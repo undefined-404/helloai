@@ -630,8 +630,9 @@ import SubTaskSequenceFlow from '@/components/SubTaskSequenceFlow.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { fmtTime } from '@/utils/tableConfig'
 // G-006 抽取：事件字典与语义色/分类派生统一由 utils/eventMeta 提供（与事件流工作台同源）
-import { EVENT_META, eventCategory, eventLabel, eventTypeColor } from '@/utils/eventMeta'
+import { eventCategory, eventLabel, eventTypeColor } from '@/utils/eventMeta'
 import { orderByDependency } from '@/utils/subTaskDag'
+import { useEventCatalogStore } from '@/stores/eventCatalog'
 import { useSkillCatalogStore } from '@/stores/skillCatalog'
 import { resolvePendingWait, usePendingCountdown } from '@/composables/usePendingCountdown'
 import type { SubTask, TaskTimelineItem, ConversationMessageItem, Attachment, LongId, Agent } from '@/types'
@@ -640,6 +641,8 @@ const route = useRoute()
 const router = useRouter()
 // 技能标签显示名（REF-1.2c）：懒加载服务端目录，未命中回退原文
 const skillCatalog = useSkillCatalogStore()
+const eventCatalog = useEventCatalogStore()
+eventCatalog.ensureLoaded()
 const item = ref<SubTask | null>(null)
 const loading = ref(false)
 const timeline = ref<TaskTimelineItem[]>([])
@@ -856,7 +859,7 @@ function dualVerdictText(pass: boolean | undefined, score: number | undefined): 
 }
 
 function eventDescription(ev: TaskTimelineItem): string {
-  const base = EVENT_META[ev.eventType]?.desc || ev.eventType
+  const base = eventCatalog.descOf(ev.eventType) || ev.eventType
   const p = ev.payload || {}
   // 改派专属事件：标注改派前的原负责人（从 Agent 名单解析名字，失败降级短 ID）
   if (ev.eventType === 'sub_task_offline_reassign'

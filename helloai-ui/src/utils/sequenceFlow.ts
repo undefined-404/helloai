@@ -25,6 +25,7 @@
 // ============================================================
 
 import type { TaskTimelineItem } from '@/types'
+import { useEventCatalogStore } from '@/stores/eventCatalog'
 
 // ── 泳道枚举 ──
 export type Swimlane = 'BIZ' | 'SCH' | 'EXT' | 'RVW' | 'DLQ' | 'OPS'
@@ -91,149 +92,6 @@ export function classifySwimlane(ev: TaskTimelineItem): Swimlane {
 }
 
 // ── 事件标签（人话化，复用 timelineFlow 的 EVENT_LABEL 风格，简短 4-12 字）──
-const LABEL: Record<string, string> = {
-  task_plan_generated: '生成任务拆解',
-  task_plan_confirmed: '确认任务拆解',
-  task_plan_rejected: '驳回任务拆解',
-  task_plan_failed: '任务拆解失败',
-  task_auto_completed: '任务最终完成',
-
-  sub_task_dispatch_prepare: '准备派单',
-  sub_task_no_candidate: '暂无可用执行者',
-  sub_task_claim_rejected: '认领被拒',
-  sub_task_dispatch_fallback: '熔断降级换人',
-  sub_task_dispatch_no_alternative: '无可用替代执行者',
-  sub_task_unclaimed_timeout_reassign: '超时未领取改派',
-  sub_task_execution_timeout_reassign: '执行超时改派',
-  sub_task_offline_reassign: '离线改派',
-  sub_task_auto_execute_dispatch: '发起自动派单',
-  sub_task_auto_execute_dispatch_enter: '进入派单流程',
-  sub_task_auto_execute_dispatch_ok: '派单成功',
-  sub_task_auto_execute_dispatch_fail: '派单失败（无空闲 Agent）',
-  sub_task_execution_command_created: '生成执行指令',
-  sub_task_execution_command_consume: 'Agent 领取指令',
-  sub_task_execution_command_consume_skipped: '跳过指令（已处理）',
-  sub_task_execution_command_poll_recovery: '巡检恢复指令',
-
-  sub_task_execute_enter: '进入执行',
-  sub_task_execute_start: '开始执行',
-  sub_task_execute_before_platform: '执行前准备',
-  sub_task_deps_context_loaded: '装配依赖产出',
-  sub_task_spec_context_loaded: '装配任务上下文',
-  sub_task_llm_call_start: '调用大模型',
-  sub_task_llm_call_end: '大模型返回',
-  sub_task_llm_call_failed: '调用大模型失败',
-  sub_task_execute_thinking: '思考/推理',
-  sub_task_execute: '产出 AI 内容',
-  sub_task_execute_submit: '提交产出',
-  sub_task_artifact_materialized: '产出物化',
-  task_plan_llm_call_start: '拆解调模型',
-  sub_task_execute_success: '执行成功',
-  sub_task_execute_failed: '执行失败',
-  sub_task_execute_result_discarded: '结果丢弃',
-  sub_task_report_blocked: '执行受阻',
-  attachment_deleted: '删除产出',
-
-  sub_task_auto_review_passed: '核验通过',
-  sub_task_auto_review_rejected: '核验驳回',
-  sub_task_auto_review_unparseable: '核验异常',
-  sub_task_auto_review_skip_max_rework: '已达最大返工，跳过核验',
-  subtask_review_prompt: '发起核验',
-  subtask_review_verdict: '核验结论',
-  subtask_review_thinking: '核验思考',
-
-  // V58: 双审 / 抽检链路节点（与单审核验泳道区分）
-  sub_task_dual_review_consented: '双审共识落地',
-  sub_task_dual_review_incomplete: '双审缺失等人工',
-  sub_task_dual_review_degraded: '双审降级单审',
-  sub_task_reviewer_disagreement: '双审分歧转人工',
-  sub_task_recheck_consistent: '抽检一致',
-  sub_task_recheck_discrepancy: '抽检分歧',
-  subtask_dual_review_prompt: '发起双审核验',
-  subtask_dual_review_verdict: '双审结论',
-  subtask_dual_review_thinking: '双审思考',
-  subtask_dual_review_result: '双审共识落定',
-  subtask_recheck_prompt: '发起抽检复审',
-  subtask_recheck_verdict: '抽检审查',
-  subtask_recheck_thinking: '抽检思考',
-  subtask_recheck_result: '抽检结论落定',
-
-  sub_task_dead_letter: '进入死信',
-  sub_task_review_dead_letter: '核验熔断入死信',
-  sub_task_dead_letter_manual_assign: '人工指派',
-  sub_task_manual_intervention_required: '人工介入待处理',
-  sub_task_manual_review_passed: '人工验收通过',
-  sub_task_manual_review_rejected: '人工驳回',
-  sub_task_manual_rework_reset: '人工驳回改派',
-
-  // A6 并轨：agent_event 执行轨迹短标签
-  run_created: 'Run 创建',
-  run_completed: 'Run 完成',
-  task_created: '任务创建',
-  task_assigned: '任务分配',
-  agent_started: 'Agent 开始执行',
-  skill_resolved: '技能解析',
-  tool_resolved: '工具解析',
-  environment_resolved: '环境解析',
-  context_built: '装配上下文',
-  tool_call_started: '调用工具',
-  tool_call_completed: '工具返回',
-  agent_completed: 'Agent 完成提交',
-  review_started: '发起核验',
-  review_rejected: '核验驳回',
-  rework_started: '进入返工',
-  review_approved: '核验通过',
-
-  // ── 审计 / 内部事件补齐（2026-10-11，REF-6.8）：缺 label 时本文件回退「去前缀 + 下划线转空格」
-  //    的伪英文（见 `LABEL[...] || ev.eventType.replace(...)`），故与 eventMeta.EVENT_META 同批登记。
-  agent_sleep: 'Agent 休眠',
-  agent_wake: 'Agent 唤醒',
-  requirement_description_section_missing: '需求小节缺失',
-  sub_task_dispatch_deferred: '派发推迟',
-  sub_task_dispatch_skip_dependency: '跳过派发（依赖）',
-  sub_task_dispatch_skip_no_capability: '跳过派发（能力）',
-  sub_task_fallback_skip_policy: '放弃降级（策略）',
-  sub_task_fallback_skip_need_human: '放弃降级（人工）',
-  sub_task_redispatch_skipped: '跳过重派',
-  sub_task_lease_reclaimed: '租约回收',
-  sub_task_report_blocked_skipped: '忽略重复阻塞',
-  sub_task_session_interrupted: '会话中断',
-  sub_task_contract_backfilled: '契约内容回填',
-  sub_task_review_skip_no_capability: '核验跳过（能力）',
-  sub_task_review_skip_no_evidence: '核验跳过（无证据）',
-  sub_task_auto_review_skip_repeated_failure: '核验重复失败短路',
-  task_plan_async_submitted: '拆解已提交',
-  task_plan_llm_call_end: '拆解模型返回',
-  task_plan_timeout_recovered: '拆解超时恢复',
-  task_plan_draft_field_missing: '拆解草案缺字段',
-  task_plan_constraints_missing: '拆解约束缺失',
-  task_plan_skill_filtered: '拆解技能被过滤',
-  task_plan_uncertainty_degraded: '不确定性降级',
-  task_plan_uncertainty_missing: '不确定性缺失',
-  task_final_report_llm_call_start: '报告调用大模型',
-  task_final_report_generated: '报告已生成',
-  task_final_report_failed: '报告生成失败',
-  task_final_report_outline_ready: '报告大纲就绪',
-  task_final_report_outline_order_suspect: '报告大纲顺序可疑',
-  task_final_report_outline_failed: '报告大纲失败',
-  task_final_report_review_discarded_stale: '报告审查丢弃（陈旧）',
-  task_final_report_review_unparseable: '报告审查不可解析',
-  task_final_report_review_warned: '报告审查告警',
-  task_final_report_review_passed: '报告审查通过',
-  task_final_report_review_rejected: '报告审查驳回',
-  task_final_report_review_failed: '报告审查失败',
-  task_final_report_review_skipped: '报告审查跳过',
-  task_final_report_review_orphan_converged: '报告审查孤儿收敛',
-  task_final_report_max_review_reached: '报告审查达上限',
-  task_final_report_rework_discarded_stale: '报告返工丢弃（陈旧）',
-  task_final_report_rolled_back: '报告已回滚',
-  task_iteration_backfill_failed: '轮次回填失败',
-  // 非「字面量直写」形态的码（静态提取扫不到，由 --db 模式的地面真值兜住）
-  agent_offline: 'Agent 离线',
-  sub_task_executor_done_issues: '执行完成问题回填',
-  task_created_from_clarify: '澄清完成建单',
-  agent_external_fallback_triggered: '外部兜底触发'
-}
 
 // ── 人工介入原因映射（markManualIntervention 的 reason 值 → 人话）──
 const INTERVENTION_REASON: Record<string, string> = {
@@ -252,7 +110,10 @@ function interventionReason(reason: unknown): string {
 }
 
 function shortLabel(ev: TaskTimelineItem): string {
-  return LABEL[ev.eventType] || ev.eventType.replace(/^sub_task_/, '').replace(/_/g, ' ')
+  const store = useEventCatalogStore()
+  store.ensureLoaded() // fire-and-forget：未就绪则回退伪英文，就绪后重渲染生效
+  const fallback = ev.eventType.replace(/^sub_task_/, '').replace(/_/g, ' ')
+  return store.labelOf(ev.eventType, fallback)
 }
 
 // ── Note 推导：失败 / 重试 / 熔断 / 人工 / 恢复 → 加 note ──

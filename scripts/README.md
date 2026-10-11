@@ -75,12 +75,12 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 
 > **S6 的口径契约（改本文件开头那一行时须知）**：S6 按**标注词**解析——须保留 `共 **N 个 PowerShell（…）+ N 个 Shell + N 个 Java 工具 + N 个 SQL**` 与 `N 个 CI 门禁脚本 + N 个架构冻结基线` 这些措辞；改坏措辞不会静默通过，而是判「无法解析」。口径为**仓库在册**（`git ls-files`）：on-disk 会混入 `powershell/logs/` 下解包 jar 的残留（实测 sql 在册 1 / on-disk 13）。故**新增脚本后先 `git add` 并同步本行计数**，二者缺一即红。
 
-**事件码 parity 守卫（无运行时依赖，**已在门禁 3 内执行**）**：`shell/verify-event-key-parity.sh` —— 治「后端落了事件码、前端字典没登记 ⇒ 界面回退裸英文（`eventMeta` 回退事件名、`sequenceFlow` 回退伪英文）」。两种模式：
+**事件码 parity 守卫（无运行时依赖，**已在门禁 3 内执行**）**：`shell/verify-event-key-parity.sh` —— **REF-6.8 收口后（`LOG-20261011-006`）职责转为「事件码服务端单一来源」**：断言显示通道写点码 ∪ 库内真值 **⊆** `TimelineEventCode` 枚举（缺条目即前端查目录无 label ⇒ 回退裸英文），并断言**前端无 EVENT_META / sequenceFlow.LABEL 硬编码残留**（防单一来源被复制回前端）。两种模式：
 
-- **静态（默认，CI 用，零依赖）**：码集 = 写入点**字面量**（形态 `"<snake_case>",` 紧邻 `AgentRole.`）∪ `AgentEventType` 枚举；断言每个码 ∈ `EVENT_META` **且** ∈ `sequenceFlow.LABEL`，缺一即红并**打印缺失码名**。
-- **`--db`（本地/运维，地面真值）**：码集取**并集** —— 再叠加库内 `SELECT DISTINCT event_type FROM task_timeline`。可覆盖静态模式的盲区：**常量传参**（`ExecutorDoneIssuesBackfiller.TIMELINE_EVENT`）、**辅助方法参数**（`task_created_from_clarify`）、**历史遗留码**（`agent_offline`）。Docker / 容器不可用时 SKIP（不制造假失败，协作规约 §27）。
+- **静态（默认，CI 用，零依赖）**：写点码集 = 邻接形态字面量 `"<snake_case>",` 紧邻 `AgentRole.`；断言 ⊆ 枚举 + 前端无残留两处。
+- **`--db`（本地/运维，地面真值）**：再叠加库内 `SELECT DISTINCT event_type FROM task_timeline`（并集），覆盖常量传参 / 辅助方法参数 / 历史遗留码等静态盲区；Docker / 容器不可用时 SKIP（不制造假失败，协作规约 §27）。
 
-建立背景、存量债务（46 个未登记码）与扰动验证见 `LOG-20261010-013`；判据锚点 `REF-6.8`。
+建立背景、存量债务（46 个未登记码）见 `LOG-20261010-013`；单一来源收口与前端字典化见 `LOG-20261011-006`；判据锚点 `REF-6.8`。
 
 ## 二、运维启停
 

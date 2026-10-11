@@ -545,13 +545,17 @@ Regression ：verify-mcp-auth.ps1（工具面鉴权不变）、verify-c3-events.
 
 > **REF-6.2 订正**：`task_timeline` 的读侧**不是 offset 分页——是完全没有分页**（`TaskTimelineServiceImpl:53-61` 全量 `list()`，REST 端点直返全量 List）。所以动作不是「把 offset 换成 keyset」，而是「**补上 keyset 分页**」。另：上游的闭合 schema 测试是**单样本式**（只断言一个样本对象的 key 集合，不具声明式约束力）——移植时应做得更严（如 `FAIL_ON_UNKNOWN_PROPERTIES` + 显式字段白名单），别只抄形状。
 
-> **Status（2026-10-11）· `REF-6.8` 半交付**（`LOG-20261010-013`）：
-> **① 前后端 key 匹配守卫已交付** —— `scripts/shell/verify-event-key-parity.sh`（静态模式进 ci-gate 门禁 3；
-> `--db` 地面真值模式供本地/运维），并**同批清偿存量债务 46 个**未登记码
-> （后端 98 码 ↔ `EVENT_META` / `sequenceFlow.LABEL` 全对齐；此前默认视图里有 42 个事件显示裸英文）。
-> **② 「事件码服务端单一来源」仍未做** —— 事件型字面量仍散落约 78 处写入点（`recordEvent(..., "sub_task_xxx", ...)`），
-> 守卫只能「事后对账」，不能「源头唯一」。该半截**不阻塞**（守卫已能拦住漏登记），
-> 若要收口需把散落字面量收成常量类/枚举（属重构，另立批次）。
+> **Status（2026-10-11）· `REF-6.8` ✅ 已收口**（`LOG-20261011-006`）：
+> **① 单一来源 enum 已交付** —— `TimelineEventCode` 枚举（`common.constant`，**141 个用户可见展示码**，
+> code+label+desc；与粗粒度 `AgentEventType`（agent_event，16 条）区分、互不取代）。
+> **② 目录端点已交付** —— `GET /api/events/catalog`（权限复用 `event:view`，已绑 ADMIN/NORMAL_USER/GUEST）；
+> `EventCatalogService` 遍历枚举全量下发。
+> **③ 前端字典化已交付** —— 删 `EVENT_META`（134）/ `sequenceFlow.LABEL`（137）硬编码，改 `stores/eventCatalog.ts`
+> 懒加载拉目录（`eventMeta.eventLabel` / `sequenceFlow.shortLabel` / 两视图消费），未命中回退原始码（fail-open）。
+> **④ 守卫重构已交付** —— `verify-event-key-parity.sh` 改为断言「显示通道写点码 ∪ 库内真值 ⊆
+> `TimelineEventCode` + 前端无 EVENT_META/LABEL 残留」（静态 PASS=4 / `--db` PASS=6）。写点 82/库内 53 均 ⊆ 枚举（0 缺口）。
+> **遗留（另批）**：后端展示通道写点字面量替换为 `TimelineEventCode` 引用（需精准枚举，实测字面量被表名污染）。
+> **先例裁定**：早前 `D-2026-10-09-6③-4` 判「事件码 guard-only 不上发」已被本批**取代**（服务端下发），见 §12 / 差距表 §0。
 
 ---
 

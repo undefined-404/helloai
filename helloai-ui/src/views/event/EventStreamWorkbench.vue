@@ -435,10 +435,10 @@
             @change="runAudit(1)"
           >
             <el-option
-              v-for="(meta, type) in EVENT_META"
-              :key="type"
-              :label="meta.label + '（' + type + '）'"
-              :value="type"
+              v-for="meta in eventCatalog.items"
+              :key="meta.code"
+              :label="meta.label + '（' + meta.code + '）'"
+              :value="meta.code"
             />
           </el-select>
           <el-date-picker
@@ -690,8 +690,8 @@ import { agentEventApi } from '@/api/agentEvent'
 import { subTaskApi } from '@/api/subTask'
 import { taskApi } from '@/api/task'
 import { useAgentNames } from '@/composables/useAgentNames'
+import { useEventCatalogStore } from '@/stores/eventCatalog'
 import {
-  EVENT_META,
   eventCategory,
   eventCategoryColor,
   eventLabel,
@@ -708,6 +708,10 @@ const router = useRouter()
 
 // Agent ID → 注册名解析（事件卡 / Audit 表展示人话名称而非裸 ID）
 const { loadAgentNames, resolveAgentName } = useAgentNames()
+
+// REF-6.8：事件码字典改从 /api/events/catalog 拉（单一来源），本地不再硬编码
+const eventCatalog = useEventCatalogStore()
+eventCatalog.ensureLoaded()
 
 const activeTab = ref<'replay' | 'audit'>('replay')
 
@@ -1192,7 +1196,7 @@ const replaySummary = computed(() => {
 
 // 事件描述人话化：字典命中用 desc，未命中回退原始类型名
 function descOf(ev: AgentEventItem): string {
-  return EVENT_META[ev.eventType]?.desc || ev.eventType
+  return eventCatalog.descOf(ev.eventType) || ev.eventType
 }
 
 // payload 原文美化：审计场景保留原始结构，异常 payload 兜底直显
