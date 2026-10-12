@@ -2,6 +2,7 @@ package com.helloai.core.agent.service;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TimelineEventCode;
@@ -210,7 +211,7 @@ public class AgentRuntimeContextAssembler {
                 .tools(enabledTools)
                 .environment(environment)
                 .accessType(command.getAccessType())
-                .systemPrompt("")
+                .systemPrompt(buildSystemPrompt(agent, command.getAccessType()))
                 .userPrompt(userPrompt)
                 .chatModel(chatModel)
                 .eventRecorder(agentEventRecorder)
@@ -742,6 +743,48 @@ public class AgentRuntimeContextAssembler {
                     dep.id(), e.getMessage());
         }
         return SubTaskOutputExtractor.extractExecutionOutput(dep.context());
+    }
+
+    /**
+     * 构建系统提示词（REF-8.2 动作①：systemPrompt 从 {@code ""} 填角色 / 工具指引 / 输出契约）。
+     *
+     * <p>此前 {@code AgentRuntimeContextAssembler:213} 硬编码 {@code systemPrompt("")}——模型只有
+     * userPrompt（任务上下文），缺角色边界与「有工具该何时用」的主动指引。本方法补齐：</p>
+     * <ul>
+     *   <li><b>角色</b>：明确自己是执行者、为任务交付物负责；</li>
+     *   <li><b>工具指引</b>：接入类型={@code API_KEY_LLM}（内部 LLM，有进程内工具集）时提示
+     *       可经工具读取附件/依赖、无法仅凭预内联摘要做结论时先用工具核验——对齐
+     *       {@code LOG-20261011-007} 事故根因（内部 LLM 只吃摘要、不主动读原始附件）；</li>
+     *   <li><b>输出契约</b>：正文用 Markdown、交付物具体可核验、行末按 userPrompt 的
+     *       {@code EXECUTION_RECORD} 回填要求输出回复。</li>
+     * </ul>
+     *
+     * <p><b>克制 / 不臆造</b>：不注入 Agent 姓名或任务级个性化（那些在 userPrompt）；systemPrompt 是
+     * 稳定的角色面，不随任务漂移。external / null 接入类型给通用角色段（不假说有工具）。
+     * 返回值恒非 blank，使 {@code ChatModelToolLoop:74} 的 hasText 守卫通过并发送 system 消息。</p>
+     *
+     * @param agent      执行者 Agent（用于角色声明）
+     * @param accessType 接入类型（决定是否提示有工具）
+     */
+    private String buildSystemPrompt(Agent agent, AgentAccessType accessType) {
+        boolean internal = accessType == AgentAccessType.API_KEY_LLM;
+        StringBuilder sb = new StringBuilder();
+        sb.append("你是 HelloAI 平台的子任务执行者（Agent: ")
+                .append(agent != null && agent.getName() != null ? agent.getName() : "executor")
+                .append("）。你的职责是把分派给你的子任务按验收标准完成并交付可核验的成果。\n\n");
+        if (internal) {
+            sb.append("你拥有平台提供的进程内工具集，可用来：\n")
+                    .append("- 读取当前子任务的完整详情、验收标准、执行约束（internal_get_sub_task_detail）；\n")
+                    .append("- 读取前置依赖产出的附件正文（internal_read_attachment / internal_get_deps_summary）；\n")
+                    .append("- 在你的正文之外登记独立的交付文件（internal_register_output_attachment）。\n")
+                    .append("当任务需要原始字段 / 实际文件内容，而上下文中仅给了摘要时，应先用工具核验，")
+                    .append("不要仅凭摘要臆测补全。无法通过工具取得所需信息时，应在交付物中显式声明缺失项。\n\n");
+        }
+        sb.append("输出契约：\n")
+                .append("- 用 Markdown 输出交付物正文，具体、可检查、紧扣验收标准；\n")
+                .append("- 若任务要求（见任务描述末尾的「产出回填要求」），按 EXECUTION_RECORD 结构回填；\n")
+                .append("- 不确定或能力达不到的事，如实说明，不得伪造文件 / 数据充当交付物。");
+        return sb.toString();
     }
 
     /** 启用工具并集（G-004 增量 A）：命令 tools ∪ 命中技能 requiredTools（去重保序，纯函数式）。 */

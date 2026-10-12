@@ -249,6 +249,49 @@ class RuntimeTurnExecutorTest {
     }
 
     @Test
+    @DisplayName("REF-8.2：内部 LLM（API_KEY_LLM）maxIterations 取内部分档（配置缺失回落默认 10）")
+    void shouldUseHigherMaxIterationsForInternalLlm() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+
+        // 内部 LLM：executionProperties 未注入（null）→ 回落 DEFAULT_MAX_ITERATIONS_EXTRA=10
+        AgentContext internalCtx = AgentContext.builder()
+                .runId("run-1-1").taskId(1L).subTaskId(10L).turn(1).agentId(3L)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .systemPrompt("sys").userPrompt("user")
+                .chatModel(chatModel)
+                .build();
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(internalCtx);
+        assertThat(captureLoopInput().maxIterations())
+                .isEqualTo(com.helloai.core.agent.runtime.loop.AgentLoopInput.DEFAULT_MAX_ITERATIONS_EXTRA);
+    }
+
+    @Test
+    @DisplayName("REF-8.2：外部 Agent（CLI_CLIENT）maxIterations 回落外部默认 5")
+    void shouldUseDefaultMaxIterationsForExternalLlm() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+
+        AgentContext externalCtx = AgentContext.builder()
+                .runId("run-1-1").taskId(1L).subTaskId(10L).turn(1).agentId(3L)
+                .accessType(AgentAccessType.CLI_CLIENT)
+                .systemPrompt("sys").userPrompt("user")
+                .chatModel(chatModel)
+                .build();
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(externalCtx);
+        assertThat(captureLoopInput().maxIterations())
+                .isEqualTo(com.helloai.core.agent.runtime.loop.AgentLoopInput.DEFAULT_MAX_ITERATIONS);
+    }
+
+    @Test
     @DisplayName("checkpoint：上下文未携带 listener → 透传 null（不落检查点）")
     void shouldPassNullLoopCheckpointListenerWhenAbsent() {
         when(agentSkillSpecService.resolve(any()))

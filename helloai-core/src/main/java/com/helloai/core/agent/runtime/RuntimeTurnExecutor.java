@@ -1,5 +1,7 @@
 package com.helloai.core.agent.runtime;
 
+import com.helloai.common.config.AgentExecutionProperties;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.event.AgentEventRecorder;
@@ -19,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -60,6 +63,14 @@ public class RuntimeTurnExecutor implements AgentRuntime {
     private final AgentSkillSpecService agentSkillSpecService;
     private final SandboxProvider sandboxProvider;
     private final ToolCallbackProvider toolCallbackProvider;
+
+    /**
+     * 执行链配置（REF-8.2 maxIterations 分档）。非构造注入（field + {@code @Autowired}），
+     * 保持既有 6 参构造器不变（复用其显式构造的测试零改动）；Spring 装配时
+     * {@code Optional<AgentExecutionProperties>} 语义，缺失时回落 {@link #resolveMaxIterations(int)} 默认。
+     */
+    @Autowired
+    private AgentExecutionProperties executionProperties;
 
     @Override
     public AgentExecutionResult execute(AgentContext ctx) {
@@ -133,7 +144,7 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                 ctx.getUserPrompt(),
                 toolExecutor,
                 resolveVisibleCallbacks(resolvedTools),
-                null,
+                resolveMaxIterations(ctx),
                 ctx.getRunId(), ctx.getTaskId(), ctx.getSubTaskId(), ctx.getTurn(), ctx.getAgentId(),
                 ctx.getEventRecorder(),
                 ctx.getLoopCheckpointListener()));
@@ -226,6 +237,26 @@ public class RuntimeTurnExecutor implements AgentRuntime {
             log.warn("RuntimeTurnExecutor: 工具回调解析失败（循环内无工具）: err={}", e.getMessage());
         }
         return callbacks;
+    }
+
+    /**
+     * 按接入类型解析 AgentLoop 最大循环轮数（REF-8.2 分档）。
+     *
+     * <p>内部 LLM 执行者（{@code API_KEY_LLM}）要多步调工具 / 读附件 / 写产物，独立档位默认更高
+     * （{@link AgentExecutionProperties#getInternalMaxIterations()} 默认 10）；其余接入类型
+     * （外部 Agent / null）回落到外部档（默认 5，与 {@code AgentLoopInput.DEFAULT_MAX_ITERATIONS} 一致）。
+     * 配置 Bean 缺失或档位 <=0 时回落硬默认，保证任何环境行为确定。</p>
+     */
+    private Integer resolveMaxIterations(AgentContext ctx) {
+        boolean internal = ctx.getAccessType() == AgentAccessType.API_KEY_LLM;
+        AgentExecutionProperties props = executionProperties;
+        if (props == null) {
+            return internal ? AgentLoopInput.DEFAULT_MAX_ITERATIONS_EXTRA
+                    : AgentLoopInput.DEFAULT_MAX_ITERATIONS;
+        }
+        int configured = internal ? props.getInternalMaxIterations() : props.getExternalMaxIterations();
+        return configured > 0 ? configured
+                : (internal ? AgentLoopInput.DEFAULT_MAX_ITERATIONS_EXTRA : AgentLoopInput.DEFAULT_MAX_ITERATIONS);
     }
 
     /**

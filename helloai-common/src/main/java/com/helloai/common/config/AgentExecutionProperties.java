@@ -77,6 +77,22 @@ public class AgentExecutionProperties {
     /** mock model 名称。 */
     private String model = "helloai-mock-executor";
 
+    /**
+     * 内部 LLM 执行者（API_KEY_LLM）的 AgentLoop 最大循环轮数（REF-8.2 分档）。
+     *
+     * <p>内部执行者要多步调工具、读附件、写产物，故独立分档默认高于外部一次性。
+     * 单元测试可直接观测该档位；配置项语义与 {@link #maxExternalIterations()} 正交。</p>
+     */
+    private int internalMaxIterations = 10;
+
+    /**
+     * 内部 LLM 执行者之外的 AgentLoop 最大循环轮数（REF-8.2 分档的默认档）。
+     *
+     * <p>外部 Agent（如一次 pullTasks + submitResult 的短链）默认维持 5 轮硬上限，
+     * 与 {@code AgentLoopInput.DEFAULT_MAX_ITERATIONS} 一致；配置项为空白时回落该默认。</p>
+     */
+    private int externalMaxIterations = 5;
+
     /** mock 前缀，便于联调时快速识别结果来源。 */
     private String mockResponsePrefix = "[mock-executor]";
 

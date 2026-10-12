@@ -224,6 +224,12 @@ class AgentRuntimeContextAssemblerTest {
             assertThat(context.getSkills()).containsExactly("eng-code-review");
             assertThat(context.getTools()).containsExactly("pullTasks", "web_search");
             assertThat(context.getChatModel()).isSameAs(mockChatModel);
+            // REF-8.2 动作①：systemPrompt 不再为空——填角色 + 内部 LLM 工具指引 + 输出契约
+            assertThat(context.getSystemPrompt())
+                    .contains("子任务执行者")
+                    .contains("进程内工具集")
+                    .contains("internal_get_sub_task_detail")
+                    .contains("输出契约");
         }
 
         @Test

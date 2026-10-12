@@ -46,6 +46,16 @@ public record AgentLoopInput(
     /** 默认最大循环轮数（LLM 调用次数硬上限，防死循环）。 */
     public static final int DEFAULT_MAX_ITERATIONS = 5;
 
+    /**
+     * 内部 LLM 执行者（API_KEY_LLM）默认最大循环轮数（REF-8.2 分档的硬默认）。
+     *
+     * <p>内部执行者需多步调工具 / 读附件 / 写产物，档位高于外部一次性（5 轮）。
+     * 配置项 {@code AgentExecutionProperties.internalMaxIterations}（默认 10）优先；
+     * 本量作为配置缺失 / 非正时的回落硬默认，保证行为确定。独立命名避开
+     * {@link #DEFAULT_MAX_ITERATIONS}（外部默认）以免语义混淆。</p>
+     */
+    public static final int DEFAULT_MAX_ITERATIONS_EXTRA = 10;
+
     public AgentLoopInput {
         if (maxIterations == null || maxIterations <= 0) {
             maxIterations = DEFAULT_MAX_ITERATIONS;
