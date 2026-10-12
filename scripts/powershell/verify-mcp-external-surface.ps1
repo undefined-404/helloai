@@ -13,8 +13,10 @@
 #
 # 断言（HARD = 失败即 exit 1）：
 #   H1 tools/list 能拿到非空工具集
-#   H2 工具集**恰好等于** 13 个对外工具（多一个 = 泄漏，少一个 = 误删）
-#   H3 没有任何工具名以 internal_ 开头
+#   H2 没有任何工具名以 internal_ 开头（泄漏 = 红）
+#   H3 工具集**恰好等于** 16 个对外工具（多一个 = 泄漏，少一个 = 误删；含 echo + search_knowledge + web_search）
+#
+# 与 macOS 侧同名 .sh 对齐（2026-10-12）：逻辑无需改动（Windows 侧已实测通过），仅订正上述过期注释。
 #
 # 前置：helloai-start 已在 6565 运行；curl.exe 在 PATH 上（SSE 长连接用）。
 #

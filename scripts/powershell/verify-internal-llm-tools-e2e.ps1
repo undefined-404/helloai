@@ -39,6 +39,19 @@
 #       带依赖的子任务执行得晚，必定看得到附件。若 H3/H4 失败，先看打印的工具调用清单
 #       判断是「没读到附件」还是「读到了没用」。
 #
+# 与 macOS 侧同名 .sh 对齐（2026-10-12，依据 LOG-20261012-007/008 双平台实测）——四处订正：
+#   ① 子任务列表端点改名：`GET /api/sub-tasks?taskId=` 实测 **405** ⇒ `/api/sub-tasks/list?taskId=`；
+#   ② Agent 来源：平台限「同角色同模型唯一（API_KEY_LLM + 未删除）」
+#      （AgentSkillPolicyService.validateModelUniqueInRole），dev 库常被常驻 `inner-<model>-<role>` 占满
+#      ⇒ 注册必 **409**；自动改用**存量 Agent**（管理端 `GET /api/admin/agents/list` 的 `apiKey`；
+#      不注册 / 不绑凭证 / 不改库）。`-ReuseMode auto|on|off` 可覆盖（默认 auto）；
+#   ③ 选人：`AgentSelector.pickPreferred` 排序首位 `dutyRank`、次位 `score` ⇒ 不打卡则子任务派给存量
+#      Agent（score 高者必胜），探针附件无法以「该执行者身份」上传（403）⇒ 新增 **STEP2.8 值班打卡**
+#      （EXECUTOR 硬前置，PLANNER/REVIEWER 仅告警；离场 finally 自动 checkOut）。`-DutyTtlMinutes` 可调；
+#   ④ **两层结论 + 证据先出**：`DEAD_LETTER`/超时不再当场退出，仍采集 STEP8 证据；
+#      退出码 `0`=两层皆过 / `1`=判据层红（H1-H5 失败）/ `2`=判据层绿而流程层未收敛。
+#   【状态】本轮改动**在 macOS 上编写，本机无 pwsh，未运行验证（NOT RUN）**——请在 Windows 侧实跑确认。
+#
 # 用法（项目根，PowerShell）：
 #   powershell -File .\scripts\powershell\verify-internal-llm-tools-e2e.ps1 -AdminPassword "..." -LlmApiKey "..."
 #   # 或使用环境变量：
@@ -62,7 +75,16 @@ param(
     # 指派后上传附件的轮询粒度（赶在执行前落地；1s 已接近 PowerShell 轮询下限）
     [int]$AssignPollMs = 1000,
     # 等所有子任务都被指派的窗口（超时只告警，不失败——后续轮询仍会补传）
-    [int]$AssignWaitSec = 180
+    [int]$AssignWaitSec = 180,
+    # Agent 来源：auto=能注册就注册，被「同角色同模型唯一」占用则改用存量 Agent；on=直接复用；off=只注册
+    [ValidateSet("auto", "on", "off")]
+    [string]$ReuseMode = "auto",
+    # 子任务被派给本次 Agent 之外的执行者时立即退出（默认仅告警，与 macOS 侧 .sh 一致）
+    [switch]$FailOnForeignAssignee,
+    # 值班租约 TTL（分钟）——STEP2.8 打卡用；离场自动 checkOut
+    [int]$DutyTtlMinutes = 60,
+    # 跳过 STEP2.8 打卡（回到与改版前 ps1 完全一致的行为；此时子任务可能派给存量 Agent）
+    [switch]$NoCheckIn
 )
 # 凭据获取三级优先：1) 显式参数非空 2) 环境变量非空 3) 交互输入（仅交互宿主；空输入最多重试 3 次）
 function Resolve-Credential {
@@ -94,7 +116,11 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Net.Http
 
 function Assert-True([bool]$Cond, [string]$Msg) {
-    if (-not $Cond) { throw ("ASSERT_FAIL: " + $Msg) }
+    if (-not $Cond) {
+        # 硬失败出口：先注销值班租约（best-effort），再抛出（与 macOS 侧 .sh 的 cleanup trap 尽力对齐）
+        Invoke-CheckOutAll
+        throw ("ASSERT_FAIL: " + $Msg)
+    }
 }
 
 function Invoke-Json([string]$Method, [string]$Url, [object]$Body, [hashtable]$Headers, [int]$TimeoutSec = 30) {
@@ -104,7 +130,8 @@ function Invoke-Json([string]$Method, [string]$Url, [object]$Body, [hashtable]$H
 }
 
 function Get-SubTasks([string]$TaskId, [hashtable]$Headers) {
-    $resp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/sub-tasks?taskId=" + $TaskId) -Body $null -Headers $Headers
+    # 端点已随「描述性路径」整改改名：旧路径 `GET /api/sub-tasks?taskId=` 实测 405，现为 /list
+    $resp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/sub-tasks/list?taskId=" + $TaskId) -Body $null -Headers $Headers
     Assert-True ($resp.code -eq 200) ("list sub-tasks code=" + $resp.code + " msg=" + $resp.msg)
     if ($resp.data.records -ne $null) { return @($resp.data.records) }
     return @($resp.data)
@@ -149,6 +176,79 @@ function Bind-AgentApiKey([string]$AgentId, [string]$Provider, [hashtable]$Heade
         remark = "verify-internal-llm-tools-e2e"
     } -Headers $Headers
     Assert-True ($resp.code -eq 200) ("bind api-key for agent " + $AgentId + " code=" + $resp.code + " msg=" + $resp.msg)
+}
+
+# ────────────────────────────────────────────────────────────
+#  存量 Agent 复用 + 值班打卡（与 macOS 侧 .sh 同源）
+# ────────────────────────────────────────────────────────────
+
+# 管理端 Agent 列表（含 apiKey，用于复用存量 Agent；不注册 / 不绑凭证 / 不改库）
+function Get-AdminAgents([hashtable]$Headers) {
+    $resp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/admin/agents/list?page=1&pageSize=200") -Body $null -Headers $Headers
+    Assert-True ($resp.code -eq 200) ("admin agents list code=" + $resp.code + " msg=" + $resp.msg)
+    return @($resp.data.list)
+}
+
+# 复用选择：精确模型优先，其次同角色任意可用 API_KEY_LLM（ACTIVE 且带 apiKey）
+function Get-ReuseAgent([string]$Role, [object[]]$AllAgents) {
+    $eligible = @($AllAgents | Where-Object {
+        $_.role -eq $Role -and $_.accessType -eq "API_KEY_LLM" -and $_.status -eq "ACTIVE" `
+            -and -not [string]::IsNullOrWhiteSpace([string]$_.apiKey)
+    })
+    Assert-True ($eligible.Count -ge 1) ("复用失败：找不到 ACTIVE 且带 apiKey 的 API_KEY_LLM " + $Role)
+    $exact = @($eligible | Where-Object { $_.modelType -eq $LlmModelType })
+    if ($exact.Count -ge 1) { return $exact[0] }
+    return $eligible[0]
+}
+
+# 值班打卡（agent 自身 apiKey 鉴权）：dutyRank=1 ⇒ 初始分配优先选中本次 Agent
+function Invoke-CheckIn([string]$AgentId, [string]$ApiKey) {
+    $body = @{ workMode = "AUTO"; maxConcurrent = 5; ttlMinutes = $DutyTtlMinutes } | ConvertTo-Json
+    $client = [System.Net.Http.HttpClient]::new()
+    try {
+        $client.DefaultRequestHeaders.Add("Authorization", "Bearer " + $ApiKey)
+        $content = [System.Net.Http.StringContent]::new($body, [System.Text.Encoding]::UTF8, "application/json")
+        $resp = $client.PostAsync(($BaseUrl + "/api/mcp/tools/checkIn"), $content).Result
+        return @{ Code = [int]$resp.StatusCode; Body = $resp.Content.ReadAsStringAsync().Result }
+    } finally { $client.Dispose() }
+}
+
+# 离场注销值班租约（best-effort，失败不报错）
+function Invoke-CheckOut([string]$AgentId, [string]$ApiKey) {
+    if ([string]::IsNullOrWhiteSpace($AgentId)) { return }
+    try {
+        $client = [System.Net.Http.HttpClient]::new()
+        $client.Timeout = [TimeSpan]::FromSeconds(10)
+        $client.DefaultRequestHeaders.Add("Authorization", "Bearer " + $ApiKey)
+        $content = [System.Net.Http.StringContent]::new('{"closeReason":"verify-internal-llm-tools-e2e finished"}',
+            [System.Text.Encoding]::UTF8, "application/json")
+        $null = $client.PostAsync(($BaseUrl + "/api/mcp/tools/checkOut"), $content).Result
+        $client.Dispose()
+    } catch { }
+}
+
+# 三个 Agent 全部 checkOut（本脚本无 try/finally 包裹主流程 ⇒ 所有出口显式调用：
+# 正常出口 exit 之前、硬失败处由 Assert-True 调用；漏掉的路径由租约 TTL 自然过期兜底）
+function Invoke-CheckOutAll() {
+    if ($NoCheckIn) { return }
+    if ($agents -eq $null) { return }   # 尚未 provision（STEP2 之前失败）时无租约
+    foreach ($role in @("PLANNER", "EXECUTOR", "REVIEWER")) {
+        if ($agents.ContainsKey($role)) {
+            Invoke-CheckOut -AgentId ([string]$agents[$role].Id) -ApiKey ([string]$agents[$role].ApiKey)
+        }
+    }
+}
+
+# 派给「非本次 Agent」时的告警/快败（STEP6 与 STEP7 共用；与 macOS 侧 .sh 同源）
+function Confirm-ForeignAssignee([string]$SubTaskId, [string]$Assignee, [hashtable]$WarnedForeign) {
+    if ($WarnedForeign.ContainsKey($SubTaskId)) { return }
+    $WarnedForeign[$SubTaskId] = $true
+    Write-Host ("  WARN: subTask " + $SubTaskId + " assigned to agent " + $Assignee + " which is NOT one of this run's API_KEY_LLM agents")
+    Write-Host "        HINT: 本脚本默认会给本次 Agent 打卡（dutyRank 优先）；仍被派给他人说明存在并发抢占，"
+    Write-Host "              可加 -FailOnForeignAssignee 快速失败，或改用独占候选池（清掉存量候选 / 换库）"
+    if ($FailOnForeignAssignee) {
+        throw ("subTask " + $SubTaskId + " 被派给非本次 Agent " + $Assignee + " ⇒ 本次断言无意义（-FailOnForeignAssignee 生效）")
+    }
 }
 
 # multipart 上传探针附件；以**该子任务的执行者身份**上传（否则 403 归属他人 / 409 无归属）
@@ -240,20 +340,68 @@ $briefLines = @(
 $BriefContent = ($briefLines -join "`r`n") + "`r`n"
 
 # ------------------------------------------------------------
-# STEP 2: register platform LLM agents (unique names -> apiKey always returned)
+# STEP 2: provision platform LLM agents (register-or-reuse)
 # ------------------------------------------------------------
-Write-Host "STEP2: register platform LLM agents (PLANNER/EXECUTOR/REVIEWER, API_KEY_LLM)"
+Write-Host "STEP2: provision platform LLM agents (PLANNER/EXECUTOR/REVIEWER, API_KEY_LLM)"
 $agents = @{}
-$agents["PLANNER"]  = Register-LlmAgent -Name ("illt-planner-"  + $ts) -Role "PLANNER"  -Headers $adminHeaders
-$agents["EXECUTOR"] = Register-LlmAgent -Name ("illt-executor-" + $ts) -Role "EXECUTOR" -Headers $adminHeaders
-$agents["REVIEWER"] = Register-LlmAgent -Name ("illt-reviewer-" + $ts) -Role "REVIEWER" -Headers $adminHeaders
+$reusedAgents = $false
+$allAgents = @(Get-AdminAgents -Headers $adminHeaders)
+$occupied = @($allAgents | Where-Object {
+    $_.accessType -eq "API_KEY_LLM" -and $_.modelType -eq $LlmModelType -and ($_.role -eq "PLANNER" -or $_.role -eq "EXECUTOR" -or $_.role -eq "REVIEWER")
+})
+
+if ($ReuseMode -eq "off") {
+    Write-Host "  register mode (-ReuseMode off)"
+} elseif ($ReuseMode -eq "on" -or $occupied.Count -gt 0) {
+    if ($ReuseMode -eq "on") {
+        Write-Host "  reuse mode (-ReuseMode on)"
+    } else {
+        $occupiedDesc = (($occupied | ForEach-Object { "" + $_.role + ":" + $_.name }) -join ",")
+        Write-Host ("  reuse mode (auto)：" + $LlmModelType + " 已被占用（" + $occupiedDesc + "）—— 平台限「同角色同模型唯一」，改用存量 Agent")
+    }
+    foreach ($role in @("PLANNER", "EXECUTOR", "REVIEWER")) {
+        $a = Get-ReuseAgent -Role $role -AllAgents $allAgents
+        $agents[$role] = @{ Id = [string]$a.id; ApiKey = [string]$a.apiKey }
+        Write-Host ("  " + $role.ToLower() + " = " + $a.name + " (" + $a.modelType + ")")
+    }
+    $reusedAgents = $true
+} else {
+    $agents["PLANNER"]  = Register-LlmAgent -Name ("illt-planner-"  + $ts) -Role "PLANNER"  -Headers $adminHeaders
+    $agents["EXECUTOR"] = Register-LlmAgent -Name ("illt-executor-" + $ts) -Role "EXECUTOR" -Headers $adminHeaders
+    $agents["REVIEWER"] = Register-LlmAgent -Name ("illt-reviewer-" + $ts) -Role "REVIEWER" -Headers $adminHeaders
+    Write-Host ("  planner=" + $agents["PLANNER"].Id + " executor=" + $agents["EXECUTOR"].Id + " reviewer=" + $agents["REVIEWER"].Id)
+}
+
 $keyByAgentId = @{}
 foreach ($k in $agents.Keys) { $keyByAgentId[[string]$agents[$k].Id] = [string]$agents[$k].ApiKey }
-Write-Host ("  planner=" + $agents["PLANNER"].Id + " executor=" + $agents["EXECUTOR"].Id + " reviewer=" + $agents["REVIEWER"].Id)
 
-Write-Host ("STEP2.5: bind vault api-key (provider=" + $llmProvider + ")")
-foreach ($k in $agents.Keys) { Bind-AgentApiKey -AgentId $agents[$k].Id -Provider $llmProvider -Headers $adminHeaders }
-Write-Host "  vault credentials bound"
+if ($reusedAgents) {
+    Write-Host "STEP2.5: skip vault bind (复用存量 Agent 用其自己的托管凭证，不改库)"
+} else {
+    Write-Host ("STEP2.5: bind vault api-key (provider=" + $llmProvider + ")")
+    foreach ($k in $agents.Keys) { Bind-AgentApiKey -AgentId $agents[$k].Id -Provider $llmProvider -Headers $adminHeaders }
+    Write-Host "  vault credentials bound"
+}
+
+# ------------------------------------------------------------
+# STEP 2.8: 值班打卡（pickPreferred 首位 dutyRank ⇒ 初始分配才轮到本次 Agent）
+# ------------------------------------------------------------
+Write-Host ("STEP2.8: check in (duty lease ttl=" + $DutyTtlMinutes + "min)")
+if ($NoCheckIn) {
+    Write-Host "  skipped check-in (-NoCheckIn)：分配可能落到存量 Agent 上"
+} else {
+    $exeCheck = Invoke-CheckIn -AgentId $agents["EXECUTOR"].Id -ApiKey $agents["EXECUTOR"].ApiKey
+    Assert-True ($exeCheck.Code -eq 200) ("EXECUTOR checkIn HTTP " + $exeCheck.Code + " body=" + $exeCheck.Body + "（探针附件必须由该子任务的执行者上传：执行者不是本次 Agent 则 H3/H4 无解）")
+    Write-Host ("  on duty: executor=" + $agents["EXECUTOR"].Id)
+    foreach ($role in @("PLANNER", "REVIEWER")) {
+        $r = Invoke-CheckIn -AgentId $agents[$role].Id -ApiKey $agents[$role].ApiKey
+        if ($r.Code -eq 200) {
+            Write-Host ("  on duty: " + $role.ToLower() + "=" + $agents[$role].Id)
+        } else {
+            Write-Host ("  WARN: " + $role + " checkIn 失败（HTTP " + $r.Code + "）—— 不阻断：存量 API_KEY_LLM 同角色 Agent 同样会被平台自动执行")
+        }
+    }
+}
 
 # ------------------------------------------------------------
 # STEP 3: create task whose description FORCES reading the attachment
@@ -305,10 +453,7 @@ while ($true) {
         $assignee = [string]$s.assignedAgent
         if ([string]::IsNullOrWhiteSpace($assignee)) { continue }
         if (-not $keyByAgentId.ContainsKey($assignee)) {
-            if (-not $warnedForeign.ContainsKey($sid)) {
-                $warnedForeign[$sid] = $true
-                Write-Host ("  WARN: subTask " + $sid + " assigned to agent " + $assignee + " which is NOT one of this run's API_KEY_LLM agents (set helloai.dispatch.force-access-type=API_KEY_LLM)")
-            }
+            Confirm-ForeignAssignee -SubTaskId $sid -Assignee $assignee -WarnedForeign $warnedForeign
             continue
         }
         $todo += @{ Id = $sid; Assignee = $assignee }
@@ -316,7 +461,7 @@ while ($true) {
     foreach ($item in $todo) {
         $up = Upload-ProbeAttachment -SubTaskId $item.Id -AgentApiKey $keyByAgentId[$item.Assignee] -FileName $AttachmentFileName -Content $BriefContent
         if ($up.Code -ge 200 -and $up.Code -lt 300) {
-            $uploaded[$item.Id] = $up.Body
+            $uploaded[$item.Id] = @{ At = [DateTime]::Now.ToString("HH:mm:ss"); Body = $up.Body }
             Write-Host ("  uploaded probe attachment for subTask " + $item.Id + " (assignee=" + $item.Assignee + ")")
         } else {
             Write-Host ("  WARN: upload failed for subTask " + $item.Id + " HTTP " + $up.Code + " body=" + $up.Body)
@@ -338,6 +483,7 @@ Write-Host ("  uploaded=" + $uploaded.Count + " subTasks")
 Write-Host ("STEP7: watch loop until all subTasks DONE (timeout=" + $LoopTimeoutSec + "s)")
 $deadline = [DateTime]::UtcNow.AddSeconds($LoopTimeoutSec)
 $allDone = $false
+$loopIssue = ""
 while ([DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Seconds $PollIntervalSec
     $subTasks = Get-SubTasks -TaskId $taskId -Headers $adminHeaders
@@ -350,23 +496,35 @@ while ([DateTime]::UtcNow -lt $deadline) {
         if ($uploaded.ContainsKey($sid)) { continue }
         $assignee = [string]$s.assignedAgent
         if ([string]::IsNullOrWhiteSpace($assignee)) { continue }
-        if (-not $keyByAgentId.ContainsKey($assignee)) { continue }
+        if (-not $keyByAgentId.ContainsKey($assignee)) {
+            Confirm-ForeignAssignee -SubTaskId $sid -Assignee $assignee -WarnedForeign $warnedForeign
+            continue
+        }
         $up = Upload-ProbeAttachment -SubTaskId $sid -AgentApiKey $keyByAgentId[$assignee] -FileName $AttachmentFileName -Content $BriefContent
         if ($up.Code -ge 200 -and $up.Code -lt 300) {
-            $uploaded[$sid] = $up.Body
+            $uploaded[$sid] = @{ At = [DateTime]::Now.ToString("HH:mm:ss"); Body = $up.Body }
             Write-Host ("  [late] uploaded probe attachment for subTask " + $sid + " (assignee=" + $assignee + ")")
         }
     }
 
+    # 死信/阻塞只记录并跳出——**不在此处退出**：H1-H5 是「内部 LLM 工具能力」判据，
+    # 与之无关的流程未收敛（评审返工超限 / 超时）不该把已产生的证据一起丢掉
     $dead = @($subTasks | Where-Object { $_.status -in @("DEAD_LETTER", "BLOCKED") })
-    Assert-True ($dead.Count -eq 0) ("subTasks entered DEAD_LETTER/BLOCKED: " + (($dead | ForEach-Object { $_.id }) -join ","))
+    if ($dead.Count -gt 0) {
+        $loopIssue = "subTasks entered DEAD_LETTER/BLOCKED: " + (($dead | ForEach-Object { $_.id }) -join ",")
+        break
+    }
 
     $notDone = @($subTasks | Where-Object { $_.status -notin @("DONE", "CANCELLED") })
     if ($notDone.Count -eq 0) { $allDone = $true; break }
 }
-Assert-True $allDone ("loop not finished in " + $LoopTimeoutSec + "s")
-$subTasks = Get-SubTasks -TaskId $taskId -Headers $adminHeaders
-Write-Host ("  all subTasks DONE/CANCELLED (" + $subTasks.Count + " total)")
+if ($allDone) {
+    $subTasks = Get-SubTasks -TaskId $taskId -Headers $adminHeaders
+    Write-Host ("  all subTasks DONE/CANCELLED (" + $subTasks.Count + " total)")
+} elseif ([string]::IsNullOrWhiteSpace($loopIssue)) {
+    $loopIssue = "loop not finished in " + $LoopTimeoutSec + "s"
+    Write-Host ("  WARN: " + $loopIssue + " —— 仍继续采集工具调用证据（STEP8）")
+}
 
 # ------------------------------------------------------------
 # STEP 8: collect tool-call evidence from every sub-task timeline
@@ -374,6 +532,8 @@ Write-Host ("  all subTasks DONE/CANCELLED (" + $subTasks.Count + " total)")
 Write-Host "STEP8: collect tool_call_* evidence from timelines"
 $startedTools = @{}
 $completedByTool = @{}
+Write-Host ""
+Write-Host "  附件上传时刻 ↔ 工具调用时刻（判 H3/H4 失败是「没赶在执行前」还是「读了没用」）："
 foreach ($s in $subTasks) {
     $sid = [string]$s.id
     $events = Get-Timeline -SubTaskId $sid -Headers $adminHeaders
@@ -391,7 +551,16 @@ foreach ($s in $subTasks) {
             $completedByTool[$toolName] += $out
         }
     }
+    $uploadedAt = ""
+    if ($uploaded.ContainsKey($sid)) { $uploadedAt = [string]$uploaded[$sid].At }
+    Write-Host ("subTask " + $sid + " | probeUploadedAt " + $uploadedAt)
+    foreach ($ev in $events) {
+        $et = [string]$ev.eventType
+        if (-not $et.StartsWith("tool_call_")) { continue }
+        Write-Host ("    " + $ev.createTime + "  " + $et + "  " + [string]$ev.payload.tool + "  success=" + [string]$ev.payload.success)
+    }
 }
+Write-Host ""
 Write-Host "  tool_call_started by tool:"
 if ($startedTools.Count -eq 0) {
     Write-Host "    (none - NO tool call happened at all)"
@@ -442,9 +611,21 @@ if ($startedTools.ContainsKey("internal_register_output_attachment")) {
 # ------------------------------------------------------------
 $taskDetail = Get-Task -TaskId $taskId -Headers $adminHeaders
 Write-Host ""
-Write-Host "OK: internal LLM tool capability e2e passed"
-Write-Host ("  taskId=" + $taskId + " taskStatus=" + $taskDetail.status)
+Write-Host ("taskId=" + $taskId + " taskStatus=" + $taskDetail.status)
 Write-Host ("  subTaskCount=" + $subTasks.Count + " uploadedProbe=" + $uploaded.Count)
 Write-Host ("  internal tools called: " + (($internalStarted | Sort-Object) -join ", "))
 Write-Host ("  marker=" + $Marker)
+Write-Host ""
+Write-Host "=== 结论（两层，互不替代）==="
+Write-Host "判据层 H1-H5: PASS —— 内部 LLM 工具面已注入、模型真调 internal_*、附件内容回流进交付物"
+if (-not [string]::IsNullOrWhiteSpace($loopIssue)) {
+    Write-Host ("流程层: 未收敛 —— " + $loopIssue)
+    Write-Host "  与内部 LLM 工具能力无关（属评审/返工/超时链）：看上面 STEP8 证据与本结论分层判读"
+    Invoke-CheckOutAll
+    exit 2
+}
+Write-Host "流程层: PASS —— 全部子任务 DONE/CANCELLED"
+Write-Host ""
+Write-Host "OK: internal LLM tool capability e2e passed"
+Invoke-CheckOutAll
 exit 0
