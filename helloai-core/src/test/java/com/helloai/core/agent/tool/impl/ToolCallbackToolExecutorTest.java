@@ -1,6 +1,7 @@
 package com.helloai.core.agent.tool.impl;
 
 import com.helloai.core.agent.tool.ToolExecutionResult;
+import com.helloai.core.agent.tool.ToolInvocationContext;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,6 +33,10 @@ class ToolCallbackToolExecutorTest {
 
     @Mock
     private ToolCallback echo;
+
+    /** REF-8.1 A1：进程内 {@code internal_} 工具 mock（验证执行器带外标识注入）。 */
+    @Mock
+    private ToolCallback internalTool;
 
     @Test
     @DisplayName("成功路径：工具输出透传，success=true 且 errorMessage=null")
@@ -120,6 +125,35 @@ class ToolCallbackToolExecutorTest {
         executor.execute("echo", "{}");
 
         verify(toolCallbackProvider, org.mockito.Mockito.times(1)).getToolCallbacks();
+    }
+
+    @Test
+    @DisplayName("REF-8.1 A1：绑定上下文时 internal_ 工具注入 agentId/subTaskId，外部工具不受影响")
+    void shouldInjectInternalIdsWhenBound() throws Exception {
+        org.springframework.ai.tool.definition.ToolDefinition internalDef =
+                definition("internal_get_sub_task_detail");
+        when(internalDef.inputSchema()).thenReturn(
+                "{\"type\":\"object\",\"properties\":{\"agentId\":{\"type\":\"integer\"},"
+                        + "\"subTaskId\":{\"type\":\"integer\"}}}");
+        when(internalTool.getToolDefinition()).thenReturn(internalDef);
+        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new ToolCallback[]{echo, internalTool});
+        when(internalTool.call(org.mockito.ArgumentMatchers.anyString())).thenReturn("ok");
+
+        ToolInvocationContext.bind(11L, 22L);
+        try {
+            ToolExecutionResult result = new ToolCallbackToolExecutor(toolCallbackProvider)
+                    .execute("internal_get_sub_task_detail", "{}");
+            assertThat(result.success()).isTrue();
+        } finally {
+            ToolInvocationContext.unbind();
+        }
+
+        org.mockito.ArgumentCaptor<String> captor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(internalTool).call(captor.capture());
+        com.fasterxml.jackson.databind.JsonNode injected =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(captor.getValue());
+        assertThat(injected.get("agentId").asLong()).isEqualTo(11L);
+        assertThat(injected.get("subTaskId").asLong()).isEqualTo(22L);
     }
 
     private void stubCatalog() {

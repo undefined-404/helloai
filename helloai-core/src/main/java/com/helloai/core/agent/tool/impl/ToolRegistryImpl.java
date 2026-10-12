@@ -1,5 +1,6 @@
 package com.helloai.core.agent.tool.impl;
 
+import com.helloai.core.agent.tool.InternalToolCallbacks;
 import com.helloai.core.agent.tool.ToolCallbackContributor;
 import com.helloai.core.agent.tool.ToolContext;
 import com.helloai.core.agent.tool.ToolDefinition;
@@ -8,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -45,6 +47,13 @@ public class ToolRegistryImpl implements ToolRegistry {
     private final ToolCallbackProvider toolCallbackProvider;
     /** 声明面来源（各域贡献者；无声明者时所有工具可用，行为与 REF-1.3 前等价）。 */
     private final List<ToolCallbackContributor> toolContributors;
+
+    /**
+     * 内部执行链专用工具（REF-8.1 B，{@code internal_} 前缀）——不进对外 MCP {@code tools/list}，
+     * 与对外面合成唯一目录。非构造注入：既有 2 参构造器与单测零改动，缺失时空集合（行为与合并前等价）。
+     */
+    @Autowired(required = false)
+    private InternalToolCallbacks internalToolCallbacks;
 
     /** 已注册工具名 → 元数据（LinkedHashMap 保序：MCP 工具注册顺序）；null = 尚未加载。 */
     private volatile Map<String, ToolDefinition> catalog;
@@ -121,7 +130,9 @@ public class ToolRegistryImpl implements ToolRegistry {
             }
             Map<String, ToolDefinition> built = new LinkedHashMap<>();
             try {
-                ToolCallback[] callbacks = toolCallbackProvider.getToolCallbacks();
+                // REF-8.1 B：目录 = 对外 MCP 面 ∪ 内部执行链专用面（internal_ 前缀在后）
+                ToolCallback[] callbacks = InternalToolCallbacks.union(
+                        toolCallbackProvider.getToolCallbacks(), internalToolCallbacks);
                 if (callbacks != null) {
                     for (ToolCallback callback : callbacks) {
                         if (callback == null || callback.getToolDefinition() == null) {

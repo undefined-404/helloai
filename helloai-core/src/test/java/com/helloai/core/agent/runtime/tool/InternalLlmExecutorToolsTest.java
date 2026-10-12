@@ -1,9 +1,13 @@
 package com.helloai.core.agent.runtime.tool;
 
+import com.helloai.common.base.BizException;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
+import com.helloai.core.agent.tool.ToolInvocationContext;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -12,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -32,6 +37,46 @@ class InternalLlmExecutorToolsTest {
     private final AgentSkillSpecService agentSkillSpecService = mock(AgentSkillSpecService.class);
     private final InternalLlmExecutorTools tools =
             new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService);
+
+    /** REF-8.1 A1 强制闸门：本类工具仅可由内部执行链调用，单测需先绑定执行链上下文。 */
+    @BeforeEach
+    void bindInternalChain() {
+        ToolInvocationContext.bind(11L, 22L);
+    }
+
+    @AfterEach
+    void unbindInternalChain() {
+        ToolInvocationContext.unbind();
+    }
+
+    @Test
+    @DisplayName("REF-8.1 A1 闸门：未绑定执行链上下文时一律拒绝（外部越权不可达）")
+    void shouldRejectWhenUnbound() {
+        ToolInvocationContext.unbind();
+
+        assertThatThrownBy(() -> tools.internalGetSubTaskDetail(11L, 22L))
+                .isInstanceOf(BizException.class).hasMessageContaining("仅可由平台内部执行链调用");
+        assertThatThrownBy(() -> tools.internalReadAttachment(11L, 50L))
+                .isInstanceOf(BizException.class);
+        assertThatThrownBy(tools::internalListSkills)
+                .isInstanceOf(BizException.class);
+        assertThatThrownBy(() -> tools.internalRegisterOutputAttachment(
+                11L, 22L, "x.md", "text/markdown", 1L, "minio://b/x.md"))
+                .isInstanceOf(BizException.class);
+    }
+
+    @Test
+    @DisplayName("REF-8.1 A1 闸门：使用绑定的 agentId/subTaskId，忽略调用方传入值（不可越权冒充）")
+    void shouldUseBoundIdsNotCallerSupplied() {
+        McpToolService.SubTaskDetail detail = new McpToolService.SubTaskDetail();
+        // 绑定值为 (11,22)；调用方冒充 (999,888) 也必须落到绑定值
+        when(mcpToolService.getSubTaskDetail(11L, 22L)).thenReturn(detail);
+
+        Object result = tools.internalGetSubTaskDetail(999L, 888L);
+
+        assertThat(result).isSameAs(detail);
+        verify(mcpToolService).getSubTaskDetail(11L, 22L);
+    }
 
     @Test
     @DisplayName("internal_get_sub_task_detail：委托 McpToolService.getSubTaskDetail（进程内直连）")

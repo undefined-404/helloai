@@ -1,9 +1,11 @@
 package com.helloai.core.agent.runtime.tool;
 
+import com.helloai.common.base.BizException;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
+import com.helloai.core.agent.tool.ToolInvocationContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
@@ -43,9 +45,22 @@ import java.util.Map;
  * 内部 LLM 授权集（{@code AgentMcpServerServiceImpl} 对 {code API_KEY_LLM} 分支）返回这些名字，
  * 模型方可经 {@code RuntimeTurnExecutor} 的 {code resolve} 看到并调用。</p>
  *
- * <p><b>鉴权纪律</b>：本类方法<b>不</b>做 {@code McpAuthContext.requireAuthId}——
- * {@code agentId} 由调用方（装配器）以内部执行链真实的执行者 ID 注入，调用方为其合法性负责
- * （进程内可信边界，非外部持牌通道）。</p>
+ * <p><b>鉴权纪律（REF-8.1 A1 接线，2026-10-12 订正）</b>：本类方法<b>不</b>做
+ * {@code McpAuthContext.requireAuthId}——{@code agentId / subTaskId} 由执行链
+ * {@code RuntimeTurnExecutor} 在 {@code agentLoop.run()} 前经
+ * {@link com.helloai.core.agent.tool.ToolInvocationContext} 绑定，并由
+ * {@code ToolCallbackToolExecutor} 在调用本类工具前<b>带外注入</b>调用参数
+ * （{@code internal_} 前缀门控 + schema 字段门控；模型无从自报，注入值覆盖模型所给值）。
+ * 合法性由执行链（进程内可信边界）负责，非外部持牌通道。故本类 {@code agentId / subTaskId}
+ * 的 {@code @ToolParam} 均标注 {@code required = false}（「平台自动注入，无需填写」）——
+ * 保留字段位供注入落点，但不再要求模型提供。</p>
+ *
+ * <p><b>强制闸门（REF-8.1 A1，2026-10-12）</b>：本类工具<b>仅</b>可由平台内部执行链调用——
+ * 每个方法入口先 {@link #requireInternalChain()}，<b>未绑定执行链上下文即拒绝</b>，
+ * 且一律使用<b>绑定的</b> {@code agentId / subTaskId}（不信任调用方入参）。这是对
+ * 「{@code internal_} 工具此前因单 provider 合并而进入外部 MCP {@code tools/list}」
+ * 的兜底：即便外部持牌调用方仍能看到工具名，也<b>无法执行</b>（无绑定 ⇒ 拒绝），
+ * 消除「跨 agent 读子任务 / 读任意附件 / 往他人子任务登记产物」的越权面。</p>
  */
 @Slf4j
 @Component
@@ -77,9 +92,10 @@ public class InternalLlmExecutorTools {
             【相关工具】internal_get_deps_summary / internal_read_attachment / internal_get_agent_status
             """)
     public Object internalGetSubTaskDetail(
-            @ToolParam(description = "内部执行链鉴定的执行者 Agent ID", required = true) Long agentId,
-            @ToolParam(description = "目标子任务 ID", required = true) Long subTaskId) {
-        return mcpToolService.getSubTaskDetail(agentId, subTaskId);
+            @ToolParam(description = "内部执行链鉴定的执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
+            @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId) {
+        ToolInvocationContext.Ids ids = requireInternalChain();
+        return mcpToolService.getSubTaskDetail(ids.agentId(), ids.subTaskId());
     }
 
     /**
@@ -97,9 +113,10 @@ public class InternalLlmExecutorTools {
             【相关工具】internal_get_sub_task_detail
             """)
     public Object internalGetDepsSummary(
-            @ToolParam(description = "执行者 Agent ID", required = true) Long agentId,
-            @ToolParam(description = "当前子任务 ID", required = true) Long subTaskId) {
-        return mcpToolService.getDepsSummary(agentId, subTaskId);
+            @ToolParam(description = "执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
+            @ToolParam(description = "当前子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId) {
+        ToolInvocationContext.Ids ids = requireInternalChain();
+        return mcpToolService.getDepsSummary(ids.agentId(), ids.subTaskId());
     }
 
     /**
@@ -114,8 +131,8 @@ public class InternalLlmExecutorTools {
             - 与外部 get_agent_status 同源，进程内直连
             """)
     public Object internalGetAgentStatus(
-            @ToolParam(description = "执行者 Agent ID", required = true) Long agentId) {
-        return mcpToolService.getAgentStatus(agentId);
+            @ToolParam(description = "执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId) {
+        return mcpToolService.getAgentStatus(requireInternalChain().agentId());
     }
 
     /**
@@ -147,18 +164,19 @@ public class InternalLlmExecutorTools {
             【相关工具】internal_get_sub_task_detail
             """)
     public Object internalRegisterOutputAttachment(
-            @ToolParam(description = "执行者 Agent ID", required = true) Long agentId,
-            @ToolParam(description = "目标子任务 ID", required = true) Long subTaskId,
+            @ToolParam(description = "执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
+            @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId,
             @ToolParam(description = "文件名", required = true) String fileName,
             @ToolParam(description = "文件 MIME 类型（可空）", required = false) String mimeType,
             @ToolParam(description = "文件字节数（可空）", required = false) Long fileSize,
             @ToolParam(description = "产物存储地址（受控白名单内）", required = true) String storageUrl) {
+        ToolInvocationContext.Ids ids = requireInternalChain();
         Long attachmentId = attachmentPort.register(
-                agentId, subTaskId, fileName,
+                ids.agentId(), ids.subTaskId(), fileName,
                 mimeType != null ? mimeType : "application/octet-stream",
                 fileSize != null ? fileSize : 0L,
                 storageUrl);
-        return java.util.Map.of("attachmentId", attachmentId, "subTaskId", subTaskId);
+        return java.util.Map.of("attachmentId", attachmentId, "subTaskId", ids.subTaskId());
     }
 
     /**
@@ -181,8 +199,9 @@ public class InternalLlmExecutorTools {
             【相关工具】internal_get_sub_task_detail / internal_get_deps_summary
             """)
     public Object internalReadAttachment(
-            @ToolParam(description = "执行者 Agent ID", required = true) Long agentId,
+            @ToolParam(description = "执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
             @ToolParam(description = "附件主键（来自 internal_get_sub_task_detail 的 attachments）", required = true) Long attachmentId) {
+        requireInternalChain();
         byte[] content = attachmentPort.loadContent(attachmentId);
         return new String(content, java.nio.charset.StandardCharsets.UTF_8);
     }
@@ -207,6 +226,7 @@ public class InternalLlmExecutorTools {
             【相关工具】internal_load_skill
             """)
     public Object internalListSkills() {
+        requireInternalChain();
         List<SkillPackage> packages = agentSkillSpecService.listPackages();
         if (packages == null || packages.isEmpty()) {
             return List.of();
@@ -243,7 +263,26 @@ public class InternalLlmExecutorTools {
             """)
     public Object internalLoadSkill(
             @ToolParam(description = "技能名（来自 internal_list_skills）", required = true) String name) {
+        requireInternalChain();
         return agentSkillSpecService.loadBody(name);
+    }
+
+    /**
+     * 强制闸门（REF-8.1 A1）：本类工具<b>仅</b>可由平台内部执行链调用。
+     *
+     * <p>判定依据 = {@link ToolInvocationContext} 是否绑定（只有 {@code RuntimeTurnExecutor}
+     * 在 {@code agentLoop.run()} 期间绑定）。外部 MCP 调用方（含经 {@code tools/call} 的
+     * 持牌 agent）无绑定 ⇒ 一律拒绝，且<b>不使用</b>调用方传入的 {@code agentId / subTaskId}。</p>
+     *
+     * @return 绑定的执行者标识（agentId 非空）
+     * @throws BizException 未绑定执行链上下文（外部 / 越权调用）
+     */
+    private static ToolInvocationContext.Ids requireInternalChain() {
+        ToolInvocationContext.Ids ids = ToolInvocationContext.current();
+        if (ids == null || ids.agentId() == null) {
+            throw new BizException("internal 工具仅可由平台内部执行链调用（缺少执行链上下文）");
+        }
+        return ids;
     }
 
     /** 技能描述封顶（目录注入防刷屏，与 DSH 的 description 封顶同构）。 */

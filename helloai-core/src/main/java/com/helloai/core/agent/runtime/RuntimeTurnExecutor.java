@@ -12,9 +12,11 @@ import com.helloai.core.agent.runtime.sandbox.Sandbox;
 import com.helloai.core.agent.runtime.sandbox.SandboxContext;
 import com.helloai.core.agent.runtime.sandbox.SandboxProvider;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.tool.InternalToolCallbacks;
 import com.helloai.core.agent.tool.ToolContext;
 import com.helloai.core.agent.tool.ToolDefinition;
 import com.helloai.core.agent.tool.ToolExecutor;
+import com.helloai.core.agent.tool.ToolInvocationContext;
 import com.helloai.core.agent.tool.ToolRegistry;
 import com.helloai.core.agent.tool.impl.DescribedToolCallback;
 import lombok.RequiredArgsConstructor;
@@ -63,6 +65,13 @@ public class RuntimeTurnExecutor implements AgentRuntime {
     private final AgentSkillSpecService agentSkillSpecService;
     private final SandboxProvider sandboxProvider;
     private final ToolCallbackProvider toolCallbackProvider;
+
+    /**
+     * 内部执行链专用工具（REF-8.1 B，{@code internal_} 前缀）——不进对外 MCP {@code tools/list}，
+     * 与对外面合成唯一目录。非构造注入：既有 6 参构造器与单测零改动，缺失时空集合（行为等价）。
+     */
+    @Autowired(required = false)
+    private InternalToolCallbacks internalToolCallbacks;
 
     /**
      * 执行链配置（REF-8.2 maxIterations 分档）。非构造注入（field + {@code @Autowired}），
@@ -138,16 +147,25 @@ public class RuntimeTurnExecutor implements AgentRuntime {
 
         // 7. AgentLoop 执行（内部按 TOOL_CALL_STARTED=3 / TOOL_CALL_COMPLETED=4 记录；
         // 每轮循环边界经 loopCheckpointListener 落进度快照，write-only 旁路）
-        AgentLoopResult loopResult = agentLoop.run(new AgentLoopInput(
-                ctx.getChatModel(),
-                ctx.getSystemPrompt(),
-                ctx.getUserPrompt(),
-                toolExecutor,
-                resolveVisibleCallbacks(resolvedTools),
-                resolveMaxIterations(ctx),
-                ctx.getRunId(), ctx.getTaskId(), ctx.getSubTaskId(), ctx.getTurn(), ctx.getAgentId(),
-                ctx.getEventRecorder(),
-                ctx.getLoopCheckpointListener()));
+        // REF-8.1 A1：绑定本轮执行链真实标识——内部 LLM 无从自报 agentId / subTaskId，改由
+        // ToolCallbackToolExecutor 经 ToolInvocationContext 在调用 internal_* 工具前带外注入。
+        // 严格 try/finally 成对解绑（防线程复用串味）；不触碰 ChatModelToolLoop 本体（§10.5 红线）。
+        ToolInvocationContext.bind(ctx.getAgentId(), ctx.getSubTaskId());
+        AgentLoopResult loopResult;
+        try {
+            loopResult = agentLoop.run(new AgentLoopInput(
+                    ctx.getChatModel(),
+                    ctx.getSystemPrompt(),
+                    ctx.getUserPrompt(),
+                    toolExecutor,
+                    resolveVisibleCallbacks(resolvedTools),
+                    resolveMaxIterations(ctx),
+                    ctx.getRunId(), ctx.getTaskId(), ctx.getSubTaskId(), ctx.getTurn(), ctx.getAgentId(),
+                    ctx.getEventRecorder(),
+                    ctx.getLoopCheckpointListener()));
+        } finally {
+            ToolInvocationContext.unbind();
+        }
 
         // 8. AGENT_COMPLETED（step=0，Turn 端点）；失败终态以结果表达，不发失败事件（ADR §5.3）
         record(ctx, 0, AgentEventType.AGENT_COMPLETED,
@@ -214,7 +232,9 @@ public class RuntimeTurnExecutor implements AgentRuntime {
         }
         List<ToolCallback> callbacks = new ArrayList<>();
         try {
-            ToolCallback[] all = toolCallbackProvider.getToolCallbacks();
+            // REF-8.1 B：可见回调源 = 对外 MCP 面 ∪ 内部执行链专用面（internal_ 前缀在后）
+            ToolCallback[] all = InternalToolCallbacks.union(
+                    toolCallbackProvider.getToolCallbacks(), internalToolCallbacks);
             if (all != null) {
                 for (ToolCallback callback : all) {
                     if (callback == null || callback.getToolDefinition() == null) {
