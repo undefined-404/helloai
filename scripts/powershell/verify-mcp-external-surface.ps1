@@ -175,7 +175,10 @@ Write-Host "  admin token acquired"
 # STEP 2: open the real external MCP surface (SSE)
 # ------------------------------------------------------------
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-$sseFile = Join-Path $WorkDir ("mcp-external-surface-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmss") + ".txt")
+# 用绝对路径（Resolve-Path）——Start-Job 的 job 进程工作目录与主脚本不同，
+# 若 $sseFile 是相对 .tmp\... 会被 job 写到别处，主脚本读不到 ⇒ sessionId 提取失败。
+$workDirAbs = (Resolve-Path $WorkDir).Path
+$sseFile = Join-Path $workDirAbs ("mcp-external-surface-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmss") + ".txt")
 if (Test-Path $sseFile) { Remove-Item $sseFile -Force }
 
 Write-Host "STEP2: open MCP SSE long connection"
