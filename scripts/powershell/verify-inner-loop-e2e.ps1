@@ -9,6 +9,10 @@
 #       （后台）依赖 ready 放行 → 自动执行 → submit(REVIEW) → 自动核验 → DONE
 #       （后台）complete 后解锁下游 → 全部 DONE 后 Task 自动 DONE
 # Ref:  doc/HelloAI 实现差距表.md（V27 内循环最小流程）
+# 关联脚本（同族验证资产，按职责拆分）：
+#   verify-mcp-external-surface.ps1    对外 MCP tools/list 不含 internal_*（REF-8.1 B / D-2026-10-12-5）
+#   verify-internal-llm-tools-e2e.ps1  内部 LLM 真的自己调 internal_* 工具完成「读附件」任务
+#                                     （REF-8.1 A / REF-8.4 收敛判据③「能力可验证」）
 # 前置：helloai-start 已在 6565 运行；helloai.providers 已配置可用 LLM；
 #       helloai.dispatch.auto-review-enabled=true（默认开启）。
 #       helloai.execution.require-vault=true 时凭证必须绑定在 Agent 上，
@@ -209,16 +213,45 @@ while ([DateTime]::UtcNow -lt $deadline) {
 Assert-True $allDone ("inner loop not finished in " + $LoopTimeoutSec + "s")
 Write-Host "all subTasks DONE/CANCELLED"
 
-Write-Host "STEP8: assert auto-review timeline evidence"
+Write-Host "STEP8: assert auto-review timeline evidence + report tool calls"
+# 端点订正（2026-10-12）：原 /api/sub-tasks/{id}/timeline 在 dcd2ae75（2026-08-04「接口路径整改至
+# §8.2 描述性风格」）已改名为 /api/sub-tasks/listTimelineBySubTaskId/{id}，旧路径必 404。
 $reviewedCount = 0
+$startedTools = @{}
 foreach ($s in $subTasks) {
     if ($s.status -ne "DONE") { continue }
-    $tlResp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/sub-tasks/" + $s.id + "/timeline") -Body $null -Headers $adminHeaders
+    $tlResp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/sub-tasks/listTimelineBySubTaskId/" + $s.id) -Body $null -Headers $adminHeaders
+    Assert-True ($tlResp.code -eq 200) ("timeline code=" + $tlResp.code + " msg=" + $tlResp.msg)
+    foreach ($ev in @($tlResp.data)) {
+        if ($ev.eventType -ne "tool_call_started") { continue }
+        $toolName = [string]$ev.payload.tool
+        if ([string]::IsNullOrWhiteSpace($toolName)) { continue }
+        if (-not $startedTools.ContainsKey($toolName)) { $startedTools[$toolName] = 0 }
+        $startedTools[$toolName] = $startedTools[$toolName] + 1
+    }
     $events = @($tlResp.data | ForEach-Object { $_.eventType })
     if ($events -contains "sub_task_auto_review_passed") { $reviewedCount++ }
 }
 Assert-True ($reviewedCount -ge 1) "no subTask carries sub_task_auto_review_passed timeline event (auto review gate not exercised)"
 Write-Host ("auto-review passed on " + $reviewedCount + " subTasks")
+
+# 工具调用证据（REF-8.1 可见面观测）。本脚本任务是纯文本、无附件，故**不断言** internal_* 被调用——
+# 仅打印实际发生的工具调用，避免把「模型选择不调工具」误报成缺陷。
+# 真正的「内部 LLM 会自己调 internal_*」硬断言见 verify-internal-llm-tools-e2e.ps1。
+Write-Host "STEP8b: tool calls observed in this run"
+if ($startedTools.Count -eq 0) {
+    Write-Host "  (none - this run's sub-tasks are plain text with no attachment, so no tool call is expected)"
+} else {
+    foreach ($k in ($startedTools.Keys | Sort-Object)) {
+        Write-Host ("  " + $k + " x" + $startedTools[$k])
+    }
+    $internalCalled = @($startedTools.Keys | Where-Object { $_ -like "internal_*" })
+    if ($internalCalled.Count -ge 1) {
+        Write-Host ("  internal_* called: " + ($internalCalled -join ","))
+    } else {
+        Write-Host "  internal_* called: none"
+    }
+}
 
 Write-Host "STEP9: assert task auto-closed to DONE"
 $taskDone = $false
