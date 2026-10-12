@@ -1,5 +1,6 @@
 # AgentTeams 最新版借鉴分析 —— 对照 helloai 的 Java 落点
 
+> **Status: `Analysis`**（借鉴预研，不改变任何实现、不承诺排期）。
 > **分析对象**：`E:\workspace\AgentTeams-main`（原 HiClaw，`agentscope-ai/AgentTeams`），changelog 覆盖 `v1.0.1` → `v1.2.2`（16 个版本）。  
 > **对照基线**：`doc/archive/reference/HelloAI_外部项目借鉴技术细节.md` §1（**5 月版**已借鉴的 7 项）。  
 > **配套报告**：`doc/research/Octop全库借鉴分析_综合版.md`（Octop 全库；旧版 `Octop全库借鉴分析_Java落点.md` 已并入该综合版，2026-10-09）。  

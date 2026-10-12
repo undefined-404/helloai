@@ -418,7 +418,7 @@ DeepSeek Harness 是**重要的 Agent Runtime 参考架构**，但不是 HelloAI
 
 > 定界（2026-09-12）：平台基础架构专项（用户 / 角色 / 权限 / 菜单底座）纳入目标架构，
 > 与业务五层（Planning / Orchestration / Runtime / Capability / Provider）**正交不冲突**。
-> 实施编排见 `doc/plan/HelloAI 基础架构调整实施计划.md`（任务编号 BASE-xxx，独立于业务主线编号）。
+> 实施编排见 `doc/archive/implemented/HelloAI 基础架构调整实施计划.md`（任务编号 BASE-xxx，独立于业务主线编号；**该专项已于 2026-10-12 执行完成归档**）。
 
 ## 12.1 定位
 
@@ -490,9 +490,9 @@ RBAC 是平台治理（Governance）之下、所有业务模块共用的支撑�
 - **任务域读权限单源**：附件与子任务视图（时间线 / 对话流 / 详情）的读判据统一为「**附件可见范围 × 根任务 Task-Team 成员**」
   （判据 `AttachmentVisibilityPolicy`，视图侧收口 `SubTaskViewGuard`）；平台账号 / 无主体通道由管理侧鉴权覆盖，**不**走该判据。
   被截断的注入内容以 `id=<attachmentId>` 标注，消费侧凭既有 `downloadById` 端点按需回取 —— **不新增读通道、不扩工具面**。
-- **渐进演进**：按 `doc/plan/HelloAI 基础架构调整实施计划.md` 分批次实施（批次一~三已落地：
-  动态路由 / 按钮权限 / 菜单管理 / 差异更新 / 部门 / 数据权限；批次四 BASE-4.x 已立项：
-  认证收口 / 身份单事实源 / 角色分层 / 全量授权化 / 建号），完成后回填基线。
+- **渐进演进**：按 `doc/archive/implemented/HelloAI 基础架构调整实施计划.md` 分批次实施（**批次一~四全部 PASS，
+  2026-10-12 归档**）：批次一~三 动态路由 / 按钮权限 / 菜单管理 / 差异更新 / 部门 / 数据权限；
+  批次四 BASE-4.x 认证收口 / 身份单事实源 / 角色分层 / 全量授权化 / 建号。回填见差距表 `G-012`（DONE）/ `G-013`（PARTIAL）。
 
 # 13. 备份与恢复
 

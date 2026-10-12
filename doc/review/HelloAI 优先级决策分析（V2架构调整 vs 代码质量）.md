@@ -170,7 +170,7 @@
 
 | # | 外部表述 | 实测 |
 |---|---|---|
-| 1 | 把 **`Synthesis`** 画进架构链（「Review/Quality Gate → … → Synthesis」） | ❌ `目标架构.md` 全文 **0 命中** `synthesis`/`synthesizer`/`整合`。`SYNTHESIZER` 出自 `design/HelloAI_契约层能力注入与最终报告整合改造方案.md` **A1**（建议项），差距表 `N2` 已登记「依赖 Role Layer 调整，**后置**」。→ **把"设计建议"当成"目标架构已要求"** |
+| 1 | 把 **`Synthesis`** 画进架构链（「Review/Quality Gate → … → Synthesis」） | ❌ `目标架构.md` 全文 **0 命中** `synthesis`/`synthesizer`/`整合`。`SYNTHESIZER` 出自 `archive/implemented/HelloAI_契约层能力注入与最终报告整合改造方案.md` **A1**（建议项），差距表 `N2` 已登记「依赖 Role Layer 调整，**后置**」。→ **把"设计建议"当成"目标架构已要求"** |
 | 2 | 层链画法不完整 | ⚠️ `目标架构 §2` 的尾段 `Agent Event Stream → Audit / Metrics / Replay → Recovery` 被整段略去；且 §2 中 **Governance 是与 Planning 并列的分支（汇入 Workflow Engine）**，非末端节点，Quality Gate 挂于 Governance 之下 |
 | 3 | 「门禁只有几条冻结规则、没真正进 CI」 | 🟡 方向对但**低估**：那条能抓 `system→task` 的规则**本应判 FAILED**（bash 复现其 10 条规则 → `[FAIL] system must not depend on [task], hits=1`），且脚本 `verify-dependency-direction.ps1:29-30` **硬编码 `e:\yhzx\1027\helloai\...`（违反 §39）** → 不是"接进 CI"就能用，**必须 bash 重写** |
 | 4 | 「Skill 已经不是简单 `role → SKILL.md` 了」 | 🟡 **说过头**：`skills/{role}/SKILL.md` **仍在生效**（`PromptTemplateServiceImpl.java:162/191/204` + `AgentController.java:270`；目录 `skills/{executor,planner,reviewer,patrol}` 实在）。准确表述是「**两套并存**」，非「已取代」 |
