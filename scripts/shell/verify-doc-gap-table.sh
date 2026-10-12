@@ -123,7 +123,7 @@ for i, l in enumerate(ls, 1):
 # tripwire：矩阵行数是「新增 / 删除 G-0xx 行」的手动确认闸门。
 # 每次登记新差距行（+1）或关闭删除（-1）时必须同步本数值，否则本守卫会红——
 # 这正是它拦住「静默增删矩阵行」的手段，**不要**改成不等式或自动推导。
-EXPECTED_ROWS = 21  # G-001 ~ G-021（G-021 于 D-2026-10-12-1 登记）
+EXPECTED_ROWS = 22  # G-001 ~ G-022（G-021 于 D-2026-10-12-1 登记；G-022 于 2026-10-13 登记）
 if n != EXPECTED_ROWS:
     bad.append("矩阵行数=%d(应 %d)" % (n, EXPECTED_ROWS))
 print(" ".join(bad))
@@ -146,7 +146,7 @@ doc, sig = sys.argv[1], sys.argv[2]
 ls = io.open(doc, encoding="utf-8").read().split("\n")
 pat = re.compile(sig)
 # durable 锚点（`LOG-…` / `D-2026-…` / `REF-…` / `V102` / `G-0xx` 等）先剔除，避免误报
-anchor = re.compile(r"`(?:LOG-[0-9]{8}-[0-9]{3}|D-20[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]+[^`]*|REF-[0-9.]+|BASE-[0-9.x]+|G-0[0-9]{2}|V[0-9]{2,3}|ADR-[0-9]+|RM[0-9]+)`")
+anchor = re.compile(r"`(?:LOG-[0-9]{8}-[0-9]{3}|D-20[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]+[^\x60]*|REF-[0-9.]+|BASE-[0-9.x]+|G-0[0-9]{2}|V[0-9]{2,3}|ADR-[0-9]+|RM[0-9]+)`")
 bad = []
 for i, l in enumerate(ls, 1):
     if not l.startswith("| G-0"):

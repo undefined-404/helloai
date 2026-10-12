@@ -65,7 +65,7 @@ C1=$(curl -s -G "$BASE/api/kb/chunk/manual-rag/0" -H "X-Admin-Token: $TOKEN")
 echo "$C1" | grep -q '"content"' && echo "$C1" | grep -q '"source":"manual-rag"' \
   && ok "chunk/manual-rag/0 返回分片" || bad "chunk/manual-rag/0 异常: $(echo "$C1" | head -c 120)"
 MISS=$(curl -s -G "$BASE/api/kb/chunk/does-not-exist/9" -H "X-Admin-Token: $TOKEN" | grep -oE '"code":[0-9]+' | head -1)
-[ "$MISS" != '"code":200' ] && ok "chunk 不存在分片被拒" || bad "chunk 不存在分片未拒（$MISS）"
+[ "$MISS" != '"code":200' ] && ok "chunk 不存在分片被拒" || bad "chunk 不存在分片未拒（${MISS}）"
 
 rm -rf "$TMP"
 echo

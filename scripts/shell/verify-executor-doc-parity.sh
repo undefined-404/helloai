@@ -90,11 +90,12 @@ else
 fi
 
 # §0.1 标题声明的数量必须等于实际行数（防止"表加了行、标题没改"）
-declared="$(sed -n '/^### 0\.1/s/.*（\([0-9]\+\) 个.*/\1/p' "$GUIDE" | head -1)"
+# 注：`\+` / `\|` 是 GNU sed 扩展，BSD sed（macOS）不认 ⇒ 用 `[0-9][0-9]*` 保持三平台可跑
+declared="$(sed -n '/^### 0\.1/s/.*（\([0-9][0-9]*\) 个.*/\1/p' "$GUIDE" | head -1)"
 if [ -n "$declared" ] && [ "$declared" = "$g_count" ]; then
   ok "S1 §0.1 标题声明数量与实际一致（$declared 个）"
 else
-  bad "S1 §0.1 标题声明数量（'${declared:-未解析到}'）与实际行数（$g_count）不一致"
+  bad "S1 §0.1 标题声明数量（'${declared:-未解析到}'）与实际行数（${g_count}）不一致"
 fi
 
 # ------------------------------------------------------------
@@ -145,9 +146,9 @@ printf '\n-- S4 内部手册 ↔ 拼装产物 --\n'
 
 for token in 'id=<attachmentId>' 'downloadById' '不可用于取'; do
   if grep -qF -- "$token" "$ASSEMBLED"; then
-    ok "S4 manual-assembled.md 含「$token」（与源章节同步）"
+    ok "S4 manual-assembled.md 含「${token}」（与源章节同步）"
   else
-    bad "S4 manual-assembled.md 缺「$token」—— 源章节改了但未重跑 assemble-manual.ps1"
+    bad "S4 manual-assembled.md 缺「${token}」—— 源章节改了但未重跑 assemble-manual.ps1"
   fi
 done
 
@@ -159,7 +160,7 @@ printf '\n-- S5 文档限额 ↔ 代码常量 --\n'
 deps_limit="$(grep -oE 'DEP_CONTENT_MAX_CHARS[[:space:]]*=[[:space:]]*[0-9_]+' "$RENDERER" | sed -E 's/.*=[[:space:]]*//' | tr -d '_' | grep -E '^[0-9]+$' | head -1)"
 deps_line="$(grep -n '整块总预算' "$GUIDE" | head -1)"
 if [ -n "$deps_limit" ] && printf '%s' "$deps_line" | grep -qF "$deps_limit"; then
-  ok "S5 执行侧注入限额与代码一致（DEP_CONTENT_MAX_CHARS=$deps_limit）"
+  ok "S5 执行侧注入限额与代码一致（DEP_CONTENT_MAX_CHARS=${deps_limit}）"
 else
   bad "S5 执行侧注入限额不一致：代码 DEP_CONTENT_MAX_CHARS=${deps_limit:-未解析到}，手册含「整块总预算」的行未出现该数字"
 fi
@@ -170,7 +171,7 @@ reviewer_line="$(grep -n '每附件' "$REVIEWER_GUIDE" | head -1)"
 if [ -n "$per_file" ] && [ -n "$total_lim" ] \
    && printf '%s' "$reviewer_line" | grep -qF "$per_file" \
    && printf '%s' "$reviewer_line" | grep -qF "$total_lim"; then
-  ok "S5 核验侧限额与代码一致（每附件 $per_file / 总计 $total_lim）"
+  ok "S5 核验侧限额与代码一致（每附件 $per_file / 总计 ${total_lim}）"
 else
   bad "S5 核验侧限额不一致：代码 每附件=${per_file:-?} 总计=${total_lim:-?}，reviewer 手册含「每附件」的行未同时出现两个数字"
 fi

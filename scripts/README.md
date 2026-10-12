@@ -1,6 +1,6 @@
 # scripts/ 索引
 
-本目录是 HelloAI 的验证与运维脚本库。共 **85 个 PowerShell（`powershell/` 84 + 根目录 `run-it-local.ps1`）+ 28 个 Shell + 1 个 Java 工具 + 1 个 SQL**（**2026-10-11 按 `git ls-files` 重新校准**：PowerShell 84+1、Shell 28（含交付文档一致性守卫、事件码 parity 守卫与 REF-4 的 `verify-rag-e2e.sh`）；此前记「83 / 28」与仓库实际不符，本次订正），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（`scripts/ci/`）。
+本目录是 HelloAI 的验证与运维脚本库。共 **87 个 PowerShell（`powershell/` 86 + 根目录 `run-it-local.ps1`）+ 30 个 Shell + 1 个 Java 工具 + 1 个 SQL**（**2026-10-12 按 `git ls-files` 重新校准**：PowerShell 84→86 = 当日新增的两个 REF-8 脚本；Shell 28→30 = 同批 macOS 侧补齐的同名 .sh；此前该行自 2026-10-11 起未随新增同步——**新增脚本必须先 `git add` 再同步本行**，否则 `verify-executor-doc-parity.sh` S6 红），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（`scripts/ci/`）。
 
 - `ci/`：**跨平台 CI 门禁与架构守卫**（bash，Git Bash / Linux CI 通用；详细见下方第六节）
 - `powershell/`：Windows 侧（pwsh / Windows PowerShell 5.1），含全部规范类与大部分 E2E 验收脚本
@@ -14,7 +14,7 @@
 >（`.agents/` / `.qoder/` 下的 `helloai-preflight`，属本地产物、不入仓 2026-09-30）——仓库内没有对应文件，
 > 按注释所述纪律执行即可，不必去找文件。2026-09-30 治理时已把脚本头里的死路径替换为「本地 preflight 技能」字样。
 
-## 一、验收脚本（verify-*，64 ps1 + 23 sh）
+## 一、验收脚本（verify-*，66 ps1 + 25 sh）
 
 命名即入口：`powershell -File .\scripts\powershell\<name>.ps1` / `zsh scripts/shell/<name>.sh`。
 绝大多数前置为「后端 6565 已启动 + admin/$HELLOAI_ADMIN_PASSWORD」，个别需 Docker 中间件（postgres:15432 / redis:26379 / rabbitmq:25672 / minio:29000）。
@@ -46,6 +46,7 @@ $env:HELLOAI_ADMIN_PASSWORD = '<你的管理员登录口令>'   # PowerShell
 | AgentHub 值班 P0/P1 | verify-agenthub-duty-e2e.ps1 | verify-agenthub-duty-e2e.sh |
 | Dashboard 值班概览 | verify-dashboard-duty-leases.ps1 | verify-dashboard-duty-leases.sh |
 | MCP 鉴权 / 业务闭环 | verify-mcp-auth.ps1 / verify-mcp-e2e.ps1 | 同名 .sh |
+| REF-8 内部 LLM 能力面（2026-10-12） | verify-mcp-external-surface.ps1 / verify-internal-llm-tools-e2e.ps1 | 同名 .sh（macOS 侧补齐；两者都不替代 verify-inner-loop-e2e（主链闭环）） |
 | MinIO 附件链路 | verify-minio-artifact.ps1 | verify-minio-artifact.sh |
 
 > **MinIO 附件链路前置（2026-10-10 订正）**：`-Token` 取管理端登录态，脚本按 **`X-Admin-Token`**
@@ -54,11 +55,38 @@ $env:HELLOAI_ADMIN_PASSWORD = '<你的管理员登录口令>'   # PowerShell
 | Planner 自动拆解 | verify-planner-decompose.ps1 | verify-planner-decompose.sh |
 | C3 Step4 灰度观察 | watch-step4.ps1 | watch-step4.sh |
 
+> **REF-8 内部 LLM 能力面（2026-10-12 新增，双平台）**：verify-mcp-external-surface（**对外 MCP
+> `tools/list` 不含 `internal_*`**，验 `D-2026-10-12-5` B；**必须走 SSE 通道**——`GET /api/mcp/tools`
+> 与 `POST /api/mcp/jsonrpc` 的 `tools/list` 都是**手写静态清单**，与 spring-ai 自动配置聚合出的真实
+> 对外面**不同源**，断言它们等于没断言）、verify-internal-llm-tools-e2e（**内部 LLM 真的自己调
+> `internal_*`**：建「必须先读附件再作答」的任务 → 子任务一被指派就以**该执行者身份**上传探针附件 →
+> 断言 `internal_get_sub_task_detail` / `internal_read_attachment` 被调用、且 marker 经工具输出回流进
+> 交付物；对应 `REF-8.4` 收敛判据③「能力可验证」）。
+> macOS 侧 `.sh` 相对 ps1 的增强（**不改变断言口径**）：① SSE 回包改「轮询等目标 id 出现」而非固定
+> sleep；② 内部 LLM 脚本额外打印**探针附件上传时刻 ↔ 工具调用时刻**对照表，用于判 H3/H4 失败是
+> 「附件没赶在执行前落地」还是「模型调了工具但没用内容」（两因结论完全不同）；③ 新增
+> `--fail-on-foreign-assignee`（子任务被派给本次注册之外的 Agent 时立即退出，默认仅告警）；
+> ④ **STEP2.8 打卡上班（默认开，`--no-check-in` 关）**——`AgentSelector.pickPreferred` 排序首位是
+> `dutyRank`，而 dev 库通常已存在 score 更高的存量 `API_KEY_LLM` 候选（实测本机 4 个：score 40 的
+> ONLINE 者必胜），此时 `force-access-type` **过滤不掉**同 accessType 的存量候选 ⇒ 不打卡则子任务
+> 派给存量 Agent，探针附件无法以「该执行者身份」上传（403），H3/H4 恒红且**与内部 LLM 能力无关**。
+> 打卡后本次 Agent dutyRank=1 胜出，离场 trap 自动 `checkOut`。
+> ⑤ **Agent 来源：复用存量（`--reuse-agents` / 占用时自动）**——平台限「同一模型在同一角色下唯一
+> （`API_KEY_LLM` + 未删除）」，dev 库已被常驻 `inner-<model>-<role>` 占满 ⇒ 注册路径必 **409**；
+> 复用走管理端列表（`GET /api/admin/agents/list` 的 `AgentListItemVO.apiKey`）取现存 Agent，
+> **不改库、不绑凭证**，用其自带托管凭证。
+> ⑥ **两层结论 + 证据先出**：流程未收敛（`DEAD_LETTER`/`BLOCKED`/超时）**不**当场退出，仍跑 STEP8
+> 采集工具调用证据；退出码 0=两层皆过 / 1=判据层红 / 2=判据层绿但流程层未收敛。起因见下节「实测订正」。
+>
+> **实测订正（2026-10-12，macOS 首次跑通）**：① `GET /api/sub-tasks?taskId=` 已随「描述性路径」整改
+> 改名为 **`/api/sub-tasks/list?taskId=`，旧路径实测 405** —— ps1 原写的是旧路径（Windows 侧会卡在同一处），**2026-10-12 已同批订正**；
+> ② 平台 `auto-review-max-rework`（默认 3）会让严格评审把「交付物缺原文/无 VERIFICATION 段」的子任务
+> 打到 `DEAD_LETTER`——这属**评审/交付格式**未收敛，与「模型会不会调 `internal_*`」是两回事，故拆两层结论。
+
 ### 仅 ps1（Windows 侧）
 
 - **规范红线**：verify-dependency-direction（依赖方向）、verify-code-style-p0-layer（Controller 分层）、verify-code-style-p1-paths（路径命名）、verify-code-style-p1-ui-sync（前后端路径同步）、verify-contract-first（契约先行）、verify-tool-matrix（工具面一致）
 - **任务/拆解/澄清**：verify-a1-task-policy、verify-a2-skill-derive、verify-a3b-agent-edit-skills、verify-674-remove-specialization、verify-requirement-clarify-structured、verify-step9b-depends-on、verify-task-running-spec-phase-b、verify-inner-loop-e2e、verify-conversation-flow-e2e、verify-e2e-batch-a、verify-m5-scenarios、verify-g014
-- **REF-8 内部 LLM 能力面（2026-10-12 新增）**：verify-mcp-external-surface（**对外 MCP `tools/list` 不含 `internal_*`**，验 `D-2026-10-12-5` B；**必须走 SSE 通道**——`GET /api/mcp/tools` 与 `POST /api/mcp/jsonrpc` 的 `tools/list` 都是**手写静态清单**，与 spring-ai 自动配置聚合出的真实对外面**不同源**，断言它们等于没断言）、verify-internal-llm-tools-e2e（**内部 LLM 真的自己调 `internal_*`**：建「必须先读附件再作答」的任务 → 子任务一被指派就以**该执行者身份**上传探针附件 → 断言 `internal_get_sub_task_detail` / `internal_read_attachment` 被调用、且 marker 经工具输出回流进交付物；对应 `REF-8.4` 收敛判据③「能力可验证」）。两者都不替代 verify-inner-loop-e2e（主链闭环）
   > 同批订正 verify-inner-loop-e2e 的 **STEP8 端点**：`/api/sub-tasks/{id}/timeline` 已在 `dcd2ae75`（2026-08-04「接口路径整改至 §8.2 描述性风格」）改名为 `/api/sub-tasks/listTimelineBySubTaskId/{id}`，旧路径必 404；并补工具调用证据输出（`tool_call_started` 按工具名聚合，仅打印不断言——该脚本任务是纯文本无附件）
 - **执行/调度**：verify-execution-dispatch-guard（启动期 fail-fast 守卫）、verify-poller-e2e（DB Poller）、verify-subtask-redispatch-auto-execution（重派自动执行；`-Scenario blocked|offline` **两场景互斥** —— target agent 硬编码同一模型 `deepseek:deepseek-v4-pro`，而平台限「同角色同模型唯一」，先跑的占用后跑的即 409；同批新增改派后 `task_timeline` 保留断言）、verify-subtask-deadletter（死信兜底）、verify-agent-execution-preview、verify-agent-llm-connectivity（真 LLM 冒烟）、verify-single-track-e2e（内部单轨：计划/执行/评审/报告全绿）
 - **审查/质量**：verify-reviewer-dual（双评审）、verify-quality-profile、verify-quality-dashboard、verify-artifact-content-review、verify-llm-conversation-stream
