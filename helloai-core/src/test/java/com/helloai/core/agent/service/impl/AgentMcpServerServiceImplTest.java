@@ -21,11 +21,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@code AgentMcpServerServiceImpl} 接入类型过滤单测（2026-10-06 L3 P1-1）。
+ * {@code AgentMcpServerServiceImpl} 接入类型过滤单测（2026-10-06 L3 P1-1 + REF-8.1）。
  *
  * <p>缺陷：内部 LLM 执行者（{@code API_KEY_LLM}、{@code supportsMCP=false}）被等价注入 13 个
  * MCP 生命周期工具，进程内调用 100% 命中 {@code McpAuthContext.requireAuthId} 空 sessionId 分支
  * → 401，模型重试至 {@code MAX_ITERATIONS}（L3 实测占内循环约 14.8%）。</p>
+ *
+ * <p><b>REF-8.1（2026-10-12）</b>：给 {@code API_KEY_LLM} 解封进程内工具通道——返回
+ * {@code INTERNAL_LLM_TOOLS}（internal_ 固有通道无条件可见 + contributor 工具受 available 限定），
+ * 而非空集。13 个外部 MCP 会话工具对内部 LLM <b>依旧剔除</b>（防 L3 P1-1 复活）；
+ * contributor 工具（web_search / search_knowledge）仅在平台授权时并入。</p>
  *
  * <p><b>REF-1.3b 增补</b>：不可关闭清单（{@code CRITICAL_TOOLS} = pullTasks / submitResult / heartbeat）
  * 的授权面生效口径——关键工具短路判启用、写进禁用列表仍在列表内；并**钉死边界**：
@@ -34,7 +39,7 @@ import static org.mockito.Mockito.when;
  * <p>本类只验证「授权结果 → 可注入结果」的过滤口径 + 不可关闭下界，不触碰 DB
  * （{@code spy} + 拦截 {@code lambdaQuery()}，与 {@code AttachmentServiceImplTest} 同范式）。</p>
  */
-@DisplayName("AgentMcpServerServiceImpl 接入类型工具过滤（L3 P1-1）")
+@DisplayName("AgentMcpServerServiceImpl 接入类型工具过滤（L3 P1-1 + REF-8.1）")
 class AgentMcpServerServiceImplTest {
 
     /** 13 个 MCP 会话类工具（与本单 MCP_SESSION_TOOLS 同集合，逐个列出以冻结清单）。 */
@@ -42,6 +47,14 @@ class AgentMcpServerServiceImplTest {
             "pullTasks", "ack", "claimSubTask", "startSubTask", "getSubTaskDetail", "heartbeat",
             "uploadArtifact", "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
             "checkIn", "checkOut");
+
+    /** REF-8.1：内部 LLM 进程内固有工具通道（InternalLlmExecutorTools @Tool name，逐个列出以冻结清单）。 */
+    private static final List<String> INTERNAL_LLM_TOOLS = List.of(
+            "internal_get_sub_task_detail",
+            "internal_get_deps_summary",
+            "internal_get_agent_status",
+            "internal_register_output_attachment",
+            "internal_read_attachment");
 
     private AgentMcpServerServiceImpl service;
     private LambdaQueryChainWrapper<AgentMcpServer> chain;
@@ -67,21 +80,21 @@ class AgentMcpServerServiceImplTest {
     }
 
     @Test
-    @DisplayName("API_KEY_LLM：13 个 MCP 会话工具全部剔除，非 MCP 工具保留")
+    @DisplayName("API_KEY_LLM（REF-8.1）：返回内部进程内工具通道，13 个 MCP 会话工具全部剔除")
     void shouldExcludeMcpSessionToolsForApiKeyLlm() {
-        // 授权集 = 13 个 MCP 工具 + 1 个非 MCP 工具（后续若引入内部工具，应被保留）
-        List<String> authorized = List.of(
-                "pullTasks", "ack", "claimSubTask", "startSubTask", "getSubTaskDetail", "heartbeat",
-                "uploadArtifact", "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
-                "checkIn", "checkOut", "some_internal_tool");
+        // 授权集 = 13 个 MCP 工具 + 已授权的 contributor（web_search/search_knowledge）
+        List<String> authorized = new java.util.ArrayList<>(MCP_TOOLS);
+        authorized.add("web_search");
+        authorized.add("search_knowledge");
         when(chain.list()).thenReturn(rowsOf(authorized));
 
         List<String> injectable = service.getEnabledToolsForAccess(11L, AgentAccessType.API_KEY_LLM);
 
-        // 13 个 MCP 工具一个都不能留
+        // 13 个 MCP 会话工具一个都不能留（防 L3 P1-1 复活）
         assertThat(injectable).doesNotContainAnyElementsOf(MCP_TOOLS);
-        // 非 MCP 工具必须保留（过滤只针对 MCP 会话工具，不得误删）
-        assertThat(injectable).containsExactly("some_internal_tool");
+        // REF-8.1：返回 5 个 internal_ 固有工具 + 已授权的 contributor 工具
+        assertThat(injectable).containsAll(INTERNAL_LLM_TOOLS);
+        assertThat(injectable).contains("web_search", "search_knowledge");
     }
 
     @Test
@@ -115,8 +128,9 @@ class AgentMcpServerServiceImplTest {
 
         // 授权查询（其它调用点）仍取全集：MCP 工具不得被本单改动隐式剔除
         assertThat(service.getEnabledTools(11L)).containsExactlyElementsOf(MCP_TOOLS);
-        // 而「可注入」视图对 API_KEY_LLM 为空（全部是 MCP 会话工具）
-        assertThat(service.getEnabledToolsForAccess(11L, AgentAccessType.API_KEY_LLM)).isEmpty();
+        // REF-8.1：可注入视图对内部 LLM 返回内部固有工具（contributor 未授权则不并入）
+        assertThat(service.getEnabledToolsForAccess(11L, AgentAccessType.API_KEY_LLM))
+                .containsExactlyElementsOf(INTERNAL_LLM_TOOLS);
     }
 
     // #region REF-1.3b 不可关闭清单（CRITICAL_TOOLS）
@@ -160,14 +174,16 @@ class AgentMcpServerServiceImplTest {
     @Test
     @DisplayName("★ REF-1.3b 边界：不可关闭清单不抵销 API_KEY_LLM 的 MCP 会话过滤（防 L3 P1-1 复活）")
     void shouldNotReAddCriticalToolsForApiKeyLlm() {
-        when(chain.list()).thenReturn(rowsOf(List.of("some_internal_tool")));
+        when(chain.list()).thenReturn(rowsOf(List.of()));
 
         // 授权面（getEnabledTools）已含 3 个关键工具（并集兜底）
         assertThat(service.getEnabledTools(11L)).contains("pullTasks", "submitResult", "heartbeat");
-        // 但可注入面（进程内 LLM 执行者，无 MCP 会话）必须依旧剔除——
+        // 但可注入面（进程内 LLM 执行者，无 MCP 会话）不得把关键工具并回来——
         // 否则必然 401 并重试至 MAX_ITERATIONS（2026-10-06 L3 P1-1，占内循环约 14.8%）
-        assertThat(service.getEnabledToolsForAccess(11L, AgentAccessType.API_KEY_LLM))
-                .containsExactly("some_internal_tool");
+        // REF-8.1：返回的是内部进程内固有工具，不含任何外部 MCP 会话工具
+        List<String> injected = service.getEnabledToolsForAccess(11L, AgentAccessType.API_KEY_LLM);
+        assertThat(injected).containsExactlyInAnyOrderElementsOf(INTERNAL_LLM_TOOLS);
+        assertThat(injected).doesNotContainAnyElementsOf(MCP_TOOLS);
     }
 
     // #endregion

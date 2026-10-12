@@ -1,0 +1,112 @@
+package com.helloai.core.agent.runtime.tool;
+
+import com.helloai.core.agent.port.AttachmentPort;
+import com.helloai.core.agent.service.McpToolService;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * {@link InternalLlmExecutorTools} 单测（REF-8.1 M1）。
+ *
+ * <p>验证 5 个进程内 {@code @Tool} 的委托正确性：读型工具复用 {@link McpToolService}
+ * 同名方法；交付登记 / 附件读取分别走 {@link AttachmentPort} 的 {{@code register}} / {code loadContent}。
+ * 均为进程内直连，无 {@code McpMcpServer} / {@code McpAuthContext} session 鉴权依赖。</p>
+ */
+@DisplayName("InternalLlmExecutorTools 进程内工具通道（REF-8.1）")
+class InternalLlmExecutorToolsTest {
+
+    private final McpToolService mcpToolService = mock(McpToolService.class);
+    private final AttachmentPort attachmentPort = mock(AttachmentPort.class);
+    private final InternalLlmExecutorTools tools =
+            new InternalLlmExecutorTools(mcpToolService, attachmentPort);
+
+    @Test
+    @DisplayName("internal_get_sub_task_detail：委托 McpToolService.getSubTaskDetail（进程内直连）")
+    void shouldDelegateGetSubTaskDetail() {
+        McpToolService.SubTaskDetail detail = new McpToolService.SubTaskDetail();
+        detail.setSubTaskId(22L);
+        detail.setTaskId(1L);
+        detail.setTitle("t");
+        // 依赖注入事例可空：这里只验证委托透传
+        when(mcpToolService.getSubTaskDetail(11L, 22L)).thenReturn(detail);
+
+        Object result = tools.internalGetSubTaskDetail(11L, 22L);
+
+        assertThat(result).isSameAs(detail);
+        verify(mcpToolService).getSubTaskDetail(11L, 22L);
+    }
+
+    @Test
+    @DisplayName("internal_get_deps_summary：委托 McpToolService.getDepsSummary")
+    void shouldDelegateGetDepsSummary() {
+        McpToolService.GetDepsSummaryResult summary = new McpToolService.GetDepsSummaryResult();
+        summary.setSubTaskId(22L);
+        summary.setDepCount(1);
+        summary.setReady(true);
+        when(mcpToolService.getDepsSummary(11L, 22L)).thenReturn(summary);
+
+        Object result = tools.internalGetDepsSummary(11L, 22L);
+
+        assertThat(result).isSameAs(summary);
+        verify(mcpToolService).getDepsSummary(11L, 22L);
+    }
+
+    @Test
+    @DisplayName("internal_get_agent_status：委托 McpToolService.getAgentStatus")
+    void shouldDelegateGetAgentStatus() {
+        McpToolService.GetAgentStatusResult status = new McpToolService.GetAgentStatusResult();
+        status.setAgentId(11L);
+        status.setStatus("ACTIVE");
+        when(mcpToolService.getAgentStatus(11L)).thenReturn(status);
+
+        Object result = tools.internalGetAgentStatus(11L);
+
+        assertThat(result).isSameAs(status);
+        verify(mcpToolService).getAgentStatus(11L);
+    }
+
+    @Test
+    @DisplayName("internal_register_output_attachment：走 AttachmentPort.register，不触发状态流转")
+    void shouldRegisterOutputAttachment() {
+        when(attachmentPort.register(11L, 22L, "out.md", "text/markdown", 10L, "minio://bucket/out.md"))
+                .thenReturn(99L);
+
+        Object result = tools.internalRegisterOutputAttachment(
+                11L, 22L, "out.md", "text/markdown", 10L, "minio://bucket/out.md");
+
+        assertThat(result).isEqualTo(Map.of("attachmentId", 99L, "subTaskId", 22L));
+        verify(attachmentPort).register(11L, 22L, "out.md", "text/markdown", 10L, "minio://bucket/out.md");
+    }
+
+    @Test
+    @DisplayName("internal_register_output_attachment：mimeType / fileSize 空时回退默认值")
+    void shouldRegisterOutputAttachmentWithDefaults() {
+        when(attachmentPort.register(11L, 22L, "out.bin",
+                "application/octet-stream", 0L, "minio://bucket/a.bin")).thenReturn(5L);
+
+        tools.internalRegisterOutputAttachment(11L, 22L, "out.bin", null, null, "minio://bucket/a.bin");
+
+        verify(attachmentPort).register(11L, 22L, "out.bin",
+                "application/octet-stream", 0L, "minio://bucket/a.bin");
+    }
+
+    @Test
+    @DisplayName("internal_read_attachment：走 AttachmentPort.loadContent 并 UTF-8 解码")
+    void shouldReadAttachment() {
+        String content = "附件正文";
+        when(attachmentPort.loadContent(50L)).thenReturn(content.getBytes(StandardCharsets.UTF_8));
+
+        Object result = tools.internalReadAttachment(11L, 50L);
+
+        assertThat(result).isEqualTo(content);
+        verify(attachmentPort).loadContent(50L);
+    }
+}

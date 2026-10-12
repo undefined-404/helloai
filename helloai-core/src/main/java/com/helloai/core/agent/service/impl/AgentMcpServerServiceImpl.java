@@ -11,6 +11,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -121,6 +122,34 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
      * 短路），读路径保持纯读，不在热路径引入写放大与事务语义。</p>
      */
     private static final List<String> CRITICAL_TOOLS = List.of("pullTasks", "submitResult", "heartbeat");
+
+    /**
+     * <b>内部 LLM 执行者（{@code API_KEY_LLM}）的进程内授权工具集（REF-8.1）。</b>
+     *
+     * <p>与 {@link #MCP_SESSION_TOOLS}（外部 MCP 会话工具）<b>语义正交</b>：本集合是给内部执行者
+     * 走进程内 {@code AgentLoop} 用的<b>独立工具通道</b>（{@link InternalLlmExecutorTools}，
+     * {@code internal_} 前缀，无 session 鉴权依赖）+ 两条 contributor 通道（{@code web_search} /
+     * {@code search_knowledge}，天然进程内安全）。</p>
+     *
+     * <p><b>为什么独立单列而非复用 DEFAULT/MCP_SESSION_TOOLS</b>：内部执行者没有 MCP 会话上下文，
+     * 注入外部 MCP 工具 100% 401（2026-10-06 L3 P1-1）。本集合正是"解封"的落点——给内部 LLM
+     * 一条<b>非 MCP 会话</b>的工具通道，而非松开 {@link #MCP_SESSION_TOOLS} 过滤（那会复活
+     * 401 回归）。</p>
+     *
+     * <p><b>受控交付边界</b>：含 {@code internal_register_output_attachment}（受控交付登记，走
+     * {@code AttachmentPort}，不动状态机），<b>不含</b>外部 {@code uploadArtifact} / {@code submitResult}
+     * ——内部执行链结果由消费侧 {@code ExecutionResultHandler}（source=INTERNAL）统一回写，暴露
+     * 外部提交工具会造成双写冲突。</p>
+     */
+    private static final List<String> INTERNAL_LLM_TOOLS = List.of(
+            "internal_get_sub_task_detail",
+            "internal_get_deps_summary",
+            "internal_get_agent_status",
+            "internal_register_output_attachment",
+            "internal_read_attachment",
+            "web_search",
+            "search_knowledge"
+    );
 
     /** 默认启用 is_enabled 值。 */
     private static final int DEFAULT_IS_ENABLED = 1;
@@ -249,19 +278,21 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
     /**
      * {@inheritDoc}
      *
-     * <p><b>内部 LLM 执行者（{@link AgentAccessType#API_KEY_LLM}）过滤掉
-     * {@link #MCP_SESSION_TOOLS}</b>：该类执行者走进程内 {@code AgentLoop}，
-     * 无 MCP 会话上下文（{@code McpAuthContext} 无 sessionId），调用这 13 个工具
-     * 100% 401。其余接入类型（{@code CLI_CLIENT} / {@code WEB_BROWSER} / {@code null}）
+     * <p><b>内部 LLM 执行者（{@link AgentAccessType#API_KEY_LLM}）走进程内进程内工具通道
+     * {@link #INTERNAL_LLM_TOOLS}（REF-8.1）</b>：该类执行者走进程内 {@code AgentLoop}，
+     * 无 MCP 会话上下文（{@code McpAuthContext} 无 sessionId），调用外部 MCP 会话工具
+     * （{@link #MCP_SESSION_TOOLS}）100% 401（2026-10-06 L3 P1-1 已修）。故为其返回
+     * <b>内部授权集</b>——与平台实际可用工具求交（保留已授权 / 已注册的内部与 contributor 工具），
+     * 而非返回被剥空后的空集。其余接入类型（{@code CLI_CLIENT} / {@code WEB_BROWSER} / {@code null}）
      * <b>原样返回</b>，与 {@link #getEnabledTools(Long)} <b>逐字一致</b>（外部链路零回归）。</p>
      *
-     * <p><b>REF-1.3b 边界：{@link #CRITICAL_TOOLS} 刻意<b>不</b>抵销上述过滤。</b>
-     * 「不可关闭」（授权面下界）≠「必须出现在每一个执行者的可见列表里」。
-     * 若在此分支把 3 个关键工具并回来，将原样复活 2026-10-06 已实测并修复的 L3 P1-1
-     * （进程内注入必然 401，占内循环约 14.8%），而收益为零——不可关闭的设计意图
-     * （外部 Agent 不因管理员误操作失去工作循环）已在 {@link #getEnabledTools(Long)} 的并集中完整达成。
-     * 摘除后它们依然「未关闭」（管理面仍显示启用），只是<b>本执行者不具备调用条件</b>——
-     * 这正是 REF-1.3「禁用了 ≠ 不具备」要表达的同一件事。</p>
+     * <p><b>REF-1.3b 边界：{@link #CRITICAL_TOOLS} 刻意<b>不</b>并入内部集。</b>
+     * 内部执行者走进程内交付登记与平台 INTERNAL 回写，不依赖外部轮询工具（{@code pullTasks} /
+     * {@code submitResult} / {@code heartbeat}）上岗——它们仍「未关闭」（管理面显示启用），
+     * 只是内部执行者不具备调用条件。这是 REF-1.3「禁用了 ≠ 不具备」的同一件事。</p>
+     *
+     * <p><b>对外零回归</b>：{@code CLI_CLIENT} 等返回 {@code enabled = getEnabledTools(agentId)}
+     * 原样集合，不因本分支改变（外部 Agent 含全部 13 个 MCP 工具，与改造前逐字一致）。</p>
      */
     @Override
     public List<String> getEnabledToolsForAccess(Long agentId, AgentAccessType accessType) {
@@ -269,9 +300,20 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
         if (accessType != AgentAccessType.API_KEY_LLM) {
             return enabled;
         }
-        return enabled.stream()
-                .filter(tool -> !MCP_SESSION_TOOLS.contains(tool))
-                .collect(Collectors.toList());
+        // 内部 LLM：返回内部进程内工具通道（REF-8.1）。
+        //  internal_* 工具由 InternalLlmExecutorTools 经 provider 注册，是固有通道，
+        //    不依赖 agent_mcp_server 授权行 ⇒ 无条件可见；
+        //  contributor 工具（web_search / search_knowledge）受 available 限定，
+        //    仅当平台可用且该 Agent 授权时并入。
+        // 顺序固定（LinkedHashSet 保序）：先 internal_*，后已授权的 contributor。
+        LinkedHashSet<String> available = new LinkedHashSet<>(enabled);
+        List<String> result = new ArrayList<>();
+        for (String tool : INTERNAL_LLM_TOOLS) {
+            if (tool.startsWith("internal_") || available.contains(tool)) {
+                result.add(tool);
+            }
+        }
+        return result;
     }
 
     /**

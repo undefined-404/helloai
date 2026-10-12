@@ -1,5 +1,6 @@
 package com.helloai.core.agent.mcp;
 
+import com.helloai.core.agent.runtime.tool.InternalLlmExecutorTools;
 import com.helloai.core.agent.tool.ToolCallbackContributor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -34,12 +35,26 @@ import java.util.List;
  * <ul>
  *   <li>{@link EchoMcpTool} —— 连通性诊断工具（1 个 @Tool）</li>
  *   <li>{@link McpMcpServer} —— §9.1 协议 6 工具 + getAgentStatus（7 个 @Tool）</li>
+ *   <li>{@link InternalLlmExecutorTools} —— REF-8.1 内部 LLM 进程内工具通道（读型 + 受控交付登记，
+ *       {@code internal_} 前缀；不依赖 MCP 会话鉴权）</li>
  *   <li>{@link ToolCallbackContributor} 实现 —— 各域贡献的平台内置工具（阶段四
  *       联网搜索 Capability 化：planner 域 web_search 经本端口并入，agent 域不反向引用）</li>
  * </ul>
  * </p>
  *
- * <p>§9.3 验收：tools/list 必须返回 helloai-mcp-server 注册的全部 8 个工具 schema。</p>
+ * <p><b>单 provider 纪律（REF-8.1）</b>：所有 {@code @Tool}（MCP + 内部进程内 + contributor）<b>必须
+ * 合并进唯一的 {@link ToolCallbackProvider}</b>——{@link ToolRegistryImpl} / {@code ToolCallbackToolExecutor}
+ * 都注入<b>单个</b> {@link ToolCallbackProvider}，若存在两个 provider Bean 会因
+ * {@code NoUniqueBeanDefinitionException} 崩溃。内部??工具只<b>追加</b>进 {@code all[]}，
+ * 不新增独立 provider，执行 / 注册链路 / MCP tools-list 自动化跟随。</p>
+ *
+ * <p>⚠️ <b>对外暴露边界（REF-8.1 待评估）</b>：合并进单一 provider 会把 {@code internal_} 工具也
+ * 带进外部 MCP {@code tools/list}。若需对外部隐藏，后续应改由 {@code McpToolConfig} 提供
+ * <b>聚合 provider</b>（MCP 面只含 {@code McpMcpServer} + contributor，内部面额外并 {@code internal_}），
+ * 二者仍合成一个 {@link ToolCallbackProvider} Bean 供执行链路消费。当前采用"可接受暴露"作为
+ * 最小改动。</p>
+ *
+ * <p>§9.3 验收：tools/list 必须返回 helloai-mcp-server 注册的全部工具 schema。</p>
  */
 @Configuration
 @RequiredArgsConstructor
@@ -47,6 +62,8 @@ public class McpToolConfig {
 
     private final EchoMcpTool echoMcpTool;
     private final McpMcpServer mcpMcpServer;
+    /** REF-8.1：内部 LLM 进程内工具通道（读型 + 受控交付登记，internal_ 前缀，无 session 依赖）。 */
+    private final InternalLlmExecutorTools internalLlmExecutorTools;
     /** 平台内置工具贡献（各域 +@Tool 实例；空列表时不影响既有 MCP 工具注册）。 */
     private final List<ToolCallbackContributor> toolContributors;
 
@@ -54,10 +71,11 @@ public class McpToolConfig {
     public ToolCallbackProvider mcpToolCallbacks() {
         Object[] contributed = toolContributors == null ? new Object[0]
                 : toolContributors.stream().map(ToolCallbackContributor::toolObject).toArray();
-        Object[] all = new Object[2 + contributed.length];
+        Object[] all = new Object[3 + contributed.length];
         all[0] = echoMcpTool;
         all[1] = mcpMcpServer;
-        System.arraycopy(contributed, 0, all, 2, contributed.length);
+        all[2] = internalLlmExecutorTools;
+        System.arraycopy(contributed, 0, all, 3, contributed.length);
         return MethodToolCallbackProvider.builder()
                 .toolObjects(all)
                 .build();
