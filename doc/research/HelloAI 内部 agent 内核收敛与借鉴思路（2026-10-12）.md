@@ -3,6 +3,8 @@
 > **Status: `Analysis`**（只读调研，不改变任何实现、不承诺排期）。
 > **性质**：只读调研 · 调研后**架构调整思路**（非设计文档、非实施计划，Status=`Analysis`）。
 > **2026-10-12 追加**：§8「后续专项：内核 / 对接协议层 可移植 jar 化（长期愿景）」——用户提出的对外可移植方向，登记为**后续专项、不排期**。
+> **2026-10-12 追加（三）**：§1.6「DSH 的**角色形态**（persona 槽位 + agent preset，非 role 枚举）与 **LLM 全生命周期 14 节点 + 2 旁路**」——对照用户提供的外部样本（WorkBuddy「调用 skills 后的上下文」）核准「身份面 + 装配时机」的差距；候选工作项 `REF-8.1.2` / `REF-8.2.3` / `REF-8.4` 挂点细化（**未登记，待裁定**）。
+> **2026-10-12 追加（二）**：§1.5「DSH 内部 LLM 调用链源码复核（本地 `0.2.1-alpha.2`）」——`REF-8` 双平台实测（`LOG-20261012-007`）后回标核对**循环内部**机制：装配**替换语义** / 结构化 **blocked**（含连续 N 轮门槛）/ 结构化**轮报**；对应新登记 `REF-8.1.1` / `REF-8.2.1` / `REF-8.2.2`，并与 `LOG-20261011-007` 的 A/B/C 对齐射程。
 > **缘起**：承 `doc/research/HelloAI 自建 java-harness 可行性分析（2026-10-12）.md`——那篇回答了「要不要从零写一套 java-harness」（结论：不；按 DSH 思路补半套，2–4 人月）。本篇回答**剩下的那半个问题**：**「补半套」具体怎么补、把散在 helloai-core 的执行碎块怎么收敛成一个内部 agent 内核、以及每一步分别借鉴开源里哪一处的哪一段思路。**
 > **关联**：`doc/review/HelloAI 内部 LLM 执行链与开源 agent 架构比对（2026-10-12）.md`（差距 D1–D6 事实源）· `doc/research/Agent 运行时开源选型参考（2026-10-12）.md` · `doc/research/HelloAI 自建 java-harness 可行性分析（2026-10-12）.md`（本篇的可行性依据）。
 > **证据口径**：开源库为本地实际代码实测（带 `path:line`，DSH=`E:/workspace/deepseek-harness-master`、octop=`E:/workspace/octop-harness-main`）；HelloAI 为本仓实测。为「思路」，不含排期进度——如需推进，另立 `plan/` 或 `design/`。
@@ -56,6 +58,153 @@
 | **原生沙箱三平台**（Windows ACL / Landlock / Seatbelt，DSH `packages/sandbox/*`） | Java 需 JNI/FFI，跨语言都难；用 docker/OCI 或外包 `bwrap` 进程。**fail-closed 原则必须**（`sandbox/src/index.ts:153-158`） |
 | **PTY / LSP / web / desktop / browser-use / computer-use / win32 koffi-FFI** | 全 Node 专属/dev-tooling，对 HelloAI 内核零价值 |
 | **octop 记忆分层蒸馏（L0→L3）**（`octop-memory`） | 算法本在外部包；属产品级，非内核必需 |
+
+### 1.5 DSH 内部 LLM 调用链源码复核（本地 checkout `0.2.1-alpha.2`）
+
+> **复核缘起**：`REF-8` 首次双平台实测（`LOG-20261012-007`）暴露三处**执行侧缺口**——内部 LLM 无「做不到」通道 / 返工上下文全量追加 / 证据契约缺段。回到标杆核对这三件事的**形状**。行号以本机 checkout 为准（§6），**此节结论不改变 §1.1 的三条架构意图**，只补「循环内部」的机制细节。
+> 可执行结论已另立行动层条目（`plan/HelloAI 借鉴落地实施计划.md` §10.2）与差距表锚点（`G-021`）——本节只留调研结论与形状对照。
+
+#### 1.5.1 调用链与终止（与 HelloAI 的差异）
+
+| 事实 | DSH 落地（实测） | HelloAI 现状 |
+|---|---|---|
+| 循环归属 | `ReactLoopAgent`：`turn() while(await this.turn())` → `step() while(true)`；**step = 一次模型请求 + 它触发的工具**，turn = 0+ steps（`packages/core/agent-loop/src/agent.ts:214,252-254,298,400,409,564,604,453`） | `ChatModelToolLoop`（语义等价，`LOG-20261006` 判据一致） |
+| 终止 | step：无 tool_calls / `max-tokens` / **工具结果携带 `concludesTurn`**（`agent.ts:547-555`、`tool-calls.ts:158`）；turn：`turnEnds` 且 inbox 空（`agent.ts:361-365`）；终态枚举含 **`blocked`**（`session/src/types.ts:201-232`） | 无 tool_calls 即停；`maxIterations` 分档 5/10 |
+| 预算 | **循环内无预算**（`packages/core` 全域无 maxSteps/maxTurns）；预算全在外层：goal rounds 默认 **256**（`goal/goal/src/index.ts:244`）、provider 重试 **5**、实验性 Ralph **256**（`experimental/tool-ralph/src/index.ts:35`） | 预算在循环内（`resolveMaxIterations`） |
+
+> **判读**：两种风格无优劣——DSH 把「循环」做成纯 driver，预算交给外层编排；HelloAI 循环自带上限（防死循环）。**不建议改**，但「工具结果可结束 turn」（`concludesTurn`）值得记：它让「交付/阻塞」这类**终止性工具**不必靠模型自觉停止。
+
+#### 1.5.2 装配 = 「一次装配 + 每步重投影」，且**替换而非追加**
+
+- **分层固定槽位**：`SECTION_ORDERS`（`system-prompt/src/index.ts:131-165`）——identity −1000 / persona 0 / plan policy 500 / team 600 / per-tool guidance 1000-5000 / deliverable refs 9000 / structured output 9900 / harness source 10000 / web 10100；runtime context **另起一条 user-role 消息**（`agent.ts:277-282,411-440`）。
+- **重试不重塞**：只有 `if (firstAttempt)` 才纳入 `decision.messages`；重试**重新推导请求**，不重新 admit users、不重跑 `agent/pre-step`（`agent.ts:426`；`docs/architecture.md:110`）。
+- **运行期上下文用「取代」语义**：注入文本明写 "This snapshot supersedes earlier runtime-context snapshots"，且 `refreshContext` 是**替换**不是追加（`system-prompt/src/index.ts:313,578`）。
+- 可拦截：`agent/pre-step` waterfall 可改写或**拒绝**本批（`agent.ts:274-287`）——这是「拒绝执行」的唯一装配层挂点。
+
+> **落到 HelloAI**：`AgentRuntimeContextAssembler.appendReworkContext:585-587` 把**所有轮次**审核意见全量拼入（"共 N 轮历史审核"），与标杆的「替换 + 只重导请求」**方向相反**——这正是「没能力却仍加载全部驳回内容、思考链变长」的机制来源。**收敛动作 = `REF-8.2.1`**。
+
+#### 1.5.3 「做不到」= 结构化 blocked，且带**连续 N 轮门槛**
+
+- **模型可自报**：`update_goal{action:"blocked", blocked_reason}`（必填）→ 落 `GoalBlockReason{code,message}` + `phase:'blocked'`（`goal/tool-goal/src/index.ts:301-318`、`goal/goal/src/types.ts:45-57`）。
+- **防滥用**：连续 `blockedAfterConsecutiveRounds`（默认 **3**）轮**之前拒绝** blocked（`tool-goal/src/index.ts:39`）——即「不许一遇难就甩锅」。
+- **下游**：轮驱动见 `phase !== 'active'` 即停驱动并解挂（`goal-round-driver/src/index.ts:165`）；工具侧 `deferContext(renderWrapupContext(...))` **补一段收尾上下文**（`tool-goal/src/index.ts:319-330`）。
+- 另有**人工升级**工具：`ask_user_question` / `exit_plan_mode` / 工具级 `ask` 审批。
+
+> **落到 HelloAI**：内部 LLM 的 7 个 `internal_*` 工具**无等价物**（实测 `tool_resolved` 事件：`tools`/`effectiveTools` 均只有 `internal_*`，`removedTools=[]`），"做不到"只能写进正文 → 被物化成交付物 → 送审 → 返工 → 死信。**收敛动作 = `REF-8.1.1`**（含 N 轮门槛与终态收尾，形状照抄 1.5.3）。
+
+#### 1.5.4 证据契约的标杆形状 = **结构化轮报**
+
+- DSH 正式路径**没有交付物核验门**：`present` 工具只 `lstat` 校验文件存在、成功后记 `deliverables/presented`（`deliverables/tool-present/src/index.ts:77-108`）；证据要求只在**提示词层**（"gather evidence … before claiming completion"，`goal-round-driver/src/prompt.ts:20-23`）。
+- 真正带证据契约的是**实验性 Ralph 循环**：每轮必须交结构化报告 `{status: continue|complete|blocked, evidence[], nextSteps[], blocker}`，非空 evidence，到 `maxRounds` 终止为 `budget-limited`（`experimental/tool-ralph/src/index.ts:89-100,151-174`）。
+
+> **落到 HelloAI**：HelloAI 的 fail-close 评审（`prompts/subtask-review.md:51-52` 的 VERIFICATION 段）**比标杆更严**——**抄不到现成物**；但**形状可借**：把「证据 + 状态 + 下一步」做成结构化轮报，**一个形状同时喂三件事**——评审要的证据、做不到通道、早停判据（`nextSteps` 重复即收敛失败）。**收敛动作 = `REF-8.2.2`**，并与 `LOG-20261011-007` 的 B 判据合并（见 1.5.5）。
+
+#### 1.5.5 与已登记 A / B / C 的接口（判据可升级）
+
+| 已登记项 | 标杆对照（实测） | 接口结论 |
+|---|---|---|
+| **A 能力闸** | DSH **同样不做任务级能力注册表**：只在**结构性不可行**上派发前拒（`prepareCall` 抛 `UNSUPPORTED_REASONING_EFFORT` / `NO_ADAPTER`，`llm/llm/src/index.ts:885-995`），其余靠**降级**（images→text，`:1078-1082`）与**工具级报错**（无图模态时 `fs/tool-fs/src/read-image.ts:129-137` 直接错） | A 的**方向被标杆印证**；口径应写明「**结构性标记**（需读原始附件/需本机执行）⇒ 拦派发」，不承诺「任务级能力判定」 |
+| **B 收敛熔断** | 同类物 `repeat-tool-reminder` 只在 3/5/8 次**相同调用**时注入纠正，**仅劝告、从不否决**（`guard/repeat-tool-reminder/src/index.ts:36,78-92`） | 我方 B **比标杆硬**（真熔断）；**判据建议升级**：从「同因驳回次数」改为「**结构化轮报里 `status=blocked` 或 `nextSteps` 重复**」——比数驳回次数更早、更准（与 `REF-8.2.2` 同源） |
+| **C 产物接地校验** | 标杆 `present` 只查存在性、不查接地 | **无参考物可抄**，仍是自建；维持「暂不立项」 |
+
+> **一句判语**：标杆在「能力门 / 证据核验」上**比我方松**（不做任务级能力判定、不做交付核验），在「自报阻塞 / 装配收敛」上**比我方紧**（结构化 blocked + N 轮门槛、替换语义）。**要抄的是后两条；前两条我方已更严，别被带松。**
+
+### 1.6 DSH 的「角色形态」与 LLM 全生命周期（本地 checkout `0.2.1-alpha.2`）
+
+> **复核缘起**：① 与外部样本（WorkBuddy 的「调用 skills 后的内部 LLM 上下文」，用户提供）对照发现我们**缺专业角色面**（人设）；② 我们的上下文是「一次拼装、全程不变」，而标杆是「每轮/每步重装配」。本节把标杆的**角色形态**与**全生命周期节点**核准到可借鉴粒度。
+> **数据源**：DSH 官方文档 `docs/agent-lifecycle.zh.md`（时序图）+ `docs/architecture.zh.md#turn-flow`（节点文字版）+ `packages/preset/**` 源码（代码抽样验证，非仅文档）。
+> **候选工作项**（**尚未登记**，待裁定）：`REF-8.1.2`（persona 槽位）/ `REF-8.2.3`（上下文预算与压缩）/ `REF-8.4` 挂点细化（拦截链 = 两个 waterfall 挂点）。
+
+#### 1.6.1 角色 = persona（身份面）+ preset（能力面），**不是** role 枚举
+
+| 面 | 机制 | 证据 |
+|---|---|---|
+| **身份面：persona** | 两个**固定槽位**：`deployment:persona-prefix`（顺序 **−1000**，在 harness identity 之后/固定顺序第一位）与 `deployment:persona-suffix`（**10200**，最后一位）；插件配置项 `personaPrefix` / `personaSuffix`（`{{variable}}` 严格引用） | `packages/core/system-prompt/src/index.ts:181-189,253-268`；槽位序见 `SECTION_ORDERS`（同文件 `:131-165`） |
+| **单 agent 人设** | `@deepseek-ai/dsh-persona` 包：**preset 挂载**该行 → 注册 prefix/suffix **遮蔽部署级默认**；还可把 prefix 变成**该会话的完整系统提示词**（抑制其他所有段落）并为该会话**关闭动态 runtime-context 快照**。文档原话：**「没有这一行，preset 能改变 agent 的工具，却永远改不了它的身份。」** 挂载有纪律：必须在 preset 内挂——全局挂会与提示词注册表自身的人设注册**相撞并明确报错**（人设已有归属） | `packages/preset/persona/README.zh.md` |
+| **能力面：agent preset** | 普通 YAML 声明：`id`/`plugins`（必填）+ `name`/`description`/`order`（roster 位次）；出货 ids = `standard` / `ptc` / `minimal` / `cordis`（`presets/<id>.patch.yml`）。**Host 共享 Agent loop；每个 Agent 只看到自己选定 revision 的 tools/prompts/skills**；registry 管选择 + **修订保留** + profile 编辑；声明提前加载，**改配置只影响之后创建的 Agent** | `packages/preset/agent-preset/README.zh.md:1-25`；格式细则见其 `skills/editing-cordis-compositions/SKILL.md` |
+| **无编排角色枚举** | 全库扫描 `packages/preset` 与 `packages/subagent`：`role` **只**出现在 LLM 消息的 `system`/`user`/`assistant`/`tool` 上——**没有** PLANNER/EXECUTOR/REVIEWER 这类编排角色。协作由 `agent-team`（持久 roster + 任务状态 + inbox）与 `subagent`（子 agent 自带路由/推理档 + `toolFilter`/`maxDepth`）承担 | 全库 grep（本机 checkout） |
+
+> **落到 HelloAI**：我们的 `AgentRole`(PLANNER/EXECUTOR/REVIEWER) 是**平台编排角色**，标杆不需要（它是"一个人的 harness"，无编排层）—— 这层**不必抄**。但 **「agent 的身份面」我们是硬编码亏损**：`AgentRuntimeContextAssembler.buildSystemPrompt:867-874` 写死「你是 HelloAI 平台的子任务执行者（Agent: X）」**且不接受覆盖**；标杆是「部署默认 persona + 按 agent 遮蔽」。**收敛动作候选 = `REF-8.1.2`**（persona 两槽位：来源可为 Agent 行字段或技能包 frontmatter；默认来自平台、按 agent 遮蔽——照抄其挂载纪律）。
+
+#### 1.6.2 LLM 全生命周期节点（turn/step 两层：14 节点 + 2 条旁路）
+
+> 语义：**一个 step = 一次模型请求 + 它调用的工具**；**一个 turn = 0..N 个 step**，在领取首条输入前打开、不再欠工作时关闭。
+
+| # | 节点 | 运行方式（机制） |
+|---|---|---|
+| 1 | `followup(content)` | 入 inbox（`agent/inbox/spliced` / `inserted`，**实时**事件） |
+| 2 | 唤醒 driver | 排队工作唤醒 → `agent/status: running` |
+| 3 | **`turn/start`** | **认领** next-step input + 一条排队消息（`agent/inbox/claimed`） |
+| 4 | **`system-prompt/assemble`** | 固定槽位顺序组装 + 工具 schema —— **每轮/每步重装配**（非一次拼装） |
+| 5 | **`agent/pre-step`（waterfall）** | 决定「**接纳**哪些消息」：`reject` \| `enter(messages, startsRequestSeries?)`；**拒绝 → 关闭不含 step 的轮次** |
+| 6 | `step/start` | 持久事件 |
+| 7 | **`agent/request`（waterfall）** | 可改写请求（换路由/加护栏） |
+| 8 | **`llm.prepareCall(config, signal)`** | 解析**实际路由与能力**；任一异步阶段取消 ⇒ system/users **都不提交** |
+| 9 | 同步准入 | `system/message`（按节点顺序协调）→ `user/message`（逐条、**只准入一次**）→ 按需 `request/header`/`request/context` |
+| 10 | **派生并冻结请求** | `deriveMessages()` 从会话日志投影历史 → 冻结（铁律「**模型可见 ⟺ 已记录**」） |
+| 11 | **流式** | `llm/stream` waterfall → 瞬态 `agent/assistant-stream` chunk*；提交 `assistant/message`（**内嵌**精确 stream）/ 失败 → `assistant/attempt`（**不进历史**）；空内容不派生 |
+| 12 | **工具流水线** | 按 `executionMode` 分类 → barrier + **有界滚动池并发** → `tool/call` →（有序 pre / 并发 execute / 有序 post）→ `tool/result`；失败 step 记录**缺失的工具结果** |
+| 13 | `step/end` | 还欠工具 or 来了新输入 → 认领新批次 → **回到 5**（同轮继续） |
+| 14 | **`agent/turn-stopping`（serial）→ `turn/end` → `status: idle`** | 终态检查点（自然停止且 inbox 空时） |
+
+**两条旁路（对我们最有借鉴价值）**
+
+- **压缩**：`compaction-basic` 在**派生请求之前**经 `agent/pre-step` 处理压力（**不等溢出**）；`agent/request-error` 只服务"规范的上下文溢出"。顺序 = **先剪工具结果**（head/middle/tail + 标记）→ **再选摘要**；恢复在**仍打开的 step 内**，且**只有 surface replacement generation 推进才重试**。
+- **重试**：提供方级失败 → `agent/request-error` 返回 retry 或保留原错；重试**不重跑 assemble、不重跑 pre-step、不重新准入 users**，只重新 prepare + 协调同一渲染组装。
+  ⇒ 标杆把「**step 内重试**」与「**内容级返工**」分开：后者根本不在循环内（靠新输入 / goal 轮 / Ralph 外层）。我们目前是「评审驳回 → 整链重跑」——平台级返工保留，但**缺「step 内重试」这一档**。
+
+**事件分域**：**持久**（`turn/*`、`step/*`、`system/message`、`user/message`、`assistant/message`、`assistant/attempt`、`tool/*`，广播于 `session/event`）vs **实时**（`agent/*`，携带活跃 Agent）；**waterfall** = `agent/pre-step` / `agent/request` / `llm/stream` / `tools/pre|execute|post`；**serial** = `agent/turn-stopping`。SDK 取回放读 `session/event`，实时 UI 读 `agent/assistant-stream`。
+
+#### 1.6.3 与 WorkBuddy 样本的对照（「调用 skills 后的上下文」形态差）
+
+| 样本里的段 | HelloAI 现状 | 判定 |
+|---|---|---|
+| 角色人设（「后端工程师白客」） | 「平台子任务执行者（Agent: X）」，**不可覆盖** | **缺**（= 1.6.1 的 `REF-8.1.2`） |
+| 派发人 / 汇报对象（主理人 → `team-lead`） | 无（上游 = 平台） | 平台编排语境不同，**不必抄**；但「向谁回填什么」我们已有 EXECUTION_RECORD 承接 |
+| 背景 / 目标 / 文件清单 | 子任务四要素（内容/交付物/验收/约束） | **结构等价**，且我们多了验收标准 + 依赖产出参考 |
+| 行为规格（**优先级从高到低**） | 验收标准 + 约束（**无显式优先级序**） | 可借：约束段加「硬约束 > 软要求」的显式序 |
+| 硬约束（违反即返工） | systemPrompt 仅一句「不得伪造」 | **平台级硬约束未成段**——应放**稳定面**（systemPrompt），与 persona 同批改 |
+| 交付要求（汇报含哪些字段） | EXECUTION_RECORD + **VERIFICATION 围栏**（`REF-8.2.2` 落点） | **我方更结构化**（证据/STATUS/NEXT_STEPS） |
+
+#### 1.6.4 落到 HelloAI：五条可借（按性价比）
+
+| # | 借鉴点 | 我们的现状 | 落点（候选编号） |
+|---|---|---|---|
+| 1 | **persona 两槽位**（默认来自平台、按 agent 遮蔽；挂载纪律：不许全局挂） | `buildSystemPrompt` 首句硬编码且不可覆盖 | 落点 `REF-8.1.2`（来源：Agent 行字段 或 技能包 frontmatter） |
+| 2 | **拦截链 = 两个 waterfall 挂点**（`pre-step` 管准入/拒绝/压缩触发；`request` 管改写请求） | `REF-8.4` 现表述为「Advisors 唯一挂点」（单点） | **`REF-8.4` 挂点细化**：**A 能力闸**天然属 `pre-step`（接纳这批输入时否决）；**B 收敛熔断**更贴 `turn-stopping` / `request-error` 侧 |
+| 3 | **上下文预算的触发时机与顺序**（装配前查预算 → 先剪工具结果 → 再摘要；重试不重装配） | 无预算/无压缩，只有分段硬截断（依赖段 64000 字符） | 落点 `REF-8.2.3`（两道 + 两触发 + 审计事件；锚点 `G-021`） |
+| 4 | **技能正文尺寸纪律**：出货 `SKILL.md` 渲染后 **< 8192 字符**（与工具结果修剪阈值协同） | `internal_load_skill` 拉全文，**无尺寸约束** | 技能包侧加正文上限（或装配侧按预算截断）；与上下文预算同批 |
+| 5 | **可版本化 preset**（改配置只影响之后创建的 Agent + 修订保留） | 改 agent 配置**立即生效且不可追溯** | 登记即可（不急；与 §8 jar 化同批评估） |
+
+> **与 §1.5 的关系**：§1.5 解决「执行侧到评审侧的**契约同源**」（结论已立行动层条目）；本节解决「**身份面 + 装配时机**」。两条线共同指向同一个判断：**我们的循环本体不缺，缺的是"装配层与挂点"**——与 §3「收敛动作都改在装配层、不动循环本体」的结论一致。
+
+### 1.7 影响面评估与实施清单（"抄之前先看会碰什么"）
+
+> **用途**：把「哪些候选会碰架构 / 状态机 / 业务流程」一次摆清，作为**逐项实施前的影响预判表**（只答「会碰什么」，不答「做到哪一步」）。
+
+#### 1.7.1 逐候选影响面
+
+| 候选 | 架构 | 状态机 | 业务流程 | 判定 |
+|---|---|---|---|---|
+| **persona 槽位**（`REF-8.1.2`） | 装配层 1 处 + Agent/技能字段 | **无** | 无（prompt 多一段） | 装配层改动，零状态机影响 ⇒ 可抄 |
+| **技能 `role` 属性** | 技能 frontmatter + `SkillPackage` 加字段 + 装配读取 | **无** | 无 | 放心抄 |
+| **上下文预算/压缩**（`REF-8.2.3`） | 装配前挂点 + 工具结果剪枝/摘要 | 无（只产审计事件，不改状态） | 无（省 token、防打爆） | 装配层改动，零状态机影响 ⇒ 可抄 |
+| **技能正文长度纪律**（<8192） | 校验规则 + 技能包 | **无** | **无** | 放心抄（与压缩修剪阈值耦合） |
+| **拦截链两挂点**（`REF-8.4` 细化） | 循环外层挂点（Advisors） | **潜在**：A 能力闸「否决」若落在循环内 ⇒ 多一条状态迁移 | 可能影响派单成功率 | 抄挂点**位置**，否决内容留**派发层**（复用 V27.1 先例） |
+| **step 内重试**（1.6.2 旁路） | 循环内 | ⚠️ **禁止**挂平台状态机（必须与「评审返工」严格分开；混起来会改 `REWORK`/`reassign_attempt_count` 口径） | 无 | 抄，但划红线 |
+| **会话单源投影**（§3 动作①） | **唯一有结构成本的一条**：数据写路径（提升现有 `agent_event`） | 无（同一状态、换投影面） | 审计/回放增强 | 已降支撑项；低成本可做 |
+| **可版本化 preset**（1.6.4-5） | **新增数据层 + 管理面** | 按「只影响之后创建的 Agent」⇒ 无；若做成「运行中切换 revision」**会碰状态机** | 能力变更可追溯 | 后置；**别做运行中切换** |
+
+#### 1.7.2 两条红线（实施时逐条核对）
+
+1. **循环内的事（准入 / 重试 / 压缩）不得直接改平台状态机**——平台状态机只能由「循环结束后的回写」驱动；我们已有这条**唯一边界**：`ExecutionResultHandler.handleReport`（其"状态非 IN_PROGRESS 即丢弃上报"守卫已两次证明能兜住新路径）。
+2. **拦截链抄"挂点位置"，否决内容留在派发层**——能力闸/熔断的判定复用 V27.1「拒派 + 标人工介入」先例，不要在循环内新造否决路径。
+
+#### 1.7.3 影响面的验证方式（不写进度）
+
+- **已实施项的影响实测证据**：见 `doc/log/` 对应 `LOG-` 条目（过程记录的唯一载体）；
+- **待实施项清单（含落点 / 验收 / 依赖顺序）**：见 `plan/HelloAI 借鉴落地实施计划.md` §10.3 追加注与差距表锚点（`G-021` / `G-022`）；
+- **本节只回答「会碰什么」（影响面与红线），不回答「做到哪一步了」**——后者以差距表为唯一事实源（治理规则 §3.3/§3.6）。
 
 ---
 
@@ -134,8 +283,16 @@
 
 ## §6 证据索引
 
-**DSH（本地实测 `E:/workspace/deepseek-harness-master`）**
+**DSH（本地实测 `E:/workspace/deepseek-harness-master`；§1.5 复核用检出 `deepseek-harness-master` 版本 `0.2.1-alpha.2`）**
+- 调用链/终止/预算（§1.5.1）：`packages/core/agent-loop/src/agent.ts:214,252-254,298,361-365,400,409,453,547-555,564,604`、`tool-calls.ts:158`、`session/src/types.ts:201-232`、`goal/goal/src/index.ts:244`、`experimental/tool-ralph/src/index.ts:35`
+- 装配槽位/替换语义（§1.5.2）：`system-prompt/src/index.ts:131-165,313,578`、`agent.ts:274-287,277-282,411-440,426`
+- blocked 通道（§1.5.3）：`goal/tool-goal/src/index.ts:39,301-318,319-330`、`goal/goal/src/types.ts:45-57`、`goal/goal-round-driver/src/index.ts:165`
+- 证据契约/轮报（§1.5.4）：`deliverables/tool-present/src/index.ts:77-108`、`goal-round-driver/src/prompt.ts:20-23`、`experimental/tool-ralph/src/index.ts:89-100,151-174`
+- 能力门/降级（§1.5.5）：`llm/llm/src/index.ts:885-995,1078-1082`、`fs/tool-fs/src/read-image.ts:129-137`、`guard/repeat-tool-reminder/src/index.ts:36,78-92`
 - 会话铁律：`packages/core/session/src/index.ts:876`、`surface.ts:7`
+- **角色形态（§1.6.1，`0.2.1-alpha.2` 复核）**：`packages/core/system-prompt/src/index.ts:131-165`（`SECTION_ORDERS` 槽位）/ `:181-189`（`PERSONA_PREFIX_SECTION` / `PERSONA_SUFFIX_SECTION`）/ `:253-268`（`personaPrefix` / `personaSuffix` 配置）；`packages/preset/persona/README.zh.md`（单 agent 人设 + 遮蔽 + 挂载纪律）；`packages/preset/agent-preset/README.zh.md:1-25`（preset YAML / revision / roster）
+- **全生命周期（§1.6.2）**：`docs/agent-lifecycle.zh.md`（时序图，14 节点）、`docs/architecture.zh.md#turn-flow`（节点文字版）、`:110-116`（事件分域 + waterfall/serial 纪律）、`:122-130`（会话日志 ↔ `deriveMessages()` 投影）
+- **技能尺寸纪律（§1.6.4-4）**：`packages/preset/agent-preset/README.zh.md:50`（出货 SKILL.md < 8192 字符，与工具结果修剪阈值协同）
 - 技能目录+惰性加载：`packages/skill/tool-skill/src/index.ts:81-160,215-251,319-321`；发现 `packages/skill/skill-filesystem/src/index.ts:149,730`
 - 工具 scope 分层：`packages/core/tools/src/index.ts`（`view(scope)`）
 - 能力来源：`docs/architecture.zh.md:106`
@@ -155,7 +312,8 @@
 ## §7 局限说明
 
 1. 本报告是**调研后的调整思路**，不是设计稿——收敛动作 ①②③④⑤ 的**具体实现结构（新类、接口签名、包归属）需在转 `plan/` 时再细化**，本报告只定「方向与改在哪层」。
-2. 引用行号以当前本地 checkout 为准（DSH `0.1.0-rc.8`、octop-harness `1.0.2`）——版本迭代快，落地时按当时代码重新定位。
+2. 引用行号以当前本地 checkout 为准（§1.1/§1.2 按 DSH `0.1.0-rc.8`、octop-harness `1.0.2`；**§1.5 / §1.6 已按 DSH `0.2.1-alpha.2` 重新定位**——两版之间行号会漂，架构意图未变）——版本迭代快，落地时按当时代码重新定位。
+3. §1.6 的**节点表以 DSH 官方文档（`docs/agent-lifecycle.zh.md` / `architecture.zh.md`）为主源**，代码抽样验证限于 persona/preset 与槽位常量；事件名与挂点纪律如与实现有出入，以当时代码为准。
 3. 收敛动作 ①（会话单源化）若要落库，涉及事务/幂等边界，需与 `ExecutionResultHandler` 的 afterCommit 回写对齐，属实现期细节，本报告不展开。
 
 ---
