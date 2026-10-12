@@ -1,6 +1,10 @@
 # HelloAI 基础架构调整实施计划
 
-> **状态：ACTIVE**
+> **状态：Done** — 归档 2026-10-12（原 `doc/plan/HelloAI 基础架构调整实施计划.md`）。
+> **完成依据**：批次一~四（`BASE-1.x`~`BASE-4.x`）**全部 PASS**（2026-09-12 / 2026-09-13）；6 项技术债（§9.9.4）**全部清零**；`G-012` = DONE。
+> **代码 / DB 实测（2026-10-12 复核）**：迁移 `V87`~`V93` 全在（`V87` 已 `DROP COLUMN sys_user.role`）；`StpUtil.checkLogin()` 落 `AuthServiceImpl:90`；`@SaCheckPermission` **35 文件 / 162 处**；`AdminOnlyInterceptor` 已放宽为「平台账号身份」判定。
+> **残留（已登记，不在本专项范围，**勿视为未完成**）**：① `G-013` 仍标 `PARTIAL`——仅剩「`active-timeout` 超时**过期触发**未实测」（实现与单测已覆盖，属验证缺口）＋ `McpAuthFilter` 用 `validateAdminToken` 属**有意设计**（非缺口）；②「管理面路径归位」登记为**后续专项**（§9.9.3 代价 #2）；③ 类名 `AdminOnlyInterceptor` 与新语义不符，登记为**技术债**（§9.9.3 代价 #3）。
+> **本文件冻结只读**，不再更新正文；当前状态以《HelloAI 实现差距表》`G-012` / `G-013` 为准。
 >
 > **定位**：平台基础架构（底座）专项调整，独立于《HelloAI 重构实施计划》的
 > 业务主线（Event Stream → Dual Executor → AgentRuntime → Capability）。本专项聚焦

@@ -1,5 +1,6 @@
 # HelloAI RM 存量缺口清偿计划（2026-10-04）
 
+> **状态：Active**（RM5 / RM6 / RM8 / RM9 仍在办；RM9 上帝类拆分未动）
 > **范围**：代码质量路线图 **RM5 / RM6 / RM8 / RM9**（阶段 B 剩余存量缺口）
 > **依据**：`doc/review/HelloAI 架构V2进度与质量审计报告（2026-10-02）.md` §6.3
 > **规范**：`doc/HelloAI_AI开发协作规约.md`（§9 生命周期 / §13 先计划 / §14 最小变更 / §40 红线）；`doc/HelloAI_CODE_STYLE.md`（§6 依赖方向 / §7.2 端口反转判据 / §7.3 Adapter / §9 类规模）
@@ -97,16 +98,80 @@
 ## 4. RM9 上帝类拆分（后续专项，L，一类一笔）
 
 ### 4.1 现状（实测）
-| 类 | 行数 | 方法数 | 主要职责（§9.1 判据：两个以上即应拆） |
+
+> **行数复测（2026-10-12）**：三类自 2026-10-04 起继续增长 —— `McpToolServiceImpl` 1181 → **1229**、`SubTaskServiceImpl` 1379 → **1559**、`RequirementClarifyServiceImpl` 1558 → **1557**（方法清单同批取证，见 §4.3）。
+
+| 类 | 行数(10-12) | 方法数 | 主要职责（§9.1 判据：两个以上即应拆） |
 |---|---|---|---|
-| `McpToolServiceImpl` | 1181 | 40 | MCP 工具集（pull/ack/claim/start/heartbeat/upload/submit/block/checkIn/checkOut/status/deps/detail）+ 私有辅助 |
-| `SubTaskServiceImpl` | 1379 | 79 | 状态机流转 + 认领/租约 + rework 预算 + inbox 通知 + 统计 + 批量创建 |
-| `RequirementClarifyServiceImpl` | 1558 | 97 | 会话 CRUD + 澄清轮次 + chat/clarify 模式切换 + Web Search + prompt 渲染 + 命令解析 |
+| `McpToolServiceImpl` | 1229 | 40 | MCP 工具集（pull/ack/claim/start/heartbeat/upload/submit/block/checkIn/checkOut/status/deps/detail）+ 私有辅助 |
+| `SubTaskServiceImpl` | 1559 | 79 | 状态机流转 + 认领/租约 + rework 预算 + inbox 通知 + 统计 + 批量创建 |
+| `RequirementClarifyServiceImpl` | 1557 | 97 | 会话 CRUD + 澄清轮次 + chat/clarify 模式切换 + Web Search + prompt 渲染 + 命令解析 |
 
 ### 4.2 改法
+
 - 按 **§9.1 业务职责**拆分（**不按方法数量**）；§9.2 禁止拆成互相转发的 `FooHelper/FooManager`。
-- **一类一笔提交**；建议顺序（报告建议）：`McpToolServiceImpl`（协议构造/状态机/DB 编排三职责最清晰）→ `SubTaskServiceImpl` → `RequirementClarifyServiceImpl`。
-- 拆分点须**逐类取证**（方法内聚度、调用链），拆法与目标类名**需与用户确认**（属架构动作，规约 §42 不由 AI 自行定义方向）。
+- **一类一笔提交**；执行顺序：`McpToolServiceImpl`（协议门面 / 任务认领 / 上报 / 只读组装四簇最清晰）→ `SubTaskServiceImpl` → `RequirementClarifyServiceImpl`。
+- **保留原类名作薄门面**（`implements` 接口不变）⇒ 外部调用方与 Spring 注入点**零改动**，新增职责类为包内 `@Service`，门面逐方法委托。这使「一类一笔」的每一笔都能**独立编译 + 独立回归 + 单笔 revert**。
+- ✅ **目标类名与切分线已确认**（架构动作，规约 §42；**2026-10-12 用户裁定：全部接受**）⇒ 下列 `4.3` 为**定稿**，可开工（一类一笔）。
+
+### 4.3 切分线（**已定稿**，2026-10-12 逐类取证 + 用户裁定全部接受）
+
+> 取证口径：`grep -nE "public |private |protected "` 取方法清单 + 字段依赖表；职责簇按**调用链内聚度**归并（同一入参族 / 同一状态机阶段 / 同一外部副作用面）。
+
+#### 4.3.1 `McpToolServiceImpl`（1229 行）→ 门面 + 3 职责类
+
+| 目标类 | 承接方法（行号） | 内聚依据 |
+|---|---|---|
+| `McpToolServiceImpl`（**保留，薄门面**） | 全部 13 个 `@Tool` 入口**逐方法委托**；保留私有守卫 `assertAgentActive:1161` / `assertToolEnabled:1171` / `refreshDutyLease:1193,1203` / `parseInboxId:1217` | 守卫是**横切**（每个工具入口都调），且 `@Tool` 协议面必须保持单一注册点 |
+| `McpTaskClaimService` | `pullTasks:114,126` · `ack:198` · `claimSubTask:228` · `startSubTask:375` + `recordClaimStarted:444` · `recordClaimRejected:469` | 「任务获取 → 确认 → 认领 → 开工」是**同一条前置链**，共享 `subTaskQueryPort` / `subTaskCommandPort` |
+| `McpAgentReportService` | `heartbeat:496` · `uploadArtifact:547` · `submitResult:576` · `reportBlocked:662` · `checkIn:712,718` · `checkOut:805` · `getAgentStatus:841` + `mergeReportedSkills:760` | 「Agent 上报自身状态与结果」——共享 `heartbeatService` / `agentDutyLeaseService` / `agentInboxService` |
+| `McpReadModelService` | `getDepsSummary:880` · `getSubTaskDetail:1046` + `loadUpstreamContent:995` · `buildSubTaskDetail:1073` · `buildContributors:1103` · `buildAttachmentItems:1132` | **纯只读组装**（零状态变更），共享 `taskRunningSpecPort` / `attachmentPort` |
+
+> 判据：门面**只做委托 + 守卫**，不含业务分支；三职责类之间**互不调用**（无 helper 环）。
+
+#### 4.3.2 `SubTaskServiceImpl`（1559 行）→ 门面 + 4 职责类
+
+| 目标类 | 承接方法（行号） | 内聚依据 |
+|---|---|---|
+| `SubTaskServiceImpl`（**保留，薄门面**） | `extends ServiceImpl<SubTaskMapper, SubTask>` 保留（CRUD / `toEntity` / `toSnapshot` / `toView`）；`requiredSkillsOf:123` · `mergeSkills:141,1417` · `updateDraft:162` · `updateContext:1407` · `claimConstraint:1435` · `updateDeadline:1497` · `createBatch:1200` | MyBatis-Plus 基类能力 + 草稿/技能等**配置面**（低频写） |
+| `SubTaskStateMachineService` | `changeStatus:331,337` · `claim:392` · `start:398` · `submit:404` · `complete:410` · `pause:477` · `resume:483` · `rework:792` · `reworkFresh:873` · `block:1002,1008` · `cancel:1044` · `reassign:1193` · `assignNext:1055` · `resetToPendingForDispatch:1080` · `markManualIntervention:973` + `consumeReworkBudget:838` · `recordReworkStartedSafely:925` · `invalidateAttachmentsOnRework:950` | **状态迁移唯一入口**（写入 + `AgentEventRecorder` 埋点）；是「第二状态机」风险的**单点收敛位** |
+| `SubTaskNotificationService` | `sendReworkInboxNotification:492` · `buildReworkSummary:513` · `formatMissingEvidence:554` · `sendApprovedInboxNotification:581` · `buildApprovedSummary:600` · `clip:620` · `sendInboxNotification:630` · `buildUncertaintyLines:731` · `notifyAgentHandover:762` · `publishAssignmentEvent:782` | **出站副作用面**（inbox 投递 + 摘要渲染 + 领域事件），零状态机依赖 |
+| `SubTaskLeaseService` | `renewCurrentNodeLeases:1100` · `reclaimExpiredLeases:1126` · `claimAtomic:1304` · `incrementExternalFallbackCount:1365` · `listPausedBefore:1352` · `listTimedOutAssigned:1360` · `listReviewOrphans:1226` + `listReviewOrphanViews:1456` | **租约 / 回收 / 巡检**（调度侧只读候选 + 原子认领），共享 `watchdogProperties` / `concurrencyQuotaService` |
+| `SubTaskQueryService` | `list:209` · `listAvailable:231` · `filterReady:246` · `listMine:271` · `getByIdForUpdate:288` · `isReady:296` · `getView:1395` · `listViewsByTaskId:1449` · `listViewsByTaskIdAndStatus:1491` · `listViewsByIds:1556` · `listDraftsInInsertOrder:1534` · `saveDrafts:1481` · `countByStatusForAgent:1257` 等全部 `count*` / `listViews*` / `listInFlight*` | **只读查询与视图投影**（无状态变更），是三类中最大且最安全的一簇 |
+
+#### 4.3.3 `RequirementClarifyServiceImpl`（1557 行）→ 门面 + 5 职责类
+
+| 目标类 | 承接方法（行号） | 内聚依据 |
+|---|---|---|
+| `RequirementClarifyServiceImpl`（**保留，薄门面**） | 会话 CRUD（`create:225,237,272` · `listConversations:746` · `detail:755` · `abandon:661` · `delete:675` · `requireActive:1395`）+ 模式切换（`switchToClarify:697,711` · `switchToChat:731` · `isClarifyMode:1269` · `isChatMode:1274`）+ `listPlannerOptions:526` | 会话生命周期与模式开关（**入参最浅、无 LLM 语义**） |
+| `ClarifyRoundOrchestrator` | `sendMessage:282,295` · `retryRound:348` · `doRound:776,780` · `runRoundCore:812` · `runFinalizeLlmRound:876` · `runLlmRound:1285` · `makeRoundDecision:1028` · `applyClarifyDecision:1071` · `runClarifySearchRound:827` | **轮次编排主链**（读状态 → 决策 → LLM → 落库） |
+| `ClarifyStreamService` | `streamRound:372` · `runStreamRound:382` · `runClarifyStream:451` · `playClarifyQuestion:497` · `streamErrorMessage:515` + 常量 `CLARIFY_PLAY_CHUNK_SIZE:84` / `CLARIFY_PLAY_DELAY_MS:87` | **SSE 流式面**（`Flux<ChatStreamEvent>`），与同步链零耦合 |
+| `ClarifyFinalizeService` | `finalize:558` · `finalizeAfterDraft:535` · `casFinalize:570` · `regenerate:588` · `buildTaskFromDraft:613` · `updateFinalDraftFields:1415` | **成任务链路**（终稿 → `Task`，含 CAS 幂等） |
+| `ClarifyCommandSearchService` | `isPlannerCommand:1216` · `isTaskCommand:1226` · `commandMatches:1231` · `plannerCommandExtra:1243` · `taskCommandExtra:1257` · `runTaskDirectRound:850` · `resolveChatSearchOutcome:1090` · `doChatWebSearch:1116` · `resolveSearchSource:1169` · `isWebSearchEnabled:1189` · `SearchPolicy:1195` · `resolveSearchPolicy:1205` | **命令解析 + Web Search 决策**（纯函数 + 已有 `ClarifyWebSearchOrchestrator` 依赖） |
+| `ClarifyPromptRenderer` | `renderPrompt:1443` · `renderDecisionPrompt:1126` · `applyDescriptionSectionGuard:941` · `isFinalMissingSections:987` · `hasAllDescriptionSections:993` · `recordDescriptionSectionWarn:1010` + 常量 `DESCRIPTION_SECTION_KEYWORDS:135` / `DESCRIPTION_SECTION_RETRY_HINT:142` / 各 `*_TEMPLATE_PATH` | **模板渲染 + 描述段守卫**（纯函数，无状态写入） |
+
+### 4.4 迁移顺序与批次（一类一笔）
+
+```text
+RM9-a  McpToolServiceImpl     → 门面 + 3 类（最小、协议面单一，先做以验证手感）
+RM9-b  SubTaskServiceImpl     → 门面 + 4 类（含状态机单点收敛，风险最高）
+RM9-c  RequirementClarifyServiceImpl → 门面 + 5 类（最大，纯编排无跨域副作用）
+```
+
+**每笔内部子序**：① 先抽**只读簇**（`McpReadModelService` / `SubTaskQueryService` / `ClarifyPromptRenderer`、`ClarifyCommandSearchService`）⇒ 零行为变更、易验证；② 再抽**副作用簇**（通知 / 流式 / 租约）；③ 最后抽**状态机 / 编排簇**（风险最高）。
+
+### 4.5 验收与回滚（每笔必做）
+
+| 层级 | 手段 |
+|---|---|
+| 编译 | `JAVA_HOME=ms-17.0.20.1 mvn -o -B -pl helloai-core -am test-compile`（**不 clean**，应用在跑） |
+| 定向单测 | 三类各自的 `*Test` + 状态机 / 租约 / SSE 相关测试 |
+| 全量单测 | `mvn -o -B -DskipTests=false test` 7 模块 BUILD SUCCESS；`<testcase>` 数**不低于**本笔前基线 |
+| 架构守卫 | `bash scripts/ci/check-arch-freeze.sh` EXIT=0；组 1/2 基线不动（拆分**不得**新增跨域前向 import） |
+| 行为等价 | 契约型方法补「等价性」用例（`SubTaskView` 投影字段逐字一致） |
+| 回滚 | **单笔 revert**（保留门面 ⇒ 无外部调用方改动，revert 即回原状） |
+
+> **风险提示**：`SubTaskServiceImpl` 是**状态机唯一入口**（`changeStatus` 被全链调用），拆分时**不得**让状态类反向依赖查询类（会造环）；`RequirementClarifyServiceImpl` 的 `doRound` / `runRoundCore` 存在重载对，抽取时须**整组迁移**。
 
 ---
 

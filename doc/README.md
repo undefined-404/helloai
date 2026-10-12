@@ -16,7 +16,6 @@
 | `HelloAI 目标架构.md` | 稳定目标边界 | ✅ |
 | `HelloAI 实现差距表.md` | Current → Target 差距（**只记当前状态，随迭代就地更新**） | ✅ |
 | `plan/HelloAI 重构实施计划.md` | 当前实施顺序（业务主线） | ✅ |
-| `plan/HelloAI 基础架构调整实施计划.md` | 基础架构（RBAC 底座）专项实施顺序（任务编号 BASE-xxx，独立于业务主线编号） | ✅ |
 | `HelloAI_CODE_STYLE.md` | 代码与工程规范 | ✅ |
 | `HelloAI_AI开发协作规约.md` | AI Agent 开发行为规约（生命周期 / 验证体系 / 红线） | ✅ |
 | `文档体系分类与治理规则.md` | 文档分类、准入规则与流转纪律（元文档） | 参考 |
@@ -85,6 +84,9 @@
 | `AgentTeams_Octop_源码复核与helloai借鉴对照.md` | `Analysis` | 两项目源码独立复核 · Fork/Return/沙箱/外部Agent/RAG 四主题对照 · §六为借鉴项索引 + 硬约束 1 订正、硬约束 2 转为 `REF-6.5`（2026-10-09） |
 | `helloai四能力完善优先级与借鉴路线.md` | `Analysis` | 用户裁定四项优先级（skills > 备份/恢复 > 沙箱 > RAG；**同日两项调整：Fork 收缩为 WONTFIX、沙箱降级为条件触发**）· **§三排序块已移出**、§六为落点索引（`REF-x.y`），含实现判断勘误（2026-10-09） |
 | `helloai借鉴清单_四项之外_完整版.md` | `Analysis` | 四项之外 A/B/C/D 四档借鉴清单 · 判据级与明确不抄 · §汇总为落点索引 · **全部来源行已补 `[实测]` + `路径:行号`**（2026-10-09） |
+| `Agent 运行时开源选型参考（2026-10-12）.md` | `Analysis` | 外部 agent runtime（DSH / octop-harness）与 Java 等价物（LangGraph4j）选型；结论「借鉴 > 替换」（2026-10-12） |
+| `HelloAI 自建 java-harness 可行性分析（2026-10-12）.md` | `Analysis` | 照 DSH / octop-harness 自建可独立运行 Java harness 的可行性；结论：从零 ≈45k–50k 行 / 10–24 人月，改走「按 DSH 补半套」（2026-10-12） |
+| `HelloAI 内部 agent 内核收敛与借鉴思路（2026-10-12）.md` | `Analysis` | 内部内核收敛轴「可见面收敛」（L1 工具集 / L2 技能目录 / L3 上下文）+ `D1~D4`·`E1` 落点（引流 `REF-8`）；非设计、非计划（2026-10-12） |
 
 ## 2.3 计划与方案（`plan/`）
 
@@ -99,12 +101,14 @@
 | 文档 | 主题 |
 |---|---|
 | `HelloAI 重构实施计划.md` | 业务主线实施顺序（Event Stream → Dual Executor → AgentRuntime → Capability；2026-10-09：备份/恢复提前到 Sandbox 之前，Fork WONTFIX 后 Event 消费面回到 Recovery 收尾） |
-| `HelloAI 基础架构调整实施计划.md` | RBAC 底座专项（`BASE-xxx`） |
 | `HelloAI_RM存量缺口清偿计划（2026-10-04）.md` | 代码质量路线图 RM5/6/8/9 分轮清偿（**RM9 未动，仍在办**） |
 | `HelloAI 上线核对清单.md` | **只在部署环境可验**的核对项（口径：本地可验项归各专项验证集，不进本清单）；首节「备份/恢复（`REF-2`）」三条：镜像内 `pg_dump`、服务器侧首次真备份、停机恢复路径 C 演练 |
 | `HelloAI 借鉴落地实施计划.md` | 借鉴落地专项（`REF-x.y`，已登记进《差距表》§0 编号口径表）：技能可装配 > 备份/恢复 > RAG（可后置）+ 四项之外 A 档 + `REF-6` 判据登记 + `REF-7` 工作详情快照；含各组验证集与文档回填口径。已裁定：Fork 收缩（`D-2026-10-09-5`）、**REF-3 沙箱降级为条件触发**与 **REF-7 新增**（`D-2026-10-09-6`）。**当前版本与逐项 `Status` 以文档头 / 各节为准，本索引不复述（避免腐烂）** |
+| `HelloAI 计划编排与排期总览.md` | 各计划之间的**依赖与冲突视图 + 统一执行次序**（编排视图，**不承载状态**）；含 2026-10-12 横向比对（陈旧快照冲突 / 无编号待排项 `D1~D4`·`E1`）与 `T0~T3` 分层排期 |
 
 > **2026-10-09 出列记录（`plan/` 只留在办项）**：3 份**已执行完成**的方案 / 清单迁入 `archive/implemented/` 并标 `Done` —— `HelloAI_V2回归测试方案（2026-10-04）.md`、`HelloAI_全面复测清单（2026-10-06）.md`、`deploy-checklist-arch-collect-2026-10.md`。
+>
+> **2026-10-12 出列记录**：`HelloAI 基础架构调整实施计划.md`（`BASE-1.x`~`BASE-4.x` 批次一~四全部 PASS + 6 项技术债清零）迁入 `archive/implemented/` 并标 `Done`；同批从 §1 权威文档表与本节表格摘出。残留两项归差距表 `G-013`（`active-timeout` 过期触发未实测 + `McpAuthFilter` 有意设计），**不在该专项范围**。
 
 ## 2.4 对外手册（`manual/`）
 

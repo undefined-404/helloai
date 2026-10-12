@@ -1,8 +1,10 @@
 # HelloAI Task-Team 与附件可见性设计
 
-> 状态：**待拍板**（schema 定稿后再动 Flyway —— 迁移一旦执行不可回改）
-> 日期：2026-10-02
-> 触发：真机混合执行测试（task `2106009817950142465`）暴露「外部 agent 无法读取同任务其他子任务产出」
+> **Status: `Partial`** · **Scope: `task_agent_member`（`V98`）任务级授权 + `attachment.visibility`（`V99`）+ 附件读判据「可见性枚举 × 任务成员关系」单一入口（`AttachmentVisibilityPolicy`）；**不含** P2 MCP 按需拉全文工具（`listTaskArtifacts` / `getUpstreamArtifact`，已由 `R9` 改形为复用 REST 通道、不新增工具）与 P3 Team 运行时化** · **差距锚点：`G-014`**
+>
+> **最后更新**：2026-10-12（Status 由「待拍板」订正为 `Partial` —— P1 已落地：`V98` / `V99` / 单一读判据入口；P2 / P3 未做）
+> **日期**：2026-10-02
+> **触发**：真机混合执行测试（task `2106009817950142465`）暴露「外部 agent 无法读取同任务其他子任务产出」
 
 ---
 

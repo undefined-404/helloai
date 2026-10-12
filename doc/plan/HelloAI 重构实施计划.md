@@ -1,8 +1,8 @@
 # HelloAI 重构实施计划
 
-> **状态：ACTIVE**
+> **状态：Active**
 >
-> 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 全链收官，P1 主体推进——G-004 / G-006 / G-010 / G-011 落地并完成 2026-09-10 外部执行者双轮全链闭环（Round2/Round3）。后续：P1 剩余项（Recovery/Fork 消费面 / Skill 回流规范 / Sandbox 第二阶段）+ 技术债清偿。近况增量：2026-09-11 外部上下文供给打通（子任务详情 MCP 工具 V76 + REST/inbox 三通道，提交 8fa09e0）；2026-09-13 Sa-Token 异步上下文修复（SSE 流式接口 500：拦截器 ASYNC 放行 + 异常处理器 SSE 分支，提交 dd3bd18，见 §14）。
+> 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 全链收官，P1 主体推进——G-004 / G-006 / G-010 / G-011 落地并完成 2026-09-10 外部执行者双轮全链闭环（Round2/Round3）。后续：P1 剩余项（**Recovery 消费面** / 技能回流规范〔`REF-1.4` 待接线〕 / Sandbox 第二阶段〔**条件触发**，Fork 已 WONTFIX〕）+ 技术债清偿。近况增量：2026-09-11 外部上下文供给打通（子任务详情 MCP 工具 V76 + REST/inbox 三通道，提交 8fa09e0）；2026-09-13 Sa-Token 异步上下文修复（SSE 流式接口 500：拦截器 ASYNC 放行 + 异常处理器 SSE 分支，提交 dd3bd18，见 §14）。
 >
 > **2026-10-09 次序与范围变更（用户裁定，`D-2026-10-09-4` / `D-2026-10-09-5` / `D-2026-10-09-6`）**：借鉴落地专项（`plan/HelloAI 借鉴落地实施计划.md`，编号 `REF-x.y`）并入本主线执行：
 >
@@ -18,7 +18,9 @@
 > - **新增 `G-020` 外部 Agent 工作详情快照**（`D-2026-10-09-6⑤`，`REF-7`，可后置）——不改变本主线次序，登记见《目标架构》§15。
 > - 本次调整不新增/删除其余 P1 能力项，不改变 P0 已收官口径。
 >
-> 最后更新：2026-10-09
+> **2026-10-12 主线补充（用户裁定，`D-2026-10-12-1` / `D-2026-10-12-2`）**：**`REF-8`「内部 LLM 能力面」列为当前 T1 最高优先**（差距锚点 `G-021`）——这是「让内部 LLM 从单轮文本生成器进化为有工具、有手脚、能按需装配技能的 agent」的唯一直接产出层。次序 **`REF-8.1` 工具面解封 → `REF-8.2` 手脚+上下文 → `REF-8.3` 技能惰性加载 → `REF-8.5` 覆盖面收敛**（`REF-8.4` 拦截链可并行铺，是 `LOG-20261011-007` A+B 的唯一挂点）。细则见 `plan/HelloAI 借鉴落地实施计划.md` §10（动作明细 / 收敛完成判据 / 红线）；**本主线不内嵌其进度**（进度以《实现差距表》`G-021` 为准）。
+>
+> 最后更新：2026-10-12
 
 # 1. 重构目标
 
@@ -73,7 +75,9 @@ A6 Timeline 消费迁移
 A7 Replay / Audit 最小读取
 ```
 
-## 现状基线（2026-09-07 代码核查）
+## 落地点（P0-A 已结项，2026-09-07）
+
+> **进度指针（不内嵌快照，`C1`）**：Event Stream 验收与消费面进度**以《差距表》`G-001` / `G-006` 为准**。以下为 P0-A 的**结项证据留痕**（A1~A7 均已落地），**不是**「当前基线」。
 
 A1~A5 已落地：`agent_event` 三层模型（Run / Turn / Step，append-only）+ EventType（含 SKILL_RESOLVED=5 / TOOL_RESOLVED=6 / ENVIRONMENT_RESOLVED=7 step 槽位）+ AgentEventRecorder（write-only）。验证：`verify-c3-events.ps1`。
 
@@ -162,11 +166,13 @@ Reviewer Decision
 Task Service
 ```
 
-## 现状基线（2026-09-10）
+## 现状与进度（指针，不内嵌快照）
 
-八件套现状：Context / EventRecorder / Environment 已落地；ToolRegistry 为元数据面（12 平台工具，仅注入 prompt 描述）；ToolExecutor 已落地（执行回路真身）；AgentLoop 已落地（`runtime/loop` 手动工具循环——ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，maxIterations 硬上限防死循环）；Session 为中断恢复检查点（AgentSessionService）；SandboxProvider 契约已落地（五边界 + 诚实策略，见 §6）。旧链编排仍在 `SubTaskExecutionServiceImpl`（约 790 行）。
-
-**第一阶段~第四阶段已全部落地**——Docker / K8s 隔离能力属 P1/P2 后置（见 §6）。
+> **本节原为 2026-09-10 的进度快照，已按 `plan/HelloAI 计划编排与排期总览.md` §3 `C1` 改为指针。**
+> 快照与 `REF-1.x` / `REF-4.x` 的实际推进不一致（曾造成「技能 / RAG 尚未开工」的误判），且违反借鉴落地 §1「双方不得互相复述进度」。
+> **当前状态以《差距表》为准**（`AgentRuntime` → `G-002` / `G-003`）；**技能与工具面进度见 `plan/HelloAI 借鉴落地实施计划.md` `REF-1` / `REF-4` 各节 `Status`**。
+>
+> 结构性结论（长期有效，**非**进度）：八件套 **Context / EventRecorder / Environment / ToolRegistry / ToolExecutor / AgentLoop / Session / SandboxProvider** 均已落地（第一阶段~第四阶段）；`SandboxProvider` 为契约 + 诚实策略（见 §6）；旧链编排仍在 `SubTaskExecutionServiceImpl`。Docker / K8s 隔离能力后置（见 §6）。
 
 # 5. P1：Skill Capability Package
 
@@ -190,7 +196,8 @@ Skill Package
 
 保持现有 Markdown 兼容，不建立第二套 Skill Runtime。
 
-现状（2026-09-10）：元数据层已落地并保持 resolve 行为兼容——SkillPackage（name / version / description / requiredTools / dependencies / inputSchema / outputSchema / validationRules）3 个 eng-* 已结构化；requiredTools→tools 双链并集联动（增量 A）+ 拆解技能通路（增量 B）已接；任务级四段（创建 → 拆解 → 派发 → 执行）贯通，真实任务带 required_skills 实测完成（2026-09-10：Round2 硬门槛准入 / Round3 技能分布派单）。剩余：技能回流贡献规范（G-010 后置）。详见差距表 G-004。
+> **进度指针（不内嵌快照，`C1`）**：技能侧落地进度**以 `plan/HelloAI 借鉴落地实施计划.md` `REF-1` 各节 `Status` 为唯一来源**（`REF-1.1`~`1.3b` / `1.5` / `1.6` 已交付；`REF-1.4` 能力已落未接线），能力状态见《差距表》`G-004`。
+> 本节的**长期有效口径**：保持 Markdown 兼容、**不建立第二套 Skill Runtime**；`requiredTools → tools` 双链并集联动；任务级四段（创建 → 拆解 → 派发 → 执行）贯通。~~原 2026-09-10 快照（「3 个 `eng-*`」）已作废~~——实测 classpath 已为 **4 个** `eng-*.md`。
 
 # 6. P1：Sandbox Provider（**2026-10-09 起：条件触发，不排期**）
 
@@ -214,7 +221,7 @@ Remote
 K8s
 ```
 
-现状（2026-09-07 代码核查）：已有 ExecutionEnvironment / ExecutionEnvironmentProvider（remote-agent / local-process，场所标签，非安全沙箱）；SandboxProvider Contract 已落地（SandboxProvider / SandboxContext / Sandbox / ExecutionPolicy 五边界，复用环境解析 + 诚实策略无 ISOLATED）；第二阶段（Docker / Remote / K8s）后置。
+> **进度指针（不内嵌快照，`C1`）**：本项**整组降级为「条件触发」**（见本节头部状态变更），**不排期**；触发条件与形态裁定以节首为准。契约面长期有效：已有 `ExecutionEnvironment` / `ExecutionEnvironmentProvider`（场所标签，非安全沙箱）；`SandboxProvider` 契约（`SandboxProvider` / `SandboxContext` / `Sandbox` / `ExecutionPolicy` 五边界，复用环境解析 + 诚实策略**无** `ISOLATED`）已落地。实测状态见《差距表》`G-005`；借鉴侧预案见 `plan/HelloAI 借鉴落地实施计划.md` `REF-3`。
 
 # 7. P1：Event Consumers
 
@@ -236,7 +243,8 @@ Recovery
 
 > **Fork 移出本序列（2026-10-09，`D-2026-10-09-5`）**：Fork 的触发入口 / 原 Run 冻结 / 驱动新 Run 执行三项 **WONTFIX**；`AgentEventForkService`（快照复制）保留为未接线的内部能力。故 Event 消费面以 **Recovery 收尾**。
 
-现状（2026-09-10）：Timeline 已并轨 Event（A6）；Replay / Audit 全链暴露——读侧（A7，见 P0-A）→ API + UI 工作台（增量 C1）→ 外部认领埋点 + run 级汇总卡（增量 C2）→ 任务/子任务维度端点（免传 runId，service 内部推导）+ 工作台选择器/名称解析/payload 结构化展开/事件流深链（增量 D）；外部执行轨迹加厚为四事件（AGENT_STARTED → AGENT_COMPLETED → REVIEW_STARTED → REVIEW_APPROVED），agent_execution_record 仍 0 行（细线状态，登记 G-006 剩余缺口）。Recovery / Fork 消费面待建（当前下一动作；注：MQ 级死信恢复 dlx 包——DeadLetterRecoveryService / DlxAlertConsumer / V60 mq_dead_letter_archive——为子任务重派兑底，属命令/结果链路，**非** Event Stream 消费面，两者勿混）。
+> **进度指针（不内嵌快照，`C1`）**：Event 消费面落地进度见《差距表》`G-006`。**长期有效口径**：`Timeline → Replay → Audit` 已全链暴露；**`Fork` 已于 2026-10-09 `D-2026-10-09-5` WONTFIX**，序列以 **`Recovery` 收尾**（`Recovery` 消费面 = 本项当前下一动作）；`agent_execution_record` 仍 0 行（细线状态）。
+> **勿混**：MQ 级死信恢复（`DeadLetterRecoveryService` / `DlxAlertConsumer` / `V60 mq_dead_letter_archive`）为子任务重派兜底，属**命令 / 结果链路**，**非** Event Stream 消费面。
 
 # 8. P1：Planner 能力感知与自适应粒度（G-010）
 
@@ -256,7 +264,10 @@ Planner 拆解不再"闭眼规划"，而是感知平台真实能力后再拆：
 - **STANDARD**：默认档（白名单为空 / 常规场景）；
 - **COARSE**：目标 + 约束 + DoD——"不许改的事"（constraints）必填。
 
-现状基线（2026-09-10）：**S1~S4 已落地（含实测）**——S1 数据层（V74 sub_task.required_skills JSONB + constraints TEXT）、S2 拆解侧（技能目录常驻注入 / 三档粒度 / 目录过滤 task_plan_skill_filtered 审计 / 超 20 项截断）、S3 传递链（mergeSkills 并集五装箱点同源 / inbox 技能要求行 / REST 下行 / 草案确认 UI 展示编辑 + updateDraftById fail-close 端点 / executor SKILL.md 增量）、S4 双场景实测 PASS：平台内链（2026-09-09，与 G-011 S5 合并）+ 外部执行链（2026-09-10 双轮全链闭环——Round2 eng-doc-standard 硬门槛准入 / Round3 技能分布派单与 135:20 分排序实证）。后置缺口：①技能回流贡献规范（D5-3）；②verify-skill-packages.ps1（D5-2）已交付（2026-09-10，18 PASS 双验证）；③④已由 G-011 清偿（见差距表 G-010）。设计：`doc/design/Planner_Capability_Awareness.md`。
+> **进度指针（不内嵌快照，`C1`）**：G-010 落地进度**以《差距表》`G-010` 为准**；技能侧（装配 / 安装 / 闸门）见 `plan/HelloAI 借鉴落地实施计划.md` `REF-1` 各节 `Status`。以下为 S1~S4 的**结项证据留痕**（2026-09-10 快照），**不是**「当前基线」——其中「`verify-skill-packages.ps1` 已交付」一项已随 `REF-1.2`（元数据迁 md）**同批重写**。
+> 长期有效口径：三档粒度（`FINE` / `STANDARD` / `COARSE`）为 **rule-based 决策矩阵**（执行者画像 × 难度调制），LLM 自判粒度后置；拆解侧「技能目录常驻注入 + 超 20 项截断」。设计：`doc/design/Planner_Capability_Awareness.md`。
+
+**落地点（S1~S4，2026-09-10 结项证据）**——S1 数据层（V74 sub_task.required_skills JSONB + constraints TEXT）、S2 拆解侧（技能目录常驻注入 / 三档粒度 / 目录过滤 task_plan_skill_filtered 审计 / 超 20 项截断）、S3 传递链（mergeSkills 并集五装箱点同源 / inbox 技能要求行 / REST 下行 / 草案确认 UI 展示编辑 + updateDraftById fail-close 端点 / executor SKILL.md 增量）、S4 双场景实测 PASS：平台内链（2026-09-09，与 G-011 S5 合并）+ 外部执行链（2026-09-10 双轮全链闭环——Round2 eng-doc-standard 硬门槛准入 / Round3 技能分布派单与 135:20 分排序实证）。后置缺口：①技能回流贡献规范（D5-3）；②verify-skill-packages.ps1（D5-2）已交付（2026-09-10，18 PASS 双验证）；③④已由 G-011 清偿（见差距表 G-010）。设计：`doc/design/Planner_Capability_Awareness.md`。
 
 # 9. P1：需求包准入与不确定性显式管理（G-011）
 
@@ -276,7 +287,10 @@ Requirement Package（goal / scope / outOfScope / assumptions / openQuestions）
 
 定界原则：**不建自动闸门**——openQuestions 不阻断拆解/派发，裁决点在草案确认（人工逐条处理）与执行侧（fail-close 走既有 BLOCKED 链）；不建平行架构（需求包解析=静态工具类，uncertainties 消费并入既有审查轨道 A）；gap_kind 实现路径分类与任务后蒸馏闭环后置批次二/三。
 
-现状基线（2026-09-10）：**S1~S5 已落地（含实测）**——S1 数据层（V75 sub_task.uncertainties JSONB + requirement_conversation.final_package JSONB + RequirementPackageParser）、S2 澄清侧（五字段结构化终稿 + final_package 定点写）、S3 拆解侧（uncertainties 继承落库 + 降级审计 + COARSE WARN + D5 兜底）、S4 传递链（执行注入 D6 三段 / 审查核验 D7 双占位符 + 轨道 A 第 8/9 条 / REST + inbox + 草案 UI）、S5 实测 PASS：平台内链（2026-09-09 与 G-010 S4 合并）+ 外部执行链（2026-09-10 双轮全链闭环——审查者引用 uncertainties 申报作驳回依据实证）。技术债：Agent 注册幂等顺序缺陷仍在（validateModelType 先于 registerOrGet）；配套 JSONB uncertainties CCE 死锁已修复（2026-09-10）。设计：`doc/design/Requirement_Package_Uncertainty.md`。
+> **进度指针（不内嵌快照，`C1`）**：G-011 落地进度**以《差距表》`G-011` 为准**。以下为 S1~S5 的**结项证据留痕**（2026-09-10 快照），**不是**「当前基线」。
+> 长期有效口径（定界原则）：**不建自动闸门**——`openQuestions` 不阻断拆解 / 派发，裁决点在草案确认与执行侧（fail-close 走既有 `BLOCKED` 链）；不建平行架构（需求包解析 = 静态工具类，`uncertainties` 消费并入既有审查轨道 A）。设计：`doc/design/Requirement_Package_Uncertainty.md`。
+
+**落地点（S1~S5，2026-09-10 结项证据）**——S1 数据层（V75 sub_task.uncertainties JSONB + requirement_conversation.final_package JSONB + RequirementPackageParser）、S2 澄清侧（五字段结构化终稿 + final_package 定点写）、S3 拆解侧（uncertainties 继承落库 + 降级审计 + COARSE WARN + D5 兜底）、S4 传递链（执行注入 D6 三段 / 审查核验 D7 双占位符 + 轨道 A 第 8/9 条 / REST + inbox + 草案 UI）、S5 实测 PASS：平台内链（2026-09-09 与 G-010 S4 合并）+ 外部执行链（2026-09-10 双轮全链闭环——审查者引用 uncertainties 申报作驳回依据实证）。技术债：Agent 注册幂等顺序缺陷仍在（validateModelType 先于 registerOrGet）；配套 JSONB uncertainties CCE 死锁已修复（2026-09-10）。设计：`doc/design/Requirement_Package_Uncertainty.md`。
 
 # 10. P2：Quality Gate / Agent Fleet
 
