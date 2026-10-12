@@ -180,9 +180,9 @@ if (Test-Path $sseFile) { Remove-Item $sseFile -Force }
 
 Write-Host "STEP2: open MCP SSE long connection"
 $job = Start-Job -ScriptBlock {
-    param($absFile)
-    & curl.exe -i -N ($BaseUrl + "/mcp/sse") *>&1 | Out-File -Encoding utf8 -FilePath $absFile
-} -ArgumentList $sseFile
+    param($absFile, $baseUrl)
+    & curl.exe -i -N ($baseUrl + "/mcp/sse") *>&1 | Out-File -Encoding utf8 -FilePath $absFile
+} -ArgumentList $sseFile, $BaseUrl
 Start-Sleep -Seconds $SseWarmupSec
 
 $sid = ""
