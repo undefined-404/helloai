@@ -56,7 +56,8 @@ class AgentMcpServerServiceImplTest {
             "internal_register_output_attachment",
             "internal_read_attachment",
             "internal_list_skills",
-            "internal_load_skill");
+            "internal_load_skill",
+            "internal_report_blocked");
 
     private AgentMcpServerServiceImpl service;
     private LambdaQueryChainWrapper<AgentMcpServer> chain;

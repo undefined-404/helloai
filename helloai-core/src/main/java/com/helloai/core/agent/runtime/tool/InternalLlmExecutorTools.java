@@ -2,6 +2,7 @@ package com.helloai.core.agent.runtime.tool;
 
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.port.AttachmentPort;
+import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
@@ -71,6 +72,15 @@ public class InternalLlmExecutorTools {
     private final AttachmentPort attachmentPort;
     /** 技能解析服务（REF-8.3：全量目录 + 惰性加载）；走 {@code getPackage} / {@code loadBody}。 */
     private final AgentSkillSpecService agentSkillSpecService;
+    /** 子任务命令端口（REF-8.1.1：自报阻塞 → {@code block} + 人工介入标记）。 */
+    private final SubTaskCommandPort subTaskCommandPort;
+
+    /** 自报阻塞前置：必须先读过子任务详情（知情拒绝闸门，见 {@code internal_report_blocked}）。 */
+    private static final String TOOL_GET_SUB_TASK_DETAIL = "internal_get_sub_task_detail";
+    /** 阻塞原因最短长度（防敷衍式「做不到」）。 */
+    private static final int MIN_BLOCKED_REASON_CHARS = 10;
+    /** 人工介入原因码（写入 {@code context.manualIntervention}，供兜底任务识别）。 */
+    private static final String BLOCKED_REASON_CODE = "executor_reported_blocked";
 
     /**
      * 查询当前子任务详情（执行内容 / 交付物 / 验收标准 / 执行约束 / 不确定性申报 / 前置附件）。
@@ -95,6 +105,8 @@ public class InternalLlmExecutorTools {
             @ToolParam(description = "内部执行链鉴定的执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
             @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId) {
         ToolInvocationContext.Ids ids = requireInternalChain();
+        // REF-8.1.1：登记「本链读过任务详情」——internal_report_blocked 的知情拒绝闸门据此判定
+        ToolInvocationContext.markCalled(TOOL_GET_SUB_TASK_DETAIL);
         return mcpToolService.getSubTaskDetail(ids.agentId(), ids.subTaskId());
     }
 
@@ -177,6 +189,63 @@ public class InternalLlmExecutorTools {
                 fileSize != null ? fileSize : 0L,
                 storageUrl);
         return java.util.Map.of("attachmentId", attachmentId, "subTaskId", ids.subTaskId());
+    }
+
+    /**
+     * 自报阻塞（REF-8.1.1：「做不到」的结构化通道）。
+     *
+     * <p><b>为什么存在</b>：本类此前的工具面<b>没有任何「做不到」出口</b>——模型确认自己无法完成时，
+     * 唯一表达方式是把「做不到」写进正文，而正文会被平台物化成交付物并进入评审 ⇒ 必然被打回
+     * （`prompts/subtask-review.md:51-52` fail-close）⇒ 返工至死信（`LOG-20261012-007` 实测复现）。
+     * 外部通道有 {@code reportBlocked}（13 工具之一），内部通道此前缺等价物。</p>
+     *
+     * <p><b>形状（借鉴 DSH {@code update_goal.blocked}，见研究文档 §1.5.3）</b>：
+     * 结构化原因 → 落 ⓐ 子任务状态 {@code BLOCKED}（{@link SubTaskCommandPort#block}，内含 PLANNER 通知）
+     * ⓑ 人工介入标记（{@link SubTaskCommandPort#markManualIntervention}，防兜底任务反复重派）。
+     * 阻塞一旦生效，循环结束后的 INTERNAL 回写因「状态非 IN_PROGRESS」被
+     * {@code ExecutionResultHandler} 丢弃 ⇒ <b>不再进入评审</b>。</p>
+     *
+     * <p><b>防滥用（「连续 N 轮门槛」在本域的等价物）</b>：DSH 数的是 goal 轮（同一目标反复尝试），
+     * 本域一次执行只有一条执行链，故等价物取「<b>知情拒绝</b>」——必须先调用过
+     * {@code internal_get_sub_task_detail}（看过任务要求）才允许报阻塞，且原因不得敷衍（&ge; 10 字）。
+     * 不采用「先耗 N 轮再许拒绝」：那会把「一两轮就看清做不到」的诚实情形反过来拖长（与收敛意图相反）。</p>
+     *
+     * @param agentId 执行者 Agent ID（平台自动注入）
+     * @param reason  阻塞原因：缺什么 / 已试过什么 / 需要什么才能继续
+     * @return 阻塞结果（状态 + 提示）
+     */
+    @Tool(name = "internal_report_blocked", description = """
+            【何时使用】确认自己**没有能力**完成本子任务时调用（最后一手）：所需输入 / 原始附件不可得、
+            需要本机环境（shell/文件/服务）而你没有、验收要求的证据无论如何拿不到。
+            【Gotchas】
+            - 调用前**必须**先 internal_get_sub_task_detail 看过任务要求（未看过即调用会被拒绝）
+            - 报阻塞后子任务转 BLOCKED 并标记人工介入，**不再进入评审**——不要再用正文硬写「做不到」充当交付物
+            - reason 必须写清「缺什么 / 试过什么 / 需要什么才能继续」，敷衍或过短会被拒绝
+            - 有能力尝试就先尝试：这是最后一手，不要一遇困难就报阻塞
+            【相关工具】internal_get_sub_task_detail / internal_get_deps_summary
+            """)
+    public Object internalReportBlocked(
+            @ToolParam(description = "执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
+            @ToolParam(description = "阻塞原因：缺什么 / 已试过什么 / 需要什么才能继续", required = true) String reason) {
+        ToolInvocationContext.Ids ids = requireInternalChain();
+        if (!ToolInvocationContext.hasCalled(TOOL_GET_SUB_TASK_DETAIL)) {
+            throw new BizException("报阻塞前必须先调用 " + TOOL_GET_SUB_TASK_DETAIL
+                    + " 了解任务要求（知情拒绝闸门：不清楚要求就不算「做不到」）");
+        }
+        String trimmed = reason == null ? "" : reason.trim();
+        if (trimmed.length() < MIN_BLOCKED_REASON_CHARS) {
+            throw new BizException("阻塞原因过短（至少 " + MIN_BLOCKED_REASON_CHARS
+                    + " 字）：请写清「缺什么 / 试过什么 / 需要什么才能继续」");
+        }
+        subTaskCommandPort.block(ids.subTaskId(), trimmed, ids.agentId());
+        Map<String, Object> extra = new java.util.HashMap<>();
+        extra.put("reason", trimmed);
+        extra.put("agentId", ids.agentId());
+        subTaskCommandPort.markManualIntervention(ids.subTaskId(), BLOCKED_REASON_CODE, extra);
+        log.info("内部执行者自报阻塞: agentId={}, subTaskId={}, reason={}",
+                ids.agentId(), ids.subTaskId(), trimmed);
+        return Map.of("subTaskId", ids.subTaskId(), "status", "BLOCKED", "manualIntervention", true,
+                "note", "已转入人工介入，本轮产出不再进入评审");
     }
 
     /**

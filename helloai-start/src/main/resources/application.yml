@@ -199,6 +199,27 @@ helloai:
     provider: deepseek
     model: deepseek-chat
     mock-response-prefix: "[mock-executor]"
+    # REF-8.1.2 persona 槽位（对齐 DSH `deployment:persona-prefix` / `deployment:persona-suffix`）：
+    # 部署级默认人设——非空时 prefix 紧跟内置身份行之后、suffix 落在整个 systemPrompt 末尾。
+    # 遮蔽纪律（照抄 dsh-persona）：`agent.labels.personaPrefix / personaSuffix` 优先于本配置，
+    # 即「部署给默认、单个 Agent 可覆盖」。两者默认空 ⇒ 不注入、行为与改造前逐字一致。
+    persona-prefix: ""
+    persona-suffix: ""
+    # REF-8.2.3 上下文压缩（对齐 DSH `compaction-basic` + `compaction-tool-result-pruner`）：
+    # 两道 = ①确定性工具结果剪枝（纯文本 + 标记，可审计）②仍超预算才 LLM 摘要（替换而非追加）。
+    # 触发 = 每轮模型调用前预估 token ≥ 窗口 × threshold-ratio（DSH 默认 0.8）；
+    #        另含提供方报错后的「压缩 + 重试本轮」（max-overflow-retries，成功响应后重置）。
+    # context-window-tokens 须与部署模型实际窗口一致（DSH 从路由模型信息读；我们暂以配置承载）。
+    context-compaction-enabled: true
+    context-window-tokens: 64000
+    context-compaction-threshold-ratio: 0.8
+    context-compaction-retain-ratio: 0.16
+    context-compaction-max-overflow-retries: 1
+    # 单次执行内的摘要次数上限（防抖动：净收益不保证 ⇒ 只接受净减 + 额度封顶）
+    context-compaction-max-summaries-per-run: 2
+    tool-result-prune-threshold-chars: 8192
+    tool-result-prune-head-chars: 4096
+    tool-result-prune-tail-chars: 1024
     sync-timeout-seconds: 180
     # 对话并发优化 B 项：平台内 LLM 调用并发上限（信号量，<=0 不限流）。
     # 真实 Provider 共用同一批 API Key，上游有 RPS 限流，超限排队等待、超时友好报错。

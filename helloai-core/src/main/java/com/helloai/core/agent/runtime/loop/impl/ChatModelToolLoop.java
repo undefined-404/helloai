@@ -60,6 +60,20 @@ public class ChatModelToolLoop implements AgentLoop {
     /** 事件 payload 中工具输出截断长度（防大输出刷爆事件表）。 */
     private static final int OUTPUT_TRUNCATE_CHARS = 500;
 
+    /** 上下文压缩器（REF-8.2.3）；no-op 时行为与改造前逐字一致。 */
+    private final ContextCompactor compactor;
+
+    /** Spring 注入构造（REF-8.2.3 上下文压缩，对齐 DSH `compaction-basic`）。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    public ChatModelToolLoop(ContextCompactor compactor) {
+        this.compactor = compactor == null ? ContextCompactor.noop() : compactor;
+    }
+
+    /** 无压缩器构造（既有单测 / 无 Spring 场景）——等价于压缩关闭。 */
+    public ChatModelToolLoop() {
+        this(ContextCompactor.noop());
+    }
+
     @Override
     public AgentLoopResult run(AgentLoopInput input) {
         if (input.chatModel() == null || input.toolExecutor() == null) {
@@ -82,9 +96,43 @@ public class ChatModelToolLoop implements AgentLoop {
         String lastText = "";
         Set<String> executedToolNames = new LinkedHashSet<>();
 
+        int overflowRetries = 0;
+        int summarizeBudget = compactor.maxSummarizationsPerRun();
         for (int i = 0; i < input.maxIterations(); i++) {
             iterations = i + 1;
-            ChatResponse response = input.chatModel().call(new Prompt(messages, buildOptions(input)));
+            DefaultToolCallingChatOptions options = buildOptions(input);
+            // REF-8.2.3 第一道挂点（对齐 DSH `agent/pre-step` 压力触发）：剪枝 → 仍超预算才摘要
+            //（摘要受本执行内的剩余额度约束，防「每轮都试一次」的抖动）
+            CompactionOutcome pressure = compactor.compactIfNeeded(
+                    messages, input.chatModel(), options, summarizeBudget);
+            if (pressure != null && pressure.summarized()) {
+                summarizeBudget--;
+            }
+            recordCompaction(input, i + 1, pressure);
+            ChatResponse response;
+            while (true) {
+                try {
+                    response = input.chatModel().call(new Prompt(messages, options));
+                    break;
+                } catch (RuntimeException e) {
+                    // REF-8.2.3 溢出恢复（对齐 DSH `agent/request-error`）：压缩一次后重试本轮；
+                    // 超上限或无可压内容则原样抛出（保持改造前的失败语义）
+                    if (overflowRetries >= compactor.maxOverflowRetries()) {
+                        throw e;
+                    }
+                    CompactionOutcome fix = compactor.compactOnOverflow(
+                            messages, input.chatModel(), options, summarizeBudget);
+                    if (fix == null || !fix.changed()) {
+                        throw e;
+                    }
+                    if (fix.summarized()) {
+                        summarizeBudget--;
+                    }
+                    overflowRetries++;
+                    recordCompaction(input, i + 1, fix);
+                }
+            }
+            overflowRetries = 0;   // 成功响应后重置（DSH 同口径：成功 assistant/message 重置溢出计数）
             if (response == null) {
                 return AgentLoopResult.error("chat model returned null response", iterations, toolCallCount,
                         totalTokens);
@@ -162,6 +210,20 @@ public class ChatModelToolLoop implements AgentLoop {
                 safeMap("tool", toolName, "success", result.success(),
                         "output", truncate(result.output())));
         return result;
+    }
+
+    /** 记录 REF-8.2.3 压缩审计事件（write-only；无压缩发生时不记）。 */
+    private void recordCompaction(AgentLoopInput input, int step, CompactionOutcome outcome) {
+        if (outcome == null) {
+            return;
+        }
+        recordEvent(input, step, AgentEventType.CONTEXT_COMPACTED, safeMap(
+                "trigger", outcome.trigger(),
+                "prunedToolResults", outcome.prunedToolResults(),
+                "shadowedMessages", outcome.shadowedMessages(),
+                "estimatedTokensBefore", outcome.estimatedTokensBefore(),
+                "estimatedTokensAfter", outcome.estimatedTokensAfter(),
+                "summarized", outcome.summarized()));
     }
 
     private void recordEvent(AgentLoopInput input, int step, AgentEventType eventType, Map<String, Object> payload) {

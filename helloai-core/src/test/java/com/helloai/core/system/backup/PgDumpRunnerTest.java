@@ -136,7 +136,13 @@ class PgDumpRunnerTest {
     @DisplayName("配置了绝对路径但文件不存在 ⇒ 显式报错（不落到 PATH 去找同名命令）")
     void absolutePathMissingFailsLoudly() {
         BackupProperties p = props();
-        p.setPgDumpPath("C:/definitely/not/here/pg_dump.exe");
+        // 平台无关地构造「绝对且不存在」的路径：写死 Windows 盘符路径（C:/…）在 macOS/Linux 上
+        // 会被 Path.isAbsolute 判为**相对**路径，脚本会走「向上逐层找」分支、消息不含「路径不存在」，
+        // 变成只在非 Windows 上红的假失败（2026-10-12 实测：macOS 全量单测唯一红项）。
+        String missingAbsolute = java.nio.file.Path
+                .of(System.getProperty("java.io.tmpdir"), "helloai-pgdump-not-here", "pg_dump")
+                .toAbsolutePath().toString();
+        p.setPgDumpPath(missingAbsolute);
         PgDumpRunner runner = new PgDumpRunner(p, envWithDatasource());
 
         assertThatThrownBy(runner::assertDumpAvailable)

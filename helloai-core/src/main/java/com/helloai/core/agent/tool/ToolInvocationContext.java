@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.HashSet;
+import java.util.Set;
+
 /**
  * 内部执行链的「工具调用上下文」——把执行者的真实标识<b>带外</b>注入内部工具的调用参数
  * （REF-8.1 A1 接线，2026-10-12）。
@@ -50,6 +53,16 @@ public final class ToolInvocationContext {
     /** 当前线程绑定的执行者标识（未绑定为 {@code null}）。 */
     private static final ThreadLocal<Ids> CURRENT = new ThreadLocal<>();
 
+    /**
+     * 本执行链<b>已调用过的内部工具名</b>（REF-8.1.1）。
+     *
+     * <p>用途：「知情后才许做的动作」的判据——例如 {@code internal_report_blocked}（自报阻塞）
+     * 要求先读过子任务详情（{@code internal_get_sub_task_detail}），否则拒绝。
+     * 登记点在 {@link #inject}（内部工具执行的唯一咽喉），随 {@link #bind} 重置、
+     * {@link #unbind} 清空，与执行链生命周期严格一致。</p>
+     */
+    private static final ThreadLocal<Set<String>> CALLED = new ThreadLocal<>();
+
     private ToolInvocationContext() {
     }
 
@@ -63,11 +76,43 @@ public final class ToolInvocationContext {
      */
     public static void bind(Long agentId, Long subTaskId) {
         CURRENT.set(new Ids(agentId, subTaskId));
+        CALLED.remove();   // 二次绑定 = 新执行链，调用记录清零
     }
 
     /** 解绑（{@code agentLoop.run()} 返回后必须调用，防线程复用串味）。 */
     public static void unbind() {
         CURRENT.remove();
+        CALLED.remove();
+    }
+
+    /**
+     * 登记「本执行链调用过该内部工具」（由工具方法自身在入口调用，REF-8.1.1）。
+     *
+     * <p>刻意<b>不</b>放在 {@link #inject} 里：注入是参数改写点，直连调用（单测 / 进程内复用）
+     * 不经过它；放在工具方法入口才与「工具确实被执行」等价。</p>
+     *
+     * @param toolName 工具名（须与 {@code @Tool(name=…)} 逐字一致）
+     */
+    public static void markCalled(String toolName) {
+        if (CURRENT.get() == null || toolName == null) {
+            return;
+        }
+        Set<String> called = CALLED.get();
+        if (called == null) {
+            called = new HashSet<>();
+            CALLED.set(called);
+        }
+        called.add(toolName);
+    }
+
+    /**
+     * 本执行链是否调用过某内部工具（未绑定 / 未调用均为 false）。
+     *
+     * @param toolName 工具名（须与 {@code @Tool(name=…)} 逐字一致）
+     */
+    public static boolean hasCalled(String toolName) {
+        Set<String> called = CALLED.get();
+        return called != null && toolName != null && called.contains(toolName);
     }
 
     /** 当前线程绑定的标识；未绑定返回 {@code null}（仅供诊断 / 测试）。 */

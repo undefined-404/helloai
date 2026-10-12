@@ -35,8 +35,10 @@ class InternalLlmExecutorToolsTest {
     private final McpToolService mcpToolService = mock(McpToolService.class);
     private final AttachmentPort attachmentPort = mock(AttachmentPort.class);
     private final AgentSkillSpecService agentSkillSpecService = mock(AgentSkillSpecService.class);
+    private final com.helloai.core.agent.port.SubTaskCommandPort subTaskCommandPort =
+            mock(com.helloai.core.agent.port.SubTaskCommandPort.class);
     private final InternalLlmExecutorTools tools =
-            new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService);
+            new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService, subTaskCommandPort);
 
     /** REF-8.1 A1 强制闸门：本类工具仅可由内部执行链调用，单测需先绑定执行链上下文。 */
     @BeforeEach
@@ -188,5 +190,62 @@ class InternalLlmExecutorToolsTest {
 
         assertThat(result).isEqualTo("## 代码评审规范\n正文……");
         verify(agentSkillSpecService).loadBody("eng-code-review");
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  REF-8.1.1：自报阻塞（「做不到」的结构化通道）
+    // ────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("REF-8.1.1 知情拒绝闸门：未读过任务详情即报阻塞 → 拒绝（不落任何状态）")
+    void shouldRejectBlockedBeforeReadingDetail() {
+        assertThatThrownBy(() -> tools.internalReportBlocked(11L, "缺少原始数据文件，无法核对字段"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("必须先调用 internal_get_sub_task_detail");
+        verify(subTaskCommandPort, org.mockito.Mockito.never())
+                .block(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    @DisplayName("REF-8.1.1 原因过短（敷衍）→ 拒绝")
+    void shouldRejectTooShortReason() {
+        when(mcpToolService.getSubTaskDetail(11L, 22L)).thenReturn(new McpToolService.SubTaskDetail());
+        tools.internalGetSubTaskDetail(11L, 22L);   // 满足知情闸门
+
+        assertThatThrownBy(() -> tools.internalReportBlocked(11L, "做不了"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("阻塞原因过短");
+    }
+
+    @Test
+    @DisplayName("REF-8.1.1 知情后报阻塞 → 子任务转 BLOCKED + 标记人工介入（不再进评审）")
+    void shouldBlockSubTaskAfterReadingDetail() {
+        when(mcpToolService.getSubTaskDetail(11L, 22L)).thenReturn(new McpToolService.SubTaskDetail());
+        tools.internalGetSubTaskDetail(11L, 22L);
+
+        Object result = tools.internalReportBlocked(11L, "缺少用户导出的原始数据文件，平台可读附件内无该文件，无法核对字段");
+
+        verify(subTaskCommandPort).block(22L,
+                "缺少用户导出的原始数据文件，平台可读附件内无该文件，无法核对字段", 11L);
+        verify(subTaskCommandPort).markManualIntervention(
+                org.mockito.ArgumentMatchers.eq(22L),
+                org.mockito.ArgumentMatchers.eq("executor_reported_blocked"),
+                org.mockito.ArgumentMatchers.anyMap());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = (Map<String, Object>) result;
+        assertThat(map).containsEntry("status", "BLOCKED").containsEntry("subTaskId", 22L);
+    }
+
+    @Test
+    @DisplayName("REF-8.1.1 闸门随执行链：解绑后调用记录清零（不跨链串味）")
+    void shouldClearCalledMarkersOnUnbind() {
+        when(mcpToolService.getSubTaskDetail(11L, 22L)).thenReturn(new McpToolService.SubTaskDetail());
+        tools.internalGetSubTaskDetail(11L, 22L);
+        assertThat(ToolInvocationContext.hasCalled("internal_get_sub_task_detail")).isTrue();
+
+        ToolInvocationContext.unbind();
+        assertThat(ToolInvocationContext.hasCalled("internal_get_sub_task_detail")).isFalse();
+        ToolInvocationContext.bind(11L, 22L);   // 复位供 @AfterEach/#后续用例
     }
 }

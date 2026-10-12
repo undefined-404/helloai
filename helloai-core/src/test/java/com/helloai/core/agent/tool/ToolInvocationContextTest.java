@@ -120,4 +120,25 @@ class ToolInvocationContextTest {
         assertThat(ToolInvocationContext.inject("internal_get_sub_task_detail", SCHEMA_WITH_BOTH, input))
                 .isEqualTo(input);
     }
+
+    @Test
+    @DisplayName("REF-8.1.1 调用登记：绑定后 markCalled 生效、解绑即清零（知情类闸门判据）")
+    void shouldTrackCalledToolsPerChain() {
+        assertThat(ToolInvocationContext.hasCalled("internal_get_sub_task_detail")).isFalse();
+
+        ToolInvocationContext.bind(11L, 22L);
+        ToolInvocationContext.markCalled("internal_get_sub_task_detail");
+        assertThat(ToolInvocationContext.hasCalled("internal_get_sub_task_detail")).isTrue();
+        assertThat(ToolInvocationContext.hasCalled("internal_read_attachment")).isFalse();
+
+        ToolInvocationContext.unbind();
+        assertThat(ToolInvocationContext.hasCalled("internal_get_sub_task_detail")).isFalse();
+    }
+
+    @Test
+    @DisplayName("REF-8.1.1 未绑定时 markCalled 为空操作（外部/无链调用不产生误判）")
+    void shouldIgnoreMarkCalledWhenUnbound() {
+        ToolInvocationContext.markCalled("internal_get_sub_task_detail");
+        assertThat(ToolInvocationContext.hasCalled("internal_get_sub_task_detail")).isFalse();
+    }
 }

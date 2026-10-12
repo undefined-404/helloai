@@ -93,6 +93,65 @@ public class AgentExecutionProperties {
      */
     private int externalMaxIterations = 5;
 
+    /**
+     * 内部 LLM 系统提示词的**部署级 persona 前缀**（REF-8.1.2，对齐 DSH `deployment:persona-prefix`）。
+     *
+     * <p>空 ⇒ 只用平台内置身份行；非空 ⇒ 紧跟内置身份行之后注入。</p>
+     * <p><b>遮蔽纪律</b>（照抄 DSH `dsh-persona`）：`agent.labels.personaPrefix` 优先于本配置——
+     * 部署给默认，单个 Agent 可遮蔽。</p>
+     */
+    private String personaPrefix = "";
+
+    // ────────────────────────────────────────────────────────────
+    //  REF-8.2.3 上下文压缩（对齐 DSH `compaction-basic` + `compaction-tool-result-pruner`）
+    //  两道：① 确定性工具结果剪枝（纯文本、可审计）② 仍超预算才做 LLM 摘要（替换而非追加）
+    // ────────────────────────────────────────────────────────────
+
+    /** 总开关（对齐 DSH `compaction-basic.auto`）；关掉即回到改造前行为（无剪枝、无摘要）。 */
+    private boolean contextCompactionEnabled = true;
+
+    /**
+     * 模型输入窗口（token）——**须与部署模型实际窗口一致**（我们的模型注册表暂无该字段，
+     * 故以配置承载；DSH 从路由模型信息读取）。
+     */
+    private int contextWindowTokens = 64000;
+
+    /** 压力触发比例（DSH `thresholdRatio` 默认 0.8）：预算 = 窗口 × 本值。 */
+    private double contextCompactionThresholdRatio = 0.8;
+
+    /** 摘要后保留的最近原文比例（DSH `retainRatio` 默认 0.16）：尾部这段**逐字保留**不摘要。 */
+    private double contextCompactionRetainRatio = 0.16;
+
+    /**
+     * 提供方报超窗时的「压缩后重试本轮」上限（DSH `maxOverflowRetries`）。
+     * 成功响应后计数重置（DSH 同口径）。
+     */
+    private int contextCompactionMaxOverflowRetries = 1;
+
+    /**
+     * 单次执行内**摘要次数上限**（REF-8.2.3 防抖动）。
+     *
+     * <p>压缩的净收益不保证（摘要可能比被压区间还长）⇒ 我们：① 只在**净减**时接受（否则回滚原文）
+     * ② 用本上限封顶，避免"每轮都试一次摘要"的反复调用（实测暴露：窗口设得远小于实际内容时，
+     * 首次摘要出现 4939 → 6327 的净增）。</p>
+     */
+    private int contextCompactionMaxSummariesPerRun = 2;
+
+    /** 工具结果剪枝阈值字符数（DSH `thresholdChars` 默认 8192）：超过则中段省略。 */
+    private int toolResultPruneThresholdChars = 8192;
+
+    /** 剪枝保留的头部字符数（DSH `headChars` 默认 4096）。 */
+    private int toolResultPruneHeadChars = 4096;
+
+    /** 剪枝保留的尾部字符数（DSH `tailChars` 默认 1024）。 */
+    private int toolResultPruneTailChars = 1024;
+
+    /**
+     * **部署级 persona 后缀**（对齐 DSH `deployment:persona-suffix`）：非空则注入到整个 systemPrompt 末尾。
+     * 遮蔽纪律同上（`agent.labels.personaSuffix` 优先）。
+     */
+    private String personaSuffix = "";
+
     /** mock 前缀，便于联调时快速识别结果来源。 */
     private String mockResponsePrefix = "[mock-executor]";
 

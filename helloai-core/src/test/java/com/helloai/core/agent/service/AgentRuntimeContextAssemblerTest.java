@@ -209,11 +209,16 @@ class AgentRuntimeContextAssemblerTest {
                     .contains("ABORTED（租约过期被回收中断）")
                     .contains("中断原因摘要：租约回收")
                     .contains("上次执行上下文装配事实：")
-                    .contains("## 返工修正指引（共 1 轮历史审核）")
+                    .contains("## 返工修正指引（第 1 轮驳回）")
                     .contains("问题 A")
                     .contains("审核评分: 3 / 5")
                     .contains("## 产出回填要求")
-                    .contains("## EXECUTION_RECORD");
+                    .contains("## EXECUTION_RECORD")
+                    // REF-8.2.2：验证证据围栏（与评审侧 fail-close 同源：只判 contains("VERIFICATION:")）
+                    .contains("## 验证证据围栏（必须放在全文最后）")
+                    .contains("VERIFICATION:")
+                    .contains("STATUS: DONE | PARTIAL | BLOCKED")
+                    .contains("NEXT_STEPS:");
 
             assertThat(context.getRunId()).isEqualTo("run-33-1");
             assertThat(context.getTaskId()).isEqualTo(33L);
@@ -225,11 +230,54 @@ class AgentRuntimeContextAssemblerTest {
             assertThat(context.getTools()).containsExactly("pullTasks", "web_search");
             assertThat(context.getChatModel()).isSameAs(mockChatModel);
             // REF-8.2 动作①：systemPrompt 不再为空——填角色 + 内部 LLM 工具指引 + 输出契约
+            // REF-8.1.1 / REF-8.2.2：工具指引含「做不到」通道；输出契约含验证证据围栏
             assertThat(context.getSystemPrompt())
                     .contains("子任务执行者")
                     .contains("进程内工具集")
                     .contains("internal_get_sub_task_detail")
-                    .contains("输出契约");
+                    .contains("internal_report_blocked")
+                    .contains("输出契约")
+                    .contains("VERIFICATION:");
+        }
+
+        @Test
+        @DisplayName("REF-8.1.2 persona 槽位：默认为空 ⇒ 身份行后直接空行（行为与改造前逐字一致）")
+        void shouldNotInjectPersonaByDefault() {
+            AgentContext context = invokeAssemble(subTask(), agent(), List.of(), List.of());
+
+            assertThat(context.getSystemPrompt())
+                    .startsWith("你是 HelloAI 平台的子任务执行者")
+                    .contains("完成并交付可核验的成果。\n\n");
+        }
+
+        @Test
+        @DisplayName("REF-8.1.2 persona 槽位：部署级 prefix/suffix 注入（prefix 在身份行后、suffix 在末尾）")
+        void shouldInjectDeploymentPersona() {
+            properties.setPersonaPrefix("你是资深后端工程师，风格严谨，先看约束再动手。");
+            properties.setPersonaSuffix("（本会话结束前必须回填验证证据围栏。）");
+
+            String prompt = invokeAssemble(subTask(), agent(), List.of(), List.of()).getSystemPrompt();
+
+            assertThat(prompt)
+                    .contains("你是资深后端工程师，风格严谨，先看约束再动手。")
+                    .endsWith("（本会话结束前必须回填验证证据围栏。）");
+            // prefix 必须落在身份行之后、工具指引之前（对齐 DSH 槽位序：identity → persona prefix → guidance）
+            assertThat(prompt.indexOf("你是资深后端工程师")).isGreaterThan(prompt.indexOf("子任务执行者"));
+            assertThat(prompt.indexOf("你是资深后端工程师")).isLessThan(prompt.indexOf("进程内工具集"));
+        }
+
+        @Test
+        @DisplayName("REF-8.1.2 persona 遮蔽：agent.labels 优先于部署级默认（部署给默认、单 Agent 可覆盖）")
+        void shouldLetAgentLabelsShadowDeploymentPersona() {
+            properties.setPersonaPrefix("部署级默认人设");
+            Agent withOverride = agent();
+            withOverride.setLabels(Map.of("personaPrefix", "该 Agent 专属人设（遮蔽部署默认）"));
+
+            String prompt = invokeAssemble(subTask(), withOverride, List.of(), List.of()).getSystemPrompt();
+
+            assertThat(prompt)
+                    .contains("该 Agent 专属人设（遮蔽部署默认）")
+                    .doesNotContain("部署级默认人设");
         }
 
         @Test
@@ -274,26 +322,55 @@ class AgentRuntimeContextAssemblerTest {
         }
 
         @Test
-        @DisplayName("返工上下文：reviewHistory 多轮铺开（时间/问题/评语/评分/已修复）")
+        @DisplayName("返工上下文（REF-8.2.1 替换语义）：只铺开最近一轮，历史轮次压成一行摘要")
         void shouldRenderReworkContextFromReviewHistory() {
             SubTaskFixture subTask = subTask();
             subTask.setContext(Map.of("reviewHistory", List.of(
                     Map.of("ts", "2026-09-29T01:00:00Z", "issues", List.of("一轮问题"),
                             "comment", "一轮评语", "score", 2, "executorDoneIssues", List.of("一轮自认修复")),
-                    Map.of("issues", "二轮问题"))));
+                    Map.of("issues", "二轮问题", "comment", "二轮评语", "score", 3,
+                            "executorDoneIssues", List.of("二轮自认修复")))));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
 
             assertThat(prompt)
-                    .contains("## 返工修正指引（共 2 轮历史审核）")
-                    .contains("### 第 1 轮")
-                    .contains("### 第 2 轮")
-                    .contains("一轮问题")
-                    .contains("审核评语: 一轮评语")
-                    .contains("审核评分: 2 / 5")
-                    .contains("上一轮你已自认修复: 一轮自认修复")
+                    // 最近一轮：明细铺开
+                    .contains("## 返工修正指引（第 2 轮驳回）")
                     .contains("审核问题: 二轮问题")
-                    .contains("请务必针对未自认修复的问题继续修正后重新提交。");
+                    .contains("审核评语: 二轮评语")
+                    .contains("审核评分: 3 / 5")
+                    .contains("上一轮你已自认修复（不必重复改动）: 二轮自认修复")
+                    // 历史轮次：只留一行摘要 + 显式「已被取代」
+                    .contains("此前 1 轮意见**已被本轮取代**")
+                    .contains("第 1 轮: 一轮问题")
+                    // 历史轮次正文不得再进 prompt（增量有界的回归断言）
+                    .doesNotContain("### 第 1 轮")
+                    .doesNotContain("审核评语: 一轮评语")
+                    .doesNotContain("审核评分: 2 / 5")
+                    .contains("请只针对**本轮**未自认修复的问题修正后重新提交");
+        }
+
+        @Test
+        @DisplayName("返工上下文（REF-8.2.1）：多轮返工时历史段增量保持一行（≥4 轮封顶 3 条 + 省略号）")
+        void shouldBoundSupersededSummary() {
+            SubTaskFixture subTask = subTask();
+            subTask.setContext(Map.of("reviewHistory", List.of(
+                    Map.of("issues", List.of("问题一")),
+                    Map.of("issues", List.of("问题二")),
+                    Map.of("issues", List.of("问题三")),
+                    Map.of("issues", List.of("问题四")),
+                    Map.of("issues", List.of("问题五")))));
+
+            String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
+
+            assertThat(prompt)
+                    .contains("## 返工修正指引（第 5 轮驳回）")
+                    .contains("此前 4 轮意见**已被本轮取代**")
+                    .contains("第 1 轮: 问题一")
+                    .contains("第 3 轮: 问题三")
+                    .contains("…")
+                    .doesNotContain("问题四")
+                    .contains("- 问题五");
         }
 
         @Test
@@ -305,7 +382,7 @@ class AgentRuntimeContextAssemblerTest {
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
 
             assertThat(prompt)
-                    .contains("## 返工修正指引（共 1 轮历史审核）")
+                    .contains("## 返工修正指引（第 1 轮驳回）")
                     .contains("旧格式评语");
         }
 

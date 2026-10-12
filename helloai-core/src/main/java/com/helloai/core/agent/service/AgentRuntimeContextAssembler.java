@@ -400,6 +400,26 @@ public class AgentRuntimeContextAssembler {
         sb.append("若无需拆分文件，直接输出正文即可；若选择该结构，请把正文按文件拆分放入 files，"
                 + "summary 概括本次产出，并在文件概览后保留 EXECUTION_RECORD 回填块。\n");
 
+        // REF-8.2.2：验证证据围栏——与评审侧 fail-close **同源**（ReviewEvidenceAssembler.verificationSignal
+        // 只判 `contains("VERIFICATION:")`）。此前内部 LLM 的输出契约不含该段，而评审侧对「无 VERIFICATION」
+        // 的提交明文「从严核验、不得判 pass=true」（prompts/subtask-review.md:51-52）⇒ 两边不同源，
+        // 内循环必然返工至死信（LOG-20261012-007 实测复现 2 次）。形状照抄 DSH Ralph 轮报
+        // （证据 + 状态 + 下一步，研究文档 §1.5.4）。
+        sb.append("\n## 验证证据围栏（必须放在全文最后）\n");
+        sb.append("评审会检测 `VERIFICATION:` 围栏；**缺失将被从严核验**（仅凭正文无法确认验收标准时会判不通过）。")
+                .append("请在交付物正文与 EXECUTION_RECORD 之后、**全文最末**附上：\n\n");
+        sb.append("```\n");
+        sb.append("VERIFICATION:\n");
+        sb.append("- 证据1：<你实际读到的原文片段 / 工具返回的关键内容，原样粘贴，禁止转述>\n");
+        sb.append("- 证据2：<...>\n");
+        sb.append("STATUS: DONE | PARTIAL | BLOCKED\n");
+        sb.append("NEXT_STEPS:\n");
+        sb.append("- <若未完成：下一步缺什么 / 需要谁补；DONE 时写「无」>\n");
+        sb.append("```\n");
+        sb.append("规则：① 该围栏之后**不得**再写任何内容；② `STATUS: BLOCKED` **仅**用于你已调用 ")
+                .append("internal_report_blocked 的情形，不要用文本代替工具报阻塞；③ 只完成一部分用 PARTIAL，")
+                .append("并在 NEXT_STEPS 写清缺什么。\n");
+
         return sb.toString();
     }
 
@@ -565,65 +585,140 @@ public class AgentRuntimeContextAssembler {
         return status;
     }
 
-    /** 返工上下文注入：从 {@code sub_task.context.reviewHistory} 按轮次铺开 REVIEWER 历史审核意见。 */
+    /**
+     * 返工上下文注入（REF-8.2.1：**替换语义**，非追加）。
+     *
+     * <p>此前把<b>全部</b>历史轮次逐轮铺开（"共 N 轮历史审核"，每轮含问题/评语/评分）——返工到第 3 轮时
+     * prompt 里堆着 3 份完整驳回 + 前置摘要 + 上次产出，思考链与 token 随轮数线性膨胀，而<b>历史轮次
+     * 对本轮该改什么几乎没有增量信息</b>（`LOG-20261012-007` 实测：模型对"能力上做不到"的任务只是
+     * 重复同一结论，回灌历史驳回零收益）。</p>
+     *
+     * <p>现改为与 DSH 一致的<b>替换语义</b>（`refreshContext` 替换而非追加、运行期快照显式声明
+     * "supersedes earlier snapshots"——研究文档 §1.5.2）：<b>只铺开最近一轮</b>，历史轮次压成一行
+     * 摘要并明写「已被本轮取代」。</p>
+     */
     private void appendReworkContext(StringBuilder sb, SubTaskSnapshot subTask) {
         Map<String, Object> ctx = subTask.context();
         if (ctx == null) {
             return;
         }
-        Object historyObj = ctx.get("reviewHistory");
-        List<?> history = null;
-        if (historyObj instanceof List<?> historyList && !historyList.isEmpty()) {
-            history = historyList;
-        } else if (ctx.get("lastAutoReview") instanceof Map<?, ?> legacy) {
-            history = List.of(legacy);
-        }
-        if (history == null) {
+        List<?> history = resolveReviewHistory(ctx);
+        if (history == null || history.isEmpty()) {
             return;
         }
+        int latestIdx = lastReviewIndex(history);
+        if (latestIdx < 0) {
+            return;
+        }
+        Map<?, ?> latest = (Map<?, ?>) history.get(latestIdx);
 
         sb.append("\n---\n\n");
-        sb.append("## 返工修正指引（共 ").append(history.size()).append(" 轮历史审核）\n");
-        sb.append("你之前提交被 REVIEWER 多次驳回，请按以下历史审核意见逐轮修正：\n\n");
+        sb.append("## 返工修正指引（第 ").append(history.size()).append(" 轮驳回）\n");
+        if (latestIdx > 0) {
+            sb.append("> 此前 ").append(latestIdx)
+                    .append(" 轮意见**已被本轮取代**（历史摘要：")
+                    .append(summarizeSuperseded(history, latestIdx))
+                    .append("）——以本轮意见为准，不要再按旧轮意见返工。\n\n");
+        }
+        sb.append("### 本轮审核意见\n");
+        appendReviewRound(sb, latest);
+        sb.append("请只针对**本轮**未自认修复的问题修正后重新提交；已自认修复项不必重复改动。\n");
+    }
 
-        int round = 1;
-        for (Object item : history) {
-            if (!(item instanceof Map<?, ?> review)) {
+    /** 取历史审核轮次（新格式 {@code reviewHistory} 优先，旧格式 {@code lastAutoReview} 单轮回退）。 */
+    private static List<?> resolveReviewHistory(Map<String, Object> ctx) {
+        Object historyObj = ctx.get("reviewHistory");
+        if (historyObj instanceof List<?> historyList && !historyList.isEmpty()) {
+            return historyList;
+        }
+        if (ctx.get("lastAutoReview") instanceof Map<?, ?> legacy) {
+            return List.of(legacy);
+        }
+        return null;
+    }
+
+    /** 最近一轮（含有效 Map 的最大下标）；无有效轮次返回 -1。 */
+    private static int lastReviewIndex(List<?> history) {
+        for (int i = history.size() - 1; i >= 0; i--) {
+            if (history.get(i) instanceof Map) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 被取代的历史轮次压缩为一行（每轮取首条问题、截断；最多列 3 轮，超出以「…」收尾）。
+     *
+     * <p>这是「增量有界」的保证：无论返工多少轮，返工段的历史部分恒定 ≤ 一行。</p>
+     */
+    private static String summarizeSuperseded(List<?> history, int latestIdx) {
+        StringBuilder s = new StringBuilder();
+        int listed = 0;
+        for (int i = 0; i < latestIdx; i++) {
+            if (!(history.get(i) instanceof Map<?, ?> review)) {
                 continue;
             }
-            sb.append("### 第 ").append(round++).append(" 轮\n");
-            Object ts = review.get("ts");
-            if (ts instanceof String tsStr && !tsStr.isBlank()) {
-                sb.append("- 时间: ").append(tsStr).append("\n");
+            if (listed == 3) {
+                s.append("；…");
+                break;
             }
-            Object issues = review.get("issues");
-            if (issues instanceof List<?> issueList && !issueList.isEmpty()) {
-                sb.append("- 审核问题:\n");
-                for (Object issue : issueList) {
-                    sb.append("  - ").append(issue).append("\n");
-                }
-            } else if (issues instanceof String issueStr && !issueStr.isBlank()) {
-                sb.append("- 审核问题: ").append(issueStr).append("\n");
+            if (listed > 0) {
+                s.append("；");
             }
-            Object comment = review.get("comment");
-            if (comment instanceof String commentStr && !commentStr.isBlank()) {
-                sb.append("- 审核评语: ").append(commentStr).append("\n");
-            }
-            Object score = review.get("score");
-            if (score instanceof Number n) {
-                sb.append("- 审核评分: ").append(n.intValue()).append(" / 5\n");
-            }
-            Object done = review.get("executorDoneIssues");
-            if (done instanceof List<?> doneList && !doneList.isEmpty()) {
-                String joined = doneList.stream()
-                        .map(Object::toString)
-                        .collect(Collectors.joining("、"));
-                sb.append("- 上一轮你已自认修复: ").append(joined).append("\n");
-            }
-            sb.append("\n");
+            s.append("第 ").append(i + 1).append(" 轮: ").append(firstIssueBrief(review));
+            listed++;
         }
+        return s.isEmpty() ? "无" : s.toString();
+    }
 
-        sb.append("请务必针对未自认修复的问题继续修正后重新提交。\n");
+    /** 取一轮审核的首条问题并截断（用于历史摘要行）。 */
+    private static String firstIssueBrief(Map<?, ?> review) {
+        Object issues = review.get("issues");
+        String first = null;
+        if (issues instanceof List<?> issueList && !issueList.isEmpty()) {
+            first = String.valueOf(issueList.get(0));
+        } else if (issues instanceof String issueStr && !issueStr.isBlank()) {
+            first = issueStr;
+        }
+        if (first == null) {
+            return "(无问题描述)";
+        }
+        String trimmed = first.trim().replaceAll("\\s+", " ");
+        return trimmed.length() > 40 ? trimmed.substring(0, 40) + "…" : trimmed;
+    }
+
+    /** 铺开一轮审核的明细（时间 / 问题 / 评语 / 评分 / 已自认修复）。 */
+    private static void appendReviewRound(StringBuilder sb, Map<?, ?> review) {
+        Object ts = review.get("ts");
+        if (ts instanceof String tsStr && !tsStr.isBlank()) {
+            sb.append("- 时间: ").append(tsStr).append("\n");
+        }
+        Object issues = review.get("issues");
+        if (issues instanceof List<?> issueList && !issueList.isEmpty()) {
+            sb.append("- 审核问题:\n");
+            for (Object issue : issueList) {
+                sb.append("  - ").append(issue).append("\n");
+            }
+        } else if (issues instanceof String issueStr && !issueStr.isBlank()) {
+            sb.append("- 审核问题: ").append(issueStr).append("\n");
+        }
+        Object comment = review.get("comment");
+        if (comment instanceof String commentStr && !commentStr.isBlank()) {
+            sb.append("- 审核评语: ").append(commentStr).append("\n");
+        }
+        Object score = review.get("score");
+        if (score instanceof Number n) {
+            sb.append("- 审核评分: ").append(n.intValue()).append(" / 5\n");
+        }
+        Object done = review.get("executorDoneIssues");
+        if (done instanceof List<?> doneList && !doneList.isEmpty()) {
+            String joined = doneList.stream()
+                    .map(Object::toString)
+                    .collect(Collectors.joining("、"));
+            sb.append("- 上一轮你已自认修复（不必重复改动）: ").append(joined).append("\n");
+        }
+        sb.append("\n");
     }
 
     /** 按 dependsOnIdList 收集直接前置的依赖产出参考段（双轨：结构化摘要 + 内容本体）。 */
@@ -768,10 +863,18 @@ public class AgentRuntimeContextAssembler {
      */
     private String buildSystemPrompt(Agent agent, AgentAccessType accessType) {
         boolean internal = accessType == AgentAccessType.API_KEY_LLM;
+        // REF-8.1.2 persona 两槽位（对齐 DSH `deployment:persona-prefix/suffix` + `dsh-persona` 的遮蔽纪律）：
+        // 部署级默认（helloai.execution.persona-prefix/suffix）→ 按 Agent 遮蔽（agent.labels 同名键优先）。
+        String personaPrefix = resolvePersona(agent, "personaPrefix", executionProperties.getPersonaPrefix());
+        String personaSuffix = resolvePersona(agent, "personaSuffix", executionProperties.getPersonaSuffix());
         StringBuilder sb = new StringBuilder();
         sb.append("你是 HelloAI 平台的子任务执行者（Agent: ")
                 .append(agent != null && agent.getName() != null ? agent.getName() : "executor")
-                .append("）。你的职责是把分派给你的子任务按验收标准完成并交付可核验的成果。\n\n");
+                .append("）。你的职责是把分派给你的子任务按验收标准完成并交付可核验的成果。\n");
+        if (!personaPrefix.isEmpty()) {
+            sb.append(personaPrefix).append("\n");
+        }
+        sb.append("\n");
         if (internal) {
             sb.append("你拥有平台提供的进程内工具集，可用来：\n")
                     .append("- 读取当前子任务的完整详情、验收标准、执行约束（internal_get_sub_task_detail）；\n")
@@ -780,13 +883,37 @@ public class AgentRuntimeContextAssembler {
                     .append("- 查看平台全部可用技能目录（internal_list_skills），并按需加载某个技能的完整规范正文")
                     .append("（internal_load_skill）——任务涉及特定专业规范时，先查技能库再按规范执行。\n")
                     .append("当任务需要原始字段 / 实际文件内容，而上下文中仅给了摘要时，应先用工具核验，")
-                    .append("不要仅凭摘要臆测补全。无法通过工具取得所需信息时，应在交付物中显式声明缺失项。\n\n");
+                    .append("不要仅凭摘要臆测补全。确认自己**无法完成**本子任务时（输入/原始附件不可得、")
+                    .append("需要本机环境而你没有、验收要求的证据拿不到），调用 internal_report_blocked ")
+                    .append("说明「缺什么 / 试过什么 / 需要什么才能继续」——报阻塞会转入人工介入、")
+                    .append("不再进入评审；**不要**用正文硬写「做不到」充当交付物（那会被评审打回并反复返工）。\n\n");
         }
         sb.append("输出契约：\n")
                 .append("- 用 Markdown 输出交付物正文，具体、可检查、紧扣验收标准；\n")
                 .append("- 若任务要求（见任务描述末尾的「产出回填要求」），按 EXECUTION_RECORD 结构回填；\n")
+                .append("- 结尾必须附 `VERIFICATION:` 验证证据围栏（证据 / STATUS / NEXT_STEPS）——")
+                .append("缺失会被评审从严核验，仅凭正文无法确认验收标准时会判不通过；\n")
                 .append("- 不确定或能力达不到的事，如实说明，不得伪造文件 / 数据充当交付物。");
+        if (!personaSuffix.isEmpty()) {
+            sb.append("\n").append(personaSuffix);
+        }
         return sb.toString();
+    }
+
+    /**
+     * REF-8.1.2 persona 槽位取值：**按 Agent 遮蔽部署级默认**。
+     *
+     * <p>取值顺序（照抄 DSH：部署给默认、单 agent 可遮蔽）：{@code agent.labels[key]}（非空字符串）
+     * → {@code deploymentDefault} → {@code ""}（不注入）。key 取 {@code personaPrefix} / {@code personaSuffix}。</p>
+     */
+    private static String resolvePersona(Agent agent, String key, String deploymentDefault) {
+        if (agent != null && agent.getLabels() != null) {
+            Object override = agent.getLabels().get(key);
+            if (override instanceof String s && !s.isBlank()) {
+                return s.trim();
+            }
+        }
+        return deploymentDefault == null ? "" : deploymentDefault.trim();
     }
 
     /** 启用工具并集（G-004 增量 A）：命令 tools ∪ 命中技能 requiredTools（去重保序，纯函数式）。 */

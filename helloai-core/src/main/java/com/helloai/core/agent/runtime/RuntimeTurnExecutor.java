@@ -141,9 +141,12 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                         "accessType", ctx.getAccessType() != null ? ctx.getAccessType().name() : null));
 
         // 6. CONTEXT_BUILT（step=2）：提示词装配完成（promptChars 按注入正文统计，依赖装配属平台层）
-        int promptChars = (ctx.getSystemPrompt() != null ? ctx.getSystemPrompt().length() : 0)
+        int systemPromptChars = ctx.getSystemPrompt() != null ? ctx.getSystemPrompt().length() : 0;
+        int promptChars = systemPromptChars
                 + (ctx.getUserPrompt() != null ? ctx.getUserPrompt().length() : 0);
-        record(ctx, 2, AgentEventType.CONTEXT_BUILT, safeMap("promptChars", promptChars));
+        // systemPromptChars 单列：稳定面（角色/persona 槽位/工具指引/输出契约）的长度——REF-8.1.2 生效的可观测面
+        record(ctx, 2, AgentEventType.CONTEXT_BUILT,
+                safeMap("promptChars", promptChars, "systemPromptChars", systemPromptChars));
 
         // 7. AgentLoop 执行（内部按 TOOL_CALL_STARTED=3 / TOOL_CALL_COMPLETED=4 记录；
         // 每轮循环边界经 loopCheckpointListener 落进度快照，write-only 旁路）

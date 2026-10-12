@@ -149,6 +149,7 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
             "internal_read_attachment",
             "internal_list_skills",
             "internal_load_skill",
+            "internal_report_blocked",
             "web_search",
             "search_knowledge"
     );

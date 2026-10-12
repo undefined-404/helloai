@@ -29,6 +29,8 @@ public enum AgentEventType {
     CONTEXT_BUILT("context_built"),
     TOOL_CALL_STARTED("tool_call_started"),
     TOOL_CALL_COMPLETED("tool_call_completed"),
+    /** REF-8.2.3 上下文压缩（对齐 DSH `compaction-basic`）：本轮模型调用前发生剪枝/摘要的审计事实。 */
+    CONTEXT_COMPACTED("context_compacted"),
     AGENT_COMPLETED("agent_completed"),
     REVIEW_STARTED("review_started"),
     REVIEW_REJECTED("review_rejected"),
