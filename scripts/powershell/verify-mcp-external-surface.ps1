@@ -182,9 +182,12 @@ $sseFile = Join-Path $workDirAbs ("mcp-external-surface-" + [DateTime]::UtcNow.T
 if (Test-Path $sseFile) { Remove-Item $sseFile -Force }
 
 Write-Host "STEP2: open MCP SSE long connection"
+# curl 用 -o 直接写字节文件、不经 PowerShell 管道——避免经 | Out-File 时的 UTF-8→string(GBK)
+# 解码错位：SSE 工具名/描述含中文，管道解码错误会破坏 JSON，ConvertFrom-Json 失败 → 0 工具。
+# -s 抑制进度条；-N 无缓冲持续写（SSE 长连接期间文件持续增长）。
 $job = Start-Job -ScriptBlock {
     param($absFile, $baseUrl)
-    & curl.exe -i -N ($baseUrl + "/mcp/sse") *>&1 | Out-File -Encoding utf8 -FilePath $absFile
+    & curl.exe -s -N ($baseUrl + "/mcp/sse") -o $absFile
 } -ArgumentList $sseFile, $BaseUrl
 Start-Sleep -Seconds $SseWarmupSec
 
