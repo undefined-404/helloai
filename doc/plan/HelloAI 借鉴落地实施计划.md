@@ -6,7 +6,14 @@
 > **用户裁定**：`D-2026-10-09-4`（见《差距表》§0「当前生效的取舍决策」）——四项能力优先级、备份/恢复与 RAG 入目标架构、沙箱生产形态、语义位与不可关闭清单同批。
 > **性质**：本计划只收**可执行结论**（借鉴落点 → 动作 → 验收 → 验证集 → 回填），不含调研过程（在 `research/`）与稳定设计（在 `design/`）。
 > **完成迁移**：执行完成后迁入 `doc/archive/implemented/` 并标 `Done`。
-> **最后更新：2026-10-11（v16）**——**v16 = REF-6.8 写点替换交付**（2026-10-11，`LOG-20261011-008`）：
+> **最后更新：2026-10-12（v18）**——**v18 = 新增 `REF-8`「内部 LLM 能力面」**（`D-2026-10-12-1`，差距锚点 **`G-021`**）：
+> 用户确认「内部 agent 内核收敛思路」按审阅建议调整 ⇒ 立 `REF-8`，收纳 `D1` 工具面解封 / `D2` 手脚·工作区（含 `systemPrompt` 非空 + `maxIterations` 分档）/ `D3` 技能全量目录 + 惰性加载 / `D4` 拦截链（Spring AI Advisors）/ `E1` 循环覆盖面收敛；
+> **内核轴 = 「可见面收敛」**（唯一输出契约 = 模型的可见集，三层）；**会话单源化降为支撑项**（提升已有 `agent_event`，**不新建表**）；`LOG-20261011-007` 的 A 能力闸 + B 收敛熔断**挂 `REF-8.4` 拦截链**之下。见 §10。
+> 同批：原 §10~§12 顺延为 **§11~§13**（`§13 裁定记录` 的内部引用已同步）。
+> **2026-10-12 后续计划侧变更（不新增版本条目 —— 遵治理规则 §3.2「版本变更史冻结新增」）**：`REF-8.1~8.3` **开工**；`REF-8.4` 承载 `LOG-20261011-007` **A+B**（阈值 `N=3`，`D-2026-10-12-3`）；新增 **§10.6 覆盖面清单（16 项，待勾选）**；`REF-7` 三约束 **C1~C3 定稿**（§8.2，`D-2026-10-12-4`）。**裁定记录本体见 `doc/log/2026-10.md` `LOG-20261012-002`**。
+> **v17 = A1「载荷旁路」配套项（Octop `middleware/workspace_image.py` 图片路径引用）补登记为「条件触发」**（2026-10-12，`LOG-20261012-001`）：
+> 该条此前**仅在 `research/` 正文出现，无 `REF-` 落点、未记 WONTFIX**（孤儿）⇒ 按 §1「孤儿项回流」补登记差距表 §7.1.4 `R14`，**不排期**（实测平台无图片 / 多模态输入通道，现状不适用）。
+> **v16 = REF-6.8 写点替换交付**（2026-10-11，`LOG-20261011-008`）：
 > 31 文件 / 119 处展示码写点枚举化（core 25 + job 6）；守卫改「写点无裸字面量 + 枚举引用存在 + 库内 ⊆ 枚举」；
 > 订正原批次两处漏（未加 import / 漏 `helloai-job` 整模块）。REF-6.8 至此**两半均收口**。
 > **v15 = REF-4.3 交付 ⇒ REF-4（RAG）收官**（2026-10-11，`LOG-20261011-005`）：
@@ -30,8 +37,8 @@
 
 | 项 | 口径 |
 |---|---|
-| `REF-x.y` 含义 | 借鉴落地专项任务；`x` 取 1~7（技能 / 备份·恢复 / 沙箱〔条件触发〕 / RAG / A 档 / 判据 / 工作详情快照） |
-| 与 `G-0xx` 的关系 | 每个 REF 组必须映射到差距锚点：`REF-1 → G-004`、`REF-2 → G-018`（**原 `REF-2.1/2.2 → G-001·G-006` 已随 Fork WONTFIX 取消映射**）、`REF-3 → G-005`（**条件触发**）、`REF-4 → G-019`、`REF-5.1 → G-015`、`REF-5.3/5.4 → 新增 G 项或就地登记`、`REF-7 → G-020` |
+| `REF-x.y` 含义 | 借鉴落地专项任务；`x` 取 1~8（技能 / 备份·恢复 / 沙箱〔条件触发〕 / RAG / A 档 / 判据 / 工作详情快照 / **内部 LLM 能力面**） |
+| 与 `G-0xx` 的关系 | 每个 REF 组必须映射到差距锚点：`REF-1 → G-004`、`REF-2 → G-018`（**原 `REF-2.1/2.2 → G-001·G-006` 已随 Fork WONTFIX 取消映射**）、`REF-3 → G-005`（**条件触发**）、`REF-4 → G-019`、`REF-5.1 → G-015`、`REF-5.3/5.4 → 新增 G 项或就地登记`、`REF-7 → G-020`、**`REF-8 → G-021`**（2026-10-12 新增） |
 | 与 `B1~B5` 的关系 | `REF-3` 即《差距表》§0 所指「现仅 **B2 Sandbox** 未动」的那一项；**REF-3 组内不得另立第二套能力层编号** |
 | 与本文件的关系 | REF 项**只在本文件排期**；`G-` 项状态**只在差距表更新**（唯一事实源），双方不得互相复述进度 |
 | 孤儿项回流 | 本文件作出的「后置 / 降级 / 不做」决定，必须同批在差距表登记条目或显式记 WONTFIX（差距表 §7.1） |
@@ -56,6 +63,9 @@ REF-3 沙箱：条件触发（不排期）
 REF-5 四项之外 A 档：独立交付，可插队（互不依赖）
 REF-7 工作详情快照：能力外延，可后置（触发 = 审计深度需求）
 REF-6 判据：随对应组落地，不单独排期
+REF-8 内部 LLM 能力面：**当前最高价值**（直接产出「LLM 变 agent」的能力，2026-10-12 新增）
+      次序 8.1 工具面 ──► 8.2 手脚+上下文 ──► 8.3 技能惰性加载 ──► 8.5 覆盖面
+      8.4 拦截链可并行铺（是 LOG-20261011-007 A+B 的唯一挂点）
 备份/恢复（REF-2）为纯增量、可独立交付，不触任何 MQ 载荷契约
 ```
 
@@ -463,7 +473,14 @@ Regression ：verify-agent-skill-capability.ps1（技能包登记）、verify-we
 > **改形落地 = ① 截断标注行补 `id=<attachmentId>`（可寻址 ref）+ ② 复用既有 REST 取回通道**
 > —— 实测团队成员读 `attachments/downloadById/{id}` 已 200，**故不新增 MCP 工具**（工具面保持 13 个，避免动外部 Agent 契约）。
 > 连带（用户裁定）：**子任务视图读判据统一**到 task-team（时间线 / 对话流 / `getById` 三处，后者此前**无任何校验**）——
-> 回流锚点 `R11`。仍待：`REF-5.5`（未来前置）。回流锚点见差距表 §7.1.4（`R8`/`R9`/`R10`/`R11`）。
+> 回流锚点 `R11`。仍待：`REF-5.5`（未来前置）。回流锚点见差距表 §7.1.4（`R8`/`R9`/`R10`/`R11`/`R14`）。
+>
+> **补登记：A1 的「配套第二条」→ `R14`（2026-10-12）**。A1 主条目（`REF-5.2a`/`5.2b`）治的是 **tool result 文本**过大，
+> 其**配套第二条**治的是**图片 base64** 过大（Octop `infra/agents/middleware/workspace_image.py`：图片在 checkpoint / history
+> **只存 `workspace://` 路径引用**，仅 model request 时展开为 `data:` URI ⇒ base64 永不落 state / 不进历史 payload）。
+> 该条此前只在 `research/` 正文以「配套」一句话带过，**既无 `REF-` 落点也未记 WONTFIX** ⇒ 属**孤儿项**（违反 §1「孤儿项回流」）。
+> 经复核：**对 helloai 现状不适用**（业务侧 `base64` / `image_url` / `vision` 零命中，附件注入为纯文本按行截断，平台无图片输入通道）
+> ⇒ 按「**条件触发**」补登记为差距表 §7.1.4 `R14`，**不排期**（触发 = 平台新增图片 / 二进制多模态输入通道）。
 
 > **v2 订正（逐条）**：
 >
@@ -489,7 +506,7 @@ Regression ：verify-agent-skill-capability.ps1（技能包登记）、verify-we
 
 现状平台能审计到的是**订单层面**：认领 / 开工 / 心跳 / 交单 / 产物 / 阻塞 / 依赖读取（`agent_event` + `task_timeline` + 产物对账）。**子任务内部的执行过程是黑盒**——这是刻意的解耦，但带来了取证盲区：返工争议、质量复盘、责任界定都只能看结果，看不到过程。
 
-## 8.2 三条设计约束（动手前必须先定）
+## 8.2 三条设计约束（**2026-10-12 已定稿**，全部按原倾向）
 
 | # | 约束 | 说明与倾向 |
 |---|---|---|
@@ -497,7 +514,9 @@ Regression ：verify-agent-skill-capability.ps1（技能包登记）、verify-we
 | C2 | **审批方是谁** | 待定：平台侧新增审批流？还是挂到既有 Reviewer 双轨？还是复用人工介入（HUMAN_REVIEW）通道？**倾向复用人工介入通道**——不新建第二套审批（治理红线：不建第二套状态机） |
 | C3 | **落时间线的粒度** | 待定：一条汇总事件（最快）/ 按阶段拆多条 / 只登记上链标记不给事件。**倾向先做「一条汇总事件 + 快照 ref」**，逐阶段拆解后置 |
 
-## 8.3 建议形态（待 C1~C3 拍板后细化）
+> **2026-10-12 用户裁定（`D-2026-10-12-4`）**：C1 / C2 / C3 **全部按原倾向定稿**（C1 双面 / C2 复用人工介入通道 / C3 一条汇总事件 + `snapshotRef`）；但 **`REF-7` 本身继续挂起**（触发条件 = 子任务内部执行深度的审计需求成立，当前未触发）——三条约束**先定不先做**，避免触发时再补拍板。
+
+## 8.3 建议形态（C1~C3 已于 2026-10-12 定稿）
 
 ```text
 外部 Agent（事后、可选）
@@ -565,11 +584,97 @@ Regression ：verify-mcp-auth.ps1（工具面鉴权不变）、verify-c3-events.
 > 守卫 `verify-event-key-parity.sh` 同步重构为「①写点无裸字面量 + ②写点枚举引用常量存在 + ③库内 ⊆ 枚举」——
 > 原「写点字面量 ⊆ 枚举」在替换后静态提取由 82 码 → 0，会**静默空转**。验证：compile BUILD SUCCESS + 守卫 PASS=5 + 反证 EXIT=1。
 > **REF-6.8 至此两半均收口**（服务端单一来源 + 写点枚举化）。
-> **先例裁定**：早前 `D-2026-10-09-6③-4` 判「事件码 guard-only 不上发」已被本批**取代**（服务端下发），见 §12 / 差距表 §0。
+> **先例裁定**：早前 `D-2026-10-09-6③-4` 判「事件码 guard-only 不上发」已被本批**取代**（服务端下发），见 §13 / 差距表 §0。
 
 ---
 
-# 10. 明确不做（C 档，与治理红线一致）
+# 10. REF-8 内部 LLM 能力面（2026-10-12 新增）
+
+> **立项**：`D-2026-10-12-1`（用户确认内核收敛审阅建议）。**差距锚点 `G-021`**（此前该缺口在差距表**零登记**，属孤儿项）。
+> **依据**：`review/HelloAI 内部 agent 内核收敛思路审阅与调整建议（2026-10-12）.md`（对 `research/HelloAI 内部 agent 内核收敛与借鉴思路（2026-10-12）.md` 的审阅结论）+ `review/HelloAI 内部 LLM 执行链与开源 agent 架构比对（2026-10-12）.md` §7。
+> **性质**：本组治的是「**内部 LLM 不是 agent**」——平台编排层（`planner > review > task > agent`）已成熟，但内部 LLM 是「**循环骨架 + 空工具面 + 无手脚 + 只覆盖 1/16 的 LLM 面**」（实测：`AgentMcpServerServiceImpl:267-275` 对 `API_KEY_LLM` 过滤全部 13 个 MCP 工具；`agentLoop.run()` 生产调用点仅 `RuntimeTurnExecutor:130` 一处）。
+
+## 10.1 内核轴 = 「可见面收敛」
+
+内核唯一输出契约 = **模型的可见集**（DSH 的 `ToolRuntime.view(scope)` 与技能目录注入，本质是同一件事的两个实例）：
+
+```text
+L1 可见工具集    由 ToolRegistry.resolve 单口径产出（源不得被上游剥空）      ← REF-8.1
+L2 可见技能目录  全量目录（name + 封顶 description），正文惰性加载           ← REF-8.3
+L3 可见上下文    system prompt（非空）+ 工作区 / 附件读手脚                 ← REF-8.2
+```
+
+**为什么用「可见面」当轴**：三个缺口（工具 / 技能 / 上下文）从「三个独立补丁」变成「**同一契约的三个截面**」；并接住已证缺陷模式「**规则存在 ≠ 全路径强制**」——可见面必须是**唯一判据**，`getEnabledToolsForAccess` 与 `ToolRegistry.resolve` 两处口径必须一致。
+
+## 10.2 动作明细
+
+| 项 | 动作 | 落点（不动 `ChatModelToolLoop` 本体） | 验收 |
+|---|---|---|---|
+| **REF-8.1** | **工具面解封**：给 `API_KEY_LLM` 一条**不依赖 MCP 会话**的工具通道（读原附件 / 文件读写 / 正式交付动作） | **✅ M1 已交付（2026-10-12）**：复用 `ToolRegistry` 语义位 + `ToolCallbackContributor`（端口**已存在**）；新增 `InternalLlmExecutorTools`（进程内 @Tool）+ 并入 `McpToolConfig` 唯一 provider；`AgentMcpServerServiceImpl` 对 `API_KEY_LLM` 返回内部授权集而非空 | 内部 LLM 的工具列表**非空**；「读原附件」「交付登记」工具可调通。单测 `InternalLlmExecutorToolsTest` 6/6 + `AgentMcpServerServiceImplTest` 7/7；全量 1976 用例绿、架构守卫 EXIT=0 |
+| **REF-8.2** | **补手脚 + 上下文**：`WorkspaceAccess`（先只读 + 只写产物目录）+ 读附件工具；`systemPrompt` 从 `""` → 「角色 + 工具使用指引 + 输出契约」；`maxIterations` **按任务类型分档**（可配，非全局常量） | `AgentRuntimeContextAssembler:213`；`RuntimeTurnExecutor.observeSandbox` 由「只观测」升级为「可访问」 | 内部 LLM 能在工作区读写产物文件 |
+| **REF-8.3** | **技能改「全量目录 + 惰性加载」**：注入目录段（非速览），新增惰性加载工具，`AgentSkillSpecService` 加 `get(name)` | `AgentRuntimeContextAssembler` 注入目录；**保留 `requiredTools`** 作能力级声明（别丢） | 目录含全部技能；正文按需加载 |
+| **REF-8.4** | **拦截链**（Spring AI **Advisors API**）——所有策略（能力闸 / 收敛熔断 / 审计）的**唯一挂点** | 挂在 `agentLoop.run` 外层 | `LOG-20261011-007` **A（能力闸）+ B（收敛熔断，阈值 `N=3`）已立项**（`D-2026-10-12-3`），**挂本行落地之后**；`C` 单独评估 |
+| **REF-8.5** | **循环覆盖面收敛**：逐面判「该不该进循环」（子任务评审、终报告生成理论上都该带工具） | `RuntimeTurnExecutor:130`（**1 处**）vs `executeSync/executeStream`（**15 处 / 9 类**） | 覆盖面显式收窄并登记边界 |
+
+## 10.3 执行次序（按「是否直接产出能力」）
+
+```text
+REF-8.1 工具面解封 ──► REF-8.2 手脚 + 上下文 ──┐
+REF-8.3 技能惰性加载 ────────────────────────┼──► REF-8.5 覆盖面收敛
+REF-8.4 拦截链（可并行铺）───────────────────┘──────► LOG-20261011-007 A + B
+```
+
+> **会话单源化降为支撑项**（**不是** `REF-8` 的首项）：**提升已有 `agent_event`**（补 `surface` 投影 + `deriveMessages()`），**不新建表**——`agent_event` 已是 append-only 事件主表（`AgentEventRecorder.java:11-15`）+ Outbox 双写 + 终态投影已在跑（`EventReconciliationServiceImpl`）。依 DSH 判据：能力来自 `ctx.tools` + `ctx.fs`/`ctx.shell`，「可见⟺已记录」是**工程品格**而非能力来源。
+
+> **2026-10-12 用户裁定（`D-2026-10-12-2` / `D-2026-10-12-3`）**：
+> ① **`REF-8.1` → `REF-8.2` → `REF-8.3` 即行开工**（当前 `T1` 最高优先，唯一直接产出「内部 LLM 变 agent」的一层）；
+> ② `LOG-20261011-007` 的 **A（能力闸）+ B（收敛熔断）正式立项**，**连续相同驳回原因阈值 `N = 3`**（对齐日志"连续 3 次"现场），动手时机 = **`REF-8.4` 落地之后**（拦截链是其唯一挂点）；**`C`（产物接地校验）单独评估，暂不立项**；
+> ③ `REF-8.5` 覆盖面收敛**不阻塞前三**，但**必须先定「哪些面进循环」**——清单见 §10.6，待用户勾选后立项。
+
+## 10.4 收敛完成判据（较「组完成」更严）
+
+1. **不依赖 MCP 会话**可独立构造 / 测试（`AgentLoopInput → AgentLoopResult` 自洽）；
+2. **可见面单口径**——模型可见工具集 = `ToolRegistry.resolve` 结果，上游**无第二处二次过滤**；
+3. **能力可验证**——拿一条「需读原附件 / 写产物」的验收任务，内部 LLM 能**自己调工具**完成；
+4. **事件不双写**——模型可见消息与事件流同源。
+
+## 10.5 红线
+
+- **不新建 append-only 表**（`agent_event` 已是主表）；违反即造「一份事实两处落」的双轨；
+- **不动 `ChatModelToolLoop` 循环本体**（骨架正确）；
+- **不引入 LangGraph4j**——仅在「显式图 / 断点续跑 / HITL」触发信号出现时再评估（与《自建 java-harness 可行性分析》方案 C 一致）；
+- 新增工具须走既有 `McpMcpServer` 守卫且**默认关闭**（`REF-6.13`）。
+
+## 10.6 覆盖面清单（`REF-8.5`，16 项，**待用户勾选**）
+
+**实测口径（2026-10-12）**：全仓生产代码 `agentLoop.run()` 调用点 **1 处**（已在循环）；业务 LLM 面走 `executeSync/executeStream` 单次聊天共 **15 处 / 9 类**。`PlatformAgentExecutionServiceImpl:90`（`:80-92` `executeStream` 内部派发）是**派发点非业务面**，不计入。合计 **1 + 15 = 16 项**。
+
+**判据**：某面若「产出需查阅 / 校验外部证据（附件原文 / 库内容 / 多步推理）」⇒ **该进循环**（带工具）；若「纯文本改写 / 结构化抽取 / 单轮判定」⇒ **留单次**即可（进循环只增成本与不确定性）。
+
+| # | 类 | 位置 | `scene` | 用途 | 建议 |
+|---|---|---|---|---|---|
+| 1 | `RuntimeTurnExecutor` | `helloai-core/…/core/agent/runtime/RuntimeTurnExecutor.java:130` | — | **唯一在循环的面**（工具调用循环） | ✅ 已循环（基线） |
+| 2 | `PlannerDecomposeAsyncServiceImpl` | `helloai-core/…/core/planner/service/impl/PlannerDecomposeAsyncServiceImpl.java:144` | `planner_decompose` | 任务拆解 | ⭐ 进循环（可查技能 / 依赖 / 历史） |
+| 3 | `ReviewExecutionEngine` | `helloai-core/…/core/review/support/ReviewExecutionEngine.java:87` | `subtask_review` | 子任务核验 | ⭐ 进循环（核验需读原始证据） |
+| 4 | `TaskFinalReportServiceImpl` | `helloai-core/…/core/task/service/impl/TaskFinalReportServiceImpl.java:252` | `task_final_report` | 终报告正文整合 | ⭐ 进循环（需读子任务产出） |
+| 5 | `FinalReportReviewServiceImpl` | `helloai-core/…/core/review/service/impl/FinalReportReviewServiceImpl.java:393` | `task_final_report_review` | 终报告审查 | ⭐ 进循环 |
+| 6 | `TaskFinalReportServiceImpl` | `…/TaskFinalReportServiceImpl.java:389` | `task_final_report_outline` | 终报告出纲 | 🟡 可留单次（纯结构化出纲） |
+| 7 | `RequirementClarifyServiceImpl` | `helloai-core/…/core/planner/service/impl/RequirementClarifyServiceImpl.java:433` | `requirement_chat` | 澄清流式主回复 | 🟡 可留单次（对话） |
+| 8 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:471` | `requirement_clarify` | 澄清流式主回复 | 🟡 可留单次 |
+| 9 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:888` | `requirement_finalize` | 需求终稿 | 🟡 可留单次 |
+| 10 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:959` | (retry) | 终稿重试 | ⬜ 留单次 |
+| 11 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:1038` | `DECISION_SCENE` | 澄清决策判定 | ⬜ 留单次（单轮判定） |
+| 12 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:1303` | `requirement_clarify`/`requirement_chat` | 同步澄清 / 聊天 | ⬜ 留单次 |
+| 13 | `SearchQueryPlannerServiceImpl` | `helloai-core/…/core/planner/service/impl/SearchQueryPlannerServiceImpl.java:195` | `REWRITE_SCENE` | 检索查询改写 | ⬜ 留单次（纯改写） |
+| 14 | `SearchGapAssessor` | `helloai-core/…/core/planner/clarify/SearchGapAssessor.java:91` | `GAP_SCENE` | 搜索缺口评估 | 🟡 可选（需查库判缺口则应进） |
+| 15 | `PromptEnhancerServiceImpl` | `helloai-core/…/core/planner/prompt/impl/PromptEnhancerServiceImpl.java:59` | `prompt_enhance` | 提示词增强 | ⬜ 留单次 |
+| 16 | `AgentExecutionPreviewServiceImpl` | `helloai-core/…/core/agent/service/impl/AgentExecutionPreviewServiceImpl.java:53` | — | 执行预览 | ⬜ 留单次 |
+
+> **勾选方式**：你只需对 `⭐`（其建议进循环）与 `🟡`（待定）表态——「进循环 / 留单次」；`⬜` 若无异议默认留单次。确认后 `REF-8.5` 立项，**把「进循环面清单」写死为验收边界**（明确「哪些面**不**进」，避免「内核收敛 = 全面进化」的误读）。
+
+---
+
+# 11. 明确不做（C 档，与治理红线一致）
 
 - Octop 单进程 / 双后端 / 进程内调度（C1~C3）——路线分歧；
 - AgentTeams CRD / Helm / leader-election / kine / Matrix 房间（C4）——K8s 原生平台实现细节；
@@ -579,7 +684,7 @@ Regression ：verify-mcp-auth.ps1（工具面鉴权不变）、verify-c3-events.
 
 ---
 
-# 11. 每组的统一收口（验证 + 回填）
+# 12. 每组的统一收口（验证 + 回填）
 
 任何 REF 组完成，**必须同批**做以下动作（《协作规约》§28/§32 + 《文档体系分类与治理规则》§4）：
 
@@ -598,9 +703,9 @@ Regression ：verify-mcp-auth.ps1（工具面鉴权不变）、verify-c3-events.
 
 ---
 
-# 12. 裁定记录（原「待拍板」段，2026-10-09 已全部裁定）
+# 13. 裁定记录（原「待拍板」段，2026-10-09 已全部裁定）
 
-> **本计划当前无待拍板项**（除 REF-7 §8.2 的 C1~C3 三条设计约束，在 REF-7 触发后、动手前再定）。
+> **本计划当前无待拍板项**（REF-7 §8.2 的 C1~C3 三条设计约束已于 2026-10-12 **定稿**，见 §8.2；`REF-7` 本身仍挂起）。
 > 原 5 条待拍板已全部裁定，记入《差距表》`D-2026-10-09-5`（Fork）与 **`D-2026-10-09-6`**（下述 5 条）。
 
 | # | 议题 | **裁定** | 依据 / 取舍（保留供追溯） |
@@ -610,3 +715,5 @@ Regression ：verify-mcp-auth.ps1（工具面鉴权不变）、verify-c3-events.
 | ③-3 | **REF-3 沙箱** | **采纳建议（修正原优先级）**：**整组降级为「条件触发」，不排期**；契约保持现状不再扩展；`G-005` 改「`Planned`（条件触发）」并登记三个触发条件 | 当前**无可隔离的执行对象**（外部 agent 在它自己终端；内部 agent 工具面全是平台 API、无 shell / 文件写；平台全库无脚本引擎 / 表达式求值）。触发条件：① 平台增加碰宿主的工具 / ② 技能包要被执行 / ③ 平台自持浏览器。**此项修正了原「第 3 优先级」排序** |
 | ③-4 | **REF-1.2 技能目录的下游一致性** | **采纳建议**：**服务端下发**（复用 REF-1.2c 的技能目录 API）；parity 守卫只留给**不适合下发的词表**（`AGENT_SKILL_OPTIONS` ↔ 后端 `KEYWORD_SKILLS`/`SYNONYMS`）与**事件码**（`REF-6.8`） | 前端常量有 **3 类语义**（`TaskFormDialog:210` 下拉拼接 / `PlanReviewDialog:489` 平台技能判定 / `skillLabelOf` 中文标签，被 `SubTaskDetail:209` 等 3 处调用）。保留常量 ⇒ 新增技能「后端生效、前端看不见」，直接抵消 REF-1.2 收益 |
 | ⑤ | **工作详情快照** | **采纳建议**：登记为 **`REF-7`**（§8），差距锚点 `G-020`；可后置，触发条件 = 子任务内部执行深度的审计需求成立 | 与 `REF-6.2`「审计闭合 schema」存在张力 ⇒ 必须双面（原文落 MinIO + 时间线放结构化索引 + `ref`），与 `REF-5.2b` 双视图同模式；审批方倾向复用人工介入通道（不建第二套审批）；新增工具须走既有 `McpMcpServer` 守卫且**默认关闭**（`REF-6.13`） |
+
+> **2026-10-12 裁定（9 项）**：本轮用户逐条拍板的 9 项裁定（RM9 类名 / REF-8 开工 / 主线指针 / LOG-007 A+B 立项 `N=3` / 覆盖面清单 / REF-7 三约束 / 沙箱 / 上线清单 / REF-1.4），**记录本体入 `doc/log/2026-10.md` `LOG-20261012-002`**（遵治理规则 §3.2「`plan/` 冻结新增决策留痕」）；决策登记见《差距表》`D-2026-10-12-2` / `-3` / `-4`。**计划侧影响已就地写入本文件 §8.2、§10.2、§10.3、§10.6**。

@@ -4,7 +4,7 @@
 >
 > 本文只记录**当前 → 目标**的真实差距；**只保留最新状态、随迭代就地更新**，不累加过程记录。
 >
-> **最后更新：2026-10-11**
+> **最后更新：2026-10-12**
 >
 > 过程与订正历史按「做过什么」归 `doc/log/`：2026-09 批次见 `doc/archive/log/2026-09.md`，2026-10 批次见 `doc/log/2026-10.md`。
 >
@@ -22,8 +22,8 @@
 | `P0`~`P3` | **架构重构主线阶段**（唯一含义）；审计优先级档已改用 `PR0`~`PR3` |
 | `RM1`~`RM13` | 代码质量路线图（与目标架构能力层不再撞号） |
 | `B1`~`B5` | 目标架构能力层（阻断项）；现仅 `B2 Sandbox` 未动 |
-| `BASE-x.y` | 基础架构专项任务（`plan/HelloAI 基础架构调整实施计划.md`） |
-| `REF-x.y` | 借鉴落地专项任务（`plan/HelloAI 借鉴落地实施计划.md`，2026-10-09 建号） |
+| `BASE-x.y` | 基础架构专项任务（`doc/archive/implemented/HelloAI 基础架构调整实施计划.md`，2026-10-12 已完成归档；编号已退役，不再新增） |
+| `REF-x.y` | 借鉴落地专项任务（`plan/HelloAI 借鉴落地实施计划.md`，2026-10-09 建号）；`x` 取 1~8 —— **`REF-8` 内部 LLM 能力面**（2026-10-12 新增，`D-2026-10-12-1`） |
 | `ARCH-YYYYMMDD-NNN` | 架构决策（`log/HelloAI 架构变更记录.md`） |
 | `LOG-YYYYMMDD-NNN` | 迭代记录（`log/YYYY-MM.md`） |
 
@@ -74,6 +74,11 @@
 - **D-2026-10-11-2｜事件码改服务端单一来源（取代 `D-2026-10-09-6③-4` 的「事件码 guard-only」）**（用户，2026-10-11）：事件码展示字典改为**服务端 enum + 目录端点下发**（`TimelineEventCode` 141 码 → `GET /api/events/catalog`），前端删 EVENT_META / sequenceFlow.LABEL 硬编码副本、改拉目录（与技能目录 REF-1.2c 同范式），守卫转「enum 单源 + 前端无残留」。早前判定「事件码不适合下发」指的是其**行为配置**（compaction/箭头推断），非 code-label 字典；字典越单源越稳。**收口**：后端展示通道写点替换为枚举引用已同批完成（守卫相应重构，见 `LOG-20261011-008`）。实现与验证见 `LOG-20261011-006` / `LOG-20261011-008`。
 - **D-2026-10-10-2｜REF-2 备份 / 恢复实施方案六项裁定**（用户，2026-10-10）：① **执行形态** —— 应用内 `ProcessBuilder` 执行**可配置路径**的 `pg_dump` / `pg_restore` + 启动前置检查（不可用则备份功能**显式不可用**，不静默）；生产 Dockerfile 的 app 阶段补装 `postgresql-client-16`；**不做 `docker exec`**（挂 `docker.sock` 与 `D-2026-10-09-4③` 的裁定相悖）。实测三环境（app 镜像无客户端 / 本地 Windows 无 / 仅 PG 容器内有）为第一前置。② **`ProcessBuilder` 判为不触发 `G-005` 条件①** —— 该条件语境是「Agent 可调用工具面」，备份是**管理端例程、非 agent 工具** ⇒ **REF-3 沙箱排期不动**。③ **备份落独立 bucket `helloai-backups`** —— `ArtifactStorageReconcileServiceImpl` 以 `listObjects(bucket, null)` **枚举整桶**，凡无 DB 记录者即孤儿候选，共用桶会被 `orphan-cleanup` 删掉；且 `ArtifactStorage.store` 只写单一配置桶 ⇒ 需新增独立写路径。④ 触发 = 定时（`helloai-job` ShedLock，与既有 18 个任务同构）+ 管理端手动端点；长操作走**异步 + 状态守卫 + 轮询查询端点**（学拆解范式）。⑤ 保留 = 仅对**自动**备份按份数淘汰（默认 **7**，可配），**手动备份永不淘汰**；GFS 留作后续精化。⑥ 新增 `platform_backup` 记录表（迁移 **V105**，形态对齐 `V67__create_credential_audit_log.sql`）+ 管理端权限码。恢复侧三门（跨引擎拒 / schema 高过运行时拒 / 在线恢复拒）先于任何 `pg_restore` 执行。详案见 `plan/HelloAI 借鉴落地实施计划.md` §4。
 
+- **D-2026-10-12-1｜内部 LLM 能力面立项（`REF-8` / `G-021`）（用户，2026-10-12）**：用户确认「内部 agent 内核思路」按审阅建议调整 ⇒ ① **新立 `REF-8`「内部 LLM 能力面」**（与既有 `REF-1~7` 并列），收纳 `D1` 工具面解封 / `D2` 手脚·工作区（含 `systemPrompt` 非空）/ `D3` 技能全量目录 + 惰性加载 / `D4` 拦截链（Spring AI Advisors）/ `E1` 循环覆盖面收敛；② 同批新立差距锚点 **`G-021`**（此前「内部 LLM 工具面 / 循环覆盖面」在差距表**零登记**，属孤儿项）；③ **内核轴 = 「可见面收敛」**——唯一输出契约 = 模型的可见集（L1 可见工具集 / L2 可见技能目录 / L3 可见上下文）；会话单源化降为**支撑项**（**提升已有 `agent_event`，不新建 Ledger**）；④ `LOG-20261011-007` 的 **A 能力闸 + B 收敛熔断** 挂 `REF-8` 的 `D4` 拦截链之下（拦截链是其唯一挂点）。详案见 `plan/HelloAI 借鉴落地实施计划.md` §10 与 `review/HelloAI 内部 agent 内核收敛思路审阅与调整建议（2026-10-12）.md`。
+- **D-2026-10-12-2｜`REF-8` 开工 + 主线指针 + 覆盖面清单**（用户，2026-10-12）：① `REF-8` 动作 **`REF-8.1 → 8.2 → 8.3` 即行开工**（当前 `T1` 最高优先，唯一直接产出「内部 LLM 变 agent」的一层）；② 权威主线《重构实施计划》§2 头部**补 `REF-8` 指针**（实测原文全 0 命中 `REF-8`，与编排总览不一致）；③ `REF-8.5` 覆盖面**先出 16 项清单待勾选**（`plan/HelloAI 借鉴落地实施计划.md` §10.6）后再立项。
+- **D-2026-10-12-3｜`LOG-20261011-007` A+B 立项**（用户，2026-10-12）：**A（能力闸）+ B（收敛熔断）正式立项**——B 的「连续**相同驳回原因**」阈值 **`N = 3`**（对齐日志"连续 3 次"现场）；动手时机 = **`REF-8.4` 拦截链落地之后**（拦截链是唯一挂点）；**`C`（产物接地校验）暂不立项**，单独评估。
+- **D-2026-10-12-4｜`REF-7` 三约束定稿 + 继续挂起**（用户，2026-10-12）：§8.2 的 C1~C3 **全部按原倾向定稿**（C1 **双面**：原文落 MinIO + 时间线只放结构化索引 + `ref`；C2 **复用人工介入 `HUMAN_REVIEW` 通道**、不建第二套审批；C3 **一条汇总事件 + `snapshotRef`**）；但 **`REF-7` 本身继续挂起**（触发 = 子任务内部执行深度审计需求成立，当前未触发）。同批确认 **`REF-3`/`B2` 沙箱继续挂起**、**`REF-1.4` 继续挂起**、**上线核对清单 §2 待环境确认**。
+
 **当前冻结基线**
 
 - **§11.3「Controller 不得暴露 core Entity」**：命中 **19 处 / 8 控制器**（冻结未清偿 —— 改动 API 响应契约须与 `helloai-ui` 联动，单独立项）；校验 `scripts/powershell/verify-code-style-p0-layer.ps1 -StaticOnly`。
@@ -105,6 +110,7 @@
 | G-018 | 备份 / 恢复（平台数据可靠性） | 备份/恢复链已具备：备份编排（`pg_dump -Fc` 全库 + MinIO 对象清单递归枚举 + manifest 前置 peek + Redisson 单飞锁 + 仅淘汰自动备份）+ `platform_backup` 记录表（`V105`）+ 恢复侧三门（跨引擎 / schema 高过运行时 / 在线）+ 管理端 preflight、restore 端点；备份落独立 bucket `helloai-backups`（不参与产物对账）；停机恢复流程手册成文（`doc/manual/platform-backup-restore/runbook.md`：能力边界 / 备份判据 / 恢复三路径与三门 / 停机清单）；生产镜像内置 `postgresql-client-16`，备份在服务器侧可用 | `pg_dump -Fc` 全库 + MinIO 对象清单 + manifest 前置 peek（不解档即可判内容）+ 分布式单飞锁 + 自动/手动备份分离的保留策略 + 停机恢复流程文档化（诚实边界：运行中备份不保证多文件同一瞬间） | **P1** | DONE · 全链成立：备份编排 + 恢复三门 + `platform_backup` 台账 + 停机恢复流程手册 + 生产侧客户端前置。落地硬约束：① 恢复侧安全闸门（跨引擎 / schema 高过运行时 / 在线）；② 「`listObjects` 返回空」显式失败，不产出缺对象的「完整备份」；③ 复用既有 `pg_restore --no-owner --no-privileges` 写法。验证见 `LOG-20261010-007` / `LOG-20261010-008` |
 | G-019 | RAG 知识库（检索增强） | 存储/检索已具备：`kb_chunk`（`V107`，`vector(1024)` + HNSW-cosine）+ 自建 `JdbcTemplate` 余弦检索 + `search_knowledge` 工具（无 KB 即摘）+ `char_budget` 注入预算 + 引用溯源 marker（`[kb:source#idx]` + 前端可点开卡片）+ 管理端 `/api/kb/*`；真实 dashscope 嵌入 + 判别性召回验证通过 | pgvector 存储与检索（**PG 单后端，不引入侧库**）+「无 KB 即摘工具」的条件可用语义位 + 注入预算（char_budget 契约）+ 引用溯源 marker（前端渲染卡片、喂模型前剥离） | **P2** | DONE · `REF-4` 全组收官（服务端单一来源 + 存储/检索 + 引用溯源 + 条件可用语义位）。交付：`kb_chunk` 存储/检索（PG 单后端）· `char_budget` 注入预算 · 无 KB 即摘工具 · 引用溯源 marker（前端可点开来源卡片）。前置全闭合：pgvector 镜像与扩展 · 通义千问 LLM 有效 · 嵌入选型 `ADR-002` 定稿 · `search_knowledge` 经 `ToolCallbackContributor` 注册并登记技能包。**生产启用**（知识库内容入口与开关）属运维决策（新能力默认关闭，`REF-6.13`）。验证见 `LOG-20261011-001`~`005` |
 | G-020 | 外部 Agent 工作详情快照（子任务执行过程的取证能力） | **完全空白**：平台当前只能审计到**订单层面**（认领 / 开工 / 心跳 / 交单 / 产物 / 阻塞 / 依赖读取，经 `agent_event` + `task_timeline` + 产物对账）；**子任务内部执行过程是黑盒**（这是刻意的解耦，但带来返工争议 / 质量复盘 / 责任界定的取证盲区） | 外部 Agent **事后、经审批、可选**地提交一份全任务工作详情快照 → 平台解析 → **原文落 MinIO** + **时间线插入结构化审计事件（闭合 schema + `snapshotRef`）** | **P2（可后置）** | TODO · 新增立项（`D-2026-10-09-6⑤`），任务锚点 `REF-7`。**动手前三项设计约束必须先定**（见 `plan/HelloAI 借鉴落地实施计划.md` §8.2）：① 与 `REF-6.2`「审计闭合 schema」的张力 ⇒ 必须双面（与 `REF-5.2b` 双视图同模式）；② 审批方是谁（倾向复用人工介入通道，不建第二套审批）；③ 落时间线的粒度。新增工具须走既有 `McpMcpServer` 守卫且**默认关闭**（`REF-6.13`） |
+| G-021 | 内部 LLM 能力面（工具面 / 手脚 / 技能装配 / 循环覆盖面） | **工具面空**：`AgentMcpServerServiceImpl:267-275` 对 `API_KEY_LLM` 过滤全部 13 个 MCP 工具 ⇒ `resolvedTools` 空 ⇒ `resolveVisibleCallbacks:197-198` 恒返 `List.of()`（**注射机制在**：`RuntimeTurnExecutor:135` `setToolCallbacks`；**注射源被清空**）；**无手脚**：无工作区概念、fs 提供方检索为空；**技能为 prompt 级速览**（`SkillSpeedSummaryRenderer:26-43`），4 技能仅 `eng-web-research` 声明 `requiredTools`；**上下文空**：`AgentRuntimeContextAssembler:213` `.systemPrompt("")` 硬编码（全链同款 `FinalReportReviewServiceImpl:387`）；**循环预算低**：`AgentLoopInput:47` `DEFAULT_MAX_ITERATIONS = 5`；**覆盖面 1/16**：全仓 `agentLoop.run()` 生产调用点**仅 1 处**（`RuntimeTurnExecutor:130`），15 处业务 LLM 面走 `executeSync/executeStream` 单次聊天 | 内部 LLM 从「单轮文本生成器」进化为**有工具、有手脚、能按需装配技能**的 agent；内核唯一输出契约 = 「模型的可见集」（L1 可见工具集 / L2 可见技能目录 / L3 可见上下文），并让多数 LLM 面进入循环 | **P1** | TODO · 新增立项（`D-2026-10-12-1`），任务锚点 `REF-8`（`D1` 工具面 / `D2` 手脚·工作区 / `D3` 技能惰性加载 / `D4` 拦截链 / `E1` 覆盖面）。现状依据：`AgentMcpServerServiceImpl:88-102,267-275` · `RuntimeTurnExecutor:130,135` · `AgentRuntimeContextAssembler:135-136,140-144,213` · `AgentLoopInput:47` · `SkillSpeedSummaryRenderer:26-43` |
 
 # 2. P0 主线
 
@@ -203,7 +209,8 @@ Timeline / Replay
 
 ### 基础架构深化（G-013，参考 JeecgBoot，实施编排独立）
 
-- 专项计划（唯一事实源）：`doc/plan/HelloAI 基础架构调整实施计划.md`（批次明细 / 验收 / 遗留）
+- 专项计划（**已执行完成，2026-10-12 迁入归档**）：`doc/archive/implemented/HelloAI 基础架构调整实施计划.md`（批次明细 / 验收 / 遗留）
+- 残留两项（**不在该专项范围**）：`active-timeout` 超时**过期触发**未实测；`McpAuthFilter` 沿用 `validateAdminToken` 属**有意设计**
 - 编号：`BASE-x.y`——与 `G-xxx` 及重构主线编号完全错开，不混用
 - 目标架构融合：`doc/HelloAI 目标架构.md` §12 基础架构（平台底座），与业务五层正交
 - 当前状态与未达成项：见 §1 矩阵 `G-013` 行
@@ -307,6 +314,32 @@ C3 落时间线的粒度 ⇒ 倾向先做「一条汇总事件 + ref」，逐阶
 
 **红线**：新增工具须走既有 `McpMcpServer` + `assertAgentActive` / `assertToolEnabled` / `refreshDutyLease` 守卫（不建平行通道），且**默认关闭**（`REF-6.13`：新能力默认关闭、通过注入启用）。
 
+### 内部 LLM 能力面（G-021，`REF-8`，2026-10-12 立项）
+
+**问题一句话**：平台的多 Agent 编排（`planner > review > task > agent`）已是成熟 P&E 骨架，但**内部 LLM 这一层 = 「循环骨架 + 空工具面 + 无手脚 + 只覆盖 1/16 的 LLM 面」** ⇒ 退化为单轮文本生成器。这与 `G-003`（AgentRuntime）不冲突：`G-003` 验收的是「**循环能跑**」（八件套落地），`G-021` 记的是「**循环的两端空**」（注什么工具 / 哪些面在循环里）。
+
+**内核轴 = 「可见面收敛」**（`D-2026-10-12-1③`）：内核唯一输出契约 = **模型的可见集**。
+
+```text
+L1 可见工具集    由 ToolRegistry.resolve 单口径产出（源不得被上游剥空）      ← REF-8.1
+L2 可见技能目录  全量目录（name + 封顶 description），正文惰性加载           ← REF-8.3
+L3 可见上下文    system prompt（非空）+ 工作区 / 附件读手脚                 ← REF-8.2
+```
+
+**五个动作**（详案见 `plan/HelloAI 借鉴落地实施计划.md` §10）：
+
+| 编号 | 动作 | 现状证据 |
+|---|---|---|
+| `REF-8.1` | **工具面解封**——给 `API_KEY_LLM` 一条**不依赖 MCP 会话**的工具通道（读原附件 / 文件读写 / 正式交付动作），复用 `ToolRegistry` 语义位 + `ToolCallbackContributor`，与 `resolve` 保持单口径 | ✅ **M1 已实施（2026-10-12）**：新增 `InternalLlmExecutorTools`（进程内 @Tool：读详情/读依赖/读状态/交付登记/读附件）+ 独立进 `McpToolConfig` provider；`AgentMcpServerServiceImpl:267-275` 对 `API_KEY_LLM` 返回内部授权集（而非空）；外部 MCP 13 工具仍对内部 LLM 剔除（防 L3 P1-1）。单测 `InternalLlmExecutorToolsTest` 6/6 + `AgentMcpServerServiceImplTest` 7/7；全量 1976 单测绿、架构守卫 EXIT=0 |
+| `REF-8.2` | **补手脚 + 上下文**——新增 `WorkspaceAccess`（先只读 + 只写产物目录）+ 读附件工具；`systemPrompt` 从 `""` 改为「角色 + 工具使用指引 + 输出契约」；`maxIterations` 按任务类型分档 | `AgentRuntimeContextAssembler:213` · `AgentLoopInput:47` |
+| `REF-8.3` | **技能改「全量目录 + 惰性加载」**——注入目录段（非速览），新增惰性加载工具，`AgentSkillSpecService` 加 `get(name)`；保留 `requiredTools` 作能力级声明 | `SkillSpeedSummaryRenderer:26-43` · `AgentSkillSpecService:61`（无 `get`） |
+| `REF-8.4` | **拦截链**（Spring AI **Advisors API**）——所有策略（能力闸 / 收敛熔断 / 审计）的**唯一挂点**；`LOG-20261011-007` 的 A + B 挂此 | — |
+| `REF-8.5` | **循环覆盖面收敛**——逐面判「该不该进循环」（子任务评审、终报告生成理论上都该带工具） | `RuntimeTurnExecutor:130`（**1 处**）vs `executeSync/executeStream`（**15 处 / 9 类**） |
+
+**收敛完成判据**（内核自洽，较「组完成」更严）：① 不依赖 MCP 会话可独立构造 / 测试；② **可见面单口径**（模型可见工具集 = `ToolRegistry.resolve` 结果，上游无第二处二次过滤——对应已证缺陷模式「**规则存在 ≠ 全路径强制**」）；③ **能力可验证**（拿一条「需读原附件 / 写产物」的验收任务，内部 LLM 能**自己调工具**完成）；④ 事件不双写（模型可见消息与事件流同源）。
+
+**红线**：**不新建 append-only 表**（`agent_event` 已是主表 + Outbox 双写，见 `AgentEventRecorder.java:11-15`）——正确动作是**提升已有 `agent_event`**（补 `surface` 投影 + `deriveMessages()`）；**不动 `ChatModelToolLoop` 循环本体**；**不引入 LangGraph4j**（触发信号出现前）。
+
 # 5. P3
 
 ```text
@@ -365,11 +398,13 @@ Cross-session optimization
 
 > A 档六项里 `REF-5.2a` / `5.1`（`LOG-20261010-009`）与 `REF-5.3` / `5.4`（`LOG-20261010-010`）已交付；
 > 本表给**每一项**留永久锚点，避免它们随批次闭环从索引里消失（`REF-5.6` 已并入 `REF-2`，故不列）。
+> `R14` 为 2026-10-12 补登记 —— A1「载荷旁路」的**配套第二条**此前仅在 `research/` 正文出现，无 `REF-` 落点、未记 WONTFIX（孤儿项回流，`LOG-20261012-001`）。
 
 | 编号 | 回流项 | 决定 | 关联 |
 |---|---|---|---|
 | R8 | **初始化期服务锁定**（`REF-5.3`） | **已交付**：判据 = **用户数 == 0**（不用 `system.setup_finished` —— 该值在 `V1__init_all.sql` 被预置为 `'1'`，当判据**永不生效**）；落点 `SetupLockInterceptor`，除 `/api/setup/**` 与 `/api/health/**` 外一律 `503 setup_required`，与前端 `!hasUsers` 同源。**边界**：闩锁在内存、单向 —— 清空用户表后恢复锁定需重启 | — |
 | R11 | **子任务视图读判据统一**（2026-10-10 用户裁定） | **已交付**：原为**两套判据且都有问题** —— 时间线 / 对话流只认 `sub_task.assigned_agent_id`（实测把**合法团队成员**也拒：加入 team 后读附件 200、读时间线仍 403）；`/api/sub-tasks/getById` **无任何校验**（任何有效 Agent API Key 可读任意子任务详情）。三处一律收敛到 `SubTaskViewGuard` → `AttachmentVisibilityPolicy.canReadTaskScoped`（与附件读侧**同一判据**，逻辑零复制）。**未动**：MCP `getSubTaskDetail` 的「本人已分配 / 未分配且 PENDING」属**工作面**约束，与可见性面语义不同 | `G-014` |
+| R14 | **图片 / 二进制载荷「只存路径引用」**（A1「载荷旁路」**配套第二条**，来源 Octop `infra/agents/middleware/workspace_image.py`） | **条件触发**（2026-10-12 用户裁定）：判据 = 图片在 checkpoint / history **只存 `workspace://` 路径引用**，仅在 model request 时展开为 `data:` URI ⇒ `base64` 永不落 state / 不进历史 payload（与 A1 主条目同属「数据面 / 控制面分离」，治的是**图片 base64** 那一半）。**当前不适用**（实测：平台**无图片 / 多模态输入通道**，业务侧 `base64` / `image_url` / `data:image` / `vision` 零命中；附件注入 `UpstreamAttachmentRenderer` 为**纯文本按行截断**）。**触发条件**：平台新增图片 / 二进制多模态输入通道 ⇒ 按 `REF-5.2b` 同思路落地（state 只留 `ref`）。**不排期** | `REF-5.2b` · `G-005` |
 
 ### 7.1.5 REF-6 判据守卫与前端事件字典（2026-10-11，依据 `plan/HelloAI 借鉴落地实施计划.md` §9 与 `LOG-20261010-013`）
 
