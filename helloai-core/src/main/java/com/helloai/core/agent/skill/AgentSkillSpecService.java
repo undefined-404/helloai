@@ -76,4 +76,27 @@ public interface AgentSkillSpecService {
      * @return 命中技能包列表（KNOWN_SPECS 声明顺序），永不为 null
      */
     List<SkillPackage> resolvePackages(List<String> requiredSkills);
+
+    /**
+     * 按技能名查目录中的健康技能包元数据（REF-8.3 惰性加载目录查询）。
+     *
+     * <p>供内部 LLM 的 {@code skill({name})} 惰性加载工具、以及「全量目录注入」使用——
+     * 只返回健康包（坏包 / 未登记 / 空名一律 {@code null}），避免模型读到不可加载技能。</p>
+     *
+     * @param name 技能名（严格匹配，不归一化）
+     * @return 健康技能包元数据；不存在 / 不入目录时返回 {@code null}
+     */
+    SkillPackage getPackage(String name);
+
+    /**
+     * 惰性加载指定技能包的正文（REF-8.3 progressive disclosure）。
+     *
+     * <p>与 {@link #getPackage(String)} 配套：目录注入只给 {@code name + description}，
+     * 正文由模型按需经工具加载。走目录 {@code bodyOf}（内置 classpath / 已安装 DB 双源），
+     * 读取失败返回 {@code null}（best-effort，不阻断）。</p>
+     *
+     * @param name 技能名
+     * @return 技能正文（含 frontmatter 剥离前的原始正文）；不存在 / 不可读时返回 {@code null}
+     */
+    String loadBody(String name);
 }

@@ -2,11 +2,18 @@ package com.helloai.core.agent.runtime.tool;
 
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.service.McpToolService;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.skill.SkillPackage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 内部 LLM 执行者（{@code API_KEY_LLM}）的<b>进程内工具通道</b>（REF-8.1 M1）。
@@ -47,6 +54,8 @@ public class InternalLlmExecutorTools {
 
     private final McpToolService mcpToolService;
     private final AttachmentPort attachmentPort;
+    /** 技能解析服务（REF-8.3：全量目录 + 惰性加载）；走 {@code getPackage} / {@code loadBody}。 */
+    private final AgentSkillSpecService agentSkillSpecService;
 
     /**
      * 查询当前子任务详情（执行内容 / 交付物 / 验收标准 / 执行约束 / 不确定性申报 / 前置附件）。
@@ -176,5 +185,72 @@ public class InternalLlmExecutorTools {
             @ToolParam(description = "附件主键（来自 internal_get_sub_task_detail 的 attachments）", required = true) Long attachmentId) {
         byte[] content = attachmentPort.loadContent(attachmentId);
         return new String(content, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 列出平台全部可调用技能（REF-8.3 全量目录注入）。
+     *
+     * <p>与 DSH {@code tool-skill} 的「全量目录 + 惰性加载」对齐：本工具返回
+     * <b>全量健康技能目录</b>（{@code name + description} 封顶，不含正文），让模型感知
+     * 「还有哪些技能可用」并自行判断哪些与当前任务相关；正文经 {@code internal_load_skill}
+     * 惰性加载。区别于任务注入的「速览」（只看得到被要求命中的那几个），本工具是
+     * <b>模型可见的全量视野</b>。</p>
+     *
+     * @return 技能目录列表（按技能 name 排序），每项含 name / version / description / requiredTools（缩写）
+     */
+    @Tool(name = "internal_list_skills", description = """
+            【何时使用】需要了解平台有哪些可用技能，以判断当前任务该按哪个技能手段执行时调用。
+            返回全量技能目录（名称 + 简介，不含正文）。
+            【Gotchas】
+            - 返回的是技能清单（name + description），任何一项的正文需调 internal_load_skill 按需加载
+            - 只列健康技能；坏技能包不会出现
+            【相关工具】internal_load_skill
+            """)
+    public Object internalListSkills() {
+        List<SkillPackage> packages = agentSkillSpecService.listPackages();
+        if (packages == null || packages.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> catalog = packages.stream()
+                .sorted(Comparator.comparing(SkillPackage::name, Comparator.nullsLast(String::compareTo)))
+                .map(pkg -> {
+                    Map<String, Object> entry = new LinkedHashMap<>();
+                    entry.put("name", pkg.name());
+                    entry.put("version", pkg.version());
+                    entry.put("description", truncateSkillDescription(pkg.description()));
+                    // requiredTools 缩写（≤6 项，避免目录过长）：供模型判断该技能需哪个工具
+                    List<String> tools = pkg.requiredTools();
+                    entry.put("requiredTools", tools != null && tools.size() <= 6 ? tools
+                            : (tools != null ? tools.subList(0, 6) : List.of()));
+                    return entry;
+                })
+                .toList();
+        return catalog;
+    }
+
+    /**
+     * 惰性加载某个技能的完整正文（REF-8.3 progressive disclosure）。
+     *
+     * @param name 技能名（必须是 internal_list_skills 返回的准确 name）
+     * @return 技能正文；技能不存在 / 不可读时返回 null
+     */
+    @Tool(name = "internal_load_skill", description = """
+            【何时使用】在 internal_list_skills 看到技能后，需要读取某个技能的完整规范正文（怎么执行、边界、验收）时调用。
+            【Gotchas】
+            - name 必须是 internal_list_skills 返回的准确技能名（严格匹配，不归一化）
+            - 返回正文可能较长；只读与当前任务相关的技能
+            【相关工具】internal_list_skills
+            """)
+    public Object internalLoadSkill(
+            @ToolParam(description = "技能名（来自 internal_list_skills）", required = true) String name) {
+        return agentSkillSpecService.loadBody(name);
+    }
+
+    /** 技能描述封顶（目录注入防刷屏，与 DSH 的 description 封顶同构）。 */
+    private static String truncateSkillDescription(String description) {
+        if (description == null) {
+            return "";
+        }
+        return description.length() <= 300 ? description : description.substring(0, 300) + "…";
     }
 }

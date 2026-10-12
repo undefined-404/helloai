@@ -105,6 +105,24 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
         return matched;
     }
 
+    @Override
+    public SkillPackage getPackage(String name) {
+        if (name == null || name.isBlank()) {
+            return null;
+        }
+        // byName 只含健康包（坏包已过滤），且严格匹配不归一化——模型必须按目录给的准确 name 查询
+        return catalog.byName().get(name);
+    }
+
+    @Override
+    public String loadBody(String name) {
+        SkillPackage pkg = getPackage(name);
+        if (pkg == null) {
+            return null;
+        }
+        return catalog.bodyOf(pkg);
+    }
+
     /**
      * 读取技能包的「执行速览」部分，并去掉文件 h1 标题行
      * （渲染段自带 {@code ### 标签} 标题，避免重复层级）。

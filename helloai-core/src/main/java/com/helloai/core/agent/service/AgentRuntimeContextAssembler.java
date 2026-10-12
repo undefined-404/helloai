@@ -776,7 +776,9 @@ public class AgentRuntimeContextAssembler {
             sb.append("你拥有平台提供的进程内工具集，可用来：\n")
                     .append("- 读取当前子任务的完整详情、验收标准、执行约束（internal_get_sub_task_detail）；\n")
                     .append("- 读取前置依赖产出的附件正文（internal_read_attachment / internal_get_deps_summary）；\n")
-                    .append("- 在你的正文之外登记独立的交付文件（internal_register_output_attachment）。\n")
+                    .append("- 在你的正文之外登记独立的交付文件（internal_register_output_attachment）；\n")
+                    .append("- 查看平台全部可用技能目录（internal_list_skills），并按需加载某个技能的完整规范正文")
+                    .append("（internal_load_skill）——任务涉及特定专业规范时，先查技能库再按规范执行。\n")
                     .append("当任务需要原始字段 / 实际文件内容，而上下文中仅给了摘要时，应先用工具核验，")
                     .append("不要仅凭摘要臆测补全。无法通过工具取得所需信息时，应在交付物中显式声明缺失项。\n\n");
         }

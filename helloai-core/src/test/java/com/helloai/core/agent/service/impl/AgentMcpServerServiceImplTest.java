@@ -48,13 +48,15 @@ class AgentMcpServerServiceImplTest {
             "uploadArtifact", "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
             "checkIn", "checkOut");
 
-    /** REF-8.1：内部 LLM 进程内固有工具通道（InternalLlmExecutorTools @Tool name，逐个列出以冻结清单）。 */
+    /** REF-8.1/8.3：内部 LLM 进程内固有工具通道（InternalLlmExecutorTools @Tool name，逐个列出以冻结清单）。 */
     private static final List<String> INTERNAL_LLM_TOOLS = List.of(
             "internal_get_sub_task_detail",
             "internal_get_deps_summary",
             "internal_get_agent_status",
             "internal_register_output_attachment",
-            "internal_read_attachment");
+            "internal_read_attachment",
+            "internal_list_skills",
+            "internal_load_skill");
 
     private AgentMcpServerServiceImpl service;
     private LambdaQueryChainWrapper<AgentMcpServer> chain;

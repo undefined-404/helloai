@@ -2,10 +2,13 @@ package com.helloai.core.agent.runtime.tool;
 
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.service.McpToolService;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.skill.SkillPackage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -14,19 +17,21 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link InternalLlmExecutorTools} 单测（REF-8.1 M1）。
+ * {@link InternalLlmExecutorTools} 单测（REF-8.1 M1 / REF-8.3 M3）。
  *
- * <p>验证 5 个进程内 {@code @Tool} 的委托正确性：读型工具复用 {@link McpToolService}
- * 同名方法；交付登记 / 附件读取分别走 {@link AttachmentPort} 的 {{@code register}} / {code loadContent}。
+ * <p>验证进程内 {@code @Tool} 的委托正确性：读型工具复用 {@link McpToolService}
+ * 同名方法；交付登记 / 附件读取分别走 {@link AttachmentPort} 的 {{@code register}} / {code loadContent}；
+ * 技能工具（REF-8.3）走 {@link AgentSkillSpecService} 的 {code listPackages} / {code loadBody}。
  * 均为进程内直连，无 {@code McpMcpServer} / {@code McpAuthContext} session 鉴权依赖。</p>
  */
-@DisplayName("InternalLlmExecutorTools 进程内工具通道（REF-8.1）")
+@DisplayName("InternalLlmExecutorTools 进程内工具通道（REF-8.1 / REF-8.3）")
 class InternalLlmExecutorToolsTest {
 
     private final McpToolService mcpToolService = mock(McpToolService.class);
     private final AttachmentPort attachmentPort = mock(AttachmentPort.class);
+    private final AgentSkillSpecService agentSkillSpecService = mock(AgentSkillSpecService.class);
     private final InternalLlmExecutorTools tools =
-            new InternalLlmExecutorTools(mcpToolService, attachmentPort);
+            new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService);
 
     @Test
     @DisplayName("internal_get_sub_task_detail：委托 McpToolService.getSubTaskDetail（进程内直连）")
@@ -108,5 +113,35 @@ class InternalLlmExecutorToolsTest {
 
         assertThat(result).isEqualTo(content);
         verify(attachmentPort).loadContent(50L);
+    }
+
+    @Test
+    @DisplayName("REF-8.3 internal_list_skills：返回全量技能目录（name/version/description/requiredTools）")
+    void shouldListSkills() {
+        SkillPackage pkg = new SkillPackage("eng-code-review", "1.0.0", "代码评审规范",
+                List.of("search_knowledge"), List.of(), Map.of(), Map.of(), List.of(), "eng-code-review.md");
+        when(agentSkillSpecService.listPackages()).thenReturn(List.of(pkg));
+
+        Object result = tools.internalListSkills();
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> list = (List<Map<String, Object>>) result;
+        assertThat(list).hasSize(1);
+        assertThat(list.get(0))
+                .containsEntry("name", "eng-code-review")
+                .containsEntry("version", "1.0.0")
+                .containsEntry("requiredTools", List.of("search_knowledge"));
+        verify(agentSkillSpecService).listPackages();
+    }
+
+    @Test
+    @DisplayName("REF-8.3 internal_load_skill：惰性加载指定技能正文（走 AgentSkillSpecService.loadBody）")
+    void shouldLoadSkillBody() {
+        when(agentSkillSpecService.loadBody("eng-code-review")).thenReturn("## 代码评审规范\n正文……");
+
+        Object result = tools.internalLoadSkill("eng-code-review");
+
+        assertThat(result).isEqualTo("## 代码评审规范\n正文……");
+        verify(agentSkillSpecService).loadBody("eng-code-review");
     }
 }
