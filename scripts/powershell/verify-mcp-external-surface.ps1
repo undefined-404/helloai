@@ -74,11 +74,16 @@ $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
 
-# 对外工具面唯一权威清单（与 McpController.TOOL_NAMES 对齐；改动须同步两边）
+# 对外 MCP 面唯一权威清单 = spring-ai 聚合的全部 ToolCallback（用户裁定 2026-10-12）：
+#   13 个业务 MCP 生命周期工具 + echo（平台连通性诊断，EchoMcpTool，设计对外）
+#   + search_knowledge / web_search（平台内置 contributor 工具，经 McpToolConfig 并入对外 provider）。
+#   注意：此清单 ≠ McpController.TOOL_NAMES（后者是 REST 直通通道的 13 个 Agent 生命周期工具，
+#   不含诊断 / contributor 工具）。改动须同步 McpToolConfig（provider 全量）。
 $ExpectedTools = @(
     "pullTasks", "ack", "claimSubTask", "startSubTask", "heartbeat", "uploadArtifact",
     "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
-    "getSubTaskDetail", "checkIn", "checkOut"
+    "getSubTaskDetail", "checkIn", "checkOut",
+    "echo", "search_knowledge", "web_search"
 )
 
 function Assert-True([bool]$Cond, [string]$Msg) {
