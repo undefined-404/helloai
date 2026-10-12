@@ -610,7 +610,7 @@ L3 可见上下文    system prompt（非空）+ 工作区 / 附件读手脚    
 
 | 项 | 动作 | 落点（不动 `ChatModelToolLoop` 本体） | 验收 |
 |---|---|---|---|
-| **REF-8.1** | **工具面解封**：给 `API_KEY_LLM` 一条**不依赖 MCP 会话**的工具通道（读原附件 / 文件读写 / 正式交付动作） | **✅ M1 已交付（2026-10-12）**：复用 `ToolRegistry` 语义位 + `ToolCallbackContributor`（端口**已存在**）；新增 `InternalLlmExecutorTools`（进程内 @Tool）+ 并入 `McpToolConfig` 唯一 provider；`AgentMcpServerServiceImpl` 对 `API_KEY_LLM` 返回内部授权集而非空 | 内部 LLM 的工具列表**非空**；「读原附件」「交付登记」工具可调通。单测 `InternalLlmExecutorToolsTest` 6/6 + `AgentMcpServerServiceImplTest` 7/7；全量 1976 用例绿、架构守卫 EXIT=0 |
+| **REF-8.1** | **工具面解封**：给 `API_KEY_LLM` 一条**不依赖 MCP 会话**的工具通道（读原附件 / 文件读写 / 正式交付动作） | **✅ M1 已交付（2026-10-12）**：复用 `ToolRegistry` 语义位 + `ToolCallbackContributor`（端口**已存在**）；新增 `InternalLlmExecutorTools`（进程内 @Tool，**不并入**对外 provider——`D-2026-10-12-5` B）；`AgentMcpServerServiceImpl` 对 `API_KEY_LLM` 返回内部授权集而非空 | 内部 LLM 的工具列表**非空**；「读原附件」「交付登记」工具可调通。单测 `InternalLlmExecutorToolsTest` 6/6 + `AgentMcpServerServiceImplTest` 7/7；全量 1976 用例绿、架构守卫 EXIT=0。**补充（`D-2026-10-12-5` A+B，2026-10-12）**：内部工具入口加「执行链绑定」强制闸门（`ToolInvocationContext`）+ 移出对外 MCP `tools/list`（`InternalToolCallbacks` 承载）⇒ 「可调通」自此**真正成立**（此前单测直连、未走模型循环）。见 `LOG-20261012-006` |
 | **REF-8.2** | **补手脚 + 上下文**：`WorkspaceAccess`（先只读 + 只写产物目录）+ 读附件工具；`systemPrompt` 从 `""` → 「角色 + 工具使用指引 + 输出契约」；`maxIterations` **按任务类型分档**（可配，非全局常量） | **✅ M2 已交付（2026-10-12）**：`systemPrompt` 已填（`buildSystemPrompt`）；`maxIterations` 分档（`AgentExecutionProperties` + `RuntimeTurnExecutor.resolveMaxIterations`）。**手脚由 REF-8.1 覆盖**（`internal_read_attachment` / `internal_register_output_attachment`）；不建 WorkSpaceAccess 文件系统工具（需 sandbox，REF-3 条件触发不排期） | 内部 LLM 有非空 systemPrompt + 分档预算 + 读附件/交付登记手脚。单测 3 个新增；全量 1978 绿 |
 | **REF-8.3** | **技能改「全量目录 + 惰性加载」**：注入目录段（非速览），新增惰性加载工具，`AgentSkillSpecService` 加 `get(name)` | **✅ M3 已交付（2026-10-12）**：`AgentSkillSpecService` 加 `getPackage(name)`/`loadBody(name)`；`InternalLlmExecutorTools` 加 `internal_list_skills`/`internal_load_skill`；`INTERNAL_LLM_TOOLS` 加 2 工具；`buildSystemPrompt` 增技能发现指引；**保留 `requiredTools`** 能力级声明 | 目录含全部技能；正文按需加载。单测 2 个新增；全量 1980 绿 |
 | **REF-8.4** | **拦截链**（Spring AI **Advisors API**）——所有策略（能力闸 / 收敛熔断 / 审计）的**唯一挂点** | 挂在 `agentLoop.run` 外层 | `LOG-20261011-007` **A（能力闸）+ B（收敛熔断，阈值 `N=3`）已立项**（`D-2026-10-12-3`），**挂本行落地之后**；`C` 单独评估 |
@@ -643,7 +643,7 @@ REF-8.4 拦截链（可并行铺）───────────────
 - **不新建 append-only 表**（`agent_event` 已是主表）；违反即造「一份事实两处落」的双轨；
 - **不动 `ChatModelToolLoop` 循环本体**（骨架正确）；
 - **不引入 LangGraph4j**——仅在「显式图 / 断点续跑 / HITL」触发信号出现时再评估（与《自建 java-harness 可行性分析》方案 C 一致）；
-- 新增工具须走既有 `McpMcpServer` 守卫且**默认关闭**（`REF-6.13`）。
+- 新增**对外**工具须走既有 `McpMcpServer` 守卫且**默认关闭**（`REF-6.13`）。**★射程 = 「对外暴露的新工具」**（`D-2026-10-12-5`）——`REF-8.1` 的**内部进程内通道**（`API_KEY_LLM` 无 MCP 会话，走会话守卫必 401＝L3 P1-1）为该红线**显式例外**：以「**执行链绑定闸门**」（`ToolInvocationContext`）替代会话守卫，且**不得**进入对外 MCP `tools/list`（`internal_*` 经非 `ToolCallbackProvider` 的 `InternalToolCallbacks` 承载）。判据：「**绕过外部守卫**」合理 ≠ 「**暴露到外部面**」合理。详见 `log/2026-10.md` `LOG-20261012-006`。
 
 ## 10.6 覆盖面清单（`REF-8.5`，16 项，**待用户勾选**）
 

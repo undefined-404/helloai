@@ -120,13 +120,17 @@ for i, l in enumerate(ls, 1):
     hits = [w for w in S if re.search(r"(?<![A-Z])" + w + r"(?![A-Z])", disp)]
     if len(hits) > 1:
         bad.append("L%d(%s 多状态词=%s)" % (i, c[1].strip(), hits))
-if n != 20:
-    bad.append("矩阵行数=%d(应 20)" % n)
+# tripwire：矩阵行数是「新增 / 删除 G-0xx 行」的手动确认闸门。
+# 每次登记新差距行（+1）或关闭删除（-1）时必须同步本数值，否则本守卫会红——
+# 这正是它拦住「静默增删矩阵行」的手段，**不要**改成不等式或自动推导。
+EXPECTED_ROWS = 21  # G-001 ~ G-021（G-021 于 D-2026-10-12-1 登记）
+if n != EXPECTED_ROWS:
+    bad.append("矩阵行数=%d(应 %d)" % (n, EXPECTED_ROWS))
 print(" ".join(bad))
 PY
 )
 if [ -z "$row_check" ]; then
-  ok "③ 处置列首词全部 ∈ 九态集合，一行一态，矩阵 20 行齐备"
+  ok "③ 处置列首词全部 ∈ 九态集合，一行一态，矩阵行数齐备（tripwire）"
 else
   bad "③ 状态词校验：$row_check"
 fi
