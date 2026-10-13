@@ -211,6 +211,14 @@ else
   bad "《差距表》结构守卫失败（详见上方 verify-doc-gap-table.sh 输出）"
 fi
 
+# M-2③ 供应商预置三方一致性守卫（前端预置 ↔ 迁移种子 ↔ application.yml 的 default-model）：
+# 2026-10-13 建（plan §11 M-1/M-2，magpie 借鉴）——防 D-a~D-e 陈旧 defaultModel（404/注册被拒）复发。
+if bash "$SCRIPT_DIR/../shell/verify-provider-catalog-parity.sh"; then
+  ok "供应商预置三方一致性守卫（前端预置 ↔ 迁移种子 ↔ application.yml default-model）"
+else
+  bad "供应商预置三方一致性守卫失败（详见 verify-provider-catalog-parity.sh 输出）"
+fi
+
 # ---------------------------------------------------------------------------
 # 门禁 4：前端类型检查 + 构建
 # ---------------------------------------------------------------------------

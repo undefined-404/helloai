@@ -287,7 +287,7 @@ helloai:
     deepseek:
       api-key: ${DEEPSEEK_API_KEY:}
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
-      default-model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
+      default-model: ${DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
       connect-timeout-ms: ${DEEPSEEK_CONNECT_TIMEOUT_MS:5000}
       # 读超时与 AgentProviderProperties 默认值对齐（3 分钟，覆盖整合报告/推理模型长输出）
       read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:180000}
@@ -304,7 +304,7 @@ helloai:
       api-key: ${DASHSCOPE_API_KEY:}
       # OpenAI 兼容模式，实际端点为 {base-url}/v1/chat/completions
       base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-      default-model: ${DASHSCOPE_CHAT_MODEL:qwen-plus}
+      default-model: ${DASHSCOPE_CHAT_MODEL:qwen3.7-plus}
   security:
     credential:
       # 凭据加密密钥（credential_vault / 系统设置页 API Key 落库加密）：
