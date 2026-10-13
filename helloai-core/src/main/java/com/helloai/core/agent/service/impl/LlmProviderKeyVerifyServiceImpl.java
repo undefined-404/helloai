@@ -41,13 +41,22 @@ public class LlmProviderKeyVerifyServiceImpl implements LlmProviderKeyVerifyServ
 
     private static final String PROTOCOL_ANTHROPIC = "ANTHROPIC_COMPATIBLE";
 
-    /** 内置供应商兜底模型（default_model 为空时使用，仅作最小探测）。 */
+    /**
+     * 内置供应商兜底模型（default_model 为空时使用，仅作最小探测）。
+     *
+     * <p><b>★取值纪律</b>：兜底值须恒等于「目录默认位」{@code llm_provider_model.is_default=1}
+     * （迁移真值：{@code V49} 目录 + {@code V61}/{@code V101} 订正）；否则兜底路径会拿一个已不在
+     * 目录内的模型去探测 ⇒ provider 返回 404 ⇒ 密钥验证失败。此处正是 {@code V61} 所述
+     * 「验证失败（HTTP 404）的直接根因」路径（{@code D-d}）。本表与 {@code providerCatalog.ts} /
+     * {@code application.yml} 由 {@code scripts/shell/verify-provider-catalog-parity.sh} 守卫
+     * （已接入 {@code scripts/ci/ci-gate.sh} 门禁 3）。</p>
+     */
     private static final Map<String, String> FALLBACK_MODELS = Map.of(
-            "deepseek", "deepseek-chat",
+            "deepseek", "deepseek-v4-flash",
             // moonshot-v1 系列已于 2026-08-31 官方下线（404），兜底模型同步切 kimi-k3
             "moonshot", "kimi-k3",
-            "minimax", "MiniMax-Text-01",
-            "dashscope", "qwen-turbo"
+            "minimax", "MiniMax-M2.5",
+            "dashscope", "qwen3.7-plus"
     );
 
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);

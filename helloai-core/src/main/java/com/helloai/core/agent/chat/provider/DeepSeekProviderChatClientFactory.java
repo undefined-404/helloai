@@ -22,7 +22,8 @@ import org.springframework.web.client.RestClient;
 public class DeepSeekProviderChatClientFactory implements ProviderChatClientFactory {
 
     private static final String PROVIDER = "deepseek";
-    private static final String DEFAULT_MODEL = "deepseek-chat";
+    /** 末位兜底模型：须恒等于目录默认位（`llm_provider_model.is_default=1`）。旧值 'deepseek-chat' 已不在目录内（V101）。 */
+    private static final String DEFAULT_MODEL = "deepseek-v4-flash";
 
     private final ToolCallingManager toolCallingManager;
     private final RetryTemplate retryTemplate;

@@ -6,7 +6,7 @@ import com.helloai.core.agent.entity.Agent;
  * Provider 和 Model 解析工具。
  *
  * <p>从 Agent.modelType 中解析 provider 和 model。
- * modelType 格式为 {@code provider:model}（如 {@code deepseek:deepseek-chat}）。</p>
+ * modelType 格式为 {@code provider:model}（如 {@code deepseek:deepseek-v4-flash}）。</p>
  */
 public final class AgentProviderResolver {
 
