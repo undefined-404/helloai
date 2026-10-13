@@ -17,7 +17,8 @@ import java.util.List;
  * @param messages    当前会话消息历史（调用方持有的<b>可变</b>列表，挂点可追加收尾指令）
  * @param internalLlm 是否内部 LLM 执行链（{@code accessType == API_KEY_LLM}；收尾轮 internal-only 门控）
  * @param draft       自然 STOP 的草稿结果（挂点据此判定是否触发收尾轮）
+ * @param maxIterations 本轮最大 LLM 调用轮数（收尾轮计 iterations 时与之取 min，防超配置上限）
  */
 public record AgentLoopTermination(ChatModel chatModel, List<Message> messages,
-                                   boolean internalLlm, AgentLoopResult draft) {
+                                   boolean internalLlm, AgentLoopResult draft, int maxIterations) {
 }

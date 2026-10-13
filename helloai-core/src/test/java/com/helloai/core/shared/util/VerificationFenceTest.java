@@ -55,4 +55,14 @@ class VerificationFenceTest {
         assertThat(parsed.hasNextSteps()).isFalse();
         assertThat(parsed.adequate()).isFalse();
     }
+
+    @Test
+    @DisplayName("parse：STATUS 带 Markdown 前置装饰（**/-/>）也能解析出值（对齐真实模型输出）")
+    void parseStatusWithMarkdownDecorators() {
+        assertThat(VerificationFence.parse("**STATUS: DONE**\n").status()).isEqualTo("DONE");
+        assertThat(VerificationFence.parse("- STATUS: BLOCKED\n").status()).isEqualTo("BLOCKED");
+        assertThat(VerificationFence.parse("> STATUS: PARTIAL\n").status()).isEqualTo("PARTIAL");
+        assertThat(VerificationFence.parse("STATUS:DONE\n").status()).isEqualTo("DONE");   // 纯 STATUS:DONE（无空格冒号）
+        assertThat(VerificationFence.parse("STATUS：完成\n").status()).isEqualTo("完成");   // 全角冒号 + 中文值
+    }
 }

@@ -109,18 +109,58 @@ class FinalReportFenceHookTest {
         assertThat(result.iterations()).isEqualTo(2);
     }
 
+    @Test
+    @DisplayName("③a 收尾轮：收尾那一轮的 token 计入累计")
+    void finalizeAccumulatesTokens() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))                       // 收尾前无 token
+                .enqueue(textWithUsage(withFence("done"), 15));   // 收尾轮 15 token
+
+        AgentLoopResult result = loop.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(result.success()).isTrue();
+        assertThat(VerificationFence.parse(result.text()).adequate()).isTrue();
+        assertThat(result.tokenUsage()).isEqualTo(15);            // 收尾轮 token 已计入
+    }
+
+    @Test
+    @DisplayName("③c 收尾轮：iterations 与 maxIterations 取 min，不超配置上限")
+    void finalizeIterationsCappedByMaxIterations() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))                       // 草稿（iterations=1）
+                .enqueue(text(withFence("done")));                 // 收尾轮
+
+        AgentLoopResult result = loop.run(input(model, AgentAccessType.API_KEY_LLM, 1));
+
+        assertThat(result.success()).isTrue();
+        // maxIterations=1 ⇒ 收尾轮计 iterations 被截断到 1，而不是 2（2 = 草稿 1 + 收尾 1）
+        assertThat(result.iterations()).isEqualTo(1);
+    }
+
     private static String withFence(String body) {
         return body + "\nVERIFICATION:\n- 已验证\nSTATUS: DONE\nNEXT_STEPS: 无";
     }
 
     private AgentLoopInput input(StubChatModel model, AgentAccessType accessType) {
+        return input(model, accessType, AgentLoopInput.DEFAULT_MAX_ITERATIONS);
+    }
+
+    private AgentLoopInput input(StubChatModel model, AgentAccessType accessType, int maxIterations) {
         return new AgentLoopInput(model, "sys", "user", toolExecutor, List.of(),
-                AgentLoopInput.DEFAULT_MAX_ITERATIONS, "run-1-1", 1L, 10L, 1, 3L, null, null, accessType);
+                maxIterations, "run-1-1", 1L, 10L, 1, 3L, null, null, accessType);
     }
 
     private static ChatResponse text(String content) {
         return new ChatResponse(List.of(new Generation(
                 AssistantMessage.builder().content(content).build())), null);
+    }
+
+    private static ChatResponse textWithUsage(String content, int totalTokens) {
+        return new ChatResponse(List.of(new Generation(
+                AssistantMessage.builder().content(content).build())),
+                org.springframework.ai.chat.metadata.ChatResponseMetadata.builder()
+                        .usage(new org.springframework.ai.chat.metadata.DefaultUsage(1, 1, totalTokens))
+                        .build());
     }
 
     /** 确定性 ChatModel stub：可编程响应队列 + 调用计数 + 失败注入。 */

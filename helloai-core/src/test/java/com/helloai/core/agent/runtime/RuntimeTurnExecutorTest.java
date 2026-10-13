@@ -177,21 +177,21 @@ class RuntimeTurnExecutorTest {
     }
 
     @Test
-    @DisplayName("A 防误伤：有工具调用但最终报告自证完成 ⇒ SUCCESS（不被空产出护栏误伤；④ 契约下内部报告须带围栏）")
-    void shouldKeepSuccessWhenDeliveredViaTools() {
+    @DisplayName("口径 A：内部 LLM 空正文但有工具 ⇒ SUCCESS（空交给 Guard A；④ 不因空判失败，质量靠 reviewer 大环兜底）")
+    void shouldKeepSuccessWhenEmptyTextButToolsInvoked() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
         when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
-        // 内部 LLM：有工具调用且自证 VERIFICATION 围栏（生产环境靠收尾轮补齐；此处 stub 直接给齐）
-        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop(
-                "已交付（工具/附件）" + FENCED_REPORT_SUFFIX, null, 3, 2, 100));
+        // Guard A 只判「空正文 && 0 工具」⇒ FAILED；此处 tools=2 ⇒ 空正文不被 Guard A 拦，
+        // ④ 口径 A 显式跳过空正文（!isBlank）⇒ 不走「缺围栏」判失败 ⇒ SUCCESS（质量交 reviewer）。
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("", null, 3, 2, 100));
 
         AgentExecutionResult result = new RuntimeTurnExecutor(
                 agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
                 .execute(context());
 
         assertThat(result.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
-        assertThat(result.getOutput()).contains("VERIFICATION:");
+        assertThat(result.getOutput()).isEmpty();
         assertThat(result.getTokenUsage()).isEqualTo(100);
     }
 

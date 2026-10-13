@@ -18,8 +18,10 @@ public final class VerificationFence {
     /** 围栏标记（与 {@code ReviewEvidenceAssembler.verificationSignal} 同一匹配器）。 */
     public static final String MARKER = "VERIFICATION:";
 
+    // STATUS 允许 Markdown 前置装饰（`**STATUS: DONE**` / `- STATUS: DONE` / `> STATUS: DONE` 等），
+    // 与宽松的 VERIFICATION contains 判定对齐；值取「到空白/冒号/逗号前的词」，兼容中文值（STATUS：完成）。
     private static final Pattern STATUS_PATTERN =
-            Pattern.compile("(?im)^\\s*STATUS\\s*[:：]?\\s*([A-Za-z_]+).*$");
+            Pattern.compile("(?im)^\\s*[#>*-]*\\s*STATUS\\s*[:：]?\\s*([^\\s：:*，]+).*$");
     private static final Pattern NEXT_STEPS_PATTERN =
             Pattern.compile("(?i)NEXT_STEPS\\s*[:：]?");
 

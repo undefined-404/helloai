@@ -23,23 +23,33 @@ import java.util.List;
  * （有自己工作空间/沙箱，走平台 reviewer 审核）不参与。产出物<b>是否真符合</b>不由此判定——
  * 统一仍归平台 reviewer 角色审核（标准一致）。</p>
  *
- * <p><b>有界保证</b>：恒在「自然 STOP」且「围栏不合格」时恰好追加一次收尾轮，收尾轮本身不再重入
- * （二次仍不合格不循环，交由 {@code RuntimeTurnExecutor} 出口分类 fail-close → FAILED）。</p>
+ * <p><b>有界保证</b>：恒在「自然 STOP」且围栏不合格时<b>恰好一次</b>收尾轮，收尾轮本身不再重入。
+ * 收尾后仍未合格<b>不循环</b>——由 {@code RuntimeTurnExecutor} 出口分类 ④ 收口。口径 A
+ * （`D-2026-10-13-6`）下 ④ 用宽松 {@code containsMarker}（有 {@code VERIFICATION:} 痕迹即放行），
+ * 故「二次仍缺 STATUS」这类会被放行交 reviewer 大环兜底；只有非空且<b>完全无</b> {@code VERIFICATION:}
+ * 痕迹才 fail-close → FAILED。</p>
+ *
+ * <p><b>记录/健壮性</b>：收尾轮采用精简 prompt（只喂「草稿 + 收尾指令」、不喂整段工具历史）从根上规避
+ * 长上下文溢出；重跑有界重试一次（覆盖瞬时故障）；收尾那一轮 token 计入累计；iterations 与
+ * maxIterations 取 min，不超配置上限。</p>
  *
  * <p><b>红线合规</b>：只改 {@link AgentLoopResult}（循环出口），不碰 {@code SubTaskStatus} / 平台
- * 状态机；{@link AgentLoopTermination#messages()} 为主调用方持有的可变列表，收尾指令即加其上。</p>
+ * 状态机；不动 {@link AgentLoopTermination#messages()}（精简 prompt，避免对循环消息列表产生副作用）。</p>
  */
 @Slf4j
 @Component
 public class FinalReportFenceHook implements LoopHook {
 
-    /** 收尾指令：让模型把既有最终结果整理为带固定围栏的《最终交付报告》。 */
-    private static final String FINALIZE_INSTRUCTION =
-            "请对上面的最终结果做一次自我审计，并整理为完整的《最终交付报告》，"
+    /** 收尾指令：让模型对草稿做自我审计并整理为带固定围栏的《最终交付报告》。 */
+    private static final String FINALIZE_HEADER_INSTRUCTION =
+            "请对下方《报告草稿》做一次自我审计，并整理为完整的《最终交付报告》，"
                     + "必须依次显式包含如下围栏三行（不要省略、不要调用任何工具）：\n"
                     + "VERIFICATION:\n- <针对交付物的核实说明，确认它满足本轮需求要点>\n"
                     + "STATUS: <DONE 或 BLOCKED>\n"
                     + "NEXT_STEPS: <如已全部完成则填 无，否则列出下一步>";
+
+    /** 收尾轮模型调用有界重试次数（覆盖瞬时故障，如网络 / 429 抖动）。 */
+    private static final int FINALIZE_MAX_ATTEMPTS = 2;
 
     @Override
     public AgentLoopResult beforeTerminate(AgentLoopTermination termination) {
@@ -59,30 +69,41 @@ public class FinalReportFenceHook implements LoopHook {
         return tryFinalizeRound(termination, draft);
     }
 
-    /** 有界一次无工具重跑：追加收尾指令 → 重跑一次模型 → 返回修订结果；失败沿用草稿。 */
+    /** 有界一次无工具重跑：只喂「草稿 + 收尾指令」，返回修订结果；重跑失败沿用草稿。 */
     private AgentLoopResult tryFinalizeRound(AgentLoopTermination termination, AgentLoopResult draft) {
-        List<Message> messages = termination.messages();
-        UserMessage finalize = new UserMessage(FINALIZE_INSTRUCTION);
-        messages.add(finalize);
-        try {
-            ChatModel chatModel = termination.chatModel();
-            // 不设 toolCallbacks ⇒ 收尾轮只产文本，不重入任何工具（有界、无副作用）
-            DefaultToolCallingChatOptions options = new DefaultToolCallingChatOptions();
-            options.setInternalToolExecutionEnabled(false);
-            ChatResponse response = chatModel.call(new Prompt(messages, options));
-            ChatResponseContentExtractor.ExtractedContent extracted =
-                    ChatResponseContentExtractor.extract(response);
-            String text = extracted.text();
-            String thinking = extracted.thinking() != null && !extracted.thinking().isBlank()
-                    ? extracted.thinking()
-                    : draft.thinking();
-            // 收尾轮视为额外一次模型轮：iterations+1，工具数不变；token 沿用 draft（best-effort）
-            return AgentLoopResult.stop(text, thinking,
-                    draft.iterations() + 1, draft.toolCallCount(), draft.tokenUsage());
-        } catch (Exception e) {
-            log.warn("FinalReportFenceHook: 收尾轮失败，沿用原草稿（交出口分类 fail-close）: err={}",
-                    e.getMessage());
+        String draftText = draft.text() != null ? draft.text() : "";
+        UserMessage finalize = new UserMessage(
+                FINALIZE_HEADER_INSTRUCTION + "\n\n《报告草稿》\n" + draftText);
+        // 精简 prompt（不喂整段历史）：自审视交付物文本本身，规避长上下文在收尾时溢出（③b 治本）
+        List<Message> lean = List.of(finalize);
+        ChatModel chatModel = termination.chatModel();
+        ChatResponse response = null;
+        RuntimeException lastEx = null;
+        for (int attempt = 0; attempt < FINALIZE_MAX_ATTEMPTS && response == null; attempt++) {
+            try {
+                // 不设 toolCallbacks ⇒ 收尾轮只产文本，不重入任何工具（有界、无副作用）
+                DefaultToolCallingChatOptions options = new DefaultToolCallingChatOptions();
+                options.setInternalToolExecutionEnabled(false);
+                response = chatModel.call(new Prompt(lean, options));
+            } catch (RuntimeException e) {
+                lastEx = e;
+            }
+        }
+        if (response == null) {
+            log.warn("FinalReportFenceHook: 收尾轮失败，沿用原草稿（交出口分类按口径 A 宽判 / reviewer 大环兜底）: err={}",
+                    lastEx == null ? "unknown" : lastEx.getMessage());
             return draft;
         }
+        ChatResponseContentExtractor.ExtractedContent extracted =
+                ChatResponseContentExtractor.extract(response);
+        String text = extracted.text();
+        String thinking = extracted.thinking() != null && !extracted.thinking().isBlank()
+                ? extracted.thinking()
+                : draft.thinking();
+        // ③a：收尾那一轮的 token 计入累计（复用 delta 累加逻辑）
+        Integer tokens = ChatModelToolLoop.accumulateUsage(response, draft.tokenUsage());
+        // ③c：收尾轮计为额外一次模型轮，与 maxIterations 取 min，不超配置上限
+        int iterations = Math.min(draft.iterations() + 1, termination.maxIterations());
+        return AgentLoopResult.stop(text, thinking, iterations, draft.toolCallCount(), tokens);
     }
 }

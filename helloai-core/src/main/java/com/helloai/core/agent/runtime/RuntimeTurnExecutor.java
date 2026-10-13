@@ -199,8 +199,15 @@ public class RuntimeTurnExecutor implements AgentRuntime {
             // REF-8.4 ④ 出口分类（对齐 DSH `turn-stopping` + 复用「空产出护栏」同层位置）：
             // 内部 LLM 自然 STOP 的最终报告若缺 VERIFICATION 围栏 ⇒ 输出契约 fail-close（评审侧同源），
             // 判 FAILED 而非 SUCCESS——但**只改 ExecutionStatus，不碰 SubTaskStatus**（红线①反证）。
-            // 非内部接入（外部 Agent / null）与空正文分支已由上面护栏兜底，不在此重复判定。
+            // 口径 A（决策 `D-2026-10-13-6`，2026-10-13）：
+            //   ① 空正文一律交给上面 Guard A 判定（空+0工具=fail / 空+工具=靠附件/工具交付合法 SUCCESS），
+            //     故此处显式跳过空正文（!isBlank），不因「空 ⇒ 无 VERIFICATION」重复误杀——生产空报告的
+            //     自证由 ② 收尾轮补齐，此处只管「非空但无自证痕迹」。
+            //   ② 用宽松 `containsMarker`（有 VERIFICATION: 即放行），不含 STATUS 也放行——小环只拦
+            //     「完全没有自证痕迹」的报告，质量/自证充分度统一由平台 reviewer 大环兜底（评审→REWORK）。
+            //   ⇒ ② 收尾轮的 `adequate()`（要求 STATUS）是「尽力让模型写完整」，与此处宽松闸不冲突。
             if (ctx.getAccessType() == AgentAccessType.API_KEY_LLM
+                    && !isBlank(loopResult.text())
                     && !VerificationFence.containsMarker(loopResult.text())) {
                 return AgentExecutionResult.builder()
                         .status(ExecutionStatus.FAILED)
