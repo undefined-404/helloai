@@ -126,7 +126,7 @@ class FinalReportFenceHookTest {
     }
 
     @Test
-    @DisplayName("③ 收尾轮 prompt 含【本轮任务要求】+ 系统提示（自审依据不丢，堵假绿）")
+    @DisplayName("③ 收尾轮 prompt 含系统提示 + 原任务要求（哨兵守卫，堵「断言命中常量」假绿）")
     void finalizePromptIncludesTaskRequirement() {
         StubChatModel model = new StubChatModel()
                 .enqueue(text("无围栏草稿"))
@@ -136,13 +136,12 @@ class FinalReportFenceHookTest {
 
         assertThat(result.success()).isTrue();
         assertThat(result.text()).contains("VERIFICATION:");
-        // 断言第 2 次（收尾）调用的 prompt 携带任务要求与系统提示 —— 自审依据确实在 prompt 里
-        List<Message> lastPrompt = model.lastPrompt();
-        String joined = lastPrompt.stream()
+        String joined = model.lastPrompt().stream()
                 .map(Message::getText).filter(Objects::nonNull)
                 .reduce("", (a, b) -> a + "\n" + b);
-        assertThat(joined).contains("【本轮任务要求】");
-        assertThat(joined).contains("user");    // 原 userPrompt 剥出仅系统提示时系统内容是"sys"
+        // 哨兵只可能来自被测来源（system / userPrompt），杜绝「断言命中指令常量自身」的同类假绿
+        assertThat(joined).contains(SENTINEL_SYSTEM);   // 兑现「系统提示」在收尾 prompt
+        assertThat(joined).contains(SENTINEL_TASK);     // 只可能来自 taskText，真守卫
     }
 
     @Test
@@ -177,12 +176,16 @@ class FinalReportFenceHookTest {
         return body + "\nVERIFICATION:\n- 已验证\nSTATUS: DONE\nNEXT_STEPS: 无";
     }
 
+    /** 唯一哨兵（system / userPrompt），供收尾自审依据断言——只可能来自被测来源。 */
+    private static final String SENTINEL_SYSTEM = "SYS-SENTINEL-7";
+    private static final String SENTINEL_TASK = "TASK-SENTINEL-9";
+
     private AgentLoopInput input(StubChatModel model, AgentAccessType accessType) {
         return input(model, accessType, AgentLoopInput.DEFAULT_MAX_ITERATIONS);
     }
 
     private AgentLoopInput input(StubChatModel model, AgentAccessType accessType, int maxIterations) {
-        return new AgentLoopInput(model, "sys", "user", toolExecutor, List.of(),
+        return new AgentLoopInput(model, SENTINEL_SYSTEM, SENTINEL_TASK, toolExecutor, List.of(),
                 maxIterations, "run-1-1", 1L, 10L, 1, 3L, null, null, accessType);
     }
 
