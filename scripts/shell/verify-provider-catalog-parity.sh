@@ -36,13 +36,13 @@ JAVA_DEEPSEEK="$ROOT/helloai-core/src/main/java/com/helloai/core/agent/chat/prov
 # ---------- 真值锚点（唯一事实来源 = llm_provider_model.is_default=1）----------
 #   - deepseek : V49:66-73 + V101（'deepseek-chat' 目录已无 → deepseek-v4-flash）
 #   - moonshot : V49:79-90 + V61（moonshot-v1-*/kimi-k2.5 下线 → kimi-k3）
-#   - minimax  : V49:108-116（MiniMax-M2.5 为默认，保持）
+#   - minimax  : V49:108-116 + V108（M2.5/M2.7 全系列即将下线 → MiniMax-M3）
 #   - dashscope: V49:94-104 + V101（'qwen-plus' 目录已无 → qwen3.7-plus）
 SEEDED=(deepseek moonshot minimax dashscope)
 declare -A SEED_DEFAULT=(
   [deepseek]=deepseek-v4-flash
   [moonshot]=kimi-k3
-  [minimax]=MiniMax-M2.5
+  [minimax]=MiniMax-M3
   [dashscope]=qwen3.7-plus
 )
 

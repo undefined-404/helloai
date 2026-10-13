@@ -75,7 +75,8 @@ export const PROVIDER_CATALOG: CatalogProvider[] = [
     // MiniMax 走 Anthropic 兼容接口（application.yml 与 V46 种子同口径），非 OpenAI 兼容
     protocolType: 'ANTHROPIC_COMPATIBLE',
     baseUrl: 'https://api.minimaxi.com/anthropic',
-    defaultModel: 'MiniMax-M2.5',
+    // M2.5 / M2.7 全系列即将下线（V108 订正）：切现役 MiniMax-M3（参考 magpie workbuddy.go:91 / factory.go:625）
+    defaultModel: 'MiniMax-M3',
     apiKeyUrl: 'https://platform.minimaxi.com/user-center/basic-information/interface-key'
   },
   {

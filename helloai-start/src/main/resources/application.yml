@@ -299,7 +299,8 @@ helloai:
     minimax:
       api-key: ${MINIMAX_API_KEY:}
       base-url: ${MINIMAX_BASE_URL:https://api.minimaxi.com/anthropic}
-      default-model: ${MINIMAX_CHAT_MODEL:MiniMax-M2.5}
+      # MiniMax-M2.5 / M2.7 全系列即将下线，默认值切现役 MiniMax-M3（V108 迁移同步）
+      default-model: ${MINIMAX_CHAT_MODEL:MiniMax-M3}
     dashscope:
       api-key: ${DASHSCOPE_API_KEY:}
       # OpenAI 兼容模式，实际端点为 {base-url}/v1/chat/completions

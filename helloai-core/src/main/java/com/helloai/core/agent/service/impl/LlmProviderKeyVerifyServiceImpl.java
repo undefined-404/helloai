@@ -55,7 +55,8 @@ public class LlmProviderKeyVerifyServiceImpl implements LlmProviderKeyVerifyServ
             "deepseek", "deepseek-v4-flash",
             // moonshot-v1 系列已于 2026-08-31 官方下线（404），兜底模型同步切 kimi-k3
             "moonshot", "kimi-k3",
-            "minimax", "MiniMax-M2.5",
+            // MiniMax-M2.5 / M2.7 全系列即将下线，兜底模型同步切现役 MiniMax-M3（V108 迁移同步）
+            "minimax", "MiniMax-M3",
             "dashscope", "qwen3.7-plus"
     );
 
