@@ -2,6 +2,7 @@
 
 > **Status: `Analysis`**（只读调研，不改变任何实现、不承诺排期）。
 > **性质**：只读调研 · 调研后**架构调整思路**（非设计文档、非实施计划，Status=`Analysis`）。
+> **2026-10-13 追加（四）**：§9「DSH ↔ HelloAI 执行形态 / 状态机 / 能力鉴别 比对」——把 `LOG-20261011-007` 的 A/B/C 判据摆到标杆的**执行形态**旁核：标杆**没有「驳回到选人」这一层**，我方**有且链已完整**，缺的只是「谁来触发」；并落定「**发现放内、处置放外**」（方案 C）的合法性双口径、以及模型能力事实源的形态（`model_name` = 官方 API 字段原样透传；禁写死代码表的本仓判例见 §9.6.4）。
 > **2026-10-12 追加**：§8「后续专项：内核 / 对接协议层 可移植 jar 化（长期愿景）」——用户提出的对外可移植方向，登记为**后续专项、不排期**。
 > **2026-10-12 追加（三）**：§1.6「DSH 的**角色形态**（persona 槽位 + agent preset，非 role 枚举）与 **LLM 全生命周期 14 节点 + 2 旁路**」——对照用户提供的外部样本（WorkBuddy「调用 skills 后的上下文」）核准「身份面 + 装配时机」的差距；候选工作项 `REF-8.1.2` / `REF-8.2.3` / `REF-8.4` 挂点细化（**未登记，待裁定**）。
 > **2026-10-12 追加（二）**：§1.5「DSH 内部 LLM 调用链源码复核（本地 `0.2.1-alpha.2`）」——`REF-8` 双平台实测（`LOG-20261012-007`）后回标核对**循环内部**机制：装配**替换语义** / 结构化 **blocked**（含连续 N 轮门槛）/ 结构化**轮报**；对应新登记 `REF-8.1.1` / `REF-8.2.1` / `REF-8.2.2`，并与 `LOG-20261011-007` 的 A/B/C 对齐射程。
@@ -108,6 +109,7 @@
 | **C 产物接地校验** | 标杆 `present` 只查存在性、不查接地 | **无参考物可抄**，仍是自建；维持「暂不立项」 |
 
 > **一句判语**：标杆在「能力门 / 证据核验」上**比我方松**（不做任务级能力判定、不做交付核验），在「自报阻塞 / 装配收敛」上**比我方紧**（结构化 blocked + N 轮门槛、替换语义）。**要抄的是后两条；前两条我方已更严，别被带松。**
+> **2026-10-13 补**：本节 A/B/C 三行判据的**执行形态对照**（含「我方重派链已完整、缺自动触发」与合法性双口径）已收于 §9.4；标杆模态字段的**三值语义**与 `outputModalities` 缺位见 §9.6。
 
 ### 1.6 DSH 的「角色形态」与 LLM 全生命周期（本地 checkout `0.2.1-alpha.2`）
 
@@ -298,6 +300,12 @@
 - 能力来源：`docs/architecture.zh.md:106`
 - 沙箱 fail-closed：`packages/sandbox/sandbox/src/index.ts:153-158`
 
+**DSH（`0.2.1-alpha.2`；§9 执行形态复核）**
+- 执行形态（§9.1）：agent 仅 idle/running；**无任务级换模型** —— `packages/core/agent-loop/src/agent.ts:575,594,604`、`session/src/types.ts:201-232`
+- 模型模态词表与三值语义（§9.6.1）：`packages/llm/llm/src/types.ts:230-237`（`ModelModalityMap` = text/image，merge-extensible）、`:339-340`（`inputModalities` 缺省 = **未知** ≠ 负面能力）；`llm/llm/src/index.ts:177,733-750,1078-1081`；**全仓 `outputModalities` 0 命中**
+- 工具侧硬拒（§9.1）：`packages/fs/tool-fs/src/read-image.ts:120-131`
+- 结构性抛错（§9.1.2）：`packages/llm/llm/src/index.ts:885-995`
+
 **octop-harness（本地实测 `E:/workspace/octop-harness-main`）**
 - 装配一次+逐 turn：`src/octop_harness/agent.py`；Octop `agents/manager.py:3068-3429,3306-3318,3360-3389`
 - 逐 turn 再装配/重编：`agents/manager.py:2145-2175,2695,2707,3041-3066`
@@ -306,6 +314,8 @@
 
 **HelloAI（本仓实测）**
 `agent/runtime/loop/impl/ChatModelToolLoop.java:58,85,100-123,147-152` · `agent/runtime/loop/AgentLoopInput.java:47` · `agent/tool/{ToolRegistry,ToolContext}.java` · `agent/tool/impl/ToolRegistryImpl.java` · `agent/skill/**` · `agent/service/impl/AgentMcpServerServiceImpl.java:267-275` · `agent/service/AgentRuntimeContextAssembler.java:135-136,140-144,155-159,213,629-696` · `agent/session/entity/AgentSession.java` · `agent/event/AgentEventRecorder.java` · `ExecutionResultHandler.java:86-100,316-331` · `ExecutionArtifactServiceImpl.java:106-148` · `agent/runtime/sandbox/**` · `agent/executor/ApiKeyAgentExecutor.java:42-64`
+
+**HelloAI（§9 追加：执行形态 / 状态机 / 能力鉴别）**：`task/service/impl/SubTaskServiceImpl.java:792-822`（`rework` 共享预算）、`:1008-1039`（`block` 三态守卫 + `SUB_TASK_REPORT_BLOCKED` / `source=agent_report`） · `task/service/impl/SubTaskDispatchServiceImpl.java:67,70-95,795` · `helloai-job/.../task/AgentHealthCheckTask.java:71,98,317-320`（**巡更先例**） · `agent/event/AgentEventContextResolver.java:29-42` · `common/config/AgentDispatchProperties.java:70` · `agent/AgentSkillDeriver.java:45-46,127,150` · `agent/service/AgentSkillPolicyService.java:53-67` · `agent/chat/AgentProviderResolver.java:56-66` · `db/migration/V49__llm_provider_model_table.sql:10-11` · `V52__llm_provider_model_capability_skills.sql:7-8` · `api/controller/AdminLlmProviderController.java:300-319`
 
 ---
 
@@ -357,3 +367,197 @@
 - 命名 / 形态：`helloai-harness` 独立 Maven 模块 vs 独立 repo；对外发布渠道（本地 nexus / 中央仓库）。
 - 是否对外开源 / 许可；社区传播所需配套（空跑 demo、doc、测试、零 HelloAI 业务残留）——属**产品化成本**，非纯代码搬迁。
 - 与《自建 java-harness 可行性分析》方案 C（LangGraph4j 覆盖）的关系——仅当触发信号出现再评估。
+---
+
+## §9 DSH ↔ HelloAI 执行形态 / 状态机 / 能力鉴别 比对（2026-10-13 追加）
+
+> **缘起**：承 §1.5（循环内部机制）与 §1.6（身份面 + 装配时机），本条补上**第三条线**——「内部 LLM 遇到自己**做不到**的活，怎么让它说出来、说出来之后**由谁处置**」。这条线在 `LOG-20261011-007` 立为 A/B/C 判据，本条把它与标杆的**执行形态**摆在一起核。
+> **口径**：DSH 为本机检出 `E:/workspace/deepseek-harness-master`（`0.2.1-alpha.2`）实测，HelloAI 为本仓实测，均带 `path:line`。
+> **治理约束（先声明）**：按 `doc/文档体系分类与治理规则.md` §3.6，**`research/` 只写形态 / 事实 / 判据，不写排期与进度**。因此本节**只回答「两边长什么样、差在哪、判据是什么」**；**裁定与在办项**由 **§9.8 指针表**路由到 `plan/` 与 `doc/log/`——本文件**不二次记账**。
+
+### 9.1 DSH 一侧的真实形态
+
+#### 9.1.1 三个关键形状
+
+| 形状 | 事实 | 证据 |
+|---|---|---|
+| **agent 状态极简** | `AgentStatus` 只有 `idle` / `running` 两态；**没有**「能力不足 / 阻塞 / 返工」这类业务态。`blocked` 不在 agent 状态里，而在**会话终态枚举**里 | `packages/core/agent-loop/src/agent.ts`（`AgentStatus`）；`session/src/types.ts:201-232`（终态枚举含 `blocked`） |
+| **不做「任务级换模型」** | 循环在**构造时声明单一 route**，请求期只做**配置级改写**；全库 grep `anotherModel` / `nextModel` / `switchToModel` / `fallbackModel` / `modelFallback` / `moreCapable` **0 命中**。换执行者只有一条路：**委派 `subagent`** | `agent-loop/src/agent.ts:575`（声明 route）、`:594`（`agent/request` 配置级改写）、`:604`（`prepareCall` 只绑一个 adapter） |
+| **「做不到」= 「拒」与「降」并存** | **工具侧硬拒**：读图前先断言路由能力，模型未声明 image 输入 ⇒ **抛错**；**LLM 侧软降**：消息里的图片被投影成文本 | 拒 = `fs/tool-fs/src/read-image.ts:120-131`；降 = `llm/llm/src/index.ts:1078-1081` |
+
+#### 9.1.2 五个「做不到」可挂的扩展点
+
+| 扩展点 | 位置 | 能做什么 | 是否迁移业务状态 |
+|---|---|---|---|
+| `agent/pre-step`（waterfall） | 装配前 | 接纳 / **拒绝**本批输入、触发压缩 | 否（只关轮次） |
+| `agent/request`（waterfall） | 请求前 | 改写请求（换路由 / 加护栏） | 否 |
+| `llm/stream`（waterfall） | 流式 | 观察 / 改写 chunk | 否 |
+| 工具结果携带 `concludesTurn` | step 内 | 用**工具结果**结束本 turn（终止性工具） | 否 |
+| `update_goal{action:"blocked", blocked_reason}` | goal 层 | **模型自报阻塞**（带连续 N 轮门槛，默认 3） | 是，但改的是 **goal phase**，非 agent status |
+
+> **另有一条「结构性抛错」**：`prepareCall` 对结构性不可行直接抛 `UNSUPPORTED_REASONING_EFFORT` / `NO_ADAPTER`（`llm/llm/src/index.ts:885-995`）——**它是抛错，不是选人**：标杆没有「驳回 → 重新选派」这个动作。
+
+### 9.2 HelloAI 一侧的真实形态
+
+| 形状 | 事实 | 证据 |
+|---|---|---|
+| **子任务状态机 11 态** | 有 `BLOCKED` / `REWORK` / `DEAD_LETTER` 等业务态——**比标杆多一整层**（标杆把这些放在会话/goal 上） | `SubTaskStatus` 枚举 |
+| **两条「能力不足」出边（共享同一预算）** | ① `REVIEW → REWORK`：**须先进评审**，`reworkCount+1` **且** `attemptTotal+1`；② `IN_PROGRESS/ASSIGNED/REWORK → BLOCKED`：**不进评审**，`reworkCount` **不变**。上限 `helloai.dispatch.max-reassign-attempts`（默认 **5**），`Turn = 1 + reworkCount + attemptTotal` | `task/service/impl/SubTaskServiceImpl.java:792-822`（`rework`，注释 `LOG-20260904-007` 明写「返工与重派同源预算，杜绝 3×5=8 次叠乘」）、`:1008-1039`（`block`，守卫只允许三态，事件 `SUB_TASK_REPORT_BLOCKED` + `source=agent_report`）；`common/config/AgentDispatchProperties.java:70`；`agent/event/AgentEventContextResolver.java:29-42` |
+| **换人重派链已完整存在** | 闸门（熔断 + 退避 `{60,180,600,1800}`）→ `accumulateReassignAttempt` → `resetToPendingForDispatch(BLOCKED)` → `assignNext`；退避时钟 = `sub_task.last_attempt_time`（**仅**由 `incrementAttemptTotal` 原子写） | `task/service/impl/SubTaskDispatchServiceImpl.java:67`（退避表）、`:70-95`（`dispatchBlockedSubTask`）、`:795`（计数） |
+| **但入口全是人工** | `dispatchBlockedSubTask` / `redispatchInProgress` 现存调用方**只有** `SubTaskController` 的两个 HTTP 端点 | `helloai-api/.../SubTaskController.java:341,365`；`:758` 自述「人工入口」 |
+| **★但「巡更式自动重派」已有活先例** | `AgentHealthCheckTask` 是 `@Scheduled(fixedRate = 60000)` 的定时 Job，**自动**对离线 agent 名下子任务走重派链（首选 `redispatchOfflineSubTask`、补偿 `dispatchPendingSubTaskCompensating`，两层） | `helloai-job/.../task/AgentHealthCheckTask.java:71,98,317-320` |
+
+> **一句判语**：标杆**没有「驳回到选人」这一层**（它的 agent 只 idle/running，换人靠新派 subagent）；HelloAI **有**这一层而且**链已完整**，缺的只是「谁来触发」。而「谁来触发」在**本仓已有先例**（`AgentHealthCheckTask`）——这不是新发明，是**复用既有巡更形状**。
+
+### 9.3 逐项形态比对
+
+| 维度 | DSH | HelloAI | 形态差 |
+|---|---|---|---|
+| 执行者状态 | 2 态（idle/running） | 11 态子任务机 | 我方多一层业务态（**不是缺陷**，是编排平台与单 agent harness 的定位差） |
+| 「做不到」的表达 | 模型自报 `blocked`（goal 层，N 轮门槛）/ 工具抛错 | 写进正文 → 被物化成交付物 → 送审 → 驳回 → 死信 | **缺「说出来」的通道**（= `REF-8.1.1`） |
+| 换人 | 委派 subagent（新起一条链） | `REWORK`（进评审）或 `BLOCKED`（不进评审）→ 重派链 | 我方两条出边**语义已分好**，链已完整 |
+| 谁触发换人 | 由调用方再派 | 现状**仅人工**；巡更先例存在 | **缺自动触发**（形态可选，见 §9.4） |
+| 预算 | 循环内无预算，全在外层（goal rounds / retry） | 循环内 `maxIterations`；重派预算 `maxReassignAttempts` | 两侧都有上限，口径不同 |
+| 模型事实源 | **adapter 运行时解析**（可异步查厂商），静态目录仅 advisory | **静态表**（`llm_provider_model`），运行时不回查厂商 | 见 §9.6 |
+| 模态词表 | `text` / `image`（**merge-extensible**），**无 output 模态** | 无模态列；模态挂在 `agent.capabilities`（**人工填写**） | 见 §9.6 |
+
+### 9.4 能力鉴别的落点形态（方案 C）
+
+**用户裁定的方向**：**发现放内、处置放外**——内核只产出「缺什么」，处置走平台既有重派链。
+
+```text
+内部 LLM 报能力缺口（adds: internal_report_blocked / 结构化轮报）
+        │  ← 循环内，只「产出」，不改平台状态
+        ▼
+   SubTaskStatus.BLOCKED        ← 复用既有出边②（不进评审、reworkCount 不变）
+        │
+        ▼
+   既有重派链：熔断 + 退避 + 选人 + fallback
+        │  （SubTaskDispatchServiceImpl.dispatchBlockedSubTask）
+        ▼
+     PENDING → ASSIGNED …       ← 状态机不变、轮次不变
+```
+
+| 落点方案 | 内容 | 合法性判定 |
+|---|---|---|
+| **A 循环内直接否决/改派** | 在 `ChatModelToolLoop` 内部拦下并换人 | ✗ **违红线**：自动循环机制不得改平台状态机 |
+| **B 内核只抛错** | 内核抛异常，外层不做处置 | ✗ 悬空：异常不等于「换人」，任务会烂在原地 |
+| **C 发现放内、处置放外（推荐）** | 内核用**显式工具动作**（`internal_report_blocked`）落 `BLOCKED`，平台既有重派链接手 | ✓ 合法：**显式工具动作**可改状态机，「换人」属派发层 |
+
+**★合法性双口径（唯一标尺）**：
+- **显式工具动作**（如 `internal_report_blocked` → `subTaskCommandPort.block`）**可以**改平台状态机——它是「模型做的动作」，与人点按钮同构；
+- **自动循环机制**（准入 / 重试 / 压缩）**不可以**——它不能替平台做状态决策。
+
+**红线②的四条机械判据**（判断一个策略「是否本就属派发层」）：
+1. 能否在 `ResilientDispatcher` 的 **`assignNext`（提交点）之前**拦下？
+2. 是否**需要撤销**任何已提交的状态迁移？
+3. 已花掉的 LLM 成本是否为 **0**（还没开始执行）？
+4. 是否**复用**既有事件 + `markManualIntervention` 语义（不新造一套）？
+
+> **一句话**：**能否在 `assignNext` 之前拦下——能，则该策略本就属派发层。** 方案 C 正是「拦在派发层」，因此不碰循环本体。
+
+**自动触发方式（形态可选，属 §9.8 待裁定项）**
+
+| 形态 | 说明 | 本仓先例 |
+|---|---|---|
+| 同事务触发 | 落 `BLOCKED` 的同一事务里直接调重派 | 无（会与 `@Transactional` 边界纠缠，退避闸门读不到新 `last_attempt_time`） |
+| **巡更触发（推荐）** | 定时 Job 扫 `BLOCKED` 且在重派窗口内的子任务，走既定链 | ✓ **已有**：`AgentHealthCheckTask`（`@Scheduled(fixedRate=60000)`，自动重派离线 agent 名下子任务） |
+
+> 注：`SubTaskDispatchServiceImpl:60-66` 的注释记录了**同一类坑的历史实例**——退避时钟曾误用 `update_time`，而 `block()` / `resetToPendingForDispatch()` 都会 `updateById` 刷新它，导致「换人」入口先 `block()` 再重派时**闸门读到被自身刷新的 now，100% 静默失败**。⇒ 自动触发若走「同事务」形态，会重踩这个坑。
+
+### 9.5 A/B 两个坐标系：是**引用关系**，不是「同一词表」
+
+**订正**（用户指出后修正）：平台里有**两个永不相交**的命名空间，但二者之间**必须有引用边**，否则等于默认「任何模型都能跑任何技能」。
+
+| 坐标系 | 载体 | 值域（实测值） | 源 |
+|---|---|---|---|
+| **A 能力谓词** | `agent.skills` | `{shell, docker, sql, web-search, code-review, python, java, thinking}` | `LlmProviderModel.capabilitySkills` / `availableOptionalSkills` |
+| **B 技能条目** | `task.required_skills` | `eng-verification` / `eng-code-review` / `eng-doc-standard` / `eng-web-research` | `SkillPackage.name`（planner 按技能目录选的就是这个） |
+
+**正确关系**：`B.requires ⊆ A.provides`（**引用边**），**不是** `A ∩ B`。
+
+**「解耦」的准确含义**：技能**不指名**某个模型（所以 `deepseek-flash` 与 `claude` 都能挂同一份说明书），**不等于**技能**不声明要求**。`deepseek-flash` 跑不了「识别图片文字」的技能——不是因为它不认识那个技能，而是**它不满足该技能的模态前置**。
+
+**当前断层（= `G-022`，P1）**：
+
+| 环节 | 实测行为 | 后果 |
+|---|---|---|
+| 技能推导 | `AgentSkillDeriver.STANDARD_SKILLS` 只有 8 个**固定值**（`agent/AgentSkillDeriver.java:45-46`） | A 坐标系被**硬编码**，写不进 B 系的值 |
+| 注册闸门 | `AgentSkillPolicyService.validateAgentSkills:66-67` 先按 `STANDARD_SKILLS::contains` 过滤 ⇒ **完全看不见 B** | 送进来的 `eng-*` 被静默丢弃 |
+| 选人匹配 | `AgentSelector.pickFromCandidates` 做 `A ∩ B` | **恒为空** ⇒ 子任务永久 `PENDING`（实测：全平台 0 个 agent 持有 `eng-*`） |
+| 同义归一 | `SkillNormalizer.matches:66-73` = `normalizedAgent.containsAll(normalizedRequired)`；唯一的「关系表」是 `synonyms():75-97`（`bash`/`powershell`/`脚本` → `shell`） | 平台**只建模同义，从不建模蕴含** |
+
+> **缺的那条边**：需要一个 `B.requires ⊆ A.provides` 的**引用**判定。`requiredTools` 反推**只能覆盖内置 4 个技能中的 1 个**（只有 `eng-web-research` 声明了 `[web_search, search_knowledge]`，另 3 个 `requiredTools: []`），且它的维度是**工具依赖**而非**模型能力** ⇒ 需要技能侧显式声明（`required-base-capabilities` 之类），但那是 **`SkillPackage` 8 键白名单 → 9 键的契约变更**（`SkillPackageParser.KNOWN_KEYS:33-35`），须四路协同。
+> **更深的阻塞**：A 侧的值**不是模型声明的，是人填的**——`AgentAccessType.defaultCapabilities:85-88` 对图片/音频/视频三类统一默认 `false` 并注明「模态理解能力取决于底层模型而非接入通道，注册时可覆盖」，覆盖入口在 `AgentController:257-267`（`AgentCapability.mergeDefaults:37-43` 只 `putAll`，**无词表/拼写校验**）。⇒ **有入口，但无词表校验、无模型对照**。
+
+### 9.6 模型能力事实源的形态
+
+#### 9.6.1 标杆：运行时解析 + 三值语义 + 只有 input 没有 output
+
+| 事实 | 证据 |
+|---|---|
+| 模型信息由 **adapter 运行时解析**（可异步查厂商）；静态目录仅 advisory，不控制路由 | `llm/llm/src/index.ts:733-750`（`resolveModelInfo` → `registration.adapter.resolveModel(...)`）；`:729-731` 注释「catalog membership remains advisory and does not control request routing」 |
+| 模态词表 = `{text, image}`，且**可由插件 merge 扩展** | `llm/llm/src/types.ts:230-237`（`ModelModalityMap` 注释「Merge-extensible provider model modality vocabulary」） |
+| **三值语义**：`inputModalities` 缺省 = **未知**（不是「没有」）；显式省略才是负面能力 | `types.ts:339-340` 注释原文「absent means unknown, while an explicit omission is negative capability」 |
+| **两层判据不同口径** | 工具侧（硬拒）：`undefined \|\| !includes('image')` ⇒ **抛错**（fail-closed，`read-image.ts:129`）；循环侧（软降）：`!== undefined && !includes('image')` ⇒ **才降级**（`llm/llm/src/index.ts:1078-1079`）——缺省时**不降级**，交给提供方失败 |
+| **全仓无 `outputModalities`** | grep `outputModalities` ⇒ **0 命中** |
+
+> ⇒ 「输出模态」这条判据**在标杆处没有先例**，是 HelloAI 自有的（见 §9.7）。而「输入模态」标杆比我们细：它是**三值**（未知 / 显式为空 / 列出），我们是**布尔**（`agent.capabilities` 的 true/false）。
+
+#### 9.6.2 HelloAI：`model_name` 是**官方 API 字段原样透传**
+
+| 字段 | 语义（实测） |
+|---|---|
+| `provider_code` | **厂商**（决定 baseUrl / apiKey / 协议），**不是模型版本** |
+| `model_name` | **调用 API 的官方模型字段**，**无映射层、无别名表、无后缀处理** ⇒ 必须与官方一致 |
+| `model_version` | **当前根本不存在该字段** |
+
+**透传链（实测，五步无一处改写）**：`AgentProviderResolver.resolveModel:56-66`（取 `modelType` 中 `:` 之后的子串）→ 工厂 `buildChatModel` 的 `effectiveModel` → `.model(effectiveModel)`（`AnthropicCompatibleProtocolFactory:87-95`；`OpenAiCompatibleProtocolFactory:94`；`DeepSeekProviderChatClientFactory:90`）。
+
+> **★潜在调用级缺陷**：`V49` 种子写的是 `deepseek-v4-flash` / `deepseek-v4-pro`，而官方字段（用户给出）是 `deepseek-flash`（含 `[1m]` 变体）；且 `LlmProviderModelQueryService.isModelAvailable:43` **只查库、从不回查厂商** + 工厂原样透传 ⇒ 一旦库内值与官方不符，症状是「**注册通过、调用失败**」。若厂商要求 `[1m]` 这类后缀，它必须进 `model_name`（或另设变体列）。
+
+#### 9.6.3 `V52` 两列的三种语义（删列前必须拆开）
+
+| 列值 | 实际语义 | 可否被模态列替代 |
+|---|---|---|
+| `capability_skills = ["thinking"]` | **所有模型都一样** ⇒ 是**平台策略**，不是模型事实 | ✗ 不能替代，须另行安置 |
+| `available_optional_skills` 里的 `shell` / `code-review` | **默认值**，零差分信息 | ✓ 可退化为常量 |
+| `available_optional_skills` 里的 **`web-search`** | **唯一有差分**的值（deepseek 无；kimi/dashscope/minimax 有）——但它是**工具可用性**，不是模态 | ⇒ 其对应物是 `SkillPackage.requiredTools` + `getEnabledToolsForAccess` |
+
+> **删列前置条件（不能先删）**：`V52` 两列有**两个在跑的消费方**——① `AgentSkillPolicyService.validateAgentSkills:53-68`（**注册闸门的唯一输入**）；② `GET /api/admin/llm-providers/getSkillOptionsByModelType/{modelType}`（`AdminLlmProviderController:300-319`，前端技能勾选框）。先删 ⇒ 闸门落进 `capability == null` 的「**不认识该模型 ⇒ 不校验**」降级放行分支 = **闸门失效**（与 `G-022` 同类）。
+> **正确次序**：建模态判据 → 迁移上述两个消费方 → **再**删列。
+
+#### 9.6.4 禁「写死代码表」——本仓已有判例
+
+用户提议「写一个配置表固定死」在**意图**上可行，但**落点必须换**，因为本仓已有判例：
+
+- `V52` 头注原文：「能力映射以**表驱动**落地：`llm_provider_model` 加两列 JSONB，与 V49 模型清单同源，**避免新建静态模板类造成两套事实源漂移**」。
+- `V49` 头注原文：「**内置 Provider 模型列表固定，只可选不可改**」+「**自定义 Provider 支持任意模型名称**」⇒ 代码里的静态表**无法表达**自定义 Provider 的任意模型名。
+
+⇒ **正确形状**：`词表进枚举/常量 + 值进数据（种子 + `builtin` 只读） + 「是否在线」为运行时**（`enabled` + `LlmProviderCatalogService.isProviderAvailable`）**。即：把「固定」落在**数据**上，而不是落在**类**上。
+
+### 9.7 粗选的两条独立判据（不可合并）
+
+| # | 判据 | 层级 | 拦谁 | 例子 |
+|---|---|---|---|---|
+| **①** | `output_modalities ⊇ {text}` = **执行者资格** | **模型级**（技能匹配之前） | 排掉「根本没有文本出口」的模型 | MiniMax Music 3（输出立体声音频）/ MiniMax H3（输出音视频） |
+| **②** | `input_modalities ⊇ 任务所需模态` = **技能可派** | **技能级** | 排掉「模型读不了这类输入」的技能 | 「识别图片文字」技能 ⇒ 需要 `input ⊇ {image}`；`deepseek-flash` 只有 `{text}` ⇒ 不可派 |
+
+> **两条为何不能合并**：① 判的是「它能不能当执行者」（与任务无关，只看模型）；② 判的是「这个技能它跑不跑得了」（依赖任务/技能所需模态）。**粗选（派发前 ② 的静态判定）+ 细选（工具级运行时复查）两层都需要**，因为**声明会说谎**（人工误填 / 配置漂移 / 模型版本升级）⇒ 运行时必须按**当前**模型事实再查一次（标杆正是这么做的：`resolveModelInfo` 运行时解析 + 工具侧 `assertImageCapableRoute` 硬拒）。
+
+> **参照样本**：用户提供的 MiniMax 多模态表（音频/视频/图片/文字皆可为**输入**，**输出**只有文本）——它同时印证了 ①（输出侧只看「有没有文本」）和 ②（输入侧看「任务需要什么模态」）两条独立判据。
+
+### 9.8 结论落点（指针表：本文件不记裁定与进度）
+
+| 内容 | 唯一落点 |
+|---|---|
+| **方案 C 的裁定本身**（发现放内、处置放外） | `doc/log/2026-10.md` 当月 `### 决策` + 差距表条（`D-2026-10-13-x`） |
+| **在办项 / 落点 / 验收 / 依赖顺序** | `doc/plan/HelloAI 借鉴落地实施计划.md` §10.7.6（范围见 §10.7.1~§10.7.2） |
+| **自动触发方式**（同事务 vs **巡更（推荐）**） | **待裁定** → 裁定后入 `plan` §10.7.6 |
+| **可移植性是否纳入本轮 `REF-8.4`** | **待裁定**（建议另立） → 裁定后入 `plan` §10.7.6 或 §8 |
+| **A/B 词表是否拆分**（`agent.skills` / `task.required_skills` 混装） | **待裁定**（建议**不拆**，改在闸门内做两段判定，零 planner 改动） |
+| **形态甲/乙**（加 3 列后退 V52 两列 **vs** 泛化成能力谓词表并吸收 `capability_skills`） | **待裁定** |
+| **`requiredBaseCapabilities` 挂点**（挂 `SkillPackage` ⇒ 8→9 键四路协同；或只做模块级默认） | **待裁定** |
+| **当前状态**（已实施 / 未清偿） | **差距表**（唯一事实源）；本文件不记 |
+| **逐项实测过程** | `doc/log/2026-10.md` `LOG-20261013-005` ~ `008` |
+| **执行流 / 状态机明细比对底稿** | `doc/research/DSH 与 HelloAI 执行流与状态机比对（2026-10-13）.md` |

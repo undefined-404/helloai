@@ -683,6 +683,101 @@ REF-8.4 拦截链（可并行铺）───────────────
 
 > **勾选方式**：你只需对 `⭐`（其建议进循环）与 `🟡`（待定）表态——「进循环 / 留单次」；`⬜` 若无异议默认留单次。确认后 `REF-8.5` 立项，**把「进循环面清单」写死为验收边界**（明确「哪些面**不**进」，避免「内核收敛 = 全面进化」的误读）。
 
+## 10.7 `REF-8.4` 本轮范围与红线②实操判定（**已裁定**，2026-10-13；5 项结论 = `D-2026-10-13-6~10`，记录 `LOG-20261013-011`）
+
+> **缘由**：`REF-8.4` 自身「范围多大」「A 挂哪一层」两个问题此前未定；`plan` 现表述为「拦截链 = A+B 的**唯一挂点**」，与 research §1.7.2 红线②「否决内容留在派发层」**自相矛盾**。本节给出**可裁定的单一建议**（含 A 层归属的机械判据）。裁定后按 §12 收口（决策入 `log/2026-10.md` `### 决策` + 差距表 `D-2026-10-13-x`）。
+
+### 10.7.1 建议范围：一个挂点骨架 + 一条链上策略
+
+**`REF-8.4` 本轮 = ① + ② + ③ + ④；A 出列，三小候选另批，step 内重试延后。**
+
+| # | 内容 | 形态（落点） | 验收 |
+|---|---|---|---|
+| ① | **三档挂点骨架** | `ChatModelToolLoop` 现有两处内联压缩**搬入**具名挂点 `beforeRequest`（原 `:106`）/ `onRequestError`（原 `:123`），并**净新增** `beforeTerminate`（现不存在）。载体 = 循环自有 hook 列表，**不强套 Spring AI `Advisors`**（理由见 10.7.3） | **不挂任何 hook ⇒ 行为与改造前逐字一致**（同 `REF-8.2.3` 的 no-op 构造验收手法）；既有 `ChatModelToolLoopTest` 18/18 不动 |
+| ② | **`beforeTerminate` 首条实现 = 轮报合格性 + 按需收尾轮** | 读 `AgentLoopResult.text()` 的 `VERIFICATION:` 围栏；**仅在缺失/不合格时**追加**一次**收尾轮（有界），仍不合格则降 `STATUS` 并落事件 | 围栏齐全的执行 ⇒ **零额外 LLM 调用**；缺失 ⇒ 恰好一次收尾轮；超限有明确终态 |
+| ③ | **`VerificationFence` 解析器（含 `STATUS` / `NEXT_STEPS`）** | 新构件；**与评审侧 `ReviewEvidenceAssembler.verificationSignal:346-351` 共用同一匹配器**（防「两处各写一份围栏判定」漂移） | 解析单测 + **同源断言**（同一输入两处判定一致） |
+| ④ | **出口分类接线** | 轮报不合格 → 与 `RuntimeTurnExecutor:187-196`（「空产出护栏」先例）**同层**分类，**只改 `ExecutionStatus`，不碰 `SubTaskStatus`** | 红线①**反证**：插一条不合格轮报 ⇒ 分类生效且子任务状态未变 |
+
+**出列 / 延后**：
+
+| 项 | 处置 | 理由（代码依据） |
+|---|---|---|
+| **A 能力闸** | **出列 `REF-8.4`** ⇒ 落 `ResilientDispatcher`（与 `REF-5.3` 同族） | A 天然不在链上（见 10.7.2）；挂点抽象只需**一条**链上策略即可验证，A 出列**不削弱** `REF-8.4` 验收 |
+| **三小候选**（技能 `role` / 技能正文字符纪律 / 读附件上限+分段） | 另批（无依赖，可并行） | §1.7.1 判为零状态机影响；与挂点骨架无耦合 |
+| **step 内重试** | **延后**（先埋点采样 provider 失败分布） | 现有 `ChatModelToolLoop:113-134` 的 `while + overflowRetries` 已覆盖主形态（溢出，经 `compactOnOverflow`）；429/5xx 分布本仓**无实测数据**；泛化会放大欠佳 provider 的「重试 + 压缩」成本 |
+| **B 的「跨轮重复」判据** | **并进评审层 `RepeatedFailureGate`**（不落链上） | 循环内**不可观测**：一次执行最多一份轮报（`lastText` 只在 `ChatModelToolLoop:148` 取），无「上一份」可比；跨执行轮次的比较属 `reviewHistory` 领域 |
+
+### 10.7.2 A 的「否决」层级：**留派发层**
+
+**建议裁定**：A 挂 `ResilientDispatcher`，复用 V27.1 先例模板（`isExecutionDenseMismatch:174-195`：timeline 事件 + `markManualIntervention` + 抛 `AgentUnavailableException` 走 fallback）；A 的落地形态 = 给 `SubTaskQueryPort` 加一个「需读原始附件」信号（与 `isExecutionDense:108` 并列、**同风格**），在 `ResilientDispatcher` 加 `isAttachmentReadMismatch`，与既有判定**共用同一 timeline 事件与同一 `markManualIntervention`**。
+
+红线②的**实操判定**（不是口号，逐条可机械核对）：
+
+| # | 判据 | 通过条件 | 代码锚点 |
+|---|---|---|---|
+| ① | **提交点** | reject 分支执行时，目标实体**尚未越过提交点** | `ResilientDispatcher:166`（`assignNext` = 提交）；循环内否决**必然已越过**（那时子任务已 `IN_PROGRESS`） |
+| ② | **回退量** | reject 后**无需撤销**任何已提交的状态迁移 | 派发层 reject 只是「不提交」，回退量 = 0；循环内否决 ⇒ 回退 = 新造状态迁移 ⇒ 踩红线① |
+| ③ | **已付成本** | reject 时刻不可回收成本 = 0 次 LLM 调用 | 派发层 = 0；循环内 = 已付 N 次 |
+| ④ | **归属** | 复用既有可观测与人工介入语义（不新造） | 既有 `SUB_TASK_DISPATCH_SKIP_NO_CAPABILITY` / `DISPATCH_SKIP_EXECUTION_DENSE` + `markManualIntervention` 形状；循环内新造否决 ⇒ 新事件码 + **可观测 3 处登记** + 新介入语义 |
+
+> **一句可执行口径**：*「能否在 `assignNext` 之前拦下」——能则留派发层；不能则说明该策略本就不该是闸门（应改作可观测或建议型）。*
+
+**同步订正建议**：`plan` §10.2 `REF-8.4` 行「拦截链 = A+B 的**唯一挂点**」⇒ 改为「**B 挂拦截链；A 挂 `ResilientDispatcher`**」；差距表 `D-2026-10-12-1` ④「A+B 挂 `D4` 拦截链之下」同口径订正。
+
+### 10.7.3 为何**不**套 Spring AI `Advisors`（三处硬约束）
+
+1. Advisors 只能挂 **`ChatClient`**；`ChatModelToolLoop:115` 调的是**裸 `ChatModel`**，且全仓 **0 处** `Advisor` 引用 ⇒ 要走 Advisors 须先把 provider 工厂（`AnthropicCompatibleProtocolFactory` / `DeepSeekProviderChatClientFactory`）改造成 `ChatClient` + 注入 advisor。
+2. DSH `agent/pre-step`（`agent.ts:275`）是**可重入 waterfall**（`compaction-basic:158` 做完副作用后调 `next()` 放行）；Advisor 是**线性装饰器**（`chain.nextCall()`）⇒「副作用后放行」这个形态**表达不出来**。
+3. DSH `agent/turn-stopping`（`agent.ts:362`）是 **`serial` 而非 waterfall** ⇒ 本就不该塞进 Advisors。
+
+⇒ 借的是**挂点位置**（DSH 的语义），不是**框架容器**（Advisors 的 API）。
+
+### 10.7.4 挂点 ↔ DSH 同构物对照
+
+| 挂点 | DSH 同构物 | HelloAI 落点 | 本轮挂什么 |
+|---|---|---|---|
+| 请求前 | `agent/pre-step` waterfall `agent.ts:275` | `ChatModelToolLoop:106`（搬入 `beforeRequest`） | 保持压缩；**不挂 A** |
+| 请求异常 | `agent/request-error` `agent.ts:512` | `ChatModelToolLoop:123`（搬入 `onRequestError`） | 保持溢出恢复；通用化延后 |
+| **终止前** | `agent/turn-stopping` serial `agent.ts:362` | **不存在 ⇒ 本节净新增** | **② 轮报合格性 + 按需收尾轮** |
+| 循环出口分类 | （DSH 无此层，属平台） | `RuntimeTurnExecutor:187-196`（空产出护栏先例） | ④ 接线 |
+| 派发 / 认领 | （DSH 无编排层） | `ResilientDispatcher:159 / 174-195` | A（已出列，落此层） |
+
+**红线核对**：①② 为既有自动机制（仅做压缩，不落状态）；③ 收尾轮**不落任何平台状态**；④ 只改 `ExecutionStatus`；A 在认领前。⇒ **红线① 不破**。`ExecutionResultHandler.handleReport:197`（状态非 `IN_PROGRESS` 即丢弃）仍是平台状态机唯一边界，**本轮不改**。
+
+### 10.7.5 附带订正：research §1.7.4 引用漂移
+
+`LOG-20261012-011`（`doc/log/2026-10.md:5271 / 5273 / 5277 / 5286`）称研究文档含 **§1.7.4「待实施清单」**，但该文档 §1.7 **实际止于 §1.7.3**（§1.7.3 自述「待实施项清单见 `plan/` §10.3 + 差距表」）⇒ 建议按治理规则修正引用（研究文档只答「会碰什么」，清单归 `plan/`）。
+
+### 10.7.6 增补（2026-10-13 二）：能力鉴别的落点 —— 「发现放内、处置放外」
+
+> 依据：`research/DSH 与 HelloAI 执行流与状态机比对（2026-10-13）.md`。本节**不改变** 10.7.1~10.7.5 的结论，只补「能力鉴别在哪一层」的裁定与其唯一缺口。
+
+**裁定**：**发现放内部 LLM 内部流程；处置放平台派发层。** 既不走「评审驳回」（消耗返工轮次、把能力不足记成质量不合格），也不走「循环内换 apiKey / 换模型」（DSH 无此机制可抄；且污染成本画像与打分、造成会话流归属歧义）。
+
+**理由（两条实测）**：
+
+1. **DSH 没有「LLM 内部换模型」可抄**：模型路由是 agent 创建时**声明**（`packages/core/agent-loop/src/agent.ts:598-599` 缺 `provider`/`model` 直接抛错），`packages/llm/llm-retry` 重试**同一条 route**；「换执行者」在 DSH 靠**委派 subagent**（`packages/subagent/README.zh.md`）。⇒ 「照抄标杆」这条原则本身否定「循环内换 key」。
+2. **HelloAI 的「换执行者」链已存在**（本轮新发现）：`SubTaskStateMachine:31` 已有 `BLOCKED → PENDING`；`SubTaskDispatchServiceImpl.dispatchBlockedSubTask:70-95` 已是完整链（闸门熔断 + 退避 → `accumulateReassignAttempt` → `resetToPendingForDispatch(BLOCKED)` → `assignNext` 选人/fallback）。⇒ **状态机零改动**（满足「任务状态机流转保持不变」）。
+
+**唯一缺口 = 自动触发接线**：`dispatchBlockedSubTask` 现存调用方**均为人工入口**（`SubTaskController.reassignById` 需 `subtask:reassign`；`redispatchInProgress`）。两条候选（**均不改状态机**）：
+
+| 候选 | 做法 | 评价 |
+|---|---|---|
+| **(a) 同事务接线** | `internal_report_blocked` 落 BLOCKED 后，若存在同角色可替代候选，调用 `dispatchBlockedSubTask`（自带闸门） | 早、准；但把「派发」语义塞进执行侧工具 |
+| **(b) 巡检接线** | 仿 `SubTaskPendingOrphanTask` 增一个「因能力不足而 BLOCKED」的巡检自动重派 | 层次干净（平台侧）；代价是延迟 |
+
+**建议**：(b) 为主、(a) 为可选加速。理由：`block` 与 `dispatch` 都是平台服务，让**平台侧巡检**决定「是否换人」比让执行侧工具直接派发更符合 §1.7.2 红线②的精神（**判定与处置留在平台**）。
+
+**预算口径（须知晓）**：两条出边（`REWORK` 与 `BLOCKED→重派`）**共享** `attempt_total`（上限 `helloai.dispatch.max-reassign-attempts = 5`，`AgentDispatchProperties:70`），且重派受 `REASSIGN_BACKOFF_SECONDS = {60,180,600,1800}`（`SubTaskDispatchServiceImpl:67`）闸门约束 ⇒ 「自报阻塞换人」**并非零成本**，但**不消耗 `reworkCount`**、**不进评审**。
+
+**可移植性判据（用户最关注项）**：
+
+> **内核可移植 ⟺ 内核只依赖「抽象对话模型 + 工具集 + 会话日志」，不认识 `task` / `subTask` / `turn` / `agentId` / 平台事件枚举。**
+
+按此核对：`AgentLoopInput` 13 字段含 **6 个平台概念**（`runId/taskId/subTaskId/turn/agentId/eventRecorder`）；`ChatModelToolLoop` 直接写 `AgentEventType.*`；`ToolInvocationContext` 为 `static`。⇒ **现状不符**，`REF-8.4` 的挂点抽象为**必要不充分**。
+
+⚠️ **与既有红线的张力（已裁定，`D-2026-10-13-7`）**：§10.5 红线写着「**不动 `ChatModelToolLoop` 循环本体**」。可移植化必然要动它的**输入契约与事件出口**（可「不动循环逻辑、只动入参/出口」，二者不必然冲突）。**已裁定（2026-10-13）**：可移植性**登记为独立待办**，不列入 `REF-8.4` 本轮范围（记录 `LOG-20261013-011`）。
+
 ---
 
 # 11. 明确不做（C 档，与治理红线一致）
