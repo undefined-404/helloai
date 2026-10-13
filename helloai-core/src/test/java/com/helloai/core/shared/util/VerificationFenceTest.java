@@ -65,4 +65,14 @@ class VerificationFenceTest {
         assertThat(VerificationFence.parse("STATUS:DONE\n").status()).isEqualTo("DONE");   // 纯 STATUS:DONE（无空格冒号）
         assertThat(VerificationFence.parse("STATUS：完成\n").status()).isEqualTo("完成");   // 全角冒号 + 中文值
     }
+
+    @Test
+    @DisplayName("parse：STATUS 混写（列表符 + 粗体 + 有序）也能解析出值（堵假绿）")
+    void parseStatusWithMixedDecorators() {
+        assertThat(VerificationFence.parse("- **STATUS: DONE**\n").status()).isEqualTo("DONE");       // 无序 + 粗体
+        assertThat(VerificationFence.parse("1. **STATUS: DONE**\n").status()).isEqualTo("DONE");       // 有序 + 粗体
+        assertThat(VerificationFence.parse("   - **STATUS: BLOCKED**\n").status()).isEqualTo("BLOCKED"); // 缩进 + 无序 + 粗体
+        assertThat(VerificationFence.parse("> **STATUS: PARTIAL**\n").status()).isEqualTo("PARTIAL");   // 引用 + 粗体
+        assertThat(VerificationFence.parse("5. STATUS：完成\n").status()).isEqualTo("完成");            // 有序 + 中文值
+    }
 }

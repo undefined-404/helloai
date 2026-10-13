@@ -249,8 +249,8 @@ public class ChatModelToolLoop implements AgentLoop {
     /**
      * 累加当轮 Token 用量（B3）：读取 {@code response.metadata.usage.totalTokens}；
      * metadata / usage / totalTokens 缺失时保持原累加值（best-effort，不阻断循环）。
+     * 包私有 static，供同包 {@link FinalReportFenceHook} 收尾轮计数复用。
      */
-    /** 累加当轮 Token 用量（包私有 static，供同包 {@link FinalReportFenceHook} 收尾轮计数复用）。 */
     static Integer accumulateUsage(ChatResponse response, Integer accumulated) {
         Usage usage = response.getMetadata() != null ? response.getMetadata().getUsage() : null;
         if (usage == null || usage.getTotalTokens() == null) {
