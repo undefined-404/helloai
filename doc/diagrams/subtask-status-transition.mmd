@@ -1,0 +1,38 @@
+%%{init: { "htmlLabels": false } }%%
+stateDiagram-v2
+  [*] --> PENDING_PLAN_REVIEW
+  PENDING_PLAN_REVIEW --> PENDING: 规划确认转正
+  PENDING_PLAN_REVIEW --> CANCELLED: 否决（审计保留）
+  PENDING --> ASSIGNED: 选人成功 assignNext
+  PENDING --> CANCELLED
+  PENDING --> DEAD_LETTER: 调度维度熔断
+  ASSIGNED --> IN_PROGRESS: worker 开工 startIfNeeded
+  ASSIGNED --> BLOCKED: 开工失败 / 执行密集回退
+  ASSIGNED --> PENDING: 租约回收 LeaseReconciler
+  ASSIGNED --> CANCELLED
+  ASSIGNED --> DEAD_LETTER
+  IN_PROGRESS --> REVIEW: 提交 submit（handleSuccess）
+  IN_PROGRESS --> BLOCKED: 执行失败 handleFailure / 自报阻塞
+  IN_PROGRESS --> PENDING: 租约到期回收
+  IN_PROGRESS --> PAUSED
+  IN_PROGRESS --> CANCELLED
+  IN_PROGRESS --> DEAD_LETTER
+  PAUSED --> IN_PROGRESS: 恢复
+  PAUSED --> CANCELLED
+  REVIEW --> DONE: 评审 APPROVE
+  REVIEW --> REWORK: 评审驳回 / 核验不过
+  REVIEW --> DEAD_LETTER: 返工熔断
+  REVIEW --> CANCELLED
+  REWORK --> IN_PROGRESS: 重执行
+  REWORK --> BLOCKED: 返工期再报阻塞
+  REWORK --> CANCELLED
+  REWORK --> DEAD_LETTER: 返工预算耗尽 rework_budget_exceeded
+  BLOCKED --> PENDING: 重派 dispatchBlockedSubTask
+  BLOCKED --> CANCELLED
+  BLOCKED --> DEAD_LETTER: 重派预算耗尽 reassign_attempt_exceeded
+  DEAD_LETTER --> ASSIGNED: 人工打捞指派
+  DEAD_LETTER --> DONE: 人工直接验收
+  DEAD_LETTER --> REWORK: 人工驳回改派
+  DEAD_LETTER --> CANCELLED
+  DONE --> [*]
+  CANCELLED --> [*]

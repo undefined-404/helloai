@@ -1,0 +1,48 @@
+%%{init: { "htmlLabels": false, "flowchart": { "wrappingWidth": 620 } } }%%
+flowchart TD
+  subgraph L1["泳道① · 平台侧选配"]
+    A1["选配模型类型→技能勾选<br/>AdminLlmProviderController.getSkillOptionsByModelType (:301-319)<br/>按 modelType 查 capabilitySkills"]
+    A2["Agent 注册预校验<br/>AgentController.validateModelType + validateAgentSkills (:80-89)<br/>modelType 格式 providerCode:modelName"]
+    A3["创建 accessType=API_KEY_LLM Agent<br/>决定走「内部执行链」"]
+    A1 --> A2 --> A3
+  end
+
+  subgraph L2["泳道② · 分配 / 调度（平台侧改 SubTaskStatus）"]
+    A3 --> B1["子任务 PENDING_PLAN_REVIEW → 确认 → PENDING"]
+    B1 --> B2{"选人闸门 AgentSelector<br/>required_skills ∩ agent.skills<br/>(:522-538 skill_not_matched)"}
+    B2 -->|"技能不适配 / 无候选<br/>NoCandidateAgentException (:197-199)"| B3["保持 PENDING · 退避重试<br/>sub_task_no_candidate · G-022<br/>不烧重派预算"]
+    B3 -.退避时钟到.-> B2
+    B2 -->|候选存在| B4["ASSIGNED · assignNext"]
+    B4 -->|"执行密集 Skim<br/>ResilientDispatcher.isExecutionDenseMismatch (:174-195)"| B5["回退 fallback / 人工介入<br/>sub_task_dispatch_fallback<br/>resetToPendingForDispatch→PENDING (:288-397)"]
+    B4 -->|租约到期 worker 崩溃| B6["IN_PROGRESS→PENDING（LeaseReconciler 回收）"]
+  end
+
+  subgraph L3["泳道③ · 内部 LLM 执行（只改 ExecutionStatus，不碰 SubTaskStatus）"]
+    B4 --> C1["IN_PROGRESS · startIfNeeded<br/>LocalExecutionCommandConsumer (:159-175)"]
+    C1 -->|"并发额度 InFlightDbQuotaService<br/>执行入口 gate"| C2["RuntimeTurnExecutor.execute<br/>AGENT_STARTED→SKILL→TOOL→ENV→CONTEXT_BUILT"]
+    C2 --> C3["AgentLoop 手动工具循环<br/>TOOL_CALL_STARTED/COMPLETED"]
+    C3 -->|收到自然 STOP 产出物| C4{"FinalReportFenceHook 收尾轮<br/>VERIFICATION 围栏合格? (:44-87)"}
+    C4 -->|"缺/不合格 · 有界一次无工具重跑"| C3
+    C4 -->|围栏齐| C5{"RuntimeTurnExecutor<br/>空产出 / 缺 VERIFICATION?<br/>④ fail-close (:189-213)"}
+    C3 -->|"ChatModel.call 抛错<br/>额度/429/超时/溢出"| C6["AgentLoop onRequestError<br/>压缩重试→超限原样抛 (:139-157)"]
+    C6 -->|error 结果| C8["ExecutionStatus = FAILED"]
+    C5 -->|空产出或缺围栏| C8
+    C5 -->|正常| C7["ExecutionStatus = SUCCESS"]
+    C1 -.->|"自报阻塞 internal_report_blocked<br/>(:217-249)"| C9["→BLOCKED<br/>触发 dispatchBlockedSubTask"]
+  end
+
+  subgraph L4["泳道④ · 消费回写 + 评审批次（平台侧改 SubTaskStatus）"]
+    C8 --> D1["handleFailure → subTaskCommandPort.block → BLOCKED<br/>SUB_TASK_EXECUTE_FAILED (:356-378)"]
+    C7 --> D2["handleSuccess → submit → REVIEW<br/>SUB_TASK_EXECUTE_SUBMIT (:280-284)"]
+    D1 --> D3["dispatchBlockedSubTask → BLOCKED→PENDING 重派 (:70)"]
+    D3 --> D4{"重派预算 attempt_total ≥5?<br/>(AgentDispatchProperties:70)"}
+    D4 -->|"是 · 熔断"| D5["DEAD_LETTER<br/>reassign_attempt_exceeded (:711-733)"]
+    D4 -->|"否 · 退避 {60,180,600,1800} 未过"| D6["保持 BLOCKED/PENDING · 稍后重试"]
+    D2 --> D7["评审 APPROVE → DONE"]
+    D2 --> D8["评审驳回 REJECT → REWORK"]
+    D8 --> D9{"返工预算?"}
+    D9 -->|耗尽| D10["DEAD_LETTER<br/>rework_budget_exceeded (:838-869)"]
+    D9 -->|未耗尽| D11["REWORK → 重新 IN_PROGRESS"]
+    D5 --> E1["人工介入打捞<br/>ASSIGNED / DONE / REWORK / CANCELLED"]
+    D10 --> E1
+  end
