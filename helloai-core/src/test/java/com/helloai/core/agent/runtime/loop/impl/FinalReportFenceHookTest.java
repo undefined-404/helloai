@@ -12,6 +12,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -19,6 +20,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -110,6 +112,40 @@ class FinalReportFenceHookTest {
     }
 
     @Test
+    @DisplayName("② 收尾轮空产出 ⇒ 沿用草稿（防止交付物被清空）")
+    void finalizeEmptyOutput_keepsDraft() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("真实交付正文，无围栏"))
+                .enqueue(text(""));   // 收尾轮返回空正文（推理模型只回 reasoning，无 getResults）
+
+        AgentLoopResult result = loop.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.text()).isEqualTo("真实交付正文，无围栏");   // 沿用草稿，未被清空
+        assertThat(result.iterations()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("③ 收尾轮 prompt 含【本轮任务要求】+ 系统提示（自审依据不丢，堵假绿）")
+    void finalizePromptIncludesTaskRequirement() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withFence("done")));
+
+        AgentLoopResult result = loop.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.text()).contains("VERIFICATION:");
+        // 断言第 2 次（收尾）调用的 prompt 携带任务要求与系统提示 —— 自审依据确实在 prompt 里
+        List<Message> lastPrompt = model.lastPrompt();
+        String joined = lastPrompt.stream()
+                .map(Message::getText).filter(Objects::nonNull)
+                .reduce("", (a, b) -> a + "\n" + b);
+        assertThat(joined).contains("【本轮任务要求】");
+        assertThat(joined).contains("user");    // 原 userPrompt 剥出仅系统提示时系统内容是"sys"
+    }
+
+    @Test
     @DisplayName("③a 收尾轮：收尾那一轮的 token 计入累计")
     void finalizeAccumulatesTokens() {
         StubChatModel model = new StubChatModel()
@@ -168,6 +204,7 @@ class FinalReportFenceHookTest {
         private final Queue<ChatResponse> responses = new LinkedList<>();
         private final java.util.Map<Integer, RuntimeException> throwPlan = new java.util.HashMap<>();
         private int calls = 0;
+        private List<Message> lastPrompt = java.util.Collections.emptyList();
 
         StubChatModel enqueue(ChatResponse response) {
             responses.offer(response);
@@ -183,6 +220,7 @@ class FinalReportFenceHookTest {
         @Override
         public ChatResponse call(Prompt prompt) {
             calls++;
+            lastPrompt = prompt.getInstructions();
             RuntimeException ex = throwPlan.remove(calls);
             if (ex != null) {
                 throw ex;
@@ -192,6 +230,11 @@ class FinalReportFenceHookTest {
 
         int callCount() {
             return calls;
+        }
+
+        /** 最近一次调用的 prompt 指令（收尾 prompt 自审依据断言用）。 */
+        List<Message> lastPrompt() {
+            return lastPrompt;
         }
     }
 }

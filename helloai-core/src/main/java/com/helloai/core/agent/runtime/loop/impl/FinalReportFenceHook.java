@@ -117,6 +117,13 @@ public class FinalReportFenceHook implements LoopHook {
         ChatResponseContentExtractor.ExtractedContent extracted =
                 ChatResponseContentExtractor.extract(response);
         String text = extracted.text();
+        // ② 防空产出清空交付物：收尾轮返回空正文（推理模型只回 reasoning_content / getResults 空，
+        // extract 返回 "" 而非 null）⇒ 沿用原草稿，不把既有报告抹掉。贴合口径 A：草稿即便只在
+        // 围栏不完整（如已含 VERIFICATION 缺 STATUS）也本应放行交 reviewer，绝不能被收尾清成空。
+        if (text == null || text.isBlank()) {
+            log.warn("FinalReportFenceHook: 收尾轮空产出，沿用原草稿（防交付物被清空）");
+            return draft;
+        }
         String thinking = extracted.thinking() != null && !extracted.thinking().isBlank()
                 ? extracted.thinking()
                 : draft.thinking();
