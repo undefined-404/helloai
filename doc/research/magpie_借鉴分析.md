@@ -24,6 +24,10 @@
 >
 > **复核与订正（2026-10-13，第三轮 —— `M-1`/`M-2` 落地后）**：① 订正上一轮的口径偏差——本文件曾把 `application.yml` 列为「平台规范真值」，实则**它自己也是陈旧源**（`default-model` 2/4，见 §六第 2b 行订正块）；真值口径改为**唯一 `llm_provider_model.is_default=1`、四方均可漂移**。② 修订实施入口章节号：`§14` → **`§11`**（`§14` 是「裁定记录」）。③ 同源扩散点由 3 处更正为 **4 处**（增 `application.yml`）。④ 落地状态：`M-2①` 全清 · `M-2③` 守卫已立并扩为**四方比对 + 覆盖完整性 + 双向反证**（`d20a0160`）· `M-1` 首波 9 条（`b580cff4`）· 余 `M-2②`/`M-3`~`M-9` 未动。
 >
+> **复核与订正（2026-10-13，第四轮 —— minimax 全系列换代）**：参考项目三处独立同口径表明 `MiniMax-M2.5`/`M2.7` 即将下线、现役统一为 **`MiniMax-M3`**（`magpie/internal/provider/workbuddy.go:91` + `factory.go:625` vs `:626` + `presets.go:273,281`；`octop-harness provider_template.json:267`；`deepseek-harness model-picker.expected.md:15`）。据此：① 新增迁移 `V108__minimax_model_deprecation.sql`（提升 `MiniMax-M3` 为默认 + 显式写能力列避免 `V52` 不回填丢 `web-search`；`M2.5`/`M2.7` 全系列 `LIKE 'MiniMax-M2.5%'`/`'MiniMax-M2.7%'` 禁用让位；事务内 dry-run 两遍验证幂等 + `ROLLBACK` 复位）；② 同步 **4 处载体**（`providerCatalog.ts` / `application.yml` / `FALLBACK_MODELS` / 守卫 `SEED_DEFAULT`）；③ **`MiniMax-M3.1-Flash-Preview` 已并入 `V108`**（用户提供 MiniMax 官方口径，2026-10-13 二次确认；初版曾判「不采纳」——仅在官方错误串中出现，见 §九「第四轮」订正行）；④ `-highspeed` 仍不采纳。详见 §九「第四轮」。
+>
+> **复核与订正（2026-10-13，第五轮 —— 预置覆盖口径实测订正）**：应「api-key 厂商是否已全部借鉴」之问，对 `presets.go` 做**精确解析**（顶层条目 = 恰好一个 tab 缩进的 `{ID:`；naive 计数会因条目内嵌子预置虚高到 87）。结论：① 顶层 **56 条**，`Kind` 实测分布 = `KindVendor` **33** / `KindRelay` **18** / `KindLocal` 4 / `KindRemote` 1（上一版目测「~28 / ~11」已订正）；② **51/56 含 `KeysURL`**（api-key 类）；③ helloai 现为 **9 条**（非旧述「4 条」），⇒ **已借鉴 9/56、余 47**（api-key 类 9/51）。④ 关键**前置约束**再度确认：`M-1` 余量卡在 `M-3`（模型目录种子）——无 `llm_provider_model` 行则 Agent 注册必 400。详见 §二 2.2/2.3 与 §六第 1 行。
+>
 > **实施侧入口**：`plan/HelloAI 借鉴落地实施计划.md` §11（`M-1`~`M-9` 的执行次序 / 验收 / 收口）。
 
 ---
@@ -100,22 +104,39 @@ type PresetDef struct {
 
 **覆盖矩阵**（按 `Kind` 归纳 `[实测]` `presets.go:115-550`）：
 
-| Kind | 代表 | 条数量级 |
+| Kind | 代表 | 条数 |
 |---|---|---|
-| vendor 直连 | Anthropic / OpenAI / Google / DeepSeek / xAI / Kimi / 智谱 / MiniMax / StepFun / 小米 / 百度 / 腾讯 / 华为 / 火山 / 通义 / Mistral / Groq / Bedrock | ~28 |
-| relay 中转 | OpenRouter / OpenCode Go / Together / Fireworks / SiliconFlow / NVIDIA NIM / ModelScope / AiHubMix / PipeLLM / 302.AI / CherryIN | ~11 |
-| local 本地 | Ollama / LM Studio / MLX-Serve / oMLX | 4 |
-| remote | Remote magpie（另一台机器上的 magpie） | 1 |
+| `KindVendor` | Anthropic / OpenAI / Google / Vertex AI / DeepSeek / xAI / Kimi(±cn) / Kimi Code(±cn) / 智谱 / Z.AI / MiniMax(±cn) / StepFun(±cn) / 小米 / 百度千帆 / 腾讯云 / 华为云 / 火山 / 通义(±cn·token-plan) / Mistral / Groq / Bedrock / Azure / Ollama Cloud / TypeSafe | **33** |
+| `KindRelay` | OpenRouter / OpenCode Go / ClinePass / OpenCode Zen / Kilo / CommandCode / Together / Fireworks / SiliconFlow / NVIDIA NIM / ModelScope / AiHubMix / PipeLLM / 302.AI / CherryIN / YYLX / Vercel Jev / Cloudflare Jev | **18** |
+| `KindLocal` | Ollama / LM Studio / oMLX / MLX-Serve | 4 |
+| `KindRemote` | Remote magpie（另一台机器上的 magpie） | 1 |
+| **合计** | — | **56** |
+
+> **口径（2026-10-13 精确复核订正）**：顶层条目 = 文件中**恰好一个 tab 缩进**的 `{ID:`（过滤条目内嵌的子预置——它们同为 `{ID:` 但缩进更深，naive 计数会虚高到 87）。上一版「vendor ~28 / relay ~11」为目测估值，实测为 **33 / 18**。另有 **51/56 条含 `KeysURL`**（api-key 类；无 Key 的 5 条 = `VertexPreset` / `ollama` / `lmstudio` / `OMLXPreset` / `mlx-serve`）。
 
 ### 2.3 与 helloai 的对照（同构、差数量）
 
-**核心事实** `[实测]`（`helloai-ui/src/views/settings/providerCatalog.ts:11-25`）：helloai 的 `CatalogProvider` 结构与 magpie `PresetDef` **同构**——`providerCode / providerName / monogram / brandColor / tagline / protocolType / baseUrl / defaultModel / apiKeyUrl`，其中 `baseUrl+protocolType` ≈ magpie 的单端点、`apiKeyUrl` ≈ magpie `KeysURL`、`defaultModel` ≈ magpie `Only/Models` 的最小形态。
+**核心事实** `[实测]`（`helloai-ui/src/views/settings/providerCatalog.ts:27-41`）：helloai 的 `CatalogProvider` 结构与 magpie `PresetDef` **同构**——`providerCode / providerName / monogram / brandColor / tagline / protocolType / baseUrl / defaultModel / apiKeyUrl`，其中 `baseUrl+protocolType` ≈ magpie 的单端点、`apiKeyUrl` ≈ magpie `KeysURL`、`defaultModel` ≈ magpie `Only/Models` 的最小形态。
 
-**核心事实** `[实测]`（`providerCatalog.ts:27-72`）：helloai 目前只有 **4 条**预置（deepseek / moonshot / minimax / dashscope），是 magpie 的 **1/14**。**数量是最大差距，结构零阻力。**
+**核心事实** `[实测]`（`providerCatalog.ts:43-150`，9 个 `providerCode`）：**helloai 现有 9 条预置**（原 4 条 deepseek / moonshot / minimax / dashscope + `M-1` 首波 5 条 openai / anthropic / xai / mistral / groq），对 magpie 顶层 **56 条**为 **9/56（≈16%）**。**数量仍是最大差距，结构零阻力。**
+
+**缺口分布（2026-10-13 实测：`presets.go` 顶层 56 条 ↔ `providerCatalog.ts` 9 条 ⇒ 余 47 条）**：
+
+| Kind | 顶层 | 已借鉴 | 余 | 未借鉴的阻碍 |
+|---|---|---|---|---|
+| `KindVendor` | 33 | 9 | **24** | `google` / `zhipu` / `zai` / `tencent-cloud` 端点不符 `<base>/v1` 工厂约定（`v1beta/openai` / `paas/v4` / `plan/v3`）⇒ 需 `M-5`；`VertexPreset` / `AzurePreset` / `bedrock` 走云凭据链（**无 `KeysURL`**，非纯 api-key）；`-cn` 区域镜像 / token-plan 类与「账号·计划」强相关 |
+| `KindRelay` | 18 | 0 | **18** | 聚合器**无单一默认模型** ⇒ `defaultModel` 无从取值，依赖 `M-3` 目录种子 |
+| `KindLocal` | 4 | 0 | 4 | helloai 是平台侧配置，本地模型不在范围 |
+| `KindRemote` | 1 | 0 | 1 | magpie 自指，不适用 |
+| **合计** | **56** | **9** | **47** | 其中 api-key 类 51 条 ⇒ 已借鉴 **9/51** |
+
+> 已借鉴 9 条的映射（magpie ID → helloai `providerCode`）：`anthropic`→`anthropic` · `openai`→`openai` · `deepseek`→`deepseek` · `xai`→`xai` · `moonshot`→`moonshot` · `minimax`→`minimax` · `qwen`→`dashscope` · `mistral`→`mistral` · `groq`→`groq`。**区域镜像（`-cn`）与 token-plan / code-plan 类不计入已借鉴**（`moonshot-cn` / `minimax-cn` / `kimi-code(-cn)` / `qwen-cn` / `qwen-token-plan` / `bailian-token-plan` / `stepfun-cn` 等）。
+>
+> ⚠️ **规模差距只是表象，真正的前置是「模型目录」**：新增预置若不同批补 `llm_provider_model` 行，密钥可配但 **Agent 注册必被拒**（`AgentSkillPolicyService.validateModelType:126` → `isModelAvailable` ⇒ 400）；而 magpie **不硬编码默认模型**（靠 models.dev 目录）⇒ `defaultModel` 无从照抄。故 `M-1` 的余量实质上**依赖 `M-3` 目录种子**（见 §七与 `plan` §11.2）。
 
 **举例（DeepSeek 注册信息对照）** `[实测]`：
 
-| 字段 | magpie（`presets.go:142-144`） | helloai（`providerCatalog.ts:29-38`） |
+| 字段 | magpie（`presets.go:142-144`） | helloai（`providerCatalog.ts:45-54`） |
 |---|---|---|
 | Chat 端点 | `https://api.deepseek.com/v1` | `https://api.deepseek.com` |
 | Anthropic 端点 | `https://api.deepseek.com/anthropic` | （无——helloai 仅 OPENAI_COMPATIBLE） |
@@ -230,7 +251,7 @@ magpie 自己缓存的 models.dev 目录 → OpenCode 的 ~/.cache/opencode/mode
 
 | # | 主题 | magpie | helloai 现状 | 差距 | 借鉴优先级 |
 |---|---|---|---|---|---|
-| 1 | 供应商预置数 | 56 条 + 订阅补充 | 4 条（`providerCatalog.ts:27-72`） | **13 倍差距** | **PR0** |
+| 1 | 供应商预置数 | 56 条 + 订阅补充 | 9 条（`providerCatalog.ts:43-150`，`M-1` 首波前为 4 条） | **≈6 倍差距（9/56）** | **PR0** |
 | 2 | 预置信息维度 | 多协议端点 / 目录 id / KeysURL / 区域 | 单端点 / 无目录 id / KeysURL / 无区域 | 中 | PR0 |
 | 2b | **预置取值正确性**（2026-10-13 复核新增） | **不硬编码模型**：由 models.dev 目录给出；端点按协议分列 | **4 条 `defaultModel` 全为陈旧值**、**3 条 `baseUrl` 与平台口径冲突**、1 条 `protocolType` 与内置声明相反 | **高——已是现网缺陷**（含 HTTP 404 直接根因） | **PR0** |
 | 3 | 模型清单来源 | models.dev 动态同步 | 手工静态行（`llm_provider_model`） | 高 | **PR1** |
@@ -249,7 +270,7 @@ magpie 自己缓存的 models.dev 目录 → OpenCode 的 ~/.cache/opencode/mode
 > | deepseek `defaultModel` | `deepseek-chat` | `deepseek-v4-flash` | `V101` 注释：「目录内已无该模型……注册直接被拒」 |
 > | moonshot `defaultModel` | `moonshot-v1-8k` | `kimi-k3` | `V61` 注释：「已下线（调用返回 404）……**验证失败（HTTP 404）的直接根因**」 |
 > | dashscope `defaultModel` | `qwen-turbo` | `qwen3.7-plus` | `V101` 注释 + `V49:101-103` 目录行 |
-> | minimax `defaultModel` | `MiniMax-Text-01` | `MiniMax-M2.5` | `V49:115`（`is_default=1`） |
+> | minimax `defaultModel` | `MiniMax-Text-01` | `MiniMax-M3` | `V49:115`（`is_default=1`）→ **2026-10-13 第四轮订正为 `MiniMax-M3`**（`V108`） |
 > | moonshot `baseUrl` | `https://api.moonshot.cn/v1` | `https://api.moonshot.cn` | `application.yml:296`；`:305` 注「实际端点为 `{base-url}/v1/chat/completions`」⇒ 原值拼出 `/v1/v1/...` |
 > | dashscope `baseUrl` | `.../compatible-mode/v1` | `.../compatible-mode` | `application.yml:306`（同上） |
 > | minimax `protocolType` | `OPENAI_COMPATIBLE` | `ANTHROPIC_COMPATIBLE` | `application.yml:301` + `V46:50`（两处独立同口径） |
@@ -258,7 +279,7 @@ magpie 自己缓存的 models.dev 目录 → OpenCode 的 ~/.cache/opencode/mode
 >
 > **写入路径**：`AddModelFormDialog.vue:311-313` 在**创建**预置供应商时直接取 `entry.defaultModel`（编辑分支 `:296` 只改 billingType、不碰 defaultModel）⇒ 删除后重加会把迁移已订正的值写回旧值。注意既有内置 provider 命中 `existingProvider` 分支（`:300-303` 只 `updateLlmProvider(billingType)`）⇒ 该风险仅在「provider 行不存在」时触发。
 >
-> **同源扩散点**（同一批陈旧值另有 4 处，均已一并订正，见 §九）：`LlmProviderKeyVerifyServiceImpl.java:45-51`（**密钥验证兜底模型表**——正是「验证失败 404」的命门）· `DeepSeekProviderChatClientFactory.java:25`（末位兜底）· `AgentProviderResolver.java:9`（javadoc 示例）· **`application.yml` 的 `default-model`（2/4）**。
+> **同源扩散点**（同一批陈旧值另有 4 处，均已一并订正，见 §九）：`LlmProviderKeyVerifyServiceImpl.java:45-51`（**密钥验证兜底模型表**——正是「验证失败 404」的命门）· `DeepSeekProviderChatClientFactory.java:25`（末位兜底）· `AgentProviderResolver.java:9`（javadoc 示例）· **`application.yml` 的 `default-model`（2/4）**。（其中 minimax 兜底值随后又因 `MiniMax-M2.5`/`M2.7` 全系列即将下线，于 `V108` 再次订正为 `MiniMax-M3`，见 §九「第四轮」。）
 
 ---
 
@@ -330,8 +351,8 @@ magpie 自己缓存的 models.dev 目录 → OpenCode 的 ~/.cache/opencode/mode
 | 多 Key（主/备/off/protocol/weight）与 UseKey/ReplaceKey | `[实测]` | `keys.go:21-32,346-365,488-517` |
 | Agent 注册 = 改写 Agent 自身 config（kimi 例） | `[实测]` | `magpie/internal/agent/kimi.go:243-312` |
 | Kimi 模型表带 capabilities（thinking/image_in/tool_use）与 efforts | `[实测]` | `kimi.go:96-108,175-196` |
-| helloai 供应商目录仅 4 条预置 | `[实测]` | `helloai-ui/src/views/settings/providerCatalog.ts:27-72` |
-| helloai `CatalogProvider` 与 magpie `PresetDef` 同构 | `[实测]` | `providerCatalog.ts:11-25` |
+| helloai 供应商目录 9 条预置（`M-1` 首波前为 4 条） | `[实测]` | `helloai-ui/src/views/settings/providerCatalog.ts:43-150` |
+| helloai `CatalogProvider` 与 magpie `PresetDef` 同构 | `[实测]` | `providerCatalog.ts:27-41` |
 | helloai `llm_provider` 字段（code/name/protocol/baseUrl/defaultModel/extraConfig） | `[实测]` | `helloai-core/.../system/entity/LlmProvider.java:30-61` |
 | helloai 模型能力字段 capabilitySkills/availableOptionalSkills | `[实测]` | `helloai-core/.../system/entity/LlmProviderModel.java:48-49,56-57` |
 | helloai Agent 注册为平台声明式（modelType/capabilities/skills） | `[实测]` | `helloai-core/.../agent/entity/Agent.java:38-95` |
@@ -347,7 +368,10 @@ magpie 自己缓存的 models.dev 目录 → OpenCode 的 ~/.cache/opencode/mode
 | **【复核】预置值存在写回路径**（创建预置供应商时直接用 `entry.defaultModel`） | `[实测]` | `AddModelFormDialog.vue:311-313`（编辑分支 `:296` 只改 billingType） |
 | **【复核】密钥验证兜底模型表同源陈旧** | `[实测]` | `LlmProviderKeyVerifyServiceImpl.java:45-51`（moonshot 已在 V61 时修、deepseek/minimax/dashscope 三条于 2026-10-13 一并订正） |
 | **【复核】DeepSeek 末位兜底模型同源陈旧** | `[实测]` | `DeepSeekProviderChatClientFactory.java:25`（已订正） |
-| **【复核】已按上表订正 5 处载体** | `[实测]` | `providerCatalog.ts`（4 条预置）、`LlmProviderKeyVerifyServiceImpl.java:45-51`、`DeepSeekProviderChatClientFactory.java:25`、`AgentProviderResolver.java:9`、**`application.yml`（deepseek/dashscope `default-model`）**；验证：`vue-tsc --noEmit` EXIT=0、`helloai-core` 2037 例 0 失败、`LlmProviderKeyVerifyServiceTest` 4 例全绿 |
+| **【复核】已按上表订正 5 处载体** | `[实测]` | `providerCatalog.ts`（当时 4 条预置；`M-1` 首波后为 9 条）、`LlmProviderKeyVerifyServiceImpl.java:45-51`、`DeepSeekProviderChatClientFactory.java:25`、`AgentProviderResolver.java:9`、**`application.yml`（deepseek/dashscope `default-model`）**；验证：`vue-tsc --noEmit` EXIT=0、`helloai-core` 2037 例 0 失败、`LlmProviderKeyVerifyServiceTest` 4 例全绿 |
 | **【第三轮】`application.yml` 自身即陈旧源**（`default-model` 2/4），故不得作为「规范真值」 | `[实测]` | `git show 794cd631^:helloai-start/src/main/resources/application.yml`（`DEEPSEEK_CHAT_MODEL:deepseek-chat` / `DASHSCOPE_CHAT_MODEL:qwen-plus`）；订正 `794cd631` |
 | **【第三轮】一致性守卫已扩为四方 + 覆盖完整性 + 双向反证** | `[实测]` | `scripts/shell/verify-provider-catalog-parity.sh`（正验 EXIT=0 / `--inject-deviation` EXIT=2 / `--inject-catalog` EXIT=1）；`d20a0160` |
 | **【第三轮】`M-1` 首波新增 5 条预置**（openai/anthropic/xai/mistral/groq）**无 `llm_provider_model` 种子行** | `[实测]` | `V49` 仅 4 家（deepseek/moonshot/minimax/dashscope），后续迁移无新增 → `AgentSkillPolicyService.validateModelType:126` → `isModelAvailable`（`LlmProviderModelQueryServiceImpl:131-142`）⇒ `M-3` 前注册 Agent 必 400「模型不可用」 |
+| **【第四轮】minimax 全系列换代：`M2.5`/`M2.7` 即将下线，现役统一为 `MiniMax-M3`** | `[实测]` | 参考项目三处独立同口径：`magpie/internal/provider/workbuddy.go:91`（`{ID:"minimax-m3", Context:512_000}`）· `magpie/internal/provider/factory.go:625`（`minimax-m3` **可用**）vs `:626`（`minimax-m2.7` **不可用**）· `magpie/internal/provider/presets.go:273,281`（`minimax-m3` 列于 `minimax-m2.7` 之前）· `octop-harness-main/src/octop_harness/providers/provider_template.json:267`· `deepseek-harness-master/apps/web/tests/expected/models-settings/model-picker.expected.md:15`（`checkbox "MiniMax-M3" [checked]`） |
+| **【第四轮】minimax 换代已落 4 处载体 + 1 迁移** | `[实测]` | `providerCatalog.ts:78`（`defaultModel:'MiniMax-M3'`）· `application.yml:302`（`MINIMAX_CHAT_MODEL:MiniMax-M3`）· `LlmProviderKeyVerifyServiceImpl` `FALLBACK_MODELS`（`minimax→MiniMax-M3`）· `scripts/shell/verify-provider-catalog-parity.sh` `SEED_DEFAULT[minimax]` + 证据锚点 · 迁移 `V108__minimax_model_deprecation.sql`；守卫正验 `EXIT=0`（`minimax 一致 defaultModel='MiniMax-M3'（含 Java 兜底）`） |
+| **【第四轮】`MiniMax-M3.1-Flash-Preview` 已并入 `V108`（结论订正）** | `[实测]` | MiniMax 现役两个模型（用户 2026-10-13 提供官方口径）：`MiniMax-M3.1-Flash-Preview`（原生多模态 / 1M 上下文 / Frontier Coding / 思考深度可调）+ `MiniMax-M3`。**订正**：初版判「不采纳」的依据是「全仓仅现于官方错误串（`magpie/internal/gateway/anthropic.go:354` + `gateway_test.go:680` + `wire_effort_test.go:108`）」——该证据仍成立，但**不足以否定其存在**（属「参考项目未启用」而非「不存在」）。故并入 `V108` 第 5 条：`enabled=1`、`is_default=0`（默认仍为 M3）、`sort_order=6`、能力列显式写 `["thinking"]` / `["shell","code-review","web-search"]` |

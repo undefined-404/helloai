@@ -11,7 +11,7 @@
 > **内核轴 = 「可见面收敛」**（唯一输出契约 = 模型的可见集，三层）；**会话单源化降为支撑项**（提升已有 `agent_event`，**不新建表**）；`LOG-20261011-007` 的 A 能力闸 + B 收敛熔断**挂 `REF-8.4` 拦截链**之下。见 §10。
 > 同批：原 §10~§12 顺延为 **§11~§13**（`§13 裁定记录` 的内部引用已同步）。
 > **2026-10-12 后续计划侧变更（不新增版本条目 —— 遵治理规则 §3.2「版本变更史冻结新增」）**：`REF-8.1~8.3` **开工**；`REF-8.4` 承载 `LOG-20261011-007` **A+B**（阈值 `N=3`，`D-2026-10-12-3`）；新增 **§10.6 覆盖面清单（16 项，待勾选）**；`REF-7` 三约束 **C1~C3 定稿**（§8.2，`D-2026-10-12-4`）。**裁定记录本体见 `doc/log/2026-10.md` `LOG-20261012-002`**。
-> **2026-10-13 后续计划侧变更（不新增版本条目 —— 遵治理规则 §3.2「版本变更史冻结新增」）**：按《治理规则》§3.6「可执行结论若进入实施，另立 `plan/` 或 `design/` 文档」，把 `research/magpie_借鉴分析.md` 的 `M-1`~`M-9` 落成**新增 §11**（`M-x` 号段，已入《差距表》§0 编号表）；原 §11~§13（明确不做 / 统一收口 / 裁定记录）**顺延为 §12~§14**，内部引用已同步。同批修好 §11.1 所列 **D-a~D-f 六个现网缺陷**（预置陈旧值及其 5 个同源扩散点，含被误当「规范真值」的 `application.yml` 自身）；`M-2③` 守卫随后扩为**四方比对 + 覆盖完整性 + 双向反证**（`d20a0160`）。
+> **2026-10-13 后续计划侧变更（不新增版本条目 —— 遵治理规则 §3.2「版本变更史冻结新增」）**：按《治理规则》§3.6「可执行结论若进入实施，另立 `plan/` 或 `design/` 文档」，把 `research/magpie_借鉴分析.md` 的 `M-1`~`M-9` 落成**新增 §11**（`M-x` 号段，已入《差距表》§0 编号表）；原 §11~§13（明确不做 / 统一收口 / 裁定记录）**顺延为 §12~§14**，内部引用已同步。同批修好 §11.1 所列 **D-a~D-f 六个现网缺陷**（预置陈旧值及其 5 个同源扩散点，含被误当「规范真值」的 `application.yml` 自身）；`M-2③` 守卫随后扩为**四方比对 + 覆盖完整性 + 双向反证**（`d20a0160`）。**同日另起 `V108`**：minimax 因 `M2.5`/`M2.7` 全系列即将下线，目录默认位改 `MiniMax-M3`（含 4 处载体同步，见 §11.1 D-a 与 `research` §九「第四轮」）。
 > **v17 = A1「载荷旁路」配套项（Octop `middleware/workspace_image.py` 图片路径引用）补登记为「条件触发」**（2026-10-12，`LOG-20261012-001`）：
 > 该条此前**仅在 `research/` 正文出现，无 `REF-` 落点、未记 WONTFIX**（孤儿）⇒ 按 §1「孤儿项回流」补登记差距表 §7.1.4 `R14`，**不排期**（实测平台无图片 / 多模态输入通道，现状不适用）。
 > **v16 = REF-6.8 写点替换交付**（2026-10-11，`LOG-20261011-008`）：
@@ -798,21 +798,21 @@ REF-8.4 拦截链（可并行铺）───────────────
 
 | # | 缺陷 | 证据（`path:line`） | 状态 |
 |---|---|---|---|
-| D-a | 预置 4 条 `defaultModel` **全为目录外陈旧值** | `V61` 注释（moonshot `moonshot-v1-8k` 已下线、**调用 404 是「验证失败」直接根因**）；`V101` 注释（`deepseek-chat` / `qwen-plus` **目录内已无、注册被拒**）；目录真值 `V49:72-73,85-89,101-103,115` | **已修**（`providerCatalog.ts`，`b580cff4`） |
+| D-a | 预置 4 条 `defaultModel` **全为目录外陈旧值** | `V61` 注释（moonshot `moonshot-v1-8k` 已下线、**调用 404 是「验证失败」直接根因**）；`V101` 注释（`deepseek-chat` / `qwen-plus` **目录内已无、注册被拒**）；目录真值 `V49:72-73,85-89,101-103,115`。**另：minimax 默认位因 `M2.5`/`M2.7` 全系列即将下线，已于 `V108` 再订正为 `MiniMax-M3`**（参考 magpie `workbuddy.go:91`/`factory.go:625`）；`V108` 同批**追加第二种可选模型 `MiniMax-M3.1-Flash-Preview`**（非默认，用户 2026-10-13 提供官方口径） | **已修**（`providerCatalog.ts`，`b580cff4`；minimax 于 `V108` 同步） |
 | D-b | 预置 3 条 `baseUrl` 与平台口径冲突（多带 `/v1`） | `application.yml:305`「OpenAI 兼容模式实际端点为 `{base-url}/v1/chat/completions`」⇒ 原值拼出 `/v1/v1/...` | **已修**（`b580cff4`） |
 | D-c | 预置 minimax `protocolType` 与平台内置**相反** | `V46:50` + `application.yml:301` + `:285` 注释「minimax 走 Anthropic 兼容接口」 | **已修**（`b580cff4`） |
 | D-d | **密钥验证兜底模型表**同源陈旧（deepseek / minimax / dashscope 三条） | `LlmProviderKeyVerifyServiceImpl.java:45-51`（moonshot 已于 V61 时单独修过，其余三条漏修——正是 404 命门） | **已修**（`43ea2494`） |
 | D-e | DeepSeek 末位兜底模型同源陈旧 | `DeepSeekProviderChatClientFactory.java:25` | **已修**（`43ea2494`） |
 | D-f | **`application.yml` 自身也是陈旧源**（`default-model` 2/4 陈旧） | `git show 794cd631^:helloai-start/src/main/resources/application.yml` = `DEEPSEEK_CHAT_MODEL:deepseek-chat` / `DASHSCOPE_CHAT_MODEL:qwen-plus` | **已修**（`794cd631`） |
 
-> **根因**：预置（前端常量）/ 迁移种子（V46·V49·V61·V101）/ `application.yml` / Java 兜底常量 —— **四种载体手工维护、无一致性守卫**，且**彼此都会漂移**（D-f 即证：`application.yml` 曾被当作「规范真值」，其实自己 2/4 是陈旧的）。**唯一真值 = `llm_provider_model.is_default=1`**。这正是 `M-2③` 要补的东西（现守卫已覆盖四方，见 §11.2 `M-2` 行）。
+> **根因**：预置（前端常量）/ 迁移种子（V46·V49·V61·V101·V108）/ `application.yml` / Java 兜底常量 —— **四种载体手工维护、无一致性守卫**，且**彼此都会漂移**（D-f 即证：`application.yml` 曾被当作「规范真值」，其实自己 2/4 是陈旧的）。**唯一真值 = `llm_provider_model.is_default=1`**。这正是 `M-2③` 要补的东西（现守卫已覆盖四方，见 §11.2 `M-2` 行）。
 > **写回路径**（防复发重点）：`AddModelFormDialog.vue:311-313` 在**创建**预置供应商时直接取 `entry.defaultModel`（编辑分支 `:296` 只改 `billingType`）⇒ 删除后重加会把迁移已订正的值写回旧值。注意既有内置 provider 走 `existingProvider` 分支（`UpdateLlmProvider` 只改 `billingType`），故该风险仅在「该 provider 行不存在」时触发。
 
 ## 11.2 动作明细
 
 | 编号 | 动作 | 落点 | 验收口径 |
 |---|---|---|---|
-| `M-1` | 供应商预置目录扩充（vendor 直连优先，relay 按需） | `helloai-ui/src/views/settings/providerCatalog.ts` | 每条 `providerCode` 唯一；新增条目的 `protocolType/baseUrl/defaultModel` 均与平台口径一致。**Status（2026-10-13）**：首波已落地 5 条直连厂商（openai/anthropic/xai/mistral/groq → 共 9 条，`b580cff4`）；端点/协议符合工厂约定、defaultModel 取 models.dev 当前值；**defer**（需 M-5 extraConfig / 默认有歧义）：zhipu·zai·google·tencent（非 `/v1` 路径）·siliconflow·modelscope·nvidia·openrouter（聚合器无单一默认）。★**可用性前置（2026-10-13 复核补）**：新预置在 `llm_provider_model` 中**无种子行** ⇒ 密钥可配、但 **Agent 注册必被拒**（`AgentSkillPolicyService.validateModelType:126` → `isModelAvailable` ⇒ 400「模型不可用或已禁用」），需待 `M-3` 补目录或先在供应商详情手工 `addModelByProviderId` |
+| `M-1` | 供应商预置目录扩充（vendor 直连优先，relay 按需） | `helloai-ui/src/views/settings/providerCatalog.ts` | 每条 `providerCode` 唯一；新增条目的 `protocolType/baseUrl/defaultModel` 均与平台口径一致。**Status（2026-10-13）**：首波已落地 5 条直连厂商（openai/anthropic/xai/mistral/groq → 共 9 条，`b580cff4`）；端点/协议符合工厂约定、defaultModel 取 models.dev 当前值；**defer**（需 M-5 extraConfig / 默认有歧义）：zhipu·zai·google·tencent（非 `/v1` 路径）·siliconflow·modelscope·nvidia·openrouter（聚合器无单一默认）。★**可用性前置（2026-10-13 复核补）**：新预置在 `llm_provider_model` 中**无种子行** ⇒ 密钥可配、但 **Agent 注册必被拒**（`AgentSkillPolicyService.validateModelType:126` → `isModelAvailable` ⇒ 400「模型不可用或已禁用」），需待 `M-3` 补目录或先在供应商详情手工 `addModelByProviderId`。**余量（2026-10-13 实测）**：magpie 顶层 56 条 − 已借鉴 9 = **余 47**（`KindVendor` 24 / `KindRelay` 18 / `KindLocal` 4 / `KindRemote` 1）；api-key 类共 51 条 ⇒ 已借鉴 **9/51** |
 | `M-2` | ① **去陈旧硬编码**（D-a~D-f，已完）；② 补多协议端点 / 模型目录 id / KeysURL；③ **加一致性守卫**（预置 ↔ 种子 `is_default=1` ↔ `application.yml` ↔ Java 兜底常量 **四方** + 覆盖完整性） | `providerCatalog.ts` + `LlmProviderKeyVerifyServiceImpl.java:45-51` + `application.yml` + `scripts/shell/verify-provider-catalog-parity.sh` | **守卫须反证可拦**：把某条预置 `defaultModel` 改偏离 `llm_provider_model.is_default=1` ⇒ 守卫 **EXIT=1**；且**目录新增 providerCode 未登记守卫白名单 ⇒ 亦须 EXIT≠0**（防新增条目静默不受保护）。**Status（2026-10-13）**：①③ 已完（③ 于 `d20a0160` 扩为四方 + 集合比对 + 双向反证）；**② 未做**——`CatalogProvider` 接口尚无「模型目录 id」字段（`providerCatalog.ts:27-41`），须先扩接口 |
 | `M-3` | 模型目录种子（models.dev 快照 → `llm_provider_model`），替代「手工静态行」 | 迁移 / 一次性导入任务 | 各内置 provider 恰有 1 条 `is_default=1`，且与预置 `defaultModel` 一致 |
 | `M-4` | 能力元数据回填（modality/efforts → `capabilitySkills` / `availableOptionalSkills`） | `llm_provider_model` 能力字段 | 回填后无模型行缺能力字段；`thinking` / 图像 / `web-search` 推导有断言 |
