@@ -33,6 +33,7 @@ import java.util.Queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -347,6 +348,21 @@ class ChatModelToolLoopTest {
         AgentLoopInput legacy = input(new StubChatModel());
 
         assertThat(legacy.loopCheckpointListener()).isNull();
+    }
+
+    @Test
+    @DisplayName("REF-8.4 挂点骨架：附加挂点被分发（请求前 + 终止前）且不影响结果")
+    void shouldDispatchRegisteredHooks() {
+        LoopHook extraHook = mock(LoopHook.class);
+        AgentLoop loopWithHook = new ChatModelToolLoop(ContextCompactor.noop(), List.of(extraHook));
+        StubChatModel model = new StubChatModel().enqueue(responseWithText("done"));
+
+        AgentLoopResult result = loopWithHook.run(input(model));
+
+        verify(extraHook).beforeRequest(anyList(), any(), any(), eq(0));
+        verify(extraHook).beforeTerminate(any(AgentLoopResult.class));
+        assertThat(result.success()).isTrue();
+        assertThat(result.text()).isEqualTo("done");
     }
 
     private AgentLoopInput input(StubChatModel model) {

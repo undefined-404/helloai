@@ -19,6 +19,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.DefaultToolCallingChatOptions;
 import org.springframework.stereotype.Component;
@@ -63,15 +64,34 @@ public class ChatModelToolLoop implements AgentLoop {
     /** 上下文压缩器（REF-8.2.3）；no-op 时行为与改造前逐字一致。 */
     private final ContextCompactor compactor;
 
-    /** Spring 注入构造（REF-8.2.3 上下文压缩，对齐 DSH `compaction-basic`）。 */
+    /** 循环具名挂点链（REF-8.4 骨架）；默认注册 {@link CompactionHook}（压缩行为与改造前一致）。 */
+    private final List<LoopHook> hooks;
+
+    /** Spring 注入构造（REF-8.2.3 上下文压缩 + REF-8.4 默认压缩挂点，对齐 DSH `compaction-basic`）。 */
     @org.springframework.beans.factory.annotation.Autowired
     public ChatModelToolLoop(ContextCompactor compactor) {
-        this.compactor = compactor == null ? ContextCompactor.noop() : compactor;
+        this(compactor, List.of());
     }
 
-    /** 无压缩器构造（既有单测 / 无 Spring 场景）——等价于压缩关闭。 */
+    /** 注入附加挂点（REF-8.4 切片 2+：在压缩挂点之后追加策略挂点，如 VerificationFence）。 */
+    public ChatModelToolLoop(ContextCompactor compactor, List<LoopHook> extraHooks) {
+        this.compactor = compactor == null ? ContextCompactor.noop() : compactor;
+        this.hooks = buildHooks(this.compactor, extraHooks);
+    }
+
+    /** 无压缩器构造（既有单测 / 无 Spring 场景）——等价于压缩关闭（CompactionHook(noop) 恒 null）。 */
     public ChatModelToolLoop() {
-        this(ContextCompactor.noop());
+        this(ContextCompactor.noop(), List.of());
+    }
+
+    /** 组装挂点链：压缩挂点恒为首个，其后追加附加挂点。 */
+    private static List<LoopHook> buildHooks(ContextCompactor compactor, List<LoopHook> extraHooks) {
+        List<LoopHook> result = new ArrayList<>();
+        result.add(new CompactionHook(compactor));
+        if (extraHooks != null) {
+            result.addAll(extraHooks);
+        }
+        return List.copyOf(result);
     }
 
     @Override
@@ -101,10 +121,9 @@ public class ChatModelToolLoop implements AgentLoop {
         for (int i = 0; i < input.maxIterations(); i++) {
             iterations = i + 1;
             DefaultToolCallingChatOptions options = buildOptions(input);
-            // REF-8.2.3 第一道挂点（对齐 DSH `agent/pre-step` 压力触发）：剪枝 → 仍超预算才摘要
-            //（摘要受本执行内的剩余额度约束，防「每轮都试一次」的抖动）
-            CompactionOutcome pressure = compactor.compactIfNeeded(
-                    messages, input.chatModel(), options, summarizeBudget);
+            // REF-8.4 挂点骨架：请求前经 beforeRequest 挂点（对齐 DSH `agent/pre-step` 压力触发）
+            // 默认 CompactionHook 剪枝 → 仍超预算才摘要（额度受 summarizeBudget 约束）
+            CompactionOutcome pressure = runBeforeRequest(input, messages, options, summarizeBudget);
             if (pressure != null && pressure.summarized()) {
                 summarizeBudget--;
             }
@@ -115,13 +134,12 @@ public class ChatModelToolLoop implements AgentLoop {
                     response = input.chatModel().call(new Prompt(messages, options));
                     break;
                 } catch (RuntimeException e) {
-                    // REF-8.2.3 溢出恢复（对齐 DSH `agent/request-error`）：压缩一次后重试本轮；
-                    // 超上限或无可压内容则原样抛出（保持改造前的失败语义）
+                    // REF-8.4 挂点骨架：溢出恢复经 onRequestError 挂点（对齐 DSH `agent/request-error`）
+                    // 压缩一次后重试本轮；超上限或无可压内容则原样抛出（保持改造前的失败语义）
                     if (overflowRetries >= compactor.maxOverflowRetries()) {
                         throw e;
                     }
-                    CompactionOutcome fix = compactor.compactOnOverflow(
-                            messages, input.chatModel(), options, summarizeBudget);
+                    CompactionOutcome fix = runOnRequestError(input, messages, options, summarizeBudget);
                     if (fix == null || !fix.changed()) {
                         throw e;
                     }
@@ -146,9 +164,9 @@ public class ChatModelToolLoop implements AgentLoop {
                 messages.add(assistant);
             }
             if (assistant == null || !assistant.hasToolCalls()) {
-                return AgentLoopResult.stop(lastText,
+                return terminate(input, AgentLoopResult.stop(lastText,
                         extracted.thinking().isBlank() ? null : extracted.thinking(),
-                        iterations, toolCallCount, totalTokens);
+                        iterations, toolCallCount, totalTokens));
             }
             List<ToolResponseMessage.ToolResponse> toolResponses = new ArrayList<>();
             for (AssistantMessage.ToolCall toolCall : assistant.getToolCalls()) {
@@ -164,9 +182,9 @@ public class ChatModelToolLoop implements AgentLoop {
             }
             if (toolResponses.isEmpty()) {
                 // 模型发了空工具调用列表（异常响应）：防死循环，按终态返回
-                return AgentLoopResult.stop(lastText,
+                return terminate(input, AgentLoopResult.stop(lastText,
                         extracted.thinking().isBlank() ? null : extracted.thinking(),
-                        iterations, toolCallCount, totalTokens);
+                        iterations, toolCallCount, totalTokens));
             }
             messages.add(ToolResponseMessage.builder().responses(toolResponses).build());
             // 循环进度检查点（P0-C checkpoint）：本轮 LLM + 工具均已完成、下一轮未开始；
@@ -174,7 +192,45 @@ public class ChatModelToolLoop implements AgentLoop {
             fireCheckpoint(input, new LoopCheckpoint(
                     i + 1, toolCallCount, messages.size(), new ArrayList<>(executedToolNames)));
         }
-        return AgentLoopResult.maxIterations(lastText, iterations, toolCallCount, totalTokens);
+        return terminate(input, AgentLoopResult.maxIterations(lastText, iterations, toolCallCount, totalTokens));
+    }
+
+    /** beforeRequest 挂点链分发：恒返回最后一个非 null 结果（默认 CompactionHook 唯一）。 */
+    private CompactionOutcome runBeforeRequest(AgentLoopInput input, List<Message> messages,
+                                               ChatOptions options, int summarizeBudget) {
+        CompactionOutcome outcome = null;
+        for (LoopHook hook : hooks) {
+            CompactionOutcome r = hook.beforeRequest(messages, input.chatModel(), options, summarizeBudget);
+            if (r != null) {
+                outcome = r;
+            }
+        }
+        return outcome;
+    }
+
+    /** onRequestError 挂点链分发。 */
+    private CompactionOutcome runOnRequestError(AgentLoopInput input, List<Message> messages,
+                                                ChatOptions options, int summarizeBudget) {
+        CompactionOutcome outcome = null;
+        for (LoopHook hook : hooks) {
+            CompactionOutcome r = hook.onRequestError(messages, input.chatModel(), options, summarizeBudget);
+            if (r != null) {
+                outcome = r;
+            }
+        }
+        return outcome;
+    }
+
+    /** 终止前挂点链分发（REF-8.4 骨架，write-only）：当前为 no-op，不落任何平台状态。 */
+    private AgentLoopResult terminate(AgentLoopInput input, AgentLoopResult result) {
+        for (LoopHook hook : hooks) {
+            try {
+                hook.beforeTerminate(result);
+            } catch (Exception e) {
+                log.warn("AgentLoop: beforeTerminate 挂点失败（write-only 不阻断）: err={}", e.getMessage());
+            }
+        }
+        return result;
     }
 
     /**
