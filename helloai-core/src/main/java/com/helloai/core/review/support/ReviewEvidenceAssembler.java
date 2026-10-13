@@ -4,6 +4,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
+import com.helloai.core.shared.util.VerificationFence;
 import com.helloai.core.task.port.AttachmentView;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.AttachmentService;
@@ -344,7 +345,8 @@ public class ReviewEvidenceAssembler {
      * 与 executor SKILL 的 fail-close 条款形成闭环。</p>
      */
     public String verificationSignal(String rawOutput) {
-        boolean hasEvidence = rawOutput != null && rawOutput.contains("VERIFICATION:");
+        // REF-8.4 ③：匹配器与 VerificationFence 共用单一来源，防「两份围栏判定」漂移
+        boolean hasEvidence = VerificationFence.containsMarker(rawOutput);
         return hasEvidence
                 ? "该提交携带验证证据（VERIFICATION 段）：请核对证据中命令/输出/结论与交付物的一致性，"
                         + "证据与结论矛盾或明显伪造的按不达标处理。"

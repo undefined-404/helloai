@@ -11,6 +11,7 @@ import com.helloai.core.agent.runtime.loop.AgentLoopResult;
 import com.helloai.core.agent.runtime.sandbox.Sandbox;
 import com.helloai.core.agent.runtime.sandbox.SandboxContext;
 import com.helloai.core.agent.runtime.sandbox.SandboxProvider;
+import com.helloai.core.shared.util.VerificationFence;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.tool.InternalToolCallbacks;
 import com.helloai.core.agent.tool.ToolContext;
@@ -189,6 +190,21 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                         .status(ExecutionStatus.FAILED)
                         .output("agent_runtime_empty_output: 模型返回空正文（finishReason="
                                 + loopResult.finishReason() + ", toolCalls=0），无任何交付物，判定为可重试失败")
+                        .thinking(loopResult.thinking())
+                        .finishReason(loopResult.finishReason())
+                        .tokenUsage(loopResult.tokenUsage())
+                        .build();
+            }
+            // REF-8.4 ④ 出口分类（对齐 DSH `turn-stopping` + 复用「空产出护栏」同层位置）：
+            // 内部 LLM 自然 STOP 的最终报告若缺 VERIFICATION 围栏 ⇒ 输出契约 fail-close（评审侧同源），
+            // 判 FAILED 而非 SUCCESS——但**只改 ExecutionStatus，不碰 SubTaskStatus**（红线①反证）。
+            // 非内部接入（外部 Agent / null）与空正文分支已由上面护栏兜底，不在此重复判定。
+            if (ctx.getAccessType() == AgentAccessType.API_KEY_LLM
+                    && !VerificationFence.containsMarker(loopResult.text())) {
+                return AgentExecutionResult.builder()
+                        .status(ExecutionStatus.FAILED)
+                        .output("agent_runtime_missing_verification: 最终报告未携带 VERIFICATION 围栏，"
+                                + "无法自证交付（输出契约 fail-close，评审侧同源判定），判定为可重试失败")
                         .thinking(loopResult.thinking())
                         .finishReason(loopResult.finishReason())
                         .tokenUsage(loopResult.tokenUsage())
