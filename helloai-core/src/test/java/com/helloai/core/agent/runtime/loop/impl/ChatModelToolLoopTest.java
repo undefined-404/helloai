@@ -360,7 +360,7 @@ class ChatModelToolLoopTest {
         AgentLoopResult result = loopWithHook.run(input(model));
 
         verify(extraHook).beforeRequest(anyList(), any(), any(), eq(0));
-        verify(extraHook).beforeTerminate(any(AgentLoopResult.class));
+        verify(extraHook).beforeTerminate(any(AgentLoopTermination.class));
         assertThat(result.success()).isTrue();
         assertThat(result.text()).isEqualTo("done");
     }

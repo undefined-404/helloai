@@ -1,5 +1,6 @@
 package com.helloai.core.agent.runtime.loop.impl;
 
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.core.agent.chat.ChatResponseContentExtractor;
 import com.helloai.core.agent.event.AgentEventRecorder;
@@ -67,13 +68,17 @@ public class ChatModelToolLoop implements AgentLoop {
     /** 循环具名挂点链（REF-8.4 骨架）；默认注册 {@link CompactionHook}（压缩行为与改造前一致）。 */
     private final List<LoopHook> hooks;
 
-    /** Spring 注入构造（REF-8.2.3 上下文压缩 + REF-8.4 默认压缩挂点，对齐 DSH `compaction-basic`）。 */
-    @org.springframework.beans.factory.annotation.Autowired
+    /** 单压缩器构造（既有单测 / 无 Spring 场景）：不注入附加挂点（行为与改造前一致）。 */
     public ChatModelToolLoop(ContextCompactor compactor) {
         this(compactor, List.of());
     }
 
-    /** 注入附加挂点（REF-8.4 切片 2+：在压缩挂点之后追加策略挂点，如 VerificationFence）。 */
+    /**
+     * Spring 注入构造（REF-8.2.3 上下文压缩 + REF-8.4 默认压缩挂点 + 策略挂点，对齐 DSH
+     * `compaction-basic`）。{@code List<LoopHook>} 注入全部 LoopHook bean——内置压缩挂点恒为首个，
+     * 其后追加策略挂点（如 `@Component FinalReportFenceHook`）。附加挂点为空列表 ⇒ 行为逐字一致。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
     public ChatModelToolLoop(ContextCompactor compactor, List<LoopHook> extraHooks) {
         this.compactor = compactor == null ? ContextCompactor.noop() : compactor;
         this.hooks = buildHooks(this.compactor, extraHooks);
@@ -164,7 +169,7 @@ public class ChatModelToolLoop implements AgentLoop {
                 messages.add(assistant);
             }
             if (assistant == null || !assistant.hasToolCalls()) {
-                return terminate(input, AgentLoopResult.stop(lastText,
+                return terminate(input, messages, AgentLoopResult.stop(lastText,
                         extracted.thinking().isBlank() ? null : extracted.thinking(),
                         iterations, toolCallCount, totalTokens));
             }
@@ -182,7 +187,7 @@ public class ChatModelToolLoop implements AgentLoop {
             }
             if (toolResponses.isEmpty()) {
                 // 模型发了空工具调用列表（异常响应）：防死循环，按终态返回
-                return terminate(input, AgentLoopResult.stop(lastText,
+                return terminate(input, messages, AgentLoopResult.stop(lastText,
                         extracted.thinking().isBlank() ? null : extracted.thinking(),
                         iterations, toolCallCount, totalTokens));
             }
@@ -192,7 +197,8 @@ public class ChatModelToolLoop implements AgentLoop {
             fireCheckpoint(input, new LoopCheckpoint(
                     i + 1, toolCallCount, messages.size(), new ArrayList<>(executedToolNames)));
         }
-        return terminate(input, AgentLoopResult.maxIterations(lastText, iterations, toolCallCount, totalTokens));
+        return terminate(input, messages, AgentLoopResult.maxIterations(lastText, iterations, toolCallCount,
+                totalTokens));
     }
 
     /** beforeRequest 挂点链分发：恒返回最后一个非 null 结果（默认 CompactionHook 唯一）。 */
@@ -221,16 +227,22 @@ public class ChatModelToolLoop implements AgentLoop {
         return outcome;
     }
 
-    /** 终止前挂点链分发（REF-8.4 骨架，write-only）：当前为 no-op，不落任何平台状态。 */
-    private AgentLoopResult terminate(AgentLoopInput input, AgentLoopResult result) {
+    /** 终止前挂点链分发（REF-8.4）：携带消息历史 + 草稿结果，挂点可改写结果（write-only）。 */
+    private AgentLoopResult terminate(AgentLoopInput input, List<Message> messages, AgentLoopResult result) {
+        AgentLoopResult current = result;
+        boolean internalLlm = input.accessType() == AgentAccessType.API_KEY_LLM;
         for (LoopHook hook : hooks) {
             try {
-                hook.beforeTerminate(result);
+                AgentLoopResult revised = hook.beforeTerminate(
+                        new AgentLoopTermination(input.chatModel(), messages, internalLlm, current));
+                if (revised != null) {
+                    current = revised;
+                }
             } catch (Exception e) {
                 log.warn("AgentLoop: beforeTerminate 挂点失败（write-only 不阻断）: err={}", e.getMessage());
             }
         }
-        return result;
+        return current;
     }
 
     /**

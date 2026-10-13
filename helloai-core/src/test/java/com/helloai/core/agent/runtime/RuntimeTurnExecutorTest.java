@@ -49,6 +49,10 @@ class RuntimeTurnExecutorTest {
     @Mock
     private AgentLoop agentLoop;
 
+    /** 内部 LLM 自证围栏后缀（对齐 ④ 出口分类契约：自然 STOP 报告须携带 VERIFICATION 才算自证完成）。 */
+    private static final String FENCED_REPORT_SUFFIX =
+            "\nVERIFICATION:\n- 已核对\nSTATUS: DONE\nNEXT_STEPS: 无";
+
     @Mock
     private ToolExecutor toolExecutor;
 
@@ -77,14 +81,16 @@ class RuntimeTurnExecutorTest {
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of("s1"), List.of("s1"), ""));
         when(toolRegistry.resolve(any(), any())).thenReturn(List.of(new ToolDefinition("t1", "desc")));
         when(toolCallbackProvider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
-        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("final answer", null, 1, 0));
+        // 内部 LLM（context 为 API_KEY_LLM）：自然 STOP 报告须自证 VERIFICATION 围栏才走 SUCCESS（④ 契约）
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop(
+                "final answer" + FENCED_REPORT_SUFFIX, null, 1, 0));
 
         AgentExecutionResult result = new RuntimeTurnExecutor(
                 agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
                 .execute(context());
 
         assertThat(result.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
-        assertThat(result.getOutput()).isEqualTo("final answer");
+        assertThat(result.getOutput()).isEqualTo("final answer" + FENCED_REPORT_SUFFIX);
 
         verify(eventRecorder).record(eqRun("run-1-1"), eqLong(1L), eqLong(10L), eqInt(1), eqInt(1),
                 eqType(AgentEventType.AGENT_STARTED), eqLong(3L), any());
@@ -171,19 +177,21 @@ class RuntimeTurnExecutorTest {
     }
 
     @Test
-    @DisplayName("A 防误伤：正文空白但**有工具调用** ⇒ 仍 SUCCESS（靠工具/附件交付产物的合法成功）")
-    void shouldKeepSuccessWhenEmptyTextButToolsInvoked() {
+    @DisplayName("A 防误伤：有工具调用但最终报告自证完成 ⇒ SUCCESS（不被空产出护栏误伤；④ 契约下内部报告须带围栏）")
+    void shouldKeepSuccessWhenDeliveredViaTools() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
         when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
-        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("", null, 3, 2, 100));
+        // 内部 LLM：有工具调用且自证 VERIFICATION 围栏（生产环境靠收尾轮补齐；此处 stub 直接给齐）
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop(
+                "已交付（工具/附件）" + FENCED_REPORT_SUFFIX, null, 3, 2, 100));
 
         AgentExecutionResult result = new RuntimeTurnExecutor(
                 agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
                 .execute(context());
 
         assertThat(result.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
-        assertThat(result.getOutput()).isEmpty();
+        assertThat(result.getOutput()).contains("VERIFICATION:");
         assertThat(result.getTokenUsage()).isEqualTo(100);
     }
 
@@ -193,7 +201,8 @@ class RuntimeTurnExecutorTest {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
         when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
-        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 2, 1, 42));
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop(
+                "ok" + FENCED_REPORT_SUFFIX, null, 2, 1, 42));
 
         AgentExecutionResult result = new RuntimeTurnExecutor(
                 agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)

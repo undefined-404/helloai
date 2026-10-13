@@ -166,7 +166,8 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                     resolveMaxIterations(ctx),
                     ctx.getRunId(), ctx.getTaskId(), ctx.getSubTaskId(), ctx.getTurn(), ctx.getAgentId(),
                     ctx.getEventRecorder(),
-                    ctx.getLoopCheckpointListener()));
+                    ctx.getLoopCheckpointListener(),
+                    ctx.getAccessType()));
         } finally {
             ToolInvocationContext.unbind();
         }

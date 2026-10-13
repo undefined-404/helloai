@@ -45,9 +45,18 @@ public interface LoopHook {
 
     /**
      * 终止前终态检查点（DSH {@code agent/turn-stopping} serial 等价物）。
-     * 只读观察循环结果，不落平台状态；默认 no-op。
+     *
+     * <p>切片 2 起升级为可改写结果：携带 {@link AgentLoopTermination}（消息历史 + 草稿结果），
+     * 返回非 null 时调用方以其替换最终结果。默认返回 null（不改写）⇒ 行为与改造前逐字一致。</p>
+     *
+     * <p>首条实现 = {@link FinalReportFenceHook}（内部 LLM 收尾轮：缺/不合格 VERIFICATION 围栏时
+     * 无工具重入一次模型自纠），write-only 纪律——异常时调用方吞掉并沿用草稿，不阻断。</p>
+     *
+     * @param termination 终止前上下文（消息历史 + 草稿结果 + 是否内部 LLM）
+     * @return 修订后的最终结果；{@code null} = 不改写（沿用草稿）
      */
-    default void beforeTerminate(AgentLoopResult result) {
-        // 默认空操作（切片 1 仅建立契约）
+    default AgentLoopResult beforeTerminate(AgentLoopTermination termination) {
+        // 默认空操作（不改写结果）
+        return null;
     }
 }

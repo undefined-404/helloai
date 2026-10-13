@@ -3,6 +3,8 @@ package com.helloai.core.agent.runtime;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.runtime.loop.impl.ChatModelToolLoop;
+import com.helloai.core.agent.runtime.loop.impl.ContextCompactor;
+import com.helloai.core.agent.runtime.loop.impl.FinalReportFenceHook;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.tool.ToolExecutor;
 import com.helloai.core.agent.tool.ToolRegistry;
@@ -92,6 +94,33 @@ class RuntimeVerificationConformanceTest {
     }
 
     @Test
+    @DisplayName("内部 LLM 缺围栏 + 收尾轮自纠出围栏 ⇒ SUCCESS（② + ④ 组合）")
+    void internalMissingFence_withFinalizeHook_succeeds() {
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
+
+        // 循环挂收尾轮：草稿缺围栏 → 收尾轮自纠出围栏 → 出口分类 ④ 不再 fail-close
+        RuntimeTurnExecutor executor = new RuntimeTurnExecutor(
+                new ChatModelToolLoop(ContextCompactor.noop(), List.of(new FinalReportFenceHook())),
+                toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider);
+        Queue<ChatResponse> queue = new LinkedList<>();
+        queue.offer(responseWithText("done, no evidence"));
+        queue.offer(responseWithText("done\nVERIFICATION:\n- 已核对\nSTATUS: DONE\nNEXT_STEPS: 无"));
+
+        AgentExecutionResult result = executor.execute(AgentContext.builder()
+                .runId("run-1-1").taskId(1L).subTaskId(10L).turn(1).step(0).agentId(3L)
+                .systemPrompt("sys").userPrompt("deliver")
+                .chatModel(stub(queue))
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .eventRecorder(null)
+                .build());
+
+        assertThat(result.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(result.getOutput()).contains("VERIFICATION:");
+    }
+
+    @Test
     @DisplayName("非内部（null accessType）缺 VERIFICATION 围栏 ⇒ 不被本护栏拦（SUCCESS）")
     void externalMissingFence_notGated() {
         when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
@@ -112,6 +141,10 @@ class RuntimeVerificationConformanceTest {
     private static ChatModel stub(ChatResponse response) {
         Queue<ChatResponse> responses = new LinkedList<>();
         responses.offer(response);
+        return stub(responses);
+    }
+
+    private static ChatModel stub(Queue<ChatResponse> responses) {
         return new ChatModel() {
             @Override
             public ChatResponse call(Prompt prompt) {
