@@ -86,6 +86,7 @@
 - **D-2026-10-13-8｜A/B 词表是否拆分**（用户，2026-10-13，记录 `LOG-20261013-011`）：**不拆分**（零 planner 改动），改在闸门内做**两段判定**——先 A 谓词粗匹配、再 B 引用边 `B.requires ⊆ A.provides` 复核。
 - **D-2026-10-13-9｜形态甲/乙（V52 加列退列 vs 泛化能力谓词表）**（用户，2026-10-13，记录 `LOG-20261013-011`）：**形态乙**（泛化能力谓词表吸收 `capability_skills=["thinking"]` 这类平台策略）；遵删列前置——先迁 `validateAgentSkills` 与 `getSkillOptionsByModelType` 两消费方、再删 V52 两列。
 - **D-2026-10-13-10｜`requiredBaseCapabilities` 挂点**（用户，2026-10-13，记录 `LOG-20261013-011`）：**`SkillPackage` 8→9 键四路协同**（技能须自报模态前置），不做模块级默认替代。
+- **D-2026-10-13-11｜`M-x` 号段建号 + minimax 换代口径（含「发布前修改已 apply 的 Migration」例外留痕）**（用户，2026-10-13，记录 `LOG-20261013-015` / `-017`）：① **`M-x` 建号**（供应商 / 模型注册信息完善，`x` 取 1~9）：来源 `research/magpie_借鉴分析.md`，实施 `plan/HelloAI 借鉴落地实施计划.md` §11；与 `REF-x.y` **并列**——`REF-` 号段的 `x` 已占满 1~8，不扩号段（详 §0 编号口径表）。② **minimax 全系列换代**：`MiniMax-M2.5` / `M2.7` 即将下线 ⇒ 目录默认位切 **`MiniMax-M3`**，并追加 **`MiniMax-M3.1-Flash-Preview`**（`enabled=1` / 非默认）。③ **迁移承载 = 并入 `V108`，不新立 `V109`**（用户裁定）：生产尚未 apply `V108` ⇒ 单迁移即完整、不遗漏；**该操作命中《协作规约》§29 的显式例外**「**除非任务明确就是修复尚未发布的本地 Migration**」（`HelloAI_CODE_STYLE.md` §16.1 / §52 同源，`§28 Git Diff 自检` 要求说明原因）。开发库已 apply 过 ⇒ 靠 `DELETE FROM flyway_schema_history WHERE version = '108';` 重跑复位（迁移本身幂等，已事务空跑两遍验证）。⚠️ **此例外仅限「尚未发布」**，不得推广到已发布迁移；④ **四方载体同步**：前端预置 / `application.yml` / Java 兜底常量（`FALLBACK_MODELS`）/ 守卫 `SEED_DEFAULT`。
 
 **当前冻结基线**
 
