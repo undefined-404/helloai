@@ -1,11 +1,15 @@
 package com.helloai.core.agent.chat;
 
+import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;
+import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.common.crypto.CredentialCryptoService;
+import com.helloai.core.system.crypto.CredentialFingerprint;
 import com.helloai.core.system.port.CredentialSecret;
 import com.helloai.core.system.service.CredentialVaultService;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import com.helloai.core.system.service.SysConfigService;
+import com.helloai.core.agent.dto.ApiKeySaveOutcome;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.agent.service.impl.PlatformProviderConfigServiceImpl;
 import com.helloai.core.agent.chat.provider.ProviderChatModelCache;
@@ -14,10 +18,19 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -172,6 +185,75 @@ class PlatformProviderConfigServiceTest {
             when(providerProperties.getConfig(PROVIDER)).thenReturn(ymlConfig(null));
 
             assertThat(configService.maskApiKey(PROVIDER)).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("saveApiKey 同 provider 内同 Key 去重（M-6）")
+    class SaveApiKeyDedup {
+
+        @Test
+        @DisplayName("首次录入 ⇒ created=true，落库带明文指纹，并清 ChatModel 缓存")
+        void shouldCreateWhenFingerprintAbsent() {
+            String fingerprint = CredentialFingerprint.of("sk-new");
+            when(credentialVaultService.existsFingerprint(
+                    CredentialOwnerType.PLATFORM, 0L, PROVIDER, fingerprint)).thenReturn(false);
+            when(credentialCryptoService.encryptToBase64("sk-new")).thenReturn("cipher-new");
+
+            ApiKeySaveOutcome outcome = configService.saveApiKey(PROVIDER, "sk-new");
+
+            assertThat(outcome.created()).isTrue();
+            assertThat(outcome.fingerprint()).isEqualTo(fingerprint).hasSize(24);
+            verify(credentialVaultService).rotatePlatformApiKey(
+                    eq(PROVIDER), eq("cipher-new"), isNull(), anyString(), eq(fingerprint));
+            verify(providerChatModelCache).clear();
+        }
+
+        @Test
+        @DisplayName("同一 Key 二次录入 ⇒ created=false，不落库、不清缓存")
+        void shouldNotPersistWhenFingerprintExists() {
+            when(credentialVaultService.existsFingerprint(
+                    CredentialOwnerType.PLATFORM, 0L, PROVIDER, CredentialFingerprint.of("sk-dup")))
+                    .thenReturn(true);
+
+            ApiKeySaveOutcome outcome = configService.saveApiKey(PROVIDER, "sk-dup");
+
+            assertThat(outcome.created()).isFalse();
+            assertThat(outcome.message()).isEqualTo(ApiKeySaveOutcome.MSG_ALREADY_EXISTS);
+            assertThat(outcome.fingerprint()).isEqualTo(CredentialFingerprint.of("sk-dup"));
+            verify(credentialVaultService, never()).rotatePlatformApiKey(
+                    any(), any(), any(), any(), any());
+            verify(providerChatModelCache, never()).clear();
+        }
+
+        @Test
+        @DisplayName("判重作用域 = PLATFORM + ownerId 0 + 该 provider（同 Key 跨 provider 不误判）")
+        void shouldScopeDedupByOwnerAndProvider() {
+            configService.saveApiKey(PROVIDER, "sk-x");
+
+            verify(credentialVaultService).existsFingerprint(
+                    CredentialOwnerType.PLATFORM, 0L, PROVIDER, CredentialFingerprint.of("sk-x"));
+        }
+
+        @Test
+        @DisplayName("历史行指纹回填必须发生在判重之前（否则升级前录入的 Key 判不出来）")
+        void shouldBackfillBeforeDedup() {
+            configService.saveApiKey(PROVIDER, "sk-order");
+
+            InOrder order = inOrder(credentialVaultService);
+            order.verify(credentialVaultService).backfillFingerprints(
+                    CredentialOwnerType.PLATFORM, 0L, PROVIDER);
+            order.verify(credentialVaultService).existsFingerprint(
+                    eq(CredentialOwnerType.PLATFORM), eq(0L), eq(PROVIDER), anyString());
+        }
+
+        @Test
+        @DisplayName("provider / apiKey 为空仍 fail-close")
+        void shouldRejectBlankInputs() {
+            assertThatThrownBy(() -> configService.saveApiKey(" ", "sk"))
+                    .isInstanceOf(BizException.class).hasMessageContaining("provider");
+            assertThatThrownBy(() -> configService.saveApiKey(PROVIDER, " "))
+                    .isInstanceOf(BizException.class).hasMessageContaining("apiKey");
         }
     }
 }
