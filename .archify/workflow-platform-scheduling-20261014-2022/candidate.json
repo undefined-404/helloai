@@ -1,0 +1,486 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "HelloAI 平台任务调度工作流",
+    "locale": "zh-CN",
+    "output": "doc/diagrams/html/platform-scheduling-flow.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://gitee.com/undefined_404/helloai.git",
+      "provider": "gitee",
+      "revision": "2c7477244c441004d7486cfd03d70d44bb47e40f"
+    }
+  },
+  "lanes": [
+    {
+      "id": "user",
+      "label": "用户"
+    },
+    {
+      "id": "planner",
+      "label": "Planner · 编排"
+    },
+    {
+      "id": "dispatch",
+      "label": "调度分发"
+    },
+    {
+      "id": "executor",
+      "label": "执行 · 双执行链"
+    },
+    {
+      "id": "reviewer",
+      "label": "Reviewer · 审核验收"
+    },
+    {
+      "id": "auto",
+      "label": "平台自动 · 兜底",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "p1",
+      "label": "① 需求澄清",
+      "fromCol": 0,
+      "toCol": 0
+    },
+    {
+      "id": "p2",
+      "label": "② 规划拆解",
+      "fromCol": 1,
+      "toCol": 1
+    },
+    {
+      "id": "p3",
+      "label": "③ 调度分发",
+      "fromCol": 2,
+      "toCol": 2
+    },
+    {
+      "id": "p4",
+      "label": "④ 并行执行",
+      "fromCol": 3,
+      "toCol": 3
+    },
+    {
+      "id": "p5",
+      "label": "⑤ 审核验收",
+      "fromCol": 4,
+      "toCol": 4
+    },
+    {
+      "id": "p6",
+      "label": "⑥ 整合交付",
+      "fromCol": 5,
+      "toCol": 5
+    }
+  ],
+  "groups": [
+    {
+      "id": "exception_band",
+      "label": "异常回收与熔断兜底",
+      "lane": "auto",
+      "fromCol": 3,
+      "toCol": 4,
+      "variant": "security"
+    }
+  ],
+  "mainPath": [
+    "req",
+    "clarify",
+    "decompose",
+    "confirm",
+    "assign",
+    "claim",
+    "execute",
+    "submit",
+    "review",
+    "report"
+  ],
+  "nodes": [
+    {
+      "id": "req",
+      "lane": "user",
+      "col": 0,
+      "type": "external",
+      "label": "描述需求",
+      "sublabel": "自然语言 · 对话入口",
+      "icon": "person"
+    },
+    {
+      "id": "clarify",
+      "lane": "planner",
+      "col": 1,
+      "type": "backend",
+      "label": "澄清会话",
+      "sublabel": "CHAT / CLARIFY",
+      "tag": "需求包六字段",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/RequirementClarifyServiceImpl.java"
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/planner/entity/RequirementConversation.java",
+          "line": 74,
+          "end_line": 80
+        }
+      ]
+    },
+    {
+      "id": "decompose",
+      "lane": "planner",
+      "col": 2,
+      "type": "backend",
+      "label": "能力感知拆解",
+      "sublabel": "三档粒度 · 草案落库",
+      "tag": "PENDING_PLAN_REVIEW",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerDecomposeAsyncServiceImpl.java",
+          "line": 161
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/planner/policy/PlannerGranularity.java",
+          "line": 10
+        }
+      ]
+    },
+    {
+      "id": "confirm",
+      "lane": "user",
+      "col": 2,
+      "type": "external",
+      "label": "确认草案",
+      "sublabel": "人工决策点",
+      "tag": "草案 → PENDING",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerAnalysisServiceImpl.java",
+          "line": 150
+        }
+      ]
+    },
+    {
+      "id": "assign",
+      "lane": "dispatch",
+      "col": 3,
+      "type": "backend",
+      "label": "选人 + 指派",
+      "sublabel": "12 层过滤 · 4 级排序",
+      "tag": "PENDING → ASSIGNED",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/agent/dispatcher/ResilientDispatcher.java",
+          "line": 63
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/agent/executor/AgentSelector.java",
+          "line": 173,
+          "end_line": 194
+        }
+      ]
+    },
+    {
+      "id": "claim",
+      "lane": "executor",
+      "col": 3,
+      "type": "external",
+      "label": "认领子任务",
+      "sublabel": "claimAtomic CAS",
+      "tag": "ASSIGNED → IN_PROGRESS",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/agent/port/SubTaskCommandPort.java",
+          "line": 96
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/agent/service/impl/McpToolServiceImpl.java",
+          "line": 335
+        }
+      ]
+    },
+    {
+      "id": "execute",
+      "lane": "executor",
+      "col": 4,
+      "type": "backend",
+      "label": "执行",
+      "sublabel": "外部 MCP · 平台内运行时",
+      "tag": "八件套",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/agent/runtime/RuntimeTurnExecutor.java",
+          "line": 61
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/agent/mcp/McpMcpServer.java",
+          "line": 68
+        }
+      ]
+    },
+    {
+      "id": "submit",
+      "lane": "executor",
+      "col": 5,
+      "type": "backend",
+      "label": "提交产物",
+      "sublabel": "幂等回写",
+      "tag": "IN_PROGRESS → REVIEW",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/agent/mcp/McpMcpServer.java",
+          "line": 256
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "lane": "reviewer",
+      "col": 5,
+      "type": "security",
+      "label": "核验",
+      "sublabel": "通过 / 驳回 · 双审共识",
+      "tag": "REVIEW → DONE",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 90
+        },
+        {
+          "path": "helloai-common/src/main/java/com/helloai/common/config/ReviewProperties.java"
+        }
+      ]
+    },
+    {
+      "id": "rework",
+      "lane": "reviewer",
+      "col": 4,
+      "type": "security",
+      "label": "驳回返工",
+      "sublabel": "缺失证据清单下发",
+      "tag": "REVIEW → REWORK",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 63
+        }
+      ]
+    },
+    {
+      "id": "blocked",
+      "lane": "dispatch",
+      "col": 4,
+      "type": "security",
+      "label": "阻塞处理",
+      "sublabel": "reportBlocked 上报",
+      "tag": "BLOCKED → PENDING",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/service/impl/SubTaskDispatchServiceImpl.java",
+          "line": 70
+        }
+      ]
+    },
+    {
+      "id": "recover",
+      "lane": "auto",
+      "col": 3,
+      "type": "backend",
+      "label": "租约到期回收",
+      "sublabel": "30s 扫描 · ShedLock",
+      "tag": "IN_PROGRESS → PENDING",
+      "sources": [
+        {
+          "path": "helloai-job/src/main/java/com/helloai/job/task/LeaseReconcilerTask.java",
+          "line": 30
+        }
+      ]
+    },
+    {
+      "id": "deadletter",
+      "lane": "auto",
+      "col": 4,
+      "type": "security",
+      "label": "死信池",
+      "sublabel": "熔断转入 · 人工四出口",
+      "tag": "非终态",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 34,
+          "end_line": 37
+        }
+      ]
+    },
+    {
+      "id": "report",
+      "lane": "auto",
+      "col": 5,
+      "type": "backend",
+      "label": "整合报告",
+      "sublabel": "汇总全部 DONE 产出",
+      "tag": "Task → DONE",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/service/impl/TaskFinalReportServiceImpl.java",
+          "line": 60
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/shared/event/TaskAutoCompletedEvent.java"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "req-clarify",
+      "from": "req",
+      "to": "clarify",
+      "label": "提出需求",
+      "variant": "emphasis"
+    },
+    {
+      "id": "clarify-decompose",
+      "from": "clarify",
+      "to": "decompose",
+      "label": "结构化需求包"
+    },
+    {
+      "id": "decompose-confirm",
+      "from": "decompose",
+      "to": "confirm",
+      "label": "草案待确认"
+    },
+    {
+      "id": "confirm-assign",
+      "from": "confirm",
+      "to": "assign",
+      "label": "confirmPlan",
+      "variant": "emphasis"
+    },
+    {
+      "id": "assign-claim",
+      "from": "assign",
+      "to": "claim",
+      "label": "指派 ASSIGNED"
+    },
+    {
+      "id": "claim-execute",
+      "from": "claim",
+      "to": "execute",
+      "label": "认领后执行"
+    },
+    {
+      "id": "execute-submit",
+      "from": "execute",
+      "to": "submit",
+      "label": "产出交付物"
+    },
+    {
+      "id": "submit-review",
+      "from": "submit",
+      "to": "review",
+      "label": "进入核验",
+      "variant": "emphasis"
+    },
+    {
+      "id": "review-report",
+      "from": "review",
+      "to": "report",
+      "label": "子任务全部终态 → Task DONE",
+      "variant": "emphasis"
+    },
+    {
+      "id": "review-rework",
+      "from": "review",
+      "to": "rework",
+      "label": "驳回",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "rework-execute",
+      "from": "rework",
+      "to": "execute",
+      "label": "返工重执行",
+      "variant": "security",
+      "role": "return"
+    },
+    {
+      "id": "execute-blocked",
+      "from": "execute",
+      "to": "blocked",
+      "label": "reportBlocked",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "blocked-assign",
+      "from": "blocked",
+      "to": "assign",
+      "label": "人工放行重派",
+      "variant": "security",
+      "role": "return"
+    },
+    {
+      "id": "execute-recover",
+      "from": "execute",
+      "to": "recover",
+      "label": "租约过期",
+      "variant": "dashed",
+      "role": "async"
+    },
+    {
+      "id": "recover-assign",
+      "from": "recover",
+      "to": "assign",
+      "label": "重回分发链",
+      "variant": "dashed",
+      "role": "return"
+    },
+    {
+      "id": "review-deadletter",
+      "from": "review",
+      "to": "deadletter",
+      "label": "返工达上限熔断",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "assign-deadletter",
+      "from": "assign",
+      "to": "deadletter",
+      "label": "重分配熔断",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "主链路",
+      "items": [
+        "确认草案后全自动：分发 → 认领 → 执行 → 提交 → 核验 → 整合报告",
+        "人工只剩两处：确认草案 + 死信池四出口（指派 / 验收 / 改派 / 放弃）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "状态迁移",
+      "items": [
+        "PENDING_PLAN_REVIEW → PENDING → ASSIGNED → IN_PROGRESS → REVIEW → DONE",
+        "驳回走 REVIEW → REWORK → IN_PROGRESS；租约到期是 IN_PROGRESS → PENDING 唯一合法入口"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "异常路径",
+      "items": [
+        "阻塞：reportBlocked 上报 → 人工放行 → 重新派发",
+        "熔断：返工达上限 / 重分配达上限 → DEAD_LETTER，自动链路停止转人工兜底"
+      ]
+    }
+  ]
+}

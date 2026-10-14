@@ -123,3 +123,12 @@ scripts/powershell/executor-config*.json
 
 # --- scripts 运行日志与 jar 解包残留（本地产物，不入仓 2026-09-30）---
 scripts/powershell/logs/
+
+# --- archify 图表生成过程产物（2026-10-15 补充）---
+# candidate.json 已入库（可复现重生成）；review-*/ 回执、.bak 备份、*.finalize.json 等过程产物不入仓
+.archify/*/review-*/
+.archify/*/*.bak*
+doc/diagrams/html/*.finalize.json
+doc/diagrams/html/*.finalize-summary.json
+doc/diagrams/html/*.browser-check.json
+doc/diagrams/html/*.delivery.json

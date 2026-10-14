@@ -1,0 +1,438 @@
+{
+  "schema_version": 3,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "HelloAI 平台三级状态机",
+    "locale": "zh-CN",
+    "output": "doc/diagrams/html/platform-state-machines.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://gitee.com/undefined_404/helloai.git",
+      "provider": "gitee",
+      "revision": "2c7477244c441004d7486cfd03d70d44bb47e40f"
+    }
+  },
+  "mainPath": [
+    "plan_review",
+    "pending",
+    "assigned",
+    "in_progress",
+    "review",
+    "done"
+  ],
+  "states": [
+    {
+      "id": "plan_review",
+      "type": "waiting",
+      "label": "PENDING_PLAN_REVIEW",
+      "sublabel": "规划草案",
+      "tag": "分发不可见",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 17
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerAnalysisServiceImpl.java",
+          "line": 150
+        }
+      ]
+    },
+    {
+      "id": "pending",
+      "type": "waiting",
+      "label": "PENDING",
+      "sublabel": "待分发",
+      "tag": "待分发",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 18
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/service/impl/SubTaskDispatchServiceImpl.java",
+          "line": 148
+        }
+      ]
+    },
+    {
+      "id": "assigned",
+      "type": "active",
+      "label": "ASSIGNED",
+      "sublabel": "已指派",
+      "tag": "等认领",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 19
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/agent/dispatcher/ResilientDispatcher.java",
+          "line": 94
+        }
+      ]
+    },
+    {
+      "id": "in_progress",
+      "type": "active",
+      "label": "IN_PROGRESS",
+      "sublabel": "执行中",
+      "tag": "持租约",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 22
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/agent/port/SubTaskCommandPort.java",
+          "line": 96
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "type": "decision",
+      "label": "REVIEW",
+      "sublabel": "核验门",
+      "tag": "LLM 判定",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 26
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 90
+        }
+      ]
+    },
+    {
+      "id": "done",
+      "type": "success",
+      "label": "DONE",
+      "sublabel": "验收通过",
+      "tag": "终态",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 32
+        }
+      ]
+    },
+    {
+      "id": "rework",
+      "type": "active",
+      "label": "REWORK",
+      "sublabel": "返工中",
+      "tag": "驳回返工",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 30
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 63
+        }
+      ]
+    },
+    {
+      "id": "blocked",
+      "type": "waiting",
+      "label": "BLOCKED",
+      "sublabel": "阻塞",
+      "tag": "等放行",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 31
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/service/impl/SubTaskDispatchServiceImpl.java",
+          "line": 70
+        }
+      ]
+    },
+    {
+      "id": "paused",
+      "type": "waiting",
+      "label": "PAUSED",
+      "sublabel": "暂停",
+      "tag": "人工暂停",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 23
+        }
+      ]
+    },
+    {
+      "id": "cancelled",
+      "type": "neutral",
+      "label": "CANCELLED",
+      "sublabel": "已取消",
+      "tag": "终态",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 33
+        }
+      ]
+    },
+    {
+      "id": "dead_letter",
+      "type": "neutral",
+      "label": "DEAD_LETTER",
+      "sublabel": "死信池",
+      "tag": "人工兜底",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 37
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "id": "plan-pending",
+      "from": "plan_review",
+      "to": "pending",
+      "label": "确认",
+      "variant": "emphasis"
+    },
+    {
+      "id": "plan-cancelled",
+      "from": "plan_review",
+      "to": "cancelled",
+      "label": "拒绝草案"
+    },
+    {
+      "id": "pending-assigned",
+      "from": "pending",
+      "to": "assigned",
+      "label": "分发"
+    },
+    {
+      "id": "pending-cancelled",
+      "from": "pending",
+      "to": "cancelled",
+      "label": "取消"
+    },
+    {
+      "id": "pending-dead",
+      "from": "pending",
+      "to": "dead_letter",
+      "label": "重派熔断",
+      "variant": "security"
+    },
+    {
+      "id": "assigned-inprogress",
+      "from": "assigned",
+      "to": "in_progress",
+      "label": "认领"
+    },
+    {
+      "id": "assigned-blocked",
+      "from": "assigned",
+      "to": "blocked",
+      "label": "上报阻塞",
+      "variant": "security"
+    },
+    {
+      "id": "assigned-pending",
+      "from": "assigned",
+      "to": "pending",
+      "label": "离线回收",
+      "variant": "dashed"
+    },
+    {
+      "id": "assigned-cancelled",
+      "from": "assigned",
+      "to": "cancelled",
+      "label": "取消"
+    },
+    {
+      "id": "assigned-dead",
+      "from": "assigned",
+      "to": "dead_letter",
+      "label": "熔断",
+      "variant": "security"
+    },
+    {
+      "id": "inprogress-pending",
+      "from": "in_progress",
+      "to": "pending",
+      "label": "租约过期",
+      "variant": "dashed"
+    },
+    {
+      "id": "inprogress-review",
+      "from": "in_progress",
+      "to": "review",
+      "label": "提交"
+    },
+    {
+      "id": "inprogress-blocked",
+      "from": "in_progress",
+      "to": "blocked",
+      "label": "上报阻塞",
+      "variant": "security"
+    },
+    {
+      "id": "inprogress-paused",
+      "from": "in_progress",
+      "to": "paused",
+      "label": "暂停"
+    },
+    {
+      "id": "inprogress-cancelled",
+      "from": "in_progress",
+      "to": "cancelled",
+      "label": "取消"
+    },
+    {
+      "id": "inprogress-dead",
+      "from": "in_progress",
+      "to": "dead_letter",
+      "label": "熔断",
+      "variant": "security"
+    },
+    {
+      "id": "paused-inprogress",
+      "from": "paused",
+      "to": "in_progress"
+    },
+    {
+      "id": "paused-cancelled",
+      "from": "paused",
+      "to": "cancelled",
+      "label": "取消"
+    },
+    {
+      "id": "review-done",
+      "from": "review",
+      "to": "done",
+      "label": "通过",
+      "variant": "emphasis"
+    },
+    {
+      "id": "review-rework",
+      "from": "review",
+      "to": "rework",
+      "label": "驳回返工",
+      "variant": "security"
+    },
+    {
+      "id": "review-cancelled",
+      "from": "review",
+      "to": "cancelled",
+      "label": "取消"
+    },
+    {
+      "id": "review-dead",
+      "from": "review",
+      "to": "dead_letter",
+      "variant": "security"
+    },
+    {
+      "id": "rework-inprogress",
+      "from": "rework",
+      "to": "in_progress",
+      "label": "重新执行"
+    },
+    {
+      "id": "rework-blocked",
+      "from": "rework",
+      "to": "blocked",
+      "label": "上报阻塞",
+      "variant": "security"
+    },
+    {
+      "id": "rework-cancelled",
+      "from": "rework",
+      "to": "cancelled",
+      "label": "取消"
+    },
+    {
+      "id": "rework-dead",
+      "from": "rework",
+      "to": "dead_letter",
+      "label": "返工上限",
+      "variant": "security"
+    },
+    {
+      "id": "blocked-pending",
+      "from": "blocked",
+      "to": "pending",
+      "label": "放行重派",
+      "variant": "dashed"
+    },
+    {
+      "id": "blocked-cancelled",
+      "from": "blocked",
+      "to": "cancelled",
+      "label": "放弃"
+    },
+    {
+      "id": "blocked-dead",
+      "from": "blocked",
+      "to": "dead_letter",
+      "label": "熔断",
+      "variant": "security"
+    },
+    {
+      "id": "dead-assigned",
+      "from": "dead_letter",
+      "to": "assigned",
+      "variant": "security"
+    },
+    {
+      "id": "dead-cancelled",
+      "from": "dead_letter",
+      "to": "cancelled",
+      "label": "放弃",
+      "variant": "security"
+    },
+    {
+      "id": "dead-done",
+      "from": "dead_letter",
+      "to": "done",
+      "label": "验收",
+      "variant": "security"
+    },
+    {
+      "id": "dead-rework",
+      "from": "dead_letter",
+      "to": "rework",
+      "label": "改派",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "子任务状态机（本图主体）",
+      "items": [
+        "11 态全量迁移由 SubTaskStateMachine 迁移表单点校验，非法迁移直接抛错",
+        "草案态 PENDING_PLAN_REVIEW 对 claim / assignNext / 自动重派 / 补偿任务全部不可见"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "主任务五态（TaskStatus）",
+      "items": [
+        "PENDING → PLANNING → IN_PROGRESS → DONE / CANCELLED",
+        "拆解触发 CAS 进 PLANNING；confirmPlan 确认草案后进 IN_PROGRESS；子任务全部终态后幂等收敛 DONE"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "最终报告五态（FinalReportStatus）",
+      "items": [
+        "NONE → GENERATING → REVIEWING → DONE，失败降 FAILED",
+        "TaskAutoCompletedEvent 是 NONE → GENERATING 唯一入口；审查链 L1 事件 / L2 死信重放 / L3 孤儿巡检三级容错，回滚经 DONE → GENERATING"
+      ]
+    }
+  ]
+}

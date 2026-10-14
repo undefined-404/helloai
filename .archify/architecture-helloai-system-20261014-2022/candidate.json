@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "HelloAI 系统架构",
+    "locale": "zh-CN",
+    "output": "doc/diagrams/html/helloai-system-architecture.html",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "repository": {
+      "url": "https://gitee.com/undefined_404/helloai.git",
+      "provider": "gitee",
+      "revision": "2c7477244c441004d7486cfd03d70d44bb47e40f"
+    }
+  },
+  "layout": { "mode": "grid", "origin": [40, 80], "cols": 4, "gapX": 30, "gapY": 40, "cellW": 130, "cellH": 64 },
+  "components": [
+    { "id": "user", "type": "external", "label": "用户", "sublabel": "需求方 · 浏览器", "pos": [40, 40], "size": [130, 56], "icon": "person" },
+    { "id": "extagent", "type": "external", "label": "外部 MCP Agent", "sublabel": "Qoder · Trae · Codex CLI", "pos": [700, 40], "size": [160, 60] },
+    { "id": "webui", "type": "security", "label": "Nginx 网关", "sublabel": "helloai-web · :80/:443 · 反代 /api /mcp", "pos": [350, 150], "size": [180, 60], "sources": [ { "path": "nginx.server.conf", "line": 10 } ] },
+    { "id": "app", "type": "backend", "label": "HelloAI 平台 · Spring Boot 单体 :6565", "sublabel": "api · core · mq · job · MCP(13 工具)", "pos": [330, 260], "size": [300, 70], "sources": [ { "path": "helloai-start/src/main/resources/application.yml", "line": 2 } ] },
+    { "id": "llm", "type": "cloud", "label": "LLM 提供方", "sublabel": "DeepSeek · OpenAI · Anthropic", "pos": [700, 260], "size": [160, 58], "sources": [ { "path": "helloai-start/src/main/resources/application.yml", "line": 31 } ] },
+    { "id": "pg", "type": "database", "label": "PostgreSQL", "sublabel": ":15432 · 业务数据", "pos": [60, 480], "size": [135, 58], "sources": [ { "path": "deploy/middleware/docker-compose.yml", "line": 27 } ] },
+    { "id": "redis", "type": "database", "label": "Redis", "sublabel": ":26379 · 缓存/分布式锁", "pos": [215, 480], "size": [135, 58], "sources": [ { "path": "deploy/middleware/docker-compose.yml", "line": 91 } ] },
+    { "id": "rabbitmq", "type": "messagebus", "label": "RabbitMQ", "sublabel": ":25672 · 消息总线", "pos": [370, 480], "size": [135, 58], "sources": [ { "path": "helloai-mq/src/main/java/com/helloai/mq/producer/DomainEventPublisher.java", "line": 47 } ] },
+    { "id": "minio", "type": "database", "label": "MinIO", "sublabel": ":29000 · 对象存储", "pos": [525, 480], "size": [135, 58], "sources": [ { "path": "helloai-start/src/main/resources/application.yml", "line": 332 } ] },
+    { "id": "prometheus", "type": "backend", "label": "Prometheus", "sublabel": ":9090 · 指标抓取", "pos": [60, 640], "size": [135, 58], "sources": [ { "path": "deploy/monitoring/prometheus/prometheus.yml", "line": 1 } ] },
+    { "id": "grafana", "type": "backend", "label": "Grafana", "sublabel": ":3000 · 可视化", "pos": [215, 640], "size": [135, 58], "sources": [ { "path": "deploy/monitoring/grafana/dashboards/helloai-overview.json", "line": 1 } ] },
+    { "id": "redis_exp", "type": "backend", "label": "redis-exporter", "sublabel": ":9121 · Redis 指标", "pos": [370, 640], "size": [135, 48], "sources": [ { "path": "deploy/monitoring/docker-compose.monitoring.yml", "line": 1 } ] },
+    { "id": "pg_exp", "type": "backend", "label": "postgres-exporter", "sublabel": ":9187 · PG 指标", "pos": [525, 640], "size": [135, 48], "sources": [ { "path": "deploy/monitoring/docker-compose.monitoring.yml", "line": 1 } ] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "HelloAI 平台 · Spring Boot 单体 :6565", "wraps": ["app"] },
+    { "kind": "region", "label": "基础设施 · Docker（deploy/middleware）", "wraps": ["pg", "redis", "rabbitmq", "minio"] },
+    { "kind": "region", "label": "监控栈 · deploy/monitoring", "wraps": ["prometheus", "grafana", "redis_exp", "pg_exp"] }
+  ],
+  "connections": [
+    { "id": "user-webui", "from": "user", "to": "webui", "label": "浏览器访问 :80", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "webui-app", "from": "webui", "to": "app", "label": "反代 /api · /mcp", "fromSide": "bottom", "toSide": "top" },
+    { "id": "extagent-app", "from": "extagent", "to": "app", "label": "MCP SSE · 13 工具", "variant": "emphasis" },
+    { "id": "app-pg", "from": "app", "to": "pg", "label": "业务数据 · Flyway", "fromSide": "bottom", "toSide": "top" },
+    { "id": "app-redis", "from": "app", "to": "redis", "label": "缓存 · 分布式锁", "fromSide": "bottom", "toSide": "top" },
+    { "id": "app-rabbitmq", "from": "app", "to": "rabbitmq", "label": "领域事件 · Outbox", "fromSide": "bottom", "toSide": "top" },
+    { "id": "app-minio", "from": "app", "to": "minio", "label": "产出物化 · 附件", "fromSide": "bottom", "toSide": "top" },
+    { "id": "app-llm", "from": "app", "to": "llm", "label": "ChatModel 调用", "fromSide": "right", "toSide": "left" },
+    { "id": "prom-app", "from": "prometheus", "to": "app", "label": "抓取 /actuator/prometheus" },
+    { "id": "prom-rabbitmq", "from": "prometheus", "to": "rabbitmq", "label": ":15692 内置指标" },
+    { "id": "prom-redisexp", "from": "prometheus", "to": "redis_exp", "label": "抓取 :9121" },
+    { "id": "prom-pgexp", "from": "prometheus", "to": "pg_exp", "label": "抓取 :9187" },
+    { "id": "grafana-prom", "from": "grafana", "to": "prometheus", "label": "数据源查询" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "访问链路", "items": [
+      "浏览器 → Nginx(:80/:443) → app:6565；静态资源由 Nginx 托管，/api 与 /mcp 反代到后端",
+      "外部 MCP Agent 经 Nginx 或直连 6565 的 /mcp/sse 长连接接入（SSE 关闭缓冲）"
+    ] },
+    { "dot": "emerald", "title": "平台模块（同一单体）", "items": [
+      "helloai-core：Planner / 弹性调度 / Agent 运行时 / Reviewer",
+      "helloai-api（REST）· helloai-mq（Outbox 领域事件）· helloai-job（租约回收 · 对账巡检）· MCP Server（13 工具）"
+    ] },
+    { "dot": "rose", "title": "数据与可观测", "items": [
+      "PostgreSQL 业务数据 · Redis 缓存/分布式锁 · RabbitMQ 消息 · MinIO 对象存储（执行产出物化与附件）",
+      "Prometheus 抓取 app:6565/actuator + RabbitMQ 15692 + redis/postgres exporter；Grafana 看板"
+    ] }
+  ]
+}

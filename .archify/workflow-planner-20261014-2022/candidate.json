@@ -1,0 +1,130 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Planner 角色工作流",
+    "locale": "zh-CN",
+    "output": "doc/diagrams/html/planner-flow-and-state.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://gitee.com/undefined_404/helloai.git",
+      "provider": "gitee",
+      "revision": "2c7477244c441004d7486cfd03d70d44bb47e40f"
+    }
+  },
+  "lanes": [
+    { "id": "user", "label": "用户" },
+    { "id": "planner", "label": "Planner · LLM 编排" },
+    { "id": "state", "label": "平台状态机" },
+    { "id": "aux", "label": "检索与兜底", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "p1", "label": "① 会话建立", "fromCol": 0, "toCol": 0 },
+    { "id": "p2", "label": "② 双模澄清", "fromCol": 1, "toCol": 1 },
+    { "id": "p3", "label": "③ 需求包准入", "fromCol": 2, "toCol": 2 },
+    { "id": "p4", "label": "④ 触发拆解", "fromCol": 3, "toCol": 3 },
+    { "id": "p5", "label": "⑤ 草案确认", "fromCol": 4, "toCol": 4 },
+    { "id": "p6", "label": "⑥ 转正分发", "fromCol": 5, "toCol": 5 }
+  ],
+  "groups": [
+    { "id": "aux_band", "label": "检索注入与兜底", "lane": "aux", "fromCol": 1, "toCol": 3, "variant": "dashed" }
+  ],
+  "mainPath": ["req", "chat", "clarify", "package", "finalize", "trigger", "decompose", "drafts", "confirm", "confirm_plan"],
+  "nodes": [
+    { "id": "req", "lane": "user", "col": 0, "type": "external", "label": "描述需求", "sublabel": "对话式新建任务", "icon": "person" },
+    { "id": "chat", "lane": "planner", "col": 0, "type": "backend", "label": "CHAT 自由对话", "sublabel": "新会话默认模式", "tag": "意图词识别",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/entity/RequirementConversation.java", "line": 74, "end_line": 80 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/service/RequirementClarifyService.java", "line": 71 }
+      ] },
+    { "id": "clarify", "lane": "planner", "col": 1, "type": "backend", "label": "CLARIFY 澄清", "sublabel": "结构化多轮追问", "tag": "用户主导切换",
+      "sources": [{ "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/RequirementClarifyServiceImpl.java" }] },
+    { "id": "package", "lane": "planner", "col": 2, "type": "backend", "label": "需求包", "sublabel": "六字段结构化准入", "tag": "验收封闭集合",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/policy/RequirementPackage.java", "line": 26, "end_line": 32 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/policy/RequirementPackageParser.java", "line": 38 }
+      ] },
+    { "id": "finalize", "lane": "user", "col": 2, "type": "external", "label": "终稿确认", "sublabel": "人工决策点 ①", "tag": "ACTIVE → FINALIZED",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/RequirementClarifyServiceImpl.java", "line": 531, "end_line": 548 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/entity/RequirementConversation.java", "line": 29 }
+      ] },
+    { "id": "trigger", "lane": "state", "col": 3, "type": "backend", "label": "触发拆解", "sublabel": "PENDING → PLANNING", "tag": "CAS 防重",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerAnalysisServiceImpl.java", "line": 104, "end_line": 108 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerAnalysisServiceImpl.java", "line": 79 }
+      ] },
+    { "id": "decompose", "lane": "planner", "col": 3, "type": "backend", "label": "能力感知拆解", "sublabel": "LLM 异步执行", "tag": "粒度三档",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerDecomposeAsyncServiceImpl.java", "line": 161 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/policy/PlannerGranularity.java", "line": 10, "end_line": 16 }
+      ] },
+    { "id": "drafts", "lane": "state", "col": 4, "type": "backend", "label": "草案落库", "sublabel": "按依赖拓扑排序", "tag": "PENDING_PLAN_REVIEW",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerDecomposeAsyncServiceImpl.java", "line": 396 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerAnalysisServiceImpl.java", "line": 44 }
+      ] },
+    { "id": "confirm", "lane": "user", "col": 4, "type": "external", "label": "确认草案", "sublabel": "人工决策点 ②", "tag": "草案 → PENDING",
+      "sources": [{ "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerAnalysisServiceImpl.java", "line": 150 }] },
+    { "id": "confirm_plan", "lane": "state", "col": 5, "type": "backend", "label": "confirmPlan", "sublabel": "Task → IN_PROGRESS", "tag": "草案全部转正",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerAnalysisServiceImpl.java", "line": 141, "end_line": 159 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java", "line": 17 }
+      ] },
+    { "id": "reject", "lane": "state", "col": 4, "type": "security", "label": "拒绝草案", "sublabel": "草案 → CANCELLED", "tag": "Task 回退 PENDING", "yOffset": 78,
+      "sources": [{ "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerAnalysisServiceImpl.java", "line": 242 }] },
+    { "id": "search", "lane": "aux", "col": 1, "type": "cloud", "label": "联网检索注入", "sublabel": "每轮 LLM 调用前", "tag": "失败降级跳过",
+      "sources": [{ "path": "helloai-core/src/main/java/com/helloai/core/planner/entity/RequirementConversation.java", "line": 66, "end_line": 72 }] },
+    { "id": "uncertainty", "lane": "aux", "col": 2, "type": "backend", "label": "不确定性继承", "sublabel": "假设与待确认项", "tag": "kind 归一降级",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/policy/RequirementPackage.java", "line": 17, "end_line": 20 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/planner/service/impl/PlannerDecomposeAsyncServiceImpl.java", "line": 437 }
+      ] },
+    { "id": "timeout", "lane": "aux", "col": 4, "type": "backend", "label": "拆解超时兜底", "sublabel": "PlanningTimeoutTask", "tag": "卡死回收",
+      "sources": [{ "path": "helloai-job/src/main/java/com/helloai/job/task/PlanningTimeoutTask.java" }] }
+  ],
+  "edges": [
+    { "id": "req-chat", "from": "req", "to": "chat", "label": "发起会话", "variant": "emphasis" },
+    { "id": "req-finalize", "from": "req", "to": "finalize", "label": "/task 直达", "variant": "dashed", "role": "branch" },
+    { "id": "chat-clarify", "from": "chat", "to": "clarify", "label": "意图词命中" },
+    { "id": "clarify-package", "from": "clarify", "to": "package", "label": "结构化收敛" },
+    { "id": "package-finalize", "from": "package", "to": "finalize", "label": "终稿待确认" },
+    { "id": "finalize-trigger", "from": "finalize", "to": "trigger", "label": "建任务 · Task PENDING", "variant": "emphasis" },
+    { "id": "trigger-decompose", "from": "trigger", "to": "decompose", "label": "异步 LLM 拆解" },
+    { "id": "decompose-drafts", "from": "decompose", "to": "drafts", "label": "解析校验落库" },
+    { "id": "drafts-confirm", "from": "drafts", "to": "confirm", "label": "待用户确认" },
+    { "id": "confirm-confirmplan", "from": "confirm", "to": "confirm_plan", "label": "confirmPlan", "variant": "emphasis" },
+    { "id": "confirm-reject", "from": "confirm", "to": "reject", "label": "拒绝", "variant": "security", "role": "branch" },
+    { "id": "reject-trigger", "from": "reject", "to": "trigger", "label": "重新拆解", "variant": "security", "role": "return" },
+    { "id": "search-clarify", "from": "search", "to": "clarify", "label": "注入上下文", "variant": "dashed", "role": "async" },
+    { "id": "decompose-timeout", "from": "decompose", "to": "timeout", "label": "卡死", "variant": "dashed", "role": "error" },
+    { "id": "timeout-trigger", "from": "timeout", "to": "trigger", "label": "回收重试", "variant": "dashed", "role": "return" },
+    { "id": "package-uncertainty", "from": "package", "to": "uncertainty", "label": "继承", "variant": "dashed", "role": "async" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "两次人工决策",
+      "items": [
+        "① 终稿确认：会话 ACTIVE → FINALIZED 并创建任务（CAS 防并发重复建任务）",
+        "② 草案确认：confirmPlan 把 PENDING_PLAN_REVIEW 全部转正，Task → IN_PROGRESS"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "双模与粒度",
+      "items": [
+        "CHAT 自由对话 / CLARIFY 结构化澄清，意图词命中可自动切换（二次确认）",
+        "拆解粒度三档：FINE 细 / STANDARD 中 / COARSE 粗，按执行者画像与任务难度定位"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "准入与兜底",
+      "items": [
+        "需求包六字段：goal / scope / outOfScope / acceptanceCriteria / assumptions / openQuestions",
+        "assumptions → ASSUMPTION、openQuestions → UNCONFIRMED 继承为子任务不确定性；拆解卡死由 PlanningTimeoutTask 兜底回收"
+      ]
+    }
+  ]
+}

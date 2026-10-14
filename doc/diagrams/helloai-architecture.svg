@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 720" width="960" height="720" role="img" aria-label="HelloAI 分布式跨终端架构图">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 790" width="900" height="790" role="img" aria-label="HelloAI 系统架构图（部署视角：浏览器 → Nginx 网关 → 平台单体 → 基础设施与监控栈）">
   <style>
     svg {
       --surface: #F7F7F8;
@@ -11,19 +11,22 @@
       --brand-text: #1A1759;
       --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     }
-    .title { fill: var(--text); font: 600 18px/26px var(--font-sans); }
-    .subtitle { fill: var(--text-muted); font: 400 12px/18px var(--font-sans); }
-    .th { fill: #FFFFFF; font: 600 14px/20px var(--font-sans); }
-    .ts { fill: #FFFFFF; font: 400 12px/18px var(--font-sans); opacity: 0.92; }
-    .leg { fill: var(--text-muted); font: 400 12px/18px var(--font-sans); }
-    .layer-label { fill: var(--text-muted); font: 600 12px/18px var(--font-sans); letter-spacing: 1px; }
-    .g-you rect { fill: #6E8EFB; stroke: #6E8EFB; stroke-width: 1.5; }
-    .g-orch rect { fill: #8B5CF6; stroke: #8B5CF6; stroke-width: 1.5; }
-    .g-meta rect { fill: #0D9488; stroke: #0D9488; stroke-width: 1.5; }
-    .g-exec rect { fill: #F97316; stroke: #F97316; stroke-width: 1.5; }
+    .title { fill: var(--text); font: 600 16px/24px var(--font-sans); }
+    .subtitle { fill: var(--text-muted); font: 400 11px/17px var(--font-sans); }
+    .th { fill: #FFFFFF; font: 600 13px/20px var(--font-sans); }
+    .ts { fill: #FFFFFF; font: 400 11px/17px var(--font-sans); opacity: 0.92; }
+    .leg { fill: var(--text-muted); font: 400 11px/17px var(--font-sans); }
+    .region-label { fill: var(--text-muted); font: 600 11px/17px var(--font-sans); letter-spacing: 0.5px; }
+    .g-ext rect { fill: #6E8EFB; stroke: #6E8EFB; stroke-width: 1.5; }
+    .g-gw rect { fill: #F59E0B; stroke: #F59E0B; stroke-width: 1.5; }
+    .g-app rect { fill: #8B5CF6; stroke: #8B5CF6; stroke-width: 1.5; }
+    .g-db rect { fill: #0D9488; stroke: #0D9488; stroke-width: 1.5; }
+    .g-mq rect { fill: #EC4899; stroke: #EC4899; stroke-width: 1.5; }
+    .g-obs rect { fill: #0EA5E9; stroke: #0EA5E9; stroke-width: 1.5; }
     .g-cap rect { fill: #6B7280; stroke: #6B7280; stroke-width: 1.5; }
     .e-arrow { stroke: var(--text-muted); stroke-width: 2; stroke-linecap: round; fill: none; }
     .e-mcp { stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 6 4; fill: none; }
+    .e-dash { stroke: #0EA5E9; stroke-width: 1.8; stroke-linecap: round; stroke-dasharray: 5 4; fill: none; }
   </style>
   <defs>
     <marker id="mk-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
@@ -32,98 +35,141 @@
     <marker id="mk-m" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
       <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--brand);"/>
     </marker>
+    <marker id="mk-g" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: #0EA5E9;"/>
+    </marker>
   </defs>
-  <rect x="1" y="1" width="958" height="718" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
-  <text class="title" x="24" y="34">HelloAI -- 跨终端、跨产品的分布式 AI Agent 调度</text>
-  <text class="subtitle" x="24" y="56">分 4 层看：编排 -> 微编排 -> 跨终端执行 -> 异构算力</text>
+  <rect x="1" y="1" width="898" height="788" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="24" y="30">HelloAI 系统架构</text>
+  <text class="subtitle" x="24" y="50">部署视角：浏览器 → Nginx 网关 → 平台单体 → 基础设施（PostgreSQL / Redis / RabbitMQ / MinIO）+ 监控栈（Prometheus / Grafana）</text>
 
-  <!-- 右上：差异化徽标 + 注记卡（避开中央"你"块，独占右侧列） -->
-  <rect x="800" y="60" width="140" height="22" rx="11" style="fill: var(--brand);"/>
-  <text x="870" y="75" text-anchor="middle" style="fill: #FFFFFF; font: 600 11px/16px var(--font-sans);">与同类的关键差异</text>
-  <rect x="800" y="92" width="140" height="112" rx="8" style="fill: var(--brand-soft); stroke: var(--brand); stroke-width: 1.5;"/>
-  <text x="812" y="114" style="fill: var(--brand-text); font: 600 12px/18px var(--font-sans);">差异化一句话</text>
-  <text x="812" y="136" style="fill: var(--text); font: 400 11px/17px var(--font-sans);">任务可跨终端，跨AI：</text>
-  <text x="812" y="154" style="fill: var(--text); font: 400 11px/17px var(--font-sans);">同一主任务的子任务</text>
-  <text x="812" y="172" style="fill: var(--text); font: 400 11px/17px var(--font-sans);">可由不同终端的不同</text>
-  <text x="812" y="190" style="fill: var(--text); font: 400 11px/17px var(--font-sans);">产品AI Agent接力完成</text>
-
-  <!-- 编排层 -->
-  <text class="layer-label" x="40" y="110">编排</text>
-  <g class="g-you">
-    <rect x="280" y="84" width="400" height="52" rx="8"/>
-    <text class="th" x="480" y="108" text-anchor="middle">你（任务发起者 / 需求方）</text>
-    <text class="ts" x="480" y="126" text-anchor="middle">说人话 · 确认草案 · 看进度 · 收报告</text>
+  <!-- ========== 第一层：外部访问者 ========== -->
+  <g class="g-ext">
+    <rect x="40" y="70" width="130" height="52" rx="8"/>
+    <text class="th" x="105" y="92" text-anchor="middle">用户</text>
+    <text class="ts" x="105" y="110" text-anchor="middle">需求方 · 浏览器</text>
   </g>
-  <g class="g-orch">
-    <rect x="160" y="164" width="640" height="92" rx="8"/>
-    <text class="th" x="480" y="192" text-anchor="middle">HelloAI 编排层（宏观调度）</text>
-    <text class="ts" x="480" y="212" text-anchor="middle">需求澄清 · 任务拆解 · 依赖 DAG · Agent 选人 · 验收 · 报告整合</text>
-    <text class="ts" x="480" y="232" text-anchor="middle">跨产品/跨终端调度：不只 AI 编码，还包括搜索、文档、数据等异构任务</text>
-    <text class="ts" x="480" y="248" text-anchor="middle">MCP Server · Spring AI 1.1.8 · 11 个 MCP 工具 · 12 层过滤 + 4 级排序</text>
+  <g class="g-ext">
+    <rect x="700" y="70" width="160" height="56" rx="8"/>
+    <text class="th" x="780" y="92" text-anchor="middle">外部 MCP Agent</text>
+    <text class="ts" x="780" y="112" text-anchor="middle">Qoder · Trae · Codex CLI</text>
   </g>
-  <path class="e-arrow" d="M480 136 L480 164" marker-end="url(#mk-a)"/>
 
-  <!-- 微编排层 -->
-  <text class="layer-label" x="40" y="337">微编排</text>
-  <g class="g-meta">
-    <rect x="160" y="290" width="640" height="86" rx="8"/>
-    <text class="th" x="480" y="318" text-anchor="middle">微编排层（Agent Harness）</text>
-    <text class="ts" x="480" y="338" text-anchor="middle">执行命令派发 · 状态机收敛 · 互斥锁（RLock）· Outbox 事务性投递</text>
-    <text class="ts" x="480" y="356" text-anchor="middle">三级触发容错（L1 事件 / L2 MQ / L3 孤儿扫描）· 双层熔断 · 三层幂等</text>
-    <text class="ts" x="480" y="372" text-anchor="middle">依赖就绪守卫 · 死信池人工兜底 · 抽检复审</text>
+  <!-- ========== 第二层：Nginx 网关 ========== -->
+  <g class="g-gw">
+    <rect x="350" y="170" width="180" height="56" rx="8"/>
+    <text class="th" x="440" y="192" text-anchor="middle">Nginx 网关</text>
+    <text class="ts" x="440" y="212" text-anchor="middle">helloai-web · :80/:443 · 反代 /api /mcp</text>
   </g>
-  <path class="e-arrow" d="M480 256 L480 290" marker-end="url(#mk-a)"/>
+  <path class="e-arrow" d="M170 96 L330 96 Q340 96 340 106 L340 170" marker-end="url(#mk-a)"/>
+  <path class="e-mcp" d="M700 98 L640 98 Q630 98 630 108 L630 268" marker-end="url(#mk-m)"/>
+  <text x="455" y="128" style="fill: var(--text-muted); font: 400 10px/16px var(--font-sans);">浏览器访问 :80</text>
+  <text x="648" y="150" style="fill: var(--brand-text); font: 400 10px/16px var(--font-sans);">MCP SSE · 13 工具</text>
 
-  <!-- 执行层：终端 #1 / #2 -->
-  <text class="layer-label" x="40" y="467">执行</text>
-  <g class="g-exec">
-    <rect x="160" y="422" width="310" height="80" rx="8"/>
-    <text class="th" x="315" y="450" text-anchor="middle">终端 #1 · 跨产品接入</text>
-    <text class="ts" x="315" y="470" text-anchor="middle">Qoder · Trae · Codex CLI · Claude Code</text>
-    <text class="ts" x="315" y="488" text-anchor="middle">本地算力 · 私有上下文 · 隔离执行</text>
+  <!-- ========== 第三层：平台单体 ========== -->
+  <rect x="300" y="245" width="360" height="115" rx="12" style="fill: rgba(139, 92, 246, 0.08); stroke: #8B5CF6; stroke-width: 1.5; stroke-dasharray: 6 4;"/>
+  <text class="region-label" x="480" y="262" text-anchor="middle" style="fill: #6D28D9;">HelloAI 平台 · Spring Boot 单体 :6565</text>
+  <g class="g-app">
+    <rect x="330" y="272" width="300" height="70" rx="8"/>
+    <text class="th" x="480" y="298" text-anchor="middle">HelloAI 平台</text>
+    <text class="ts" x="480" y="318" text-anchor="middle">helloai-api · core · mq · job · MCP Server（13 工具）</text>
+    <text class="ts" x="480" y="334" text-anchor="middle">Planner 拆解 · 弹性调度 · Agent 运行时 · Reviewer 核验</text>
   </g>
-  <g class="g-exec">
-    <rect x="490" y="422" width="310" height="80" rx="8"/>
-    <text class="th" x="645" y="450" text-anchor="middle">终端 #2 · 同一时刻并行</text>
-    <text class="ts" x="645" y="470" text-anchor="middle">可挂不同厂商的 AI 助手</text>
-    <text class="ts" x="645" y="488" text-anchor="middle">MCP 协议 · 标准化通信</text>
-  </g>
-  <path class="e-mcp" d="M315 376 L315 422" marker-end="url(#mk-m)"/>
-  <path class="e-mcp" d="M645 376 L645 422" marker-end="url(#mk-m)"/>
-  <rect x="335" y="388" width="290" height="20" rx="10" style="fill: var(--brand-soft);"/>
-  <text x="480" y="402" text-anchor="middle" style="fill: var(--brand-text); font: 600 11px/16px var(--font-sans);">MCP · 跨终端标准化通道</text>
+  <path class="e-arrow" d="M440 226 L440 272" marker-end="url(#mk-a)"/>
+  <text x="450" y="248" style="fill: var(--text-muted); font: 400 10px/16px var(--font-sans);">反代 /api · /mcp</text>
 
-  <!-- 终端 #N：并列延续（省略号，非流程箭头） -->
-  <circle cx="460" cy="513" r="2.5" style="fill: var(--text-muted);"/>
-  <circle cx="480" cy="513" r="2.5" style="fill: var(--text-muted);"/>
-  <circle cx="500" cy="513" r="2.5" style="fill: var(--text-muted);"/>
-  <rect x="160" y="524" width="640" height="44" rx="8" style="fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5;"/>
-  <text class="layer-label" x="480" y="551" text-anchor="middle" style="letter-spacing: 0.5px;">终端 #3 · 终端 #4 · 终端 #N …… 平台无上限</text>
-
-  <!-- 能力层 -->
-  <text class="layer-label" x="40" y="610">能力</text>
+  <!-- LLM 提供方（右） -->
   <g class="g-cap">
-    <rect x="160" y="580" width="640" height="50" rx="8"/>
-    <text class="th" x="480" y="600" text-anchor="middle" style="font-size: 13px;">LLM 提供方（按终端任选：DeepSeek · Claude · GPT · Gemini · Moonshot · Qwen）</text>
-    <text class="ts" x="480" y="620" text-anchor="middle">凭证托管 · 模型能力驱动 · 动态热加载</text>
+    <rect x="700" y="272" width="160" height="54" rx="8"/>
+    <text class="th" x="780" y="294" text-anchor="middle">LLM 提供方</text>
+    <text class="ts" x="780" y="312" text-anchor="middle">DeepSeek · OpenAI · Anthropic</text>
   </g>
-  <path class="e-arrow" d="M480 568 L480 580" marker-end="url(#mk-a)"/>
+  <path class="e-arrow" d="M630 306 L700 306" marker-end="url(#mk-a)"/>
+  <text x="648" y="300" style="fill: var(--text-muted); font: 400 10px/16px var(--font-sans);">ChatModel 调用</text>
 
-  <!-- 图例 -->
+  <!-- ========== 第四层：基础设施 ========== -->
+  <rect x="30" y="420" width="660" height="120" rx="12" style="fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5;"/>
+  <text class="region-label" x="48" y="442">基础设施 · Docker（deploy/middleware）</text>
+  <g class="g-db">
+    <rect x="60" y="456" width="135" height="54" rx="8"/>
+    <text class="th" x="127" y="478" text-anchor="middle">PostgreSQL</text>
+    <text class="ts" x="127" y="496" text-anchor="middle">:15432 · 业务数据</text>
+  </g>
+  <g class="g-db">
+    <rect x="215" y="456" width="135" height="54" rx="8"/>
+    <text class="th" x="282" y="478" text-anchor="middle">Redis</text>
+    <text class="ts" x="282" y="496" text-anchor="middle">:26379 · 缓存/分布式锁</text>
+  </g>
+  <g class="g-mq">
+    <rect x="370" y="456" width="135" height="54" rx="8"/>
+    <text class="th" x="437" y="478" text-anchor="middle">RabbitMQ</text>
+    <text class="ts" x="437" y="496" text-anchor="middle">:25672 · 消息总线</text>
+  </g>
+  <g class="g-db">
+    <rect x="525" y="456" width="135" height="54" rx="8"/>
+    <text class="th" x="592" y="478" text-anchor="middle">MinIO</text>
+    <text class="ts" x="592" y="496" text-anchor="middle">:29000 · 对象存储</text>
+  </g>
+  <!-- 平台 → 中间件连线 -->
+  <path class="e-arrow" d="M420 342 L420 410 Q420 420 410 420 L127 420 Q117 420 117 430 L117 456" marker-end="url(#mk-a)"/>
+  <path class="e-arrow" d="M455 342 L455 410 Q455 420 445 420 L282 420 Q272 420 272 430 L272 456" marker-end="url(#mk-a)"/>
+  <path class="e-arrow" d="M470 342 L470 456" marker-end="url(#mk-a)"/>
+  <path class="e-arrow" d="M490 342 L490 410 Q490 420 500 420 L592 420 Q602 420 602 430 L602 456" marker-end="url(#mk-a)"/>
+  <text x="250" y="400" style="fill: var(--text-muted); font: 400 10px/16px var(--font-sans);">业务数据 · Flyway</text>
+  <text x="385" y="400" style="fill: var(--text-muted); font: 400 10px/16px var(--font-sans);">缓存 · 分布式锁</text>
+  <text x="525" y="400" style="fill: var(--text-muted); font: 400 10px/16px var(--font-sans);">领域事件 · Outbox</text>
+  <text x="640" y="400" style="fill: var(--text-muted); font: 400 10px/16px var(--font-sans);">产出物化 · 附件</text>
+
+  <!-- ========== 第五层：监控栈 ========== -->
+  <rect x="30" y="570" width="660" height="120" rx="12" style="fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5;"/>
+  <text class="region-label" x="48" y="592">监控栈 · Prometheus + Grafana（deploy/monitoring）</text>
+  <g class="g-obs">
+    <rect x="60" y="606" width="135" height="54" rx="8"/>
+    <text class="th" x="127" y="628" text-anchor="middle">Prometheus</text>
+    <text class="ts" x="127" y="646" text-anchor="middle">:9090 · 指标抓取</text>
+  </g>
+  <g class="g-obs">
+    <rect x="215" y="606" width="135" height="54" rx="8"/>
+    <text class="th" x="282" y="628" text-anchor="middle">Grafana</text>
+    <text class="ts" x="282" y="646" text-anchor="middle">:3000 · 可视化</text>
+  </g>
+  <g class="g-obs">
+    <rect x="370" y="606" width="135" height="48" rx="8"/>
+    <text class="th" x="437" y="626" text-anchor="middle">redis-exporter</text>
+    <text class="ts" x="437" y="644" text-anchor="middle">:9121 · Redis 指标</text>
+  </g>
+  <g class="g-obs">
+    <rect x="525" y="606" width="135" height="48" rx="8"/>
+    <text class="th" x="592" y="626" text-anchor="middle">postgres-exporter</text>
+    <text class="ts" x="592" y="644" text-anchor="middle">:9187 · PG 指标</text>
+  </g>
+  <!-- Prometheus 抓取链路 -->
+  <path class="e-dash" d="M127 606 L127 560 Q127 552 135 552 L390 552 Q398 552 398 544 L398 342" marker-end="url(#mk-g)"/>
+  <path class="e-dash" d="M90 606 L44 606 Q36 606 36 598 L36 342" marker-end="url(#mk-g)"/>
+  <path class="e-dash" d="M437 654 L437 700"/>
+  <path class="e-dash" d="M592 654 L592 700"/>
+  <path class="e-dash" d="M370 630 L437 630" marker-end="url(#mk-g)"/>
+  <text x="45" y="520" style="fill: #0369A1; font: 400 10px/16px var(--font-sans);">抓取 /actuator/prometheus</text>
+  <text x="345" y="590" style="fill: #0369A1; font: 400 10px/16px var(--font-sans);">:15692 内置指标</text>
+  <text x="330" y="674" style="fill: #0369A1; font: 400 10px/16px var(--font-sans);">抓取 :9121</text>
+  <text x="485" y="674" style="fill: #0369A1; font: 400 10px/16px var(--font-sans);">抓取 :9187</text>
+  <text x="252" y="700" style="fill: #0369A1; font: 400 10px/16px var(--font-sans);">数据源查询</text>
+
+  <!-- ========== 图例 ========== -->
   <g>
-    <line x1="40" y1="680" x2="76" y2="680" style="stroke: var(--text-muted); stroke-width: 2; stroke-linecap: round;"/>
-    <text class="leg" x="84" y="684">主流程</text>
-    <line x1="148" y1="680" x2="184" y2="680" style="stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 6 4;"/>
-    <text class="leg" x="192" y="684">MCP 协议通道</text>
-    <rect x="316" y="671" width="18" height="18" rx="4" style="fill: #6E8EFB;"/>
-    <text class="leg" x="342" y="684">你</text>
-    <rect x="376" y="671" width="18" height="18" rx="4" style="fill: #8B5CF6;"/>
-    <text class="leg" x="402" y="684">编排</text>
-    <rect x="442" y="671" width="18" height="18" rx="4" style="fill: #0D9488;"/>
-    <text class="leg" x="468" y="684">微编排</text>
-    <rect x="518" y="671" width="18" height="18" rx="4" style="fill: #F97316;"/>
-    <text class="leg" x="544" y="684">跨终端执行</text>
-    <rect x="618" y="671" width="18" height="18" rx="4" style="fill: #6B7280;"/>
-    <text class="leg" x="644" y="684">异构算力</text>
+    <line x1="40" y1="750" x2="66" y2="750" style="stroke: var(--text-muted); stroke-width: 2; stroke-linecap: round;"/>
+    <text class="leg" x="74" y="754">依赖 / 访问</text>
+    <line x1="150" y1="750" x2="176" y2="750" style="stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 6 4;"/>
+    <text class="leg" x="184" y="754">MCP 协议通道</text>
+    <rect x="278" y="741" width="18" height="18" rx="4" style="fill: #8B5CF6;"/>
+    <text class="leg" x="304" y="754">平台单体</text>
+    <rect x="358" y="741" width="18" height="18" rx="4" style="fill: #0D9488;"/>
+    <text class="leg" x="384" y="754">基础设施</text>
+    <rect x="438" y="741" width="18" height="18" rx="4" style="fill: #0EA5E9;"/>
+    <text class="leg" x="464" y="754">监控栈</text>
+    <rect x="518" y="741" width="18" height="18" rx="4" style="fill: #F59E0B;"/>
+    <text class="leg" x="544" y="754">网关</text>
+    <rect x="578" y="741" width="18" height="18" rx="4" style="fill: #6E8EFB;"/>
+    <text class="leg" x="604" y="754">外部</text>
   </g>
 </svg>

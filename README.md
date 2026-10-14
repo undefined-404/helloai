@@ -10,6 +10,8 @@
   <img src="https://img.shields.io/badge/协议-MCP-blue" alt="MCP">
 </p>
 
+> 🧭 **单页交互版**：[README.html](README.html) —— 这份 README 的全文，加上 6 张可拖拽 / 滚轮缩放 / 悬停高亮的架构图，融合在同一页里。
+
 > **算力上限不取决于你的服务器，而取决于你有多少台终端。**
 
 你在日常工作中是不是也遇到过这种情况：想让 AI 帮你完成一个稍微复杂的任务，但它要么中途"跑偏"，要么在某个环节反复出错，你必须全程盯着、反复纠正？
@@ -136,7 +138,41 @@ HelloAI：追问澄清 → 拆解为带依赖的子任务草案 → 你确认 �
 
 ![任务旅程](doc/images/helloai任务旅程.png)
 
-**想看完整的工作方式？** → [Planner 双模对话](doc/design/Planner_Capability_Awareness.md) · [Reviewer 审核流程](doc/diagrams/reviewer-full-flow.svg) · [任务生命周期](doc/diagrams/subtask-state-machine.svg)
+### 平台任务调度工作流
+
+从一句需求到完整交付的完整链路——六阶段、三角色协同，节点标注均为代码实况（TaskStatus / SubTaskStatus / 关键类）：
+
+![平台任务调度工作流](doc/diagrams/platform-scheduling-flow.svg)
+
+### 平台三级状态机
+
+主任务、子任务、最终整合报告三张状态机各自收敛，经 ①②③ 联动；每张状态机的合法迁移表都是唯一裁判：
+
+![平台三级状态机](doc/diagrams/platform-state-machines.svg)
+
+### 三种角色的工作流与状态机
+
+**Planner（规划者）**——双模澄清 → 六字段需求包 → 能力感知拆解 → 人工确认草案：
+
+![Planner 工作流与状态机](doc/diagrams/planner-flow-and-state.svg)
+
+**Executor（执行者）**——值班打卡 → 认领执行 → 提交审核（外部 MCP Agent / 平台内 LLM 双执行链）：
+
+![Executor 工作流与状态机](doc/diagrams/executor-flow-and-state.svg)
+
+**Reviewer（质检者）**——双轨纪律制核验 → 通过 / 驳回返工 / 熔断人工兜底 → 抽检复审：
+
+![Reviewer 审核流程与状态迭代](doc/diagrams/reviewer-flow-and-state.svg)
+
+> 🖼️ **交互式 HTML 版**（可缩放 / 深色模式 / 图例与节点详情）：
+> [系统架构图](doc/diagrams/html/helloai-system-architecture.html) ·
+> [平台任务调度工作流](doc/diagrams/html/platform-scheduling-flow.html) ·
+> [平台三级状态机](doc/diagrams/html/platform-state-machines.html) ·
+> [Planner 工作流与状态机](doc/diagrams/html/planner-flow-and-state.html) ·
+> [Executor 工作流与状态机](doc/diagrams/html/executor-flow-and-state.html) ·
+> [Reviewer 工作流与状态机](doc/diagrams/html/reviewer-flow-and-state.html)
+
+> 更细的链路图：[Planner 双模对话](doc/design/Planner_Capability_Awareness.md) · [子任务全状态机（11 态）](doc/diagrams/subtask-state-machine.svg) · [Reviewer 审核全流程](doc/diagrams/reviewer-full-flow.svg) · [外部 Agent 执行流程](doc/diagrams/external-agent-flow.svg) · [平台内 LLM 执行流程](doc/diagrams/internal-llm-executor-flow.svg) · [整合报告流程](doc/diagrams/final-report-flow.svg) · [Planner 拆解流程](doc/diagrams/planner-decompose-flow.svg)
 
 ---
 
@@ -385,7 +421,8 @@ sudo bash scripts/ci/host-prepare.sh --swap 2G   # 4G 内存机器建议加 2G s
 | **了解架构设计** | [文档地图](doc/README.md) → 项目基线 / 目标架构 / 设计文档 |
 | **接入外部 AI Agent** | [EXECUTOR 接入指南](.executor-onboarding.md) — SKILL 生成、MCP 连接、打卡流程 |
 | **查外部 Agent 值守手册** | [值守手册](doc/manual/executor-duty/manual-assembled.md) — 值班 / 领任务 / 提交 / 心跳 / 排障 |
-| **查看任务状态机** | [子任务状态机（11 态）](doc/diagrams/subtask-state-machine.svg) — 流转与异常路径 |
+| **查看任务状态机** | [平台三级状态机](doc/diagrams/platform-state-machines.svg) — 主任务 / 子任务 / 整合报告联动 · [子任务状态机（11 态）](doc/diagrams/subtask-state-machine.svg) — 流转与异常路径 |
+| **浏览交互式架构图** | [doc/diagrams/html/](doc/diagrams/html/) — 系统架构 / 平台调度 / 三级状态机 / Planner / Executor / Reviewer，均为可缩放、带图例的 HTML 版 |
 | **了解适用边界** | [诚实的能力边界](doc/HelloAI_项目介绍.md)（§2.6） |
 | **参与开发** | [代码规范](doc/HelloAI_CODE_STYLE.md) · [项目基线](doc/HelloAI%20项目基线文档.md) |
 | **查看迭代记录** | [doc/log/](doc/log/) — 按月归档的功能线汇总 |

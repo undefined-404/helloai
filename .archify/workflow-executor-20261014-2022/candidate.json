@@ -1,0 +1,134 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Executor 角色工作流",
+    "locale": "zh-CN",
+    "output": "doc/diagrams/html/executor-flow-and-state.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://gitee.com/undefined_404/helloai.git",
+      "provider": "gitee",
+      "revision": "2c7477244c441004d7486cfd03d70d44bb47e40f"
+    }
+  },
+  "lanes": [
+    { "id": "agent", "label": "外部执行 Agent" },
+    { "id": "platform", "label": "平台派发链" },
+    { "id": "runtime", "label": "平台内运行时" },
+    { "id": "infra", "label": "租约与兜底", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "p1", "label": "① 值班选人", "fromCol": 0, "toCol": 0 },
+    { "id": "p2", "label": "② 派发拉取", "fromCol": 1, "toCol": 1 },
+    { "id": "p3", "label": "③ 原子认领", "fromCol": 2, "toCol": 2 },
+    { "id": "p4", "label": "④ 开工执行", "fromCol": 3, "toCol": 3 },
+    { "id": "p5", "label": "⑤ 双链产出", "fromCol": 4, "toCol": 4 },
+    { "id": "p6", "label": "⑥ 回写兜底", "fromCol": 5, "toCol": 5 }
+  ],
+  "groups": [
+    { "id": "mcp_band", "label": "MCP 13 工具协议面", "lane": "agent", "fromCol": 0, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["checkin", "pull", "claim", "start", "exec_ext", "submit", "review"],
+  "nodes": [
+    { "id": "checkin", "lane": "agent", "col": 0, "type": "external", "label": "打卡上岗", "sublabel": "checkIn 值班租约", "tag": "心跳保活",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/agent/mcp/McpMcpServer.java", "line": 413 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/agent/mcp/McpMcpServer.java", "line": 188 }
+      ] },
+    { "id": "selector", "lane": "platform", "col": 0, "type": "backend", "label": "智能选人", "sublabel": "AgentSelector", "tag": "12 层过滤",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/agent/executor/AgentSelector.java", "line": 173, "end_line": 194 }
+      ] },
+    { "id": "dispatcher", "lane": "platform", "col": 1, "type": "backend", "label": "弹性派发", "sublabel": "ResilientDispatcher", "tag": "双层熔断",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/agent/dispatcher/ResilientDispatcher.java", "line": 93, "end_line": 96 }
+      ] },
+    { "id": "fallback", "lane": "platform", "col": 1, "type": "security", "label": "降级替代", "sublabel": "pickAlternative", "tag": "同角色改派", "yOffset": 78,
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/agent/dispatcher/ResilientDispatcher.java", "line": 255 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/agent/dispatcher/ResilientDispatcher.java", "line": 272 }
+      ] },
+    { "id": "pull", "lane": "agent", "col": 1, "type": "external", "label": "拉取任务", "sublabel": "pullTasks 收件箱", "tag": "未读优先",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/agent/mcp/McpMcpServer.java", "line": 68 }
+      ] },
+    { "id": "claim", "lane": "platform", "col": 2, "type": "backend", "label": "原子认领", "sublabel": "claimAtomic CAS", "tag": "PENDING→ASSIGNED",
+      "sources": [
+        { "path": "helloai-core/src/main/resources/mapper/SubTaskMapper.xml", "line": 115, "end_line": 125 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/task/service/impl/SubTaskServiceImpl.java", "line": 1304, "end_line": 1307 }
+      ] },
+    { "id": "start", "lane": "agent", "col": 3, "type": "external", "label": "开工执行", "sublabel": "startSubTask", "tag": "写执行租约",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/agent/mcp/McpMcpServer.java", "line": 161 },
+        { "path": "helloai-core/src/main/java/com/helloai/core/task/service/impl/SubTaskServiceImpl.java", "line": 361, "end_line": 366 }
+      ] },
+    { "id": "exec_ext", "lane": "agent", "col": 4, "type": "external", "label": "外部执行", "sublabel": "本地 CLI/浏览器", "tag": "uploadArtifact",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/agent/mcp/McpMcpServer.java", "line": 216 }
+      ] },
+    { "id": "exec_int", "lane": "runtime", "col": 4, "type": "backend", "label": "平台内执行", "sublabel": "RuntimeTurnExecutor", "tag": "AgentLoop",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/agent/runtime/RuntimeTurnExecutor.java", "line": 86 }
+      ] },
+    { "id": "watchdog", "lane": "infra", "col": 4, "type": "backend", "label": "看门狗续租", "sublabel": "Watchdog 150s", "tag": "TTL 300s",
+      "sources": [
+        { "path": "helloai-job/src/main/java/com/helloai/job/task/WatchdogLeaseRenewTask.java", "line": 47, "end_line": 50 }
+      ] },
+    { "id": "submit", "lane": "agent", "col": 5, "type": "external", "label": "结果回报", "sublabel": "submitResult", "tag": "resultId 幂等",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/agent/mcp/McpMcpServer.java", "line": 256 }
+      ] },
+    { "id": "review", "lane": "platform", "col": 5, "type": "backend", "label": "转入审核", "sublabel": "IN_PROGRESS → REVIEW", "tag": "交 Reviewer",
+      "sources": [
+        { "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java", "line": 22 }
+      ] },
+    { "id": "reclaim", "lane": "infra", "col": 5, "type": "security", "label": "租约回收", "sublabel": "Reconciler 30s", "tag": "回 PENDING",
+      "sources": [
+        { "path": "helloai-job/src/main/java/com/helloai/job/task/LeaseReconcilerTask.java", "line": 41, "end_line": 45 }
+      ] }
+  ],
+  "edges": [
+    { "id": "checkin-pull", "from": "checkin", "to": "pull", "label": "上线待命" },
+    { "id": "pull-claim", "from": "pull", "to": "claim", "label": "认领请求" },
+    { "id": "claim-start", "from": "claim", "to": "start", "label": "开工请求" },
+    { "id": "start-exec_ext", "from": "start", "to": "exec_ext", "label": "本地执行" },
+    { "id": "exec_ext-submit", "from": "exec_ext", "to": "submit", "label": "结果上报" },
+    { "id": "submit-review", "from": "submit", "to": "review", "label": "状态迁移", "variant": "emphasis" },
+    { "id": "selector-dispatcher", "from": "selector", "to": "dispatcher", "label": "候选集" },
+    { "id": "dispatcher-pull", "from": "dispatcher", "to": "pull", "label": "收件箱通知" },
+    { "id": "dispatcher-fallback", "from": "dispatcher", "to": "fallback", "label": "熔断/失联", "variant": "security", "role": "branch" },
+    { "id": "fallback-claim", "from": "fallback", "to": "claim", "label": "替代分配", "variant": "security", "role": "return" },
+    { "id": "start-exec_int", "from": "start", "to": "exec_int", "label": "平台托管", "variant": "dashed", "role": "branch" },
+    { "id": "exec_int-submit", "from": "exec_int", "to": "submit", "label": "执行完成", "toSide": "bottom" },
+    { "id": "start-watchdog", "from": "start", "to": "watchdog", "label": "租约写入", "variant": "dashed", "role": "async" },
+    { "id": "watchdog-reclaim", "from": "watchdog", "to": "reclaim", "label": "节点失联", "variant": "dashed", "role": "error" },
+    { "id": "reclaim-claim", "from": "reclaim", "to": "claim", "label": "回收重认", "variant": "dashed", "role": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "双执行链",
+      "items": [
+        "外部 MCP Agent：13 工具（pullTasks/ack/claimSubTask/startSubTask/heartbeat/uploadArtifact/submitResult/reportBlocked/getAgentStatus/getDepsSummary/getSubTaskDetail/checkIn/checkOut）",
+        "平台内 RuntimeTurnExecutor：AgentLoop 迭代 + 沙箱策略 + 工具注册表，与外部链同口径回写审核"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "三层幂等",
+      "items": [
+        "claimAtomic：SQL CAS（status=PENDING 且 assigned 为空或本人）+ version 乐观锁，并发认领只成功一次",
+        "submitResult：resultId 幂等键，同一子任务重复提交不重复入审；finishReason 记录 completed/failed/timeout"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "租约与熔断",
+      "items": [
+        "IN_PROGRESS 写 owner + lease_until（TTL 300s）；Watchdog 150s 续期（无 ShedLock，每节点独立）",
+        "Reconciler 30s 扫描回收（ShedLock 单例，batch 200）；熔断 30%/60s/10 窗，降级选同角色替代，无替代抛 409"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,405 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Reviewer 角色工作流",
+    "locale": "zh-CN",
+    "output": "doc/diagrams/html/reviewer-flow-and-state.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://gitee.com/undefined_404/helloai.git",
+      "provider": "gitee",
+      "revision": "2c7477244c441004d7486cfd03d70d44bb47e40f"
+    }
+  },
+  "lanes": [
+    {
+      "id": "trigger",
+      "label": "审查触发"
+    },
+    {
+      "id": "gate",
+      "label": "门控与选人"
+    },
+    {
+      "id": "review",
+      "label": "核验执行"
+    },
+    {
+      "id": "outcome",
+      "label": "判定落地"
+    },
+    {
+      "id": "loop",
+      "label": "反馈与兜底",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "p1",
+      "label": "① 入审触发",
+      "fromCol": 0,
+      "toCol": 0
+    },
+    {
+      "id": "p2",
+      "label": "② 门控预检",
+      "fromCol": 1,
+      "toCol": 1
+    },
+    {
+      "id": "p3",
+      "label": "③ 选人配对",
+      "fromCol": 2,
+      "toCol": 2
+    },
+    {
+      "id": "p4",
+      "label": "④ 核验执行",
+      "fromCol": 3,
+      "toCol": 3
+    },
+    {
+      "id": "p5",
+      "label": "⑤ 判定落地",
+      "fromCol": 4,
+      "toCol": 4
+    },
+    {
+      "id": "p6",
+      "label": "⑥ 兜底与反馈",
+      "fromCol": 5,
+      "toCol": 5
+    }
+  ],
+  "mainPath": [
+    "submitted",
+    "trig",
+    "lock",
+    "precheck",
+    "picker",
+    "exec_single",
+    "pass"
+  ],
+  "nodes": [
+    {
+      "id": "submitted",
+      "lane": "trigger",
+      "col": 0,
+      "type": "external",
+      "label": "子任务入审",
+      "sublabel": "IN_PROGRESS → REVIEW",
+      "tag": "Executor 回报",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/task/statemachine/SubTaskStateMachine.java",
+          "line": 22
+        }
+      ]
+    },
+    {
+      "id": "trig",
+      "lane": "trigger",
+      "col": 0,
+      "type": "backend",
+      "label": "三路触发",
+      "sublabel": "L1 事件·L2 MQ·L3 扫描",
+      "tag": "幂等同锁",
+      "yOffset": 78,
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 168
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/mqconsumer/MqReviewCommandConsumer.java",
+          "line": 41
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 191
+        }
+      ]
+    },
+    {
+      "id": "lock",
+      "lane": "gate",
+      "col": 1,
+      "type": "backend",
+      "label": "互斥锁防重",
+      "sublabel": "RLock · 120s TTL",
+      "tag": "tryLock 抢占",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 234,
+          "end_line": 241
+        }
+      ]
+    },
+    {
+      "id": "precheck",
+      "lane": "gate",
+      "col": 1,
+      "type": "backend",
+      "label": "审前预检",
+      "sublabel": "返工上限·证据硬检",
+      "tag": "否则转人工",
+      "yOffset": 78,
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 269,
+          "end_line": 300
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 332,
+          "end_line": 351
+        }
+      ]
+    },
+    {
+      "id": "picker",
+      "lane": "gate",
+      "col": 2,
+      "type": "backend",
+      "label": "选人配对",
+      "sublabel": "指定优先·双模型",
+      "tag": "REVIEWER 角色",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/picker/ReviewerPickerImpl.java",
+          "line": 39
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/picker/ReviewerPickerImpl.java",
+          "line": 71
+        }
+      ]
+    },
+    {
+      "id": "exec_single",
+      "lane": "review",
+      "col": 3,
+      "type": "backend",
+      "label": "单审核验",
+      "sublabel": "LLM 判定·证据装配",
+      "tag": "Verdict 解析",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 388
+        }
+      ],
+      "yOffset": 78
+    },
+    {
+      "id": "exec_dual",
+      "lane": "review",
+      "col": 3,
+      "type": "backend",
+      "label": "双审并行",
+      "sublabel": "双模型·90s 收敛",
+      "tag": "REQUIRE_BOTH",
+      "yOffset": 0,
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 473,
+          "end_line": 482
+        }
+      ]
+    },
+    {
+      "id": "pass",
+      "lane": "outcome",
+      "col": 4,
+      "type": "backend",
+      "label": "核验通过",
+      "sublabel": "REVIEW → DONE",
+      "tag": "隐式评分",
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 421,
+          "end_line": 428
+        }
+      ]
+    },
+    {
+      "id": "recheck",
+      "lane": "loop",
+      "col": 4,
+      "type": "cloud",
+      "label": "抽检复审",
+      "sublabel": "5% · 1h · 20/轮",
+      "tag": "只度量不改状态",
+      "sources": [
+        {
+          "path": "helloai-job/src/main/java/com/helloai/job/task/ReviewerRecheckTask.java",
+          "line": 40,
+          "end_line": 42
+        },
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/support/ReviewRecheckExecutor.java",
+          "line": 56
+        }
+      ],
+      "yOffset": 0
+    },
+    {
+      "id": "reject",
+      "lane": "loop",
+      "col": 5,
+      "type": "security",
+      "label": "驳回返工",
+      "sublabel": "REVIEW → REWORK",
+      "tag": "重执行命令",
+      "yOffset": 0,
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 585
+        }
+      ]
+    },
+    {
+      "id": "deadletter",
+      "lane": "loop",
+      "col": 5,
+      "type": "security",
+      "label": "返工熔断",
+      "sublabel": "→ DEAD_LETTER",
+      "tag": "人工四出口",
+      "yOffset": 156,
+      "sources": [
+        {
+          "path": "helloai-core/src/main/java/com/helloai/core/review/service/impl/SubTaskReviewServiceImpl.java",
+          "line": 288
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "submitted-trig",
+      "from": "submitted",
+      "to": "trig",
+      "label": "入审事件"
+    },
+    {
+      "id": "trig-lock",
+      "from": "trig",
+      "to": "lock",
+      "label": "抢锁进入"
+    },
+    {
+      "id": "lock-precheck",
+      "from": "lock",
+      "to": "precheck",
+      "label": "锁内预检"
+    },
+    {
+      "id": "precheck-picker",
+      "from": "precheck",
+      "to": "picker",
+      "label": "选人"
+    },
+    {
+      "id": "picker-exec_single",
+      "from": "picker",
+      "to": "exec_single",
+      "label": "单审"
+    },
+    {
+      "id": "picker-exec_dual",
+      "from": "picker",
+      "to": "exec_dual",
+      "label": "HIGH 难度",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "exec_single-pass",
+      "from": "exec_single",
+      "to": "pass",
+      "label": "pass",
+      "variant": "emphasis"
+    },
+    {
+      "id": "exec_single-reject",
+      "from": "exec_single",
+      "to": "reject",
+      "label": "驳回",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "exec_dual-pass",
+      "from": "exec_dual",
+      "to": "pass",
+      "label": "共识通过"
+    },
+    {
+      "id": "exec_dual-reject",
+      "from": "exec_dual",
+      "to": "reject",
+      "label": "共识驳回"
+    },
+    {
+      "id": "reject-deadletter",
+      "from": "reject",
+      "to": "deadletter",
+      "label": "预算耗尽",
+      "variant": "dashed",
+      "role": "error"
+    },
+    {
+      "id": "pass-recheck",
+      "from": "pass",
+      "to": "recheck",
+      "label": "APPROVED 采样",
+      "variant": "dashed",
+      "role": "async"
+    },
+    {
+      "id": "reject-submitted",
+      "from": "reject",
+      "to": "submitted",
+      "label": "返工重投",
+      "variant": "dashed",
+      "role": "return",
+      "route": "outside-right",
+      "fromSide": "right",
+      "toSide": "right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "三级容错触发",
+      "items": [
+        "L1 AFTER_COMMIT + @Async 事件主路径；L2 MQ reviewerQueue（Outbox 补偿，Redis + DB 双层幂等）；L3 30s 孤儿扫描（60s 阈值，batch 10）",
+        "Redisson RLock 120s 互斥 + 状态必须仍为 REVIEW 双重防重：三路并发只一路进入，其余直接跳过"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "双审与判定",
+      "items": [
+        "difficulty=HIGH 且候选 ≥ 2（两位模型不同）走双审并行，90s 共同 deadline；REQUIRE_BOTH 一致才落地，分歧停留 REVIEW 转人工",
+        "通过 → DONE（触发隐式评分与下游解锁）；驳回 → REWORK，核验意见入 reviewHistory，对 API_KEY_LLM 执行者重下发执行命令闭合返工"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "熔断与反馈",
+      "items": [
+        "返工达上限（默认 3 次）或共享预算耗尽 → DEAD_LETTER；人工四出口：指派 / 放弃 / 直接验收 / 驳回改派",
+        "抽检复审：1h 周期、5% 抽样、单轮上限 20，只度量不改状态（放水率进 review_recheck_log）；最终报告 3A 闭环：保真机械门 → LLM 审查 → 返工重写，自审同 Agent 过硬守卫"
+      ]
+    }
+  ]
+}
