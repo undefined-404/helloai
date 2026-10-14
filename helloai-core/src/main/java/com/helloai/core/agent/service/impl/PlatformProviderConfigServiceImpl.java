@@ -1,9 +1,12 @@
 package com.helloai.core.agent.service.impl;
 
 import com.helloai.core.agent.service.PlatformProviderConfigService;
+import com.helloai.core.agent.dto.ApiKeySaveOutcome;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;
+import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.common.crypto.CredentialCryptoService;
+import com.helloai.core.system.crypto.CredentialFingerprint;
 import com.helloai.core.agent.chat.provider.ProviderChatModelCache;
 import com.helloai.core.system.port.CredentialSecret;
 import com.helloai.core.system.port.LlmProviderProfile;
@@ -37,6 +40,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class PlatformProviderConfigServiceImpl implements PlatformProviderConfigService {
+
+    /** PLATFORM 级凭证的固定占位归属 ID（与 vault 侧平台级查询口径一致）。 */
+    private static final long PLATFORM_OWNER_ID = 0L;
 
     private final CredentialVaultService credentialVaultService;
     private final CredentialCryptoService credentialCryptoService;
@@ -108,22 +114,39 @@ public class PlatformProviderConfigServiceImpl implements PlatformProviderConfig
     /**
      * 保存（轮换）平台级 API Key：AES 加密 → vault PLATFORM 级 rotate → 清空 ChatModel 缓存。
      *
+     * <p>`M-6` 起带**同 provider 内同 Key 去重**：写入前先把该 provider 的历史行指纹补齐
+     * （`V111` 之前的行指纹为 NULL，由 {@code backfillFingerprints} 自愈），再判定是否已有
+     * 同指纹凭证；命中则**不重复落库**，返回 {@code created=false} + 「已存在」文案。</p>
+     *
      * <p>缓存全清后旧实例不再命中，下次调用按新 key 自动重建；正在执行的调用持有旧实例引用，
      * 完成后无引用即被 GC，可接受。</p>
+     *
+     * @return 保存结果（是否新增 + 指纹）
      */
     @Transactional(rollbackFor = Exception.class)
-    public void saveApiKey(String provider, String apiKey) {
+    public ApiKeySaveOutcome saveApiKey(String provider, String apiKey) {
         if (provider == null || provider.isBlank()) {
             throw new BizException("provider 不能为空");
         }
         if (apiKey == null || apiKey.isBlank()) {
             throw new BizException("apiKey 不能为空");
         }
+        String fingerprint = CredentialFingerprint.of(apiKey);
+        // `M-6`：先补齐历史行指纹（幂等），否则「二次录入」对升级前录入过的 Key 判不出来
+        credentialVaultService.backfillFingerprints(
+                CredentialOwnerType.PLATFORM, PLATFORM_OWNER_ID, provider);
+        if (credentialVaultService.existsFingerprint(
+                CredentialOwnerType.PLATFORM, PLATFORM_OWNER_ID, provider, fingerprint)) {
+            log.info("平台级 API Key 已存在，跳过写入: provider={}, fingerprint={}", provider, fingerprint);
+            return ApiKeySaveOutcome.ofAlreadyExists(fingerprint);
+        }
         String encrypted = credentialCryptoService.encryptToBase64(apiKey);
         credentialVaultService.rotatePlatformApiKey(provider, encrypted, null,
-                "平台配置动态化（系统设置页写入）");
+                "平台配置动态化（系统设置页写入）", fingerprint);
         providerChatModelCache.clear();
-        log.info("平台级 API Key 已轮换并清理 ChatModel 缓存: provider={}", provider);
+        log.info("平台级 API Key 已轮换并清理 ChatModel 缓存: provider={}, fingerprint={}",
+                provider, fingerprint);
+        return ApiKeySaveOutcome.ofCreated(fingerprint);
     }
 
     /**

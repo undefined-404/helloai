@@ -1,5 +1,7 @@
 package com.helloai.core.agent.service;
 
+import com.helloai.core.agent.dto.ApiKeySaveOutcome;
+
 /**
  * Provider 平台级配置服务：API Key / Base URL / 默认模型的读取与保存。
  *
@@ -27,8 +29,14 @@ public interface PlatformProviderConfigService {
 
     /**
      * 保存 provider 的平台级 API Key（写 vault，明文明文落库前加密）。
+     *
+     * <p>`M-6` 起带**同 provider 内同 Key 去重**：若该 provider 下已存在同指纹凭证
+     * （含历史 EXPIRED/DISABLED 行），则**不重复落库**，返回
+     * {@link ApiKeySaveOutcome#created()} = {@code false}。</p>
+     *
+     * @return 保存结果（是否新增 + 指纹），供调用方提示「已存在」
      */
-    void saveApiKey(String provider, String apiKey);
+    ApiKeySaveOutcome saveApiKey(String provider, String apiKey);
 
     /**
      * 保存 provider 的 Base URL 与默认模型（写 sys_config）。
