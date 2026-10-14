@@ -221,6 +221,17 @@ else
   bad "供应商注册信息一致性守卫失败（详见 verify-provider-catalog-parity.sh 输出）"
 fi
 
+# 技能/能力词表三源一致性 + V52 两列退役守卫（`M-9`）：
+# S1 后端 STANDARD_SKILLS ⇔ 前端 AGENT_SKILL_OPTIONS ⇔ REQUIRED 键集；
+# S2 V52 两列（模型能力锁定技能 / 可扩展技能白名单）仅允许存在于白名单迁移（防「代码幽灵」）；
+# S3 含 INSERT INTO llm_provider_model 的新迁移必须显式写 capabilities（V112 已摘列默认值）。
+# 纯文本 + grep/awk/sed，零外部依赖，CI 可跑；反证三连见脚本头部用法。
+if bash "$SCRIPT_DIR/../shell/verify-skill-capability-parity.sh"; then
+  ok "技能/能力词表三源一致性 + V52 两列退役守卫（S1 词表 / S2 无回写 / S3 新迁移写谓词）"
+else
+  bad "技能/能力 parity 守卫失败（详见 verify-skill-capability-parity.sh 输出）"
+fi
+
 # ---------------------------------------------------------------------------
 # 门禁 4：前端类型检查 + 构建
 # ---------------------------------------------------------------------------

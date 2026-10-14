@@ -20,13 +20,20 @@
 #      a model already held by a resident agent in that role returns 409, which
 #      then cascades into S6/S7 "target agent not found". That is why a model with
 #      a long-lived inner-*-executor/planner/reviewer cannot be used here.
-#   2. WHITELISTED as the case needs: `llm_provider_model.available_optional_skills`
-#      is per-model DB data, and the assertions are model-sensitive --
-#      `deepseek-v4-pro` must NOT list web-search (S3 tests rejection),
-#      `kimi-k3` MUST list web-search (S2/S5). Swapping in a model with a
-#      different whitelist silently changes what S1-S7 mean.
-# Current picks: deepseek-v4-pro [shell,code-review] / kimi-k3 [+web-search]
-#                / qwen3.8-Max (S7 model switch). Change all three together.
+#   2. MODEL-SENSITIVE predicate: since M-9 the web-search gate is driven by
+#      `llm_provider_model.capabilities->>'webSearch'` (and `thinking` by `reasoning`),
+#      and the assertions are model-sensitive -- `deepseek-v4-pro` must have
+#      webSearch=false (S3 tests rejection), `kimi-k3` must have webSearch=true (S2/S5).
+#      Swapping in a model with a different predicate silently changes what S1-S7 mean.
+# Current picks: deepseek-v4-pro [reasoning=true, webSearch=false] /
+#                kimi-k3 [reasoning=true, webSearch=true] / qwen3.8-max (S7 model
+#                switch, reasoning=true, webSearch=true). Change all three together.
+#   NOTE (QA-M9-01): `dashscope:qwen3.8-max` and `dashscope:qwen3.8-Max` are TWO
+#   DIFFERENT rows -- the capital-M one is [reasoning=false, webSearch=true], so using
+#   it here would fail the S7 "contains thinking" assertion for a reason unrelated to
+#   skill policy. Keep the lowercase spelling. Verify against the DB before editing:
+#     SELECT model_name, capabilities->>'reasoning', capabilities->>'webSearch'
+#       FROM llm_provider_model WHERE model_name ILIKE 'qwen3.8%' AND deleted = 0;
 # ============================================================
 param(
     [string]$AdminPassword = ""
@@ -226,10 +233,10 @@ if ($s6Target) {
     Write-Fail 'S6' 'target agent v52-e2e-ds-v1 not found'
 }
 
-# ---- S7: edit agent to kimi model + [shell,web-search] ----
-Write-Output '==== S7: edit agent modelType=kimi + skills=[shell,web-search] ===='
+# ---- S7: edit agent to qwen model + [shell,web-search] ----
+Write-Output '==== S7: edit agent modelType=qwen3.8-max + skills=[shell,web-search] ===='
 if ($s6Target) {
-    $s7Body = ConvertTo-JsonSafe @{ modelType = 'dashscope:qwen3.8-Max'; skills = @('shell', 'web-search') }
+    $s7Body = ConvertTo-JsonSafe @{ modelType = 'dashscope:qwen3.8-max'; skills = @('shell', 'web-search') }
     $s7 = Invoke-Api -Method 'Put' -Uri ($BaseUrl + '/api/admin/agents/updateById/' + $s6Target.id) -Headers $AdminHeaders -BodyJson $s7Body
     Assert-True ($s7 -ne $null -and $s7.code -eq 200) 'S7' ('update code=' + ($s7.code) + ' msg=' + ($s7.msg))
     if ($s7 -ne $null -and $s7.code -eq 200) {
