@@ -6,6 +6,8 @@ import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.core.system.entity.CredentialAuditLog;
 import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.port.CredentialSecret;
+import com.helloai.core.system.port.PlatformApiKeyChange;
+import com.helloai.core.system.port.PlatformApiKeyView;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -172,16 +174,99 @@ public interface CredentialVaultService extends IService<CredentialVault> {
                                                          String encryptedValue,
                                                          String remark, String fingerprint);
 
+    // ── `M-8` 多 Key 主备：列表 / 手动切换 / 停用 / 删除 ────────────────────
+
+    /**
+     * 列出某 provider 下平台级 API Key 的条目快照（**不含密文**，明文仅以脱敏形态出现）。
+     *
+     * <p>排序 = **启用位在前**（{@code ACTIVE → DISABLED → EXPIRED}），同组内按
+     * {@code create_time ASC, id ASC}。该顺序即「顶替启用位时选哪把备位」的依据
+     * （对齐 magpie 取「下一把在用的」{@code keys.go:369-379}）。</p>
+     *
+     * <p>含 {@code EXPIRED}（轮换淘汰的历史行）而不隐藏：隐藏会造成「列表为空但库里
+     * 还有行、provider 却显示未配置」的错觉，不如显式标注状态。</p>
+     *
+     * @param provider LLM Provider；空白 ⇒ 返回空列表
+     */
+    List<PlatformApiKeyView> listPlatformApiKeyViews(String provider);
+
+    /**
+     * `M-8` **手动切换**启用位：把指定的备位凭证升为 {@code ACTIVE}，同
+     * (owner, provider, type) 下的原 {@code ACTIVE} 降为 {@code DISABLED}。
+     *
+     * <p>对齐 magpie {@code UseKey}（{@code keys.go:346-365}）「makes one of a provider's keys
+     * the first」；**差异**：magpie 被替换的那把「stays on, next in line」（仍可用于
+     * failover），helloai 因红线 {@code N-1} 无自动 failover，被降级行只能落
+     * {@code DISABLED}（不参与路由）。</p>
+     *
+     * <p><b>顺序敏感</b>：{@code uk_credential_vault_*_active} 部分唯一索引只允许一条
+     * {@code ACTIVE}，故必须**先降后升**，且两步同事务。两步均走 CAS
+     * （{@code WHERE status = <期望值>}），状态被并发改动即整体回滚。</p>
+     *
+     * @param credentialId 目标备位凭证 ID
+     * @param provider     所属 provider（不匹配即拒绝，防跨 provider 误切）
+     * @param operator     操作者
+     * @return 切换前后启用位快照
+     * @throws com.helloai.common.base.BizException 凭证不存在 / 非平台级 API Key / 与 provider
+     *                                              不匹配 / 已是启用位 / 为 EXPIRED / CAS 冲突
+     */
+    PlatformApiKeyChange activatePlatformApiKeyCredential(Long credentialId, String provider,
+                                                          String operator);
+
+    /**
+     * `M-8` **停用**平台级 API Key（{@code ACTIVE / DISABLED → DISABLED}）。
+     *
+     * <p>对齐 magpie {@code SetKeyOn}（{@code keys.go:381-405}）「turns a key on or off」，
+     * 并遵守其守卫：<b>在用的最后一把必须留在用</b>。落到 helloai 的单一启用位模型即
+     * —— 停用**启用位**时若有备位可顶，则**原子地把最旧的一把备位升为启用位**；若无备位可顶，
+     * 则 fail-close 拒绝（否则该 provider 会静默变成「未配置」）。停用**备位**是幂等空操作
+     * （它本就不参与路由）。</p>
+     *
+     * @param credentialId 目标凭证 ID
+     * @param provider     所属 provider（不匹配即拒绝）
+     * @param operator     操作者
+     * @return 操作前后启用位快照
+     * @throws com.helloai.common.base.BizException 凭证不存在 / 非平台级 API Key / 与 provider
+     *                                              不匹配 / 为 EXPIRED（轮换终态）/
+     *                                              停用启用位但无备位可顶
+     */
+    PlatformApiKeyChange deactivatePlatformApiKeyCredential(Long credentialId, String provider,
+                                                            String operator);
+
+    /**
+     * `M-8` **删除**平台级 API Key（软删 {@code deleted = 1}，保留行以备审计追溯）。
+     *
+     * <p>对齐 magpie {@code RemoveKey}（{@code keys.go:407-423}）「forgets a key」及其守卫
+     * 「One key in use always stays」：删除**启用位**时同样先顶替、无备位可顶则拒绝；
+     * 删除**备位 / EXPIRED** 行直接放行（不动启用位，故不会使 provider 失去可用 Key）。</p>
+     *
+     * @param credentialId 目标凭证 ID
+     * @param provider     所属 provider（不匹配即拒绝）
+     * @param operator     操作者
+     * @return 操作前后启用位快照（{@link PlatformApiKeyChange#credentialId()} 为已删除行）
+     */
+    PlatformApiKeyChange deletePlatformApiKeyCredential(Long credentialId, String provider,
+                                                        String operator);
+
     /**
      * 人工停用凭证（N-004 收口）。
      *
      * <p>复用 {@link CredentialStatus#DISABLED} 人为停用语义（与 bind 旧凭证一致），
      * 不新增状态。仅 ACTIVE / DISABLED 可停用；EXPIRED（轮换淘汰）不可逆，禁止停用。</p>
      *
+     * <p><b>`M-8` 新增作用域限定的守卫</b>：目标为**平台级**（{@code PLATFORM}）且状态为
+     * {@code ACTIVE} 时，本方法会先找备位顶替，**无备位可顶则拒绝**（语义与
+     * {@link #deactivatePlatformApiKeyCredential} 完全一致 —— 后者在生产路径上已覆盖本入口，
+     * 此处是防止旧端点 {@code POST /api/credentials/revoke/{id}} 绕过守卫）。</p>
+     *
+     * <p><b>为何 Agent 级不受此守卫约束</b>：平台级缺启用位 ⇒ 该 provider 对**全平台**不可用，
+     * 故需防呆；Agent 级缺启用位只影响该 Agent 自身的绑定，管理员可随时重绑，
+     * 过度拦截会破坏 N-004 已确立的停用语义。</p>
+     *
      * @param id       凭证 ID
      * @param operator 操作者（admin）
      * @return 停用后的凭证
-     * @throws com.helloai.common.base.BizException 凭证不存在或已 EXPIRED（fail-close）
+     * @throws com.helloai.common.base.BizException 凭证不存在 / 已 EXPIRED / 平台级启用位无备位可顶（fail-close）
      */
     CredentialVault revokeCredential(Long id, String operator);
 

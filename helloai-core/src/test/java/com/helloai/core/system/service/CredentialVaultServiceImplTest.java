@@ -14,6 +14,8 @@ import com.helloai.common.crypto.CredentialCryptoService;
 import com.helloai.core.system.entity.CredentialAuditLog;
 import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.mapper.CredentialVaultMapper;
+import com.helloai.core.system.port.PlatformApiKeyChange;
+import com.helloai.core.system.port.PlatformApiKeyView;
 import com.helloai.core.system.service.impl.CredentialVaultServiceImpl;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,8 +23,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.io.Serializable;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -33,9 +37,11 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -290,6 +296,387 @@ class CredentialVaultServiceImplTest {
             verify(auditService).record(any(), eq(CredentialOwnerType.PLATFORM), eq(0L), eq(PROVIDER),
                     eq(CredentialAuditAction.BIND), eq(CredentialAuditAction.OPERATOR_ADMIN),
                     eq("batch add as standby (DISABLED)"));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  `M-8` 多 Key 主备（列表 / 手动切换 / 停用 / 删除）
+    // ══════════════════════════════════════════════════════════════════════
+
+    /** 平台级凭证工厂（`M-8`）；密文固定为 {@code cipher-<id>}，便于按行桩解密。 */
+    private CredentialVault platformVault(Long id, CredentialStatus status, String fingerprint) {
+        CredentialVault v = new CredentialVault();
+        v.setId(id);
+        v.setOwnerType(CredentialOwnerType.PLATFORM);
+        v.setOwnerId(0L);
+        v.setProvider(PROVIDER);
+        v.setCredentialType(CredentialType.API_KEY);
+        v.setStatus(status);
+        v.setFingerprint(fingerprint);
+        v.setEncryptedValue("cipher-" + id);
+        v.setCreateTime(OffsetDateTime.now());
+        return v;
+    }
+
+    /** 统一断言：某行被降级（REVOKE 审计）。 */
+    private void assertDemoted(InOrder order, Long id) {
+        order.verify(auditService).record(eq(id), eq(CredentialOwnerType.PLATFORM), eq(0L), eq(PROVIDER),
+                eq(CredentialAuditAction.REVOKE), anyString(), anyString());
+    }
+
+    /** 统一断言：某行被升为启用位（ACTIVATE 审计）。 */
+    private void assertPromoted(InOrder order, Long id) {
+        order.verify(auditService).record(eq(id), eq(CredentialOwnerType.PLATFORM), eq(0L), eq(PROVIDER),
+                eq(CredentialAuditAction.ACTIVATE), anyString(), anyString());
+    }
+
+    @Nested
+    @DisplayName("`M-8` listPlatformApiKeyViews 主备列表")
+    class ListPlatformApiKeyViews {
+
+        @Test
+        @DisplayName("排序：启用位 → 备位 → 历史（EXPIRED）；打乱输入仍由服务排好（不依赖 SQL 方言）")
+        void shouldOrderActiveStandbyThenExpired() {
+            when(vaultMapper.selectList(any())).thenReturn(List.of(
+                    platformVault(3L, CredentialStatus.EXPIRED, "fp-expired"),
+                    platformVault(2L, CredentialStatus.DISABLED, "fp-standby"),
+                    platformVault(1L, CredentialStatus.ACTIVE, "fp-active")));
+            when(cryptoService.decryptFromBase64(anyString())).thenReturn("sk-abcdefgh1234");
+
+            List<PlatformApiKeyView> views = service.listPlatformApiKeyViews(PROVIDER);
+
+            assertThat(views).extracting(PlatformApiKeyView::id).containsExactly(1L, 2L, 3L);
+            assertThat(views).extracting(PlatformApiKeyView::status).containsExactly(
+                    CredentialStatus.ACTIVE, CredentialStatus.DISABLED, CredentialStatus.EXPIRED);
+        }
+
+        @Test
+        @DisplayName("逐行脱敏：明文经 SecretMask（前 4 + … + 后 4），指纹原样透出")
+        void shouldMaskEachRow() {
+            when(vaultMapper.selectList(any())).thenReturn(List.of(
+                    platformVault(1L, CredentialStatus.ACTIVE, "fp-active")));
+            when(cryptoService.decryptFromBase64("cipher-1")).thenReturn("sk-abcdefgh1234");
+
+            List<PlatformApiKeyView> views = service.listPlatformApiKeyViews(PROVIDER);
+
+            assertThat(views).hasSize(1);
+            assertThat(views.get(0).masked()).isEqualTo("sk-a…1234");
+            assertThat(views.get(0).fingerprint()).isEqualTo("fp-active");
+        }
+
+        @Test
+        @DisplayName("★best-effort：单行解密失败只该行 masked=null，不阻断列表其余行")
+        void shouldNotBreakListWhenOneRowFailsToDecrypt() {
+            when(vaultMapper.selectList(any())).thenReturn(List.of(
+                    platformVault(1L, CredentialStatus.ACTIVE, "fp-a"),
+                    platformVault(9L, CredentialStatus.DISABLED, "fp-bad")));
+            when(cryptoService.decryptFromBase64(anyString())).thenAnswer(inv -> {
+                String cipher = inv.getArgument(0);
+                if ("cipher-9".equals(cipher)) {
+                    throw new BizException("凭证解密失败: 主密钥已轮换");
+                }
+                return "sk-abcdefgh1234";
+            });
+
+            List<PlatformApiKeyView> views = service.listPlatformApiKeyViews(PROVIDER);
+
+            assertThat(views).hasSize(2);
+            assertThat(views.get(0).masked()).isEqualTo("sk-a…1234");
+            assertThat(views.get(1).id()).isEqualTo(9L);
+            assertThat(views.get(1).masked()).isNull();
+        }
+
+        @Test
+        @DisplayName("provider 为空 ⇒ 返回空列表，不触库")
+        void shouldReturnEmptyForBlankProvider() {
+            assertThat(service.listPlatformApiKeyViews("  ")).isEmpty();
+            verify(vaultMapper, never()).selectList(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("`M-8` activatePlatformApiKeyCredential 手动切换启用位")
+    class Activate {
+
+        @Test
+        @DisplayName("★先降后升：原启用位先降级、目标备位随后升位（部分唯一索引只允许一条 ACTIVE）")
+        void shouldDemoteBeforePromote() {
+            when(vaultMapper.selectById(2L)).thenReturn(platformVault(2L, CredentialStatus.DISABLED, "fp-standby"));
+            when(vaultMapper.selectOne(any())).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-active"));
+            when(vaultMapper.update(isNull(), any())).thenReturn(1);
+
+            PlatformApiKeyChange change = service.activatePlatformApiKeyCredential(2L, PROVIDER, "admin");
+
+            assertThat(change.credentialId()).isEqualTo(2L);
+            assertThat(change.fingerprint()).isEqualTo("fp-standby");
+            assertThat(change.previousActiveId()).isEqualTo(1L);
+            assertThat(change.activeId()).isEqualTo(2L);
+
+            InOrder order = inOrder(auditService);
+            assertDemoted(order, 1L);
+            assertPromoted(order, 2L);
+        }
+
+        @Test
+        @DisplayName("此前无启用位 ⇒ previousActiveId=null，仅升级一次（无降级步骤）")
+        void shouldActivateWithoutPreviousActive() {
+            when(vaultMapper.selectById(2L)).thenReturn(platformVault(2L, CredentialStatus.DISABLED, "fp-standby"));
+            when(vaultMapper.selectOne(any())).thenReturn(null);
+            when(vaultMapper.update(isNull(), any())).thenReturn(1);
+
+            PlatformApiKeyChange change = service.activatePlatformApiKeyCredential(2L, PROVIDER, "admin");
+
+            assertThat(change.previousActiveId()).isNull();
+            assertThat(change.activeId()).isEqualTo(2L);
+            verify(vaultMapper, times(1)).update(isNull(), any());
+            verify(auditService, never()).record(any(), any(), any(), anyString(),
+                    eq(CredentialAuditAction.REVOKE), anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("目标已是启用位 ⇒ 拒绝（不静默成功，避免调用方误以为发生了切换）")
+        void shouldRejectAlreadyActive() {
+            when(vaultMapper.selectById(1L)).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-active"));
+
+            assertThatThrownBy(() -> service.activatePlatformApiKeyCredential(1L, PROVIDER, "admin"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("已是启用位");
+
+            verify(vaultMapper, never()).update(any(), any());
+        }
+
+        @Test
+        @DisplayName("EXPIRED 为轮换淘汰终态 ⇒ 不可启用")
+        void shouldRejectExpiredTarget() {
+            when(vaultMapper.selectById(3L)).thenReturn(platformVault(3L, CredentialStatus.EXPIRED, "fp-e"));
+
+            assertThatThrownBy(() -> service.activatePlatformApiKeyCredential(3L, PROVIDER, "admin"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("不可启用");
+
+            verify(vaultMapper, never()).update(any(), any());
+        }
+
+        @Test
+        @DisplayName("★凭证不属于该 provider ⇒ 拒绝且不触库（防跨 Provider 误切）")
+        void shouldRejectProviderMismatch() {
+            when(vaultMapper.selectById(2L)).thenReturn(platformVault(2L, CredentialStatus.DISABLED, "fp-standby"));
+
+            assertThatThrownBy(() -> service.activatePlatformApiKeyCredential(2L, "openai", "admin"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("不匹配");
+
+            verify(vaultMapper, never()).update(any(), any());
+        }
+
+        @Test
+        @DisplayName("Agent 级凭证不得走平台级主备切换 ⇒ 拒绝")
+        void shouldRejectNonPlatformOwner() {
+            when(vaultMapper.selectById(CREDENTIAL_ID))
+                    .thenReturn(vault(CREDENTIAL_ID, CredentialStatus.DISABLED, null));
+
+            assertThatThrownBy(() -> service.activatePlatformApiKeyCredential(CREDENTIAL_ID, PROVIDER, "admin"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("仅支持平台级");
+        }
+
+        @Test
+        @DisplayName("凭证不存在 ⇒ 拒绝")
+        void shouldRejectMissingCredential() {
+            when(vaultMapper.selectById(99L)).thenReturn(null);
+
+            assertThatThrownBy(() -> service.activatePlatformApiKeyCredential(99L, PROVIDER, "admin"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("不存在");
+        }
+
+        @Test
+        @DisplayName("升位 CAS 冲突（并发已改状态）⇒ 抛错交由事务回滚（降级步骤一并撤销）")
+        void shouldRejectCasConflictOnPromote() {
+            when(vaultMapper.selectById(2L)).thenReturn(platformVault(2L, CredentialStatus.DISABLED, "fp-standby"));
+            when(vaultMapper.selectOne(any())).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-active"));
+            when(vaultMapper.update(isNull(), any())).thenReturn(1, 0);
+
+            assertThatThrownBy(() -> service.activatePlatformApiKeyCredential(2L, PROVIDER, "admin"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("状态冲突");
+        }
+    }
+
+    @Nested
+    @DisplayName("`M-8` deactivatePlatformApiKeyCredential 停用")
+    class Deactivate {
+
+        @Test
+        @DisplayName("停用启用位且有备位 ⇒ 备位顶上（先降后升）")
+        void shouldPromoteSuccessorWhenDeactivatingActive() {
+            when(vaultMapper.selectById(1L)).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-a"));
+            when(vaultMapper.selectList(any())).thenReturn(List.of(
+                    platformVault(2L, CredentialStatus.DISABLED, "fp-s")));
+            when(vaultMapper.update(isNull(), any())).thenReturn(1);
+
+            PlatformApiKeyChange change = service.deactivatePlatformApiKeyCredential(1L, PROVIDER, "admin");
+
+            assertThat(change.previousActiveId()).isEqualTo(1L);
+            assertThat(change.activeId()).isEqualTo(2L);
+
+            InOrder order = inOrder(auditService);
+            assertDemoted(order, 1L);
+            assertPromoted(order, 2L);
+        }
+
+        @Test
+        @DisplayName("★停用唯一的启用 Key（无备位可顶）⇒ fail-close 拒绝，不触任何 UPDATE")
+        void shouldRejectWhenNoSuccessor() {
+            when(vaultMapper.selectById(1L)).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-a"));
+            when(vaultMapper.selectList(any())).thenReturn(List.of());
+
+            assertThatThrownBy(() -> service.deactivatePlatformApiKeyCredential(1L, PROVIDER, "admin"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("唯一的启用 Key");
+
+            verify(vaultMapper, never()).update(any(), any());
+        }
+
+        @Test
+        @DisplayName("停用已是备位的行 ⇒ 幂等空操作（不触 UPDATE），启用位不变")
+        void shouldBeIdempotentWhenTargetIsStandby() {
+            when(vaultMapper.selectById(2L)).thenReturn(platformVault(2L, CredentialStatus.DISABLED, "fp-s"));
+            when(vaultMapper.selectOne(any())).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-a"));
+
+            PlatformApiKeyChange change = service.deactivatePlatformApiKeyCredential(2L, PROVIDER, "admin");
+
+            assertThat(change.previousActiveId()).isEqualTo(1L);
+            assertThat(change.activeId()).isEqualTo(1L);
+            verify(vaultMapper, never()).update(any(), any());
+        }
+
+        @Test
+        @DisplayName("EXPIRED ⇒ 拒绝（轮换终态不可逆）")
+        void shouldRejectExpired() {
+            when(vaultMapper.selectById(3L)).thenReturn(platformVault(3L, CredentialStatus.EXPIRED, "fp-e"));
+
+            assertThatThrownBy(() -> service.deactivatePlatformApiKeyCredential(3L, PROVIDER, "admin"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("不可停用");
+        }
+    }
+
+    @Nested
+    @DisplayName("`M-8` deletePlatformApiKeyCredential 删除（软删）")
+    class DeleteKey {
+
+        @Test
+        @DisplayName("删除备位 ⇒ 走 IService#removeById（带 @TableLogic ⇒ 软删），不动启用位")
+        void shouldSoftDeleteStandby() {
+            when(vaultMapper.selectById(2L)).thenReturn(platformVault(2L, CredentialStatus.DISABLED, "fp-s"));
+            when(vaultMapper.selectOne(any())).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-a"));
+            doReturn(true).when(service).removeById(any(Serializable.class));
+
+            PlatformApiKeyChange change = service.deletePlatformApiKeyCredential(2L, PROVIDER, "admin");
+
+            assertThat(change.credentialId()).isEqualTo(2L);
+            assertThat(change.previousActiveId()).isEqualTo(1L);
+            assertThat(change.activeId()).isEqualTo(1L);
+            verify(service).removeById(2L);
+            verify(vaultMapper, never()).update(any(), any());
+            verify(auditService).record(eq(2L), eq(CredentialOwnerType.PLATFORM), eq(0L), eq(PROVIDER),
+                    eq(CredentialAuditAction.DELETE), eq("admin"), anyString());
+        }
+
+        @Test
+        @DisplayName("删除启用位且有备位 ⇒ 先顶替再删；审计文案记录「删除时的状态」")
+        void shouldPromoteThenDeleteActive() {
+            when(vaultMapper.selectById(1L)).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-a"));
+            when(vaultMapper.selectList(any())).thenReturn(List.of(
+                    platformVault(2L, CredentialStatus.DISABLED, "fp-s")));
+            when(vaultMapper.update(isNull(), any())).thenReturn(1);
+            doReturn(true).when(service).removeById(any(Serializable.class));
+
+            PlatformApiKeyChange change = service.deletePlatformApiKeyCredential(1L, PROVIDER, "admin");
+
+            assertThat(change.previousActiveId()).isEqualTo(1L);
+            assertThat(change.activeId()).isEqualTo(2L);
+            verify(service).removeById(1L);
+            // 先降后升发生在删除之前 ⇒ 审计文案必须描述「删除时它是 ACTIVE」，不能是已被改写的 DISABLED
+            verify(auditService).record(eq(1L), eq(CredentialOwnerType.PLATFORM), eq(0L), eq(PROVIDER),
+                    eq(CredentialAuditAction.DELETE), eq("admin"),
+                    org.mockito.ArgumentMatchers.contains("status at delete=ACTIVE"));
+        }
+
+        @Test
+        @DisplayName("★删除唯一的启用 Key（无备位可顶）⇒ 拒绝，且不删任何行")
+        void shouldRejectDeletingLastActiveKey() {
+            when(vaultMapper.selectById(1L)).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-a"));
+            when(vaultMapper.selectList(any())).thenReturn(List.of());
+
+            assertThatThrownBy(() -> service.deletePlatformApiKeyCredential(1L, PROVIDER, "admin"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("唯一的启用 Key");
+
+            verify(service, never()).removeById(any(Serializable.class));
+            verify(vaultMapper, never()).update(any(), any());
+        }
+
+        @Test
+        @DisplayName("删除 EXPIRED 历史行 ⇒ 允许（清理轮换淘汰记录），启用位不变")
+        void shouldAllowDeletingExpiredHistory() {
+            when(vaultMapper.selectById(3L)).thenReturn(platformVault(3L, CredentialStatus.EXPIRED, "fp-e"));
+            when(vaultMapper.selectOne(any())).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-a"));
+            doReturn(true).when(service).removeById(any(Serializable.class));
+
+            PlatformApiKeyChange change = service.deletePlatformApiKeyCredential(3L, PROVIDER, "admin");
+
+            assertThat(change.activeId()).isEqualTo(1L);
+            verify(service).removeById(3L);
+        }
+    }
+
+    @Nested
+    @DisplayName("`M-8` revokeCredential 的平台级守卫（防旧端点绕过）")
+    class RevokePlatformGuard {
+
+        @Test
+        @DisplayName("平台级 ACTIVE 且有备位 ⇒ 顶替后降级（旧端点同样受「启用位不可缺失」约束）")
+        void shouldPromoteWhenRevokingPlatformActive() {
+            when(vaultMapper.selectById(1L)).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-a"));
+            when(vaultMapper.selectList(any())).thenReturn(List.of(
+                    platformVault(2L, CredentialStatus.DISABLED, "fp-s")));
+            when(vaultMapper.update(isNull(), any())).thenReturn(1);
+
+            CredentialVault result = service.revokeCredential(1L, "admin");
+
+            assertThat(result.getStatus()).isEqualTo(CredentialStatus.DISABLED);
+            InOrder order = inOrder(auditService);
+            assertDemoted(order, 1L);
+            assertPromoted(order, 2L);
+        }
+
+        @Test
+        @DisplayName("★平台级 ACTIVE 且无备位 ⇒ 拒绝（否则整个 Provider 静默变「未配置」）")
+        void shouldRejectWhenNoSuccessorOnPlatformActive() {
+            when(vaultMapper.selectById(1L)).thenReturn(platformVault(1L, CredentialStatus.ACTIVE, "fp-a"));
+            when(vaultMapper.selectList(any())).thenReturn(List.of());
+
+            assertThatThrownBy(() -> service.revokeCredential(1L, "admin"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("唯一的启用 Key");
+
+            verify(vaultMapper, never()).update(any(), any());
+        }
+
+        @Test
+        @DisplayName("Agent 级 ACTIVE 仍走原路径：不找继任者、不加守卫（N-004 语义不变）")
+        void shouldKeepAgentPathUnchanged() {
+            when(vaultMapper.selectById(CREDENTIAL_ID))
+                    .thenReturn(vault(CREDENTIAL_ID, CredentialStatus.ACTIVE, null));
+            when(vaultMapper.update(isNull(), any())).thenReturn(1);
+
+            CredentialVault result = service.revokeCredential(CREDENTIAL_ID, "admin");
+
+            assertThat(result.getStatus()).isEqualTo(CredentialStatus.DISABLED);
+            // Agent 级不触发「找继任备位」，故不应有 selectList 调用
+            verify(vaultMapper, never()).selectList(any());
         }
     }
 }

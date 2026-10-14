@@ -18,6 +18,17 @@ public final class CredentialAuditAction {
     /** 人工停用（旧凭证 → DISABLED，人为失效语义）。 */
     public static final String REVOKE = "revoke";
 
+    /**
+     * 手动切换启用位（`M-8`：备位 → ACTIVE，同域原 ACTIVE → DISABLED）。
+     *
+     * <p>与 {@link #ROTATE} 的区别：轮换是「换值」（旧值 → EXPIRED，新行接位），
+     * 切换是「换谁在用」（同一批行之间移动启用位，不新增行）。</p>
+     */
+    public static final String ACTIVATE = "activate";
+
+    /** 删除凭证（`M-8`：软删 {@code deleted=1}，保留行以备审计追溯）。 */
+    public static final String DELETE = "delete";
+
     /** 过期扫描自动失效（ACTIVE 且 expire_time 已过 → EXPIRED）。 */
     public static final String EXPIRE = "expire";
 
