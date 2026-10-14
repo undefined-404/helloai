@@ -71,22 +71,30 @@ public interface CredentialVaultService extends IService<CredentialVault> {
      * 以最小 upsert 方式保存 Agent 的 API Key 凭证。
      *
      * <p>先只支持单条启用态记录；后续多 Provider / 多版本轮换再继续扩展。</p>
+     *
+     * @param fingerprint 明文指纹（`M-6`，{@code com.helloai.common.crypto.CredentialFingerprint#of}）；
+     *                    {@code secretRef} 型凭证传 {@code null}
      */
     CredentialVault saveAgentApiKeyCredential(Long agentId, String provider,
                                               String encryptedValue, String secretRef,
                                               OffsetDateTime expiresAt,
-                                              String remark);
+                                              String remark, String fingerprint);
 
     /**
      * 以最小 upsert 方式保存平台级 API Key 凭证（ownerId 固定占位 0）。
+     *
+     * @param fingerprint 明文指纹（`M-6`）；{@code secretRef} 型凭证传 {@code null}
      */
     CredentialVault savePlatformApiKeyCredential(String provider,
                                                  String encryptedValue, String secretRef,
-                                                 String remark);
+                                                 String remark, String fingerprint);
 
+    /**
+     * 以最小 upsert 方式保存 Agent 的 API Key 凭证（无到期时间重载，`M-6` 起含指纹）。
+     */
     CredentialVault saveAgentApiKeyCredential(Long agentId, String provider,
                                               String encryptedValue, String secretRef,
-                                              String remark);
+                                              String remark, String fingerprint);
 
     /**
      * 轮换 Agent 的 API Key 凭证：旧凭证 → EXPIRED，新凭证 → ACTIVE。
@@ -104,18 +112,45 @@ public interface CredentialVaultService extends IService<CredentialVault> {
      * @param encryptedValue 新凭证加密值
      * @param secretRef      新凭证 Secret 引用
      * @param remark         审计备注
+     * @param fingerprint    明文指纹（`M-6`）
      * @return 新创建的 ACTIVE 凭证
      */
     CredentialVault rotateAgentApiKey(Long agentId, String provider,
                                       String encryptedValue, String secretRef,
-                                      String remark);
+                                      String remark, String fingerprint);
 
     /**
      * 轮换平台级 API Key 凭证（旧凭证 → EXPIRED，新凭证 → ACTIVE），ownerId 固定占位 0。
+     *
+     * @param fingerprint 明文指纹（`M-6`）
      */
     CredentialVault rotatePlatformApiKey(String provider,
                                          String encryptedValue, String secretRef,
-                                         String remark);
+                                         String remark, String fingerprint);
+
+    // ── `M-6` Key 指纹：同 provider 内同 Key 去重 / 历史行回填 ──────────────
+
+    /**
+     * 判断指定归属 + provider 下是否已存在**同指纹**的凭证（不限状态，含历史 EXPIRED/DISABLED 行）。
+     *
+     * <p>用于「同一 Key 二次录入 ⇒ 已存在」判重。**作用域 = owner + provider**：
+     * 同一把 Key 被不同 provider 或不同 owner 合法复用时，不得互相判重。</p>
+     *
+     * @param fingerprint 指纹；{@code null} / 空白 ⇒ 直接返回 {@code false}
+     */
+    boolean existsFingerprint(CredentialOwnerType ownerType, Long ownerId,
+                              String provider, String fingerprint);
+
+    /**
+     * `M-6` 惰性回填：把指定归属 + provider 下「**指纹为空且密文非空**」的历史行解密补写指纹。
+     *
+     * <p>迁移 `V111` 无法在 SQL 侧由密文推导指纹（AES-GCM 每次随机 nonce，密文不可还原），
+     * 故回填落在**应用层本域内**（agent 域不得 import `system.entity`，见 RM5 批 3 快照先例）。
+     * 幂等：只补不覆盖；{@code secretRef} 型与已解密失败的行跳过。</p>
+     *
+     * @return 本次实际补写的行数
+     */
+    int backfillFingerprints(CredentialOwnerType ownerType, Long ownerId, String provider);
 
     /**
      * 人工停用凭证（N-004 收口）。

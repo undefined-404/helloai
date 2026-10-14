@@ -2,6 +2,7 @@ package com.helloai.core.system.service.impl;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.crypto.CredentialCryptoService;
+import com.helloai.core.system.crypto.CredentialFingerprint;
 import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.service.CredentialVaultBindingService;
 import com.helloai.core.system.service.CredentialVaultService;
@@ -35,7 +36,8 @@ public class CredentialVaultBindingServiceImpl implements CredentialVaultBinding
             throw new BizException("apiKey 不能为空");
         }
         String encrypted = credentialCryptoService.encryptToBase64(apiKeyPlaintext);
-        return credentialVaultService.saveAgentApiKeyCredential(agentId, provider, encrypted, null, expiresAt, remark);
+        return credentialVaultService.saveAgentApiKeyCredential(agentId, provider, encrypted, null, expiresAt, remark,
+                CredentialFingerprint.of(apiKeyPlaintext));
     }
 
     @Override
@@ -90,6 +92,7 @@ public class CredentialVaultBindingServiceImpl implements CredentialVaultBinding
             throw new BizException("apiKey 不能为空");
         }
         String encrypted = credentialCryptoService.encryptToBase64(apiKeyPlaintext);
-        return credentialVaultService.rotateAgentApiKey(agentId, provider, encrypted, null, remark);
+        return credentialVaultService.rotateAgentApiKey(agentId, provider, encrypted, null, remark,
+                CredentialFingerprint.of(apiKeyPlaintext));
     }
 }

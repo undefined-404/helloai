@@ -2,6 +2,7 @@ package com.helloai.core.system.service;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.crypto.CredentialCryptoService;
+import com.helloai.core.system.crypto.CredentialFingerprint;
 import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.service.impl.CredentialVaultBindingServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -125,19 +126,22 @@ class CredentialVaultBindingServiceTest {
     class BindAgentApiKey {
 
         @Test
-        @DisplayName("明文先加密后写入 vault，透传 expiresAt/remark")
+        @DisplayName("明文先加密后写入 vault，透传 expiresAt/remark 与明文指纹（M-6）")
         void shouldEncryptThenSave() {
+            String expectedFingerprint = CredentialFingerprint.of("sk-plain");
             when(credentialCryptoService.encryptToBase64("sk-plain")).thenReturn("cipher-new");
             OffsetDateTime expiresAt = OffsetDateTime.now().plusDays(30);
             when(credentialVaultService.saveAgentApiKeyCredential(
-                    eq(AGENT_ID), eq(PROVIDER), eq("cipher-new"), eq(null), eq(expiresAt), eq("bind-remark")))
+                    eq(AGENT_ID), eq(PROVIDER), eq("cipher-new"), eq(null), eq(expiresAt), eq("bind-remark"),
+                    eq(expectedFingerprint)))
                     .thenReturn(vault(null, "cipher-new"));
 
             bindingService.bindAgentApiKey(AGENT_ID, PROVIDER, "sk-plain", expiresAt, "bind-remark");
 
             verify(credentialCryptoService).encryptToBase64("sk-plain");
+            // 指纹必须由明文算出（非 null、非透传占位）——stub 以精确值匹配，传 null 会落空
             verify(credentialVaultService).saveAgentApiKeyCredential(
-                    AGENT_ID, PROVIDER, "cipher-new", null, expiresAt, "bind-remark");
+                    AGENT_ID, PROVIDER, "cipher-new", null, expiresAt, "bind-remark", expectedFingerprint);
         }
     }
 }

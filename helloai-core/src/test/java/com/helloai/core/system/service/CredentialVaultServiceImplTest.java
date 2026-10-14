@@ -10,6 +10,7 @@ import com.helloai.common.constant.CredentialAuditAction;
 import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.common.constant.CredentialStatus;
 import com.helloai.common.constant.CredentialType;
+import com.helloai.common.crypto.CredentialCryptoService;
 import com.helloai.core.system.entity.CredentialAuditLog;
 import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.mapper.CredentialVaultMapper;
@@ -62,13 +63,15 @@ class CredentialVaultServiceImplTest {
 
     private CredentialVaultMapper vaultMapper;
     private CredentialAuditService auditService;
+    private CredentialCryptoService cryptoService;
     private CredentialVaultServiceImpl service;
 
     @BeforeEach
     void setUp() {
         vaultMapper = mock(CredentialVaultMapper.class);
         auditService = mock(CredentialAuditService.class);
-        service = spy(new CredentialVaultServiceImpl(auditService));
+        cryptoService = mock(CredentialCryptoService.class);
+        service = spy(new CredentialVaultServiceImpl(auditService, cryptoService));
         ReflectionTestUtils.setField(service, "baseMapper", vaultMapper);
     }
 
@@ -192,33 +195,35 @@ class CredentialVaultServiceImplTest {
     class AuditLanding {
 
         @Test
-        @DisplayName("saveAgentApiKeyCredential：旧 ACTIVE 停用 + 新凭证保存 + BIND 审计")
+        @DisplayName("saveAgentApiKeyCredential：旧 ACTIVE 停用 + 新凭证保存（含指纹）+ BIND 审计")
         void shouldAuditOnSave() {
             when(vaultMapper.update(isNull(), any())).thenReturn(1);
             doReturn(true).when(service).save(any(CredentialVault.class));
 
-            service.saveAgentApiKeyCredential(AGENT_ID, PROVIDER, "cipher", null, null, "r");
+            service.saveAgentApiKeyCredential(AGENT_ID, PROVIDER, "cipher", null, null, "r", "fp-save");
 
             ArgumentCaptor<CredentialVault> captor = ArgumentCaptor.forClass(CredentialVault.class);
             verify(service).save(captor.capture());
             CredentialVault saved = captor.getValue();
+            assertThat(saved.getFingerprint()).isEqualTo("fp-save");
             verify(auditService).record(eq(saved.getId()), eq(CredentialOwnerType.AGENT), eq(AGENT_ID),
                     eq(PROVIDER), eq(CredentialAuditAction.BIND), eq(CredentialAuditAction.OPERATOR_ADMIN), anyString());
         }
 
         @Test
-        @DisplayName("rotateAgentApiKey：旧→EXPIRED + 新凭证 + ROTATE 审计（detail 含 rotated_from_id）")
+        @DisplayName("rotateAgentApiKey：旧→EXPIRED + 新凭证（含指纹）+ ROTATE 审计（detail 含 rotated_from_id）")
         void shouldAuditOnRotate() {
             CredentialVault oldVault = vault(9L, CredentialStatus.ACTIVE, null);
             when(vaultMapper.selectOne(any())).thenReturn(oldVault);
             when(vaultMapper.update(isNull(), any())).thenReturn(1);
             doReturn(true).when(service).save(any(CredentialVault.class));
 
-            service.rotateAgentApiKey(AGENT_ID, PROVIDER, "cipher-new", null, "rotate-remark");
+            service.rotateAgentApiKey(AGENT_ID, PROVIDER, "cipher-new", null, "rotate-remark", "fp-rotate");
 
             ArgumentCaptor<CredentialVault> captor = ArgumentCaptor.forClass(CredentialVault.class);
             verify(service).save(captor.capture());
             CredentialVault saved = captor.getValue();
+            assertThat(saved.getFingerprint()).isEqualTo("fp-rotate");
             verify(auditService).record(eq(saved.getId()), eq(CredentialOwnerType.AGENT), eq(AGENT_ID),
                     eq(PROVIDER), eq(CredentialAuditAction.ROTATE), eq(CredentialAuditAction.OPERATOR_ADMIN),
                     org.mockito.ArgumentMatchers.contains("rotated_from_id=9"));

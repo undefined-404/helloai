@@ -9,6 +9,8 @@ import com.helloai.common.constant.CredentialAuditAction;
 import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.common.constant.CredentialStatus;
 import com.helloai.common.constant.CredentialType;
+import com.helloai.common.crypto.CredentialCryptoService;
+import com.helloai.core.system.crypto.CredentialFingerprint;
 import com.helloai.core.system.entity.CredentialAuditLog;
 import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.port.CredentialSecret;
@@ -16,6 +18,7 @@ import com.helloai.core.system.mapper.CredentialVaultMapper;
 import com.helloai.core.system.service.CredentialAuditService;
 import com.helloai.core.system.service.CredentialVaultService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,11 +28,13 @@ import java.util.List;
 /**
  * 凭证保险库服务实现。
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMapper, CredentialVault> implements CredentialVaultService {
 
     private final CredentialAuditService credentialAuditService;
+    private final CredentialCryptoService credentialCryptoService;
 
     /**
      * 查询 Agent 的当前启用 API Key 凭证。
@@ -124,6 +129,92 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
                 .count() > 0;
     }
 
+    // ── `M-6` Key 指纹：同 provider 内同 Key 去重 / 历史行惰性回填 ──────────
+
+    /**
+     * 判断指定归属 + provider 下是否已存在同指纹凭证（不限状态，含历史 EXPIRED/DISABLED 行）。
+     */
+    @Override
+    public boolean existsFingerprint(CredentialOwnerType ownerType, Long ownerId,
+                                     String provider, String fingerprint) {
+        if (fingerprint == null || fingerprint.isBlank()) {
+            return false;
+        }
+        return lambdaQuery()
+                .eq(CredentialVault::getOwnerType, ownerType)
+                .eq(CredentialVault::getOwnerId, ownerId)
+                .eq(CredentialVault::getProvider, provider)
+                .eq(CredentialVault::getCredentialType, CredentialType.API_KEY)
+                .eq(CredentialVault::getFingerprint, fingerprint)
+                .count() > 0;
+    }
+
+    /**
+     * 列出指定归属 + provider 的全部 API Key 凭证（含历史行）。
+     */
+    private List<CredentialVault> listByOwnerAndProvider(CredentialOwnerType ownerType, Long ownerId,
+                                                         String provider) {
+        return lambdaQuery()
+                .eq(CredentialVault::getOwnerType, ownerType)
+                .eq(CredentialVault::getOwnerId, ownerId)
+                .eq(CredentialVault::getProvider, provider)
+                .eq(CredentialVault::getCredentialType, CredentialType.API_KEY)
+                .list();
+    }
+
+    /**
+     * 仅当该行当前无指纹时写入（只补不覆盖，幂等）。
+     */
+    private boolean updateFingerprintIfAbsent(Long id, String fingerprint) {
+        if (id == null || fingerprint == null || fingerprint.isBlank()) {
+            return false;
+        }
+        return lambdaUpdate()
+                .eq(CredentialVault::getId, id)
+                .and(w -> w.isNull(CredentialVault::getFingerprint)
+                        .or().eq(CredentialVault::getFingerprint, ""))
+                .set(CredentialVault::getFingerprint, fingerprint)
+                .update();
+    }
+
+    /**
+     * `M-6` 惰性回填历史行指纹。
+     *
+     * <p>解密属「凭证素材」职责，落在本域内可避免 agent 域 import {@code system.entity}
+     * （RM5 批 3 已为此建立只读快照先例）。逐行 best-effort：单行解密失败只记 WARN 并跳过，
+     * **不阻断**管理员保存密钥。</p>
+     */
+    @Override
+    public int backfillFingerprints(CredentialOwnerType ownerType, Long ownerId, String provider) {
+        int filled = 0;
+        for (CredentialVault row : listByOwnerAndProvider(ownerType, ownerId, provider)) {
+            if (row.getFingerprint() != null && !row.getFingerprint().isBlank()) {
+                continue;
+            }
+            String encrypted = row.getEncryptedValue();
+            if (encrypted == null || encrypted.isBlank()) {
+                // secretRef 型凭证：无明文可摘要，保持 NULL（合法）
+                continue;
+            }
+            String computed;
+            try {
+                computed = CredentialFingerprint.of(credentialCryptoService.decryptFromBase64(encrypted));
+            } catch (Exception e) {
+                log.warn("历史凭证指纹回填跳过（解密失败）: id={}, provider={}, reason={}",
+                        row.getId(), provider, e.getMessage());
+                continue;
+            }
+            if (updateFingerprintIfAbsent(row.getId(), computed)) {
+                filled++;
+            }
+        }
+        if (filled > 0) {
+            log.info("凭证指纹已回填: ownerType={}, ownerId={}, provider={}, rows={}",
+                    ownerType, ownerId, provider, filled);
+        }
+        return filled;
+    }
+
     /**
      * 以最小 upsert 方式保存 Agent 的 API Key 凭证。
      *
@@ -134,9 +225,9 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
     public CredentialVault saveAgentApiKeyCredential(Long agentId, String provider,
                                                      String encryptedValue, String secretRef,
                                                      OffsetDateTime expiresAt,
-                                                     String remark) {
+                                                     String remark, String fingerprint) {
         return saveApiKeyCredential(CredentialOwnerType.AGENT, agentId, provider,
-                encryptedValue, secretRef, expiresAt, remark);
+                encryptedValue, secretRef, expiresAt, remark, fingerprint);
     }
 
     /**
@@ -146,16 +237,16 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
     @Override
     public CredentialVault savePlatformApiKeyCredential(String provider,
                                                         String encryptedValue, String secretRef,
-                                                        String remark) {
+                                                        String remark, String fingerprint) {
         return saveApiKeyCredential(CredentialOwnerType.PLATFORM, 0L, provider,
-                encryptedValue, secretRef, null, remark);
+                encryptedValue, secretRef, null, remark, fingerprint);
     }
 
     private CredentialVault saveApiKeyCredential(CredentialOwnerType ownerType, Long ownerId,
                                                  String provider,
                                                  String encryptedValue, String secretRef,
                                                  OffsetDateTime expiresAt,
-                                                 String remark) {
+                                                 String remark, String fingerprint) {
         lambdaUpdate()
                 .eq(CredentialVault::getOwnerType, ownerType)
                 .eq(CredentialVault::getOwnerId, ownerId)
@@ -175,6 +266,7 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
         vault.setStatus(CredentialStatus.ACTIVE);
         vault.setExpireTime(expiresAt);
         vault.setRemark(remark);
+        vault.setFingerprint(fingerprint);
         save(vault);
         // 绑定/保存动作审计（同事务，fail-close——审计失败整体回滚）
         recordAudit(vault, CredentialAuditAction.BIND, CredentialAuditAction.OPERATOR_ADMIN,
@@ -186,8 +278,9 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
     @Override
     public CredentialVault saveAgentApiKeyCredential(Long agentId, String provider,
                                                      String encryptedValue, String secretRef,
-                                                     String remark) {
-        return saveAgentApiKeyCredential(agentId, provider, encryptedValue, secretRef, null, remark);
+                                                     String remark, String fingerprint) {
+        return saveAgentApiKeyCredential(agentId, provider, encryptedValue, secretRef, null,
+                remark, fingerprint);
     }
 
     /**
@@ -212,9 +305,9 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
     @Override
     public CredentialVault rotateAgentApiKey(Long agentId, String provider,
                                              String encryptedValue, String secretRef,
-                                             String remark) {
+                                             String remark, String fingerprint) {
         return rotateApiKey(CredentialOwnerType.AGENT, agentId, provider,
-                encryptedValue, secretRef, remark);
+                encryptedValue, secretRef, remark, fingerprint);
     }
 
     /**
@@ -224,15 +317,15 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
     @Override
     public CredentialVault rotatePlatformApiKey(String provider,
                                                 String encryptedValue, String secretRef,
-                                                String remark) {
+                                                String remark, String fingerprint) {
         return rotateApiKey(CredentialOwnerType.PLATFORM, 0L, provider,
-                encryptedValue, secretRef, remark);
+                encryptedValue, secretRef, remark, fingerprint);
     }
 
     private CredentialVault rotateApiKey(CredentialOwnerType ownerType, Long ownerId,
                                          String provider,
                                          String encryptedValue, String secretRef,
-                                         String remark) {
+                                         String remark, String fingerprint) {
         CredentialVault oldVault = getActiveApiKey(ownerType, ownerId, provider);
 
         if (oldVault != null) {
@@ -259,6 +352,7 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
         newVault.setSecretRef(secretRef);
         newVault.setStatus(CredentialStatus.ACTIVE);
         newVault.setRemark(finalRemark);
+        newVault.setFingerprint(fingerprint);
         save(newVault);
         // 轮换动作审计（同事务；detail 记录 rotated_from_id 审计链）
         recordAudit(newVault, CredentialAuditAction.ROTATE, CredentialAuditAction.OPERATOR_ADMIN,

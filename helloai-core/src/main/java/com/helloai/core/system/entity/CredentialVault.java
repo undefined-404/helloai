@@ -47,6 +47,15 @@ public class CredentialVault extends BaseEntity {
     /** 外部 Secret 引用（如 Vault/环境变量 Key 名），和 encryptedValue 二选一或并存。 */
     private String secretRef;
 
+    /**
+     * Key 指纹：明文的 SHA-256 前缀小写十六进制串（24 字符），用于同 provider 内
+     * 同 Key 去重与多 Key 区分，**不可逆、不暴露明文**（见 `V111`）。
+     *
+     * <p>{@code null} 的两种合法情形：{@code secretRef} 型凭证（无明文可摘要）、
+     * 迁移前的历史行（待应用层惰性回填）。</p>
+     */
+    private String fingerprint;
+
     /** 当前启停状态。 */
     private CredentialStatus status;
 
