@@ -1,9 +1,9 @@
 package com.helloai.core.agent;
 
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.core.system.port.ModelCapabilities;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -39,8 +39,9 @@ public final class AgentSkillDeriver {
      * 标准技能标签集合（与前端 constants/agentSkills.ts、required_skills 词表对齐）。
      *
      * <p>能力驱动校验边界（D2=A）：explicitSkills 中属于标准集合的
-     * 项必须落在模型白名单内；非标准项视为自定义技能豁免校验（平台侧能力声明，
-     * 与模型原生能力无关）。</p>
+     * 项必须满足模型能力谓词（{@link SkillCapabilityRequirements#satisfies}，
+     * 键集与 {@link SkillCapabilityRequirements#REQUIRED} 严格同集合）；
+     * 非标准项视为自定义技能豁免校验（平台侧能力声明，与模型原生能力无关）。</p>
      */
     public static final Set<String> STANDARD_SKILLS = Set.of(
             "shell", "docker", "sql", "web-search", "code-review", "python", "java", "thinking");
@@ -83,36 +84,32 @@ public final class AgentSkillDeriver {
     /**
      * 按模型能力推导技能（API_KEY_LLM 注册/编辑使用）。
      *
-     * <p>优先级：① 模型能力锁定（capabilitySkills，始终追加不可取消）→
-     * ② accessType 兜底基础技能 → ③ explicitSkills：标准技能按白名单过滤、
+     * <p>优先级：① 模型能力锁定（{@code lockedSkills}，始终追加不可取消）→
+     * ② accessType 兜底基础技能 → ③ explicitSkills：标准技能按能力谓词判定（{@link SkillCapabilityRequirements#satisfies}）、
      * 自定义技能豁免放行（D2=A）→ ④ 名称/描述关键词兜底。<br>
-     * 已识别模型（availableOptionalSkills 非空）时对结果净化：标准技能不在
-     * capabilitySkills ∪ availableOptionalSkills 内则移除（如 deepseek 模型描述含"搜索"
-     * 也不会推导出 web-search）；未识别模型（白名单为空）不净化，与 {@link #derive} 行为一致。</p>
+     * 已识别模型（{@code caps != null}）时对结果净化：标准技能不满足谓词则移除（如 deepseek 模型描述含"搜索"
+     * 也不会推导出 web-search）；未识别模型（{@code caps == null}）不净化，与 {@link #derive} 行为一致。</p>
      *
-     * @param type                     接入类型（决定基础技能；null 按无基础技能处理）
-     * @param name                     Agent 名称（可为 null）
-     * @param description              Agent 描述（可为 null）
-     * @param explicitSkills           用户显式传入的技能（可为 null/空）
-     * @param capabilitySkills         模型能力锁定技能（可为 null）
-     * @param availableOptionalSkills  模型可扩展技能白名单（可为 null/空 = 未识别模型降级）
+     * <p><b>`M-9` 换内容</b>：入参由「白名单两列」改为能力谓词快照
+     * {@link ModelCapabilities}；「已识别」判据由「白名单非空」改为 {@code caps != null}；
+     * {@code reasoning=false} ⇒ 结果不含 {@code thinking}（裁定 ①），{@code webSearch=false} ⇒ 不含 {@code web-search}。</p>
+     *
+     * @param type           接入类型（决定基础技能；null 按无基础技能处理）
+     * @param name           Agent 名称（可为 null）
+     * @param description    Agent 描述（可为 null）
+     * @param explicitSkills 用户显式传入的技能（可为 null/空）
+     * @param caps           模型能力谓词快照（可为 null = 未识别模型降级）
      * @return 清洗后的技能列表（非 null）
      */
     public static List<String> deriveWithCapabilities(
             AgentAccessType type, String name, String description,
             List<String> explicitSkills,
-            List<String> capabilitySkills, List<String> availableOptionalSkills) {
+            ModelCapabilities caps) {
 
         LinkedHashSet<String> result = new LinkedHashSet<>();
 
-        // ① 模型能力锁定（始终追加，不可取消）
-        if (capabilitySkills != null) {
-            for (String s : capabilitySkills) {
-                if (s != null && !s.isBlank()) {
-                    result.add(s.trim());
-                }
-            }
-        }
+        // ① 模型能力锁定（reasoning=true ⇒ thinking；始终追加，不可取消）
+        result.addAll(SkillCapabilityRequirements.lockedSkills(caps));
 
         // ② accessType 兜底（保留行为）
         if (type != null) {
@@ -122,10 +119,10 @@ public final class AgentSkillDeriver {
             }
         }
 
-        // ③ explicitSkills：标准技能查白名单，自定义技能豁免放行（D2=A）
+        // ③ explicitSkills：标准技能查能力谓词，自定义技能豁免放行（D2=A）
         for (String s : clean(explicitSkills)) {
             if (STANDARD_SKILLS.contains(s)) {
-                if (availableOptionalSkills != null && availableOptionalSkills.contains(s)) {
+                if (caps != null && SkillCapabilityRequirements.satisfies(s, caps)) {
                     result.add(s);
                 }
             } else {
@@ -141,13 +138,10 @@ public final class AgentSkillDeriver {
             }
         }
 
-        // 已识别模型：净化标准技能越界项（自定义技能保留）
-        if (availableOptionalSkills != null && !availableOptionalSkills.isEmpty()) {
-            Set<String> whitelist = new HashSet<>(availableOptionalSkills);
-            if (capabilitySkills != null) {
-                whitelist.addAll(capabilitySkills);
-            }
-            result.removeIf(s -> STANDARD_SKILLS.contains(s) && !whitelist.contains(s));
+        // 已识别模型（caps != null）：净化标准技能越界项（自定义技能保留）
+        if (caps != null) {
+            result.removeIf(s -> STANDARD_SKILLS.contains(s)
+                    && !SkillCapabilityRequirements.satisfies(s, caps));
         }
         return new ArrayList<>(result);
     }

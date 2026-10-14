@@ -1,6 +1,7 @@
 package com.helloai.core.agent;
 
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.core.system.port.ModelCapabilities;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -17,6 +18,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 空显式走推导 / 清洗（trim、空白过滤、去重） / null 防御。</p>
  */
 class AgentSkillDeriverTest {
+
+    /**
+     * `M-9` 谓词快照（入参构造器）：{@code deriveWithCapabilities` 由「白名单两列」改为能力谓词。
+     * reasoning↔thinking、webSearch↔web-search；其余作业类型技能恒真。
+     */
+    private static ModelCapabilities caps(boolean reasoning, boolean webSearch) {
+        return new ModelCapabilities(List.of("text"), List.of("text"), reasoning, true, webSearch);
+    }
 
     @Test
     @DisplayName("显式技能优先：非空显式值直接返回，不被推导覆盖")
@@ -105,17 +114,17 @@ class AgentSkillDeriverTest {
     void withCapabilities_lockedSkillAlwaysPresent() {
         List<String> result = AgentSkillDeriver.deriveWithCapabilities(
                 AgentAccessType.API_KEY_LLM, "planner", "计划编排", null,
-                List.of("thinking"), List.of("shell", "code-review"));
+                caps(true, false));
         assertThat(result).contains("thinking");
         assertThat(result).contains("code-review");
     }
 
     @Test
-    @DisplayName("deriveWithCapabilities：标准技能按白名单过滤，越界项被丢弃")
+    @DisplayName("deriveWithCapabilities：标准技能按能力谓词过滤，越界项被丢弃")
     void withCapabilities_standardSkillOutOfWhitelistDropped() {
         List<String> result = AgentSkillDeriver.deriveWithCapabilities(
-                AgentAccessType.API_KEY_LLM, "deepseek", "通用", List.of("thinking", "python", "shell"),
-                List.of("thinking"), List.of("shell", "code-review"));
+                AgentAccessType.API_KEY_LLM, "deepseek", "通用", List.of("thinking", "web-search", "shell"),
+                caps(true, false));
         assertThat(result).containsExactly("thinking", "code-review", "shell");
     }
 
@@ -124,7 +133,7 @@ class AgentSkillDeriverTest {
     void withCapabilities_customSkillExempted() {
         List<String> result = AgentSkillDeriver.deriveWithCapabilities(
                 AgentAccessType.API_KEY_LLM, "k8s-ops", "Kubernetes 运维", List.of("kubernetes", "shell"),
-                List.of("thinking"), List.of("shell", "code-review"));
+                caps(true, false));
         assertThat(result).contains("kubernetes", "thinking", "shell");
     }
 
@@ -133,26 +142,67 @@ class AgentSkillDeriverTest {
     void withCapabilities_keywordOutOfWhitelistPurged() {
         List<String> result = AgentSkillDeriver.deriveWithCapabilities(
                 AgentAccessType.API_KEY_LLM, "search-bot", "擅长联网搜索与浏览器", null,
-                List.of("thinking"), List.of("shell", "code-review"));
+                caps(true, false));
         assertThat(result).doesNotContain("web-search");
         assertThat(result).contains("thinking", "code-review");
     }
 
     @Test
-    @DisplayName("deriveWithCapabilities：未识别模型（白名单空）不净化，保留 A2 关键词兜底行为")
+    @DisplayName("deriveWithCapabilities：未识别模型（caps=null）不净化，保留 A2 关键词兜底行为")
     void withCapabilities_unknownModelKeepsKeywordFallback() {
         List<String> result = AgentSkillDeriver.deriveWithCapabilities(
                 AgentAccessType.API_KEY_LLM, "search-bot", "擅长联网搜索", null,
-                null, null);
+                null);
         assertThat(result).contains("web-search", "code-review");
     }
 
     @Test
-    @DisplayName("deriveWithCapabilities：联网模型白名单放行 web-search")
+    @DisplayName("deriveWithCapabilities：联网模型（webSearch=true）放行 web-search")
     void withCapabilities_webSearchAllowedForOnlineModels() {
         List<String> result = AgentSkillDeriver.deriveWithCapabilities(
                 AgentAccessType.API_KEY_LLM, "kimi", "搜索专家", List.of("web-search"),
-                List.of("thinking"), List.of("shell", "code-review", "web-search"));
+                caps(true, true));
         assertThat(result).contains("web-search", "thinking");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  M-9 新增：谓词驱动的拒绝面变化
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("M-9：reasoning=false ⇒ 结果不含 thinking（thinking 由 reasoning 驱动）")
+    void withCapabilities_reasoningFalseExcludesThinking() {
+        List<String> result = AgentSkillDeriver.deriveWithCapabilities(
+                AgentAccessType.API_KEY_LLM, "deepseek", "通用", List.of("thinking", "shell"),
+                caps(false, false));
+        assertThat(result).doesNotContain("thinking");
+        assertThat(result).contains("shell", "code-review");
+    }
+
+    @Test
+    @DisplayName("M-9：webSearch=false ⇒ 显式 web-search 被拒（不落库）")
+    void withCapabilities_webSearchFalseDropsExplicitWebSearch() {
+        List<String> result = AgentSkillDeriver.deriveWithCapabilities(
+                AgentAccessType.API_KEY_LLM, "deepseek", "通用", List.of("web-search"),
+                caps(true, false));
+        assertThat(result).doesNotContain("web-search");
+    }
+
+    @Test
+    @DisplayName("M-9：作业类型技能恒真（python/docker/sql/java 在最弱模型下仍保留）")
+    void withCapabilities_jobTypeSkillsAlwaysKept() {
+        List<String> result = AgentSkillDeriver.deriveWithCapabilities(
+                AgentAccessType.API_KEY_LLM, "coder", "通用", List.of("python", "docker", "sql", "java"),
+                caps(false, false));
+        assertThat(result).contains("python", "docker", "sql", "java");
+    }
+
+    @Test
+    @DisplayName("M-9：reasoning=true 且 webSearch=true ⇒ thinking 与 web-search 同时存在")
+    void withCapabilities_bothPredicatesTrue() {
+        List<String> result = AgentSkillDeriver.deriveWithCapabilities(
+                AgentAccessType.API_KEY_LLM, "kimi", "搜索专家", List.of("web-search"),
+                caps(true, true));
+        assertThat(result).contains("thinking", "web-search", "code-review");
     }
 }

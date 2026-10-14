@@ -5,6 +5,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.AgentSkillDeriver;
+import com.helloai.core.agent.SkillCapabilityRequirements;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.system.port.LlmProviderModelProfile;
@@ -12,9 +13,7 @@ import com.helloai.core.system.service.LlmProviderModelQueryService;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Agent 技能推导与模型能力校验组件。
@@ -38,9 +37,13 @@ public class AgentSkillPolicyService {
     /**
      * 校验 Agent skills 不超出模型能力。
      *
-     * <p>规则（D2=A 标准校验 + 自定义豁免）：仅标准技能标签查模型白名单
-     * （capabilitySkills ∪ availableOptionalSkills）；非标准项视为自定义技能豁免；
+     * <p>规则（D2=A 标准校验 + 自定义豁免）：仅标准技能标签按模型能力谓词判定
+     * （{@link com.helloai.core.agent.SkillCapabilityRequirements#satisfies}）；非标准项视为自定义技能豁免；
      * modelType 为 null/blank 或模型未识别（表中不存在）时直接通过（降级兼容）。</p>
+     *
+     * <p><b>`M-9` 换判据</b>：由 V52 两列白名单（{@code capabilitySkills ∪ availableOptionalSkills}）
+     * 改为能力谓词（{@code thinking←reasoning}、{@code web-search←webSearch}；
+     * 作业类型技能恒真）。错误码 / 文案逐字保持。</p>
      */
     public void validateAgentSkills(String modelType, List<String> skills) {
         if (modelType == null || modelType.isBlank()) {
@@ -50,24 +53,18 @@ public class AgentSkillPolicyService {
         if (cleaned.isEmpty()) {
             return;
         }
-        LlmProviderModelProfile capability = llmProviderModelQueryService.findCapabilityProfileByModelType(modelType);
-        if (capability == null) {
+        LlmProviderModelProfile profile = llmProviderModelQueryService.findCapabilityProfileByModelType(modelType);
+        if (profile == null) {
             // 未识别模型：不校验（降级兼容）
             return;
         }
-        Set<String> whitelist = new HashSet<>();
-        if (capability.capabilitySkills() != null) {
-            whitelist.addAll(capability.capabilitySkills());
-        }
-        if (capability.availableOptionalSkills() != null) {
-            whitelist.addAll(capability.availableOptionalSkills());
-        }
+        // 越界 = 标准技能且能力谓词不满足（satisfies 恒真会让门失效，故判据必须走谓词）。
         List<String> invalid = cleaned.stream()
                 .filter(AgentSkillDeriver.STANDARD_SKILLS::contains)
-                .filter(s -> !whitelist.contains(s))
+                .filter(s -> !SkillCapabilityRequirements.satisfies(s, profile.capabilities()))
                 .toList();
         if (!invalid.isEmpty()) {
-            // 技能超出模型白名单属可自纠入参错误：显式 code=400 而非单参构造的默认 500，
+            // 技能超出模型能力属可自纠入参错误：显式 code=400 而非单参构造的默认 500，
             // 与同族修复同口径（本类 validateModelType 格式/可用性 → 400、validateModelUniqueInRole → 409，
             // 以及 AgentController 的 name/role 校验 → 400）。单参构造会让 GlobalExceptionHandler
             // 把「你请求了一个该模型不支持的技能」也报成服务端故障（2026-10-10 修复）。
@@ -78,7 +75,7 @@ public class AgentSkillPolicyService {
     /**
      * 收口技能落库推导。
      *
-     * <p>API_KEY_LLM 且 modelType 已识别 → 能力驱动推导（能力锁定 + 白名单过滤 + 自定义豁免）；
+     * <p>API_KEY_LLM 且 modelType 已识别 → 能力驱动推导（能力锁定 + 谓词过滤 + 自定义豁免）；
      * 其他接入类型或未识别模型 → 走基础推导（显式优先）。</p>
      */
     public List<String> deriveSkillsForRegistration(Agent agent, List<String> explicitSkills) {
@@ -88,13 +85,12 @@ public class AgentSkillPolicyService {
         AgentAccessType accessType = agent.getAccessType();
         String modelType = agent.getModelType();
         if (accessType == AgentAccessType.API_KEY_LLM && modelType != null && !modelType.isBlank()) {
-            LlmProviderModelProfile capability = llmProviderModelQueryService.findCapabilityProfileByModelType(modelType);
-            if (capability != null) {
+            LlmProviderModelProfile profile = llmProviderModelQueryService.findCapabilityProfileByModelType(modelType);
+            if (profile != null) {
                 return AgentSkillDeriver.deriveWithCapabilities(
                         accessType, agent.getName(), agent.getRemark(),
                         explicitSkills,
-                        capability.capabilitySkills(),
-                        capability.availableOptionalSkills());
+                        profile.capabilities());
             }
         }
         // 非 API_KEY_LLM / 未识别模型：基础推导（显式优先，不合并基础技能）

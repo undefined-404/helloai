@@ -334,11 +334,17 @@ class AgentServiceTest {
     // ════════════════════════════════════════════════════════════
 
     private LlmProviderModelProfile capability(String modelType, List<String> capability, List<String> available) {
-        return new LlmProviderModelProfile(capability, available);
+        // `M-9`：端口内容由「白名单两列」换为能力谓词快照。沿用旧入参语义 → 映射：
+        // capability 非空 ⇔ reasoning=true（thinking 锁定）；available 含 web-search ⇔ webSearch=true。
+        return new LlmProviderModelProfile(new com.helloai.core.system.port.ModelCapabilities(
+                List.of("text"), List.of("text"),
+                capability != null && capability.contains("thinking"),
+                true,
+                available != null && available.contains("web-search")));
     }
 
     @Test
-    @DisplayName("validateAgentSkills：标准技能超出模型白名单 → 抛 BizException")
+    @DisplayName("validateAgentSkills：标准技能越出模型能力（web-search）→ 抛 BizException")
     void validateSkills_standardSkillOutOfWhitelist_throws() {
         AgentService service = newSpyService();
         when(llmProviderModelQueryService.findCapabilityProfileByModelType("deepseek:deepseek-v4-flash"))
@@ -346,10 +352,10 @@ class AgentServiceTest {
                         List.of("thinking"), List.of("shell", "code-review")));
 
         assertThatThrownBy(() -> service.validateAgentSkills(
-                "deepseek:deepseek-v4-flash", List.of("python", "shell")))
+                "deepseek:deepseek-v4-flash", List.of("web-search", "shell")))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不支持技能")
-                .hasMessageContaining("python")
+                .hasMessageContaining("web-search")
                 // 错误码：可自纠入参 → 400，而非单参构造默认的 500（2026-10-10 修复）
                 .satisfies(ex -> assertThat(((BizException) ex).getCode()).isEqualTo(400));
     }
@@ -394,7 +400,7 @@ class AgentServiceTest {
         agent.setRemark("计划编排");
         agent.setModelType("deepseek:deepseek-v4-flash");
 
-        List<String> skills = service.deriveSkillsForRegistration(agent, List.of("thinking", "python", "shell"));
+        List<String> skills = service.deriveSkillsForRegistration(agent, List.of("thinking", "web-search", "shell"));
 
         assertThat(skills).containsExactly("thinking", "code-review", "shell");
     }
