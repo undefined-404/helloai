@@ -12,6 +12,8 @@ import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.crypto.AgentApiKeyCipher;
 import com.helloai.core.system.entity.LlmProviderModel;
+import com.helloai.core.system.port.LlmProviderModelProfile;
+import com.helloai.core.system.port.ModelCapabilities;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.system.service.PromptTemplateService;
 import com.helloai.core.agent.AgentCapability;
@@ -266,6 +268,11 @@ public class AgentController {
         }
         agent.setCapabilities(AgentCapability.mergeDefaults(accessType, override));
 
+        // 4b) 模态三键由模型能力谓词收敛（T8：只缩不放）
+        //     —— 客户端传 true 而模型不支持 ⇒ 落 false；客户端传 false ⇒ 保持 false；
+        //     pdf 等未知模态 token 不影响三键；模型无对应模态（含无 modelType / 未识别）⇒ false。
+        convergeModalityCapabilities(agent);
+
         // 5) skills（能力驱动）：显式传入优先；否则已有技能为空时按 accessType + 模型能力推导。
         // 白名单校验已在注册前完成（register / registerWithToken），此处只做推导与落库。
         List<String> explicitSkills = resolveExplicitSkills(body);
@@ -288,6 +295,45 @@ public class AgentController {
         if (accessType == AgentAccessType.API_KEY_LLM) {
             llmProviderCatalogService.provisionPlatformCredential(agent);
         }
+    }
+
+    /** 模态 token → {@code agent.capabilities} 能力键（T8：仅此三键参与收敛，其余字段语义不动）。 */
+    private static final Map<String, String> MODALITY_CAPABILITY_KEYS = Map.of(
+            "image", AgentCapability.SUPPORTS_IMAGE_UNDERSTANDING,
+            "audio", AgentCapability.SUPPORTS_AUDIO_UNDERSTANDING,
+            "video", AgentCapability.SUPPORTS_VIDEO_UNDERSTANDING);
+
+    /**
+     * 收敛 {@code agent.capabilities} 的模态三键（T8）。
+     *
+     * <p>规则 = 客户端声明 <b>AND</b> 模型支持（<b>只能缩小不能放大</b>）：</p>
+     * <ul>
+     *   <li>客户端传 {@code true} 而模型 {@code capabilities.input} 无对应模态 ⇒ 落 {@code false}；</li>
+     *   <li>客户端传 {@code false} ⇒ 保持 {@code false}；</li>
+     *   <li>模型无对应模态（含无 modelType / 未识别）⇒ {@code false}（fail-closed）；</li>
+     *   <li>{@code pdf} 等未知模态 token 不影响三键（只认 image/audio/video）。</li>
+     * </ul>
+     */
+    private void convergeModalityCapabilities(Agent agent) {
+        Map<String, Object> caps = agent.getCapabilities();
+        if (caps == null) {
+            return;
+        }
+        ModelCapabilities model = resolveModelCapabilities(agent.getModelType());
+        for (Map.Entry<String, String> entry : MODALITY_CAPABILITY_KEYS.entrySet()) {
+            boolean supported = model != null && model.supportsInput(entry.getKey());
+            caps.put(entry.getValue(),
+                    AgentCapability.hasCapability(agent, entry.getValue()) && supported);
+        }
+    }
+
+    /** 按 modelType 取模型能力谓词快照；无 modelType 或未识别模型返回 {@code null}。 */
+    private ModelCapabilities resolveModelCapabilities(String modelType) {
+        if (modelType == null || modelType.isBlank()) {
+            return null;
+        }
+        LlmProviderModelProfile profile = llmProviderModelQueryService.findCapabilityProfileByModelType(modelType);
+        return profile == null ? null : profile.capabilities();
     }
 
     /**
