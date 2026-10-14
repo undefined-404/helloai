@@ -247,4 +247,49 @@ class CredentialVaultServiceImplTest {
             assertThat(result).isSameAs(page);
         }
     }
+
+    @Nested
+    @DisplayName("`M-7` saveDisabledPlatformApiKeyCredential 备位落库")
+    class SaveDisabledPlatformApiKey {
+
+        @Test
+        @DisplayName("落库 status=DISABLED、owner=PLATFORM/0，保留指纹与密文，secretRef/expireTime 为空")
+        void shouldPersistAsDisabled() {
+            service.saveDisabledPlatformApiKeyCredential(PROVIDER, "cipher-1", "备位", "fp-1");
+
+            ArgumentCaptor<CredentialVault> captor = ArgumentCaptor.forClass(CredentialVault.class);
+            verify(vaultMapper).insert(captor.capture());
+            CredentialVault saved = captor.getValue();
+            assertThat(saved.getStatus()).isEqualTo(CredentialStatus.DISABLED);
+            assertThat(saved.getOwnerType()).isEqualTo(CredentialOwnerType.PLATFORM);
+            assertThat(saved.getOwnerId()).isZero();
+            assertThat(saved.getProvider()).isEqualTo(PROVIDER);
+            assertThat(saved.getCredentialType()).isEqualTo(CredentialType.API_KEY);
+            assertThat(saved.getEncryptedValue()).isEqualTo("cipher-1");
+            assertThat(saved.getFingerprint()).isEqualTo("fp-1");
+            assertThat(saved.getRemark()).isEqualTo("备位");
+            assertThat(saved.getSecretRef()).isNull();
+            assertThat(saved.getExpireTime()).isNull();
+        }
+
+        @Test
+        @DisplayName("★与「顶替式」保存的区别：备位落库不产生任何 UPDATE，原 ACTIVE 行不受影响")
+        void shouldNotUpdateExistingRows() {
+            service.saveDisabledPlatformApiKeyCredential(PROVIDER, "cipher-1", "备位", "fp-1");
+
+            verify(vaultMapper, never()).update(any(), any());
+            // 带类型实参：BaseMapper#updateById 有 T / Collection<T> 两个重载，裸 any() 会歧义
+            verify(vaultMapper, never()).updateById(any(CredentialVault.class));
+        }
+
+        @Test
+        @DisplayName("落库带 BIND 审计，detail 标明备位语义（与启用位写入可区分）")
+        void shouldRecordBindAudit() {
+            service.saveDisabledPlatformApiKeyCredential(PROVIDER, "cipher-1", "备位", "fp-1");
+
+            verify(auditService).record(any(), eq(CredentialOwnerType.PLATFORM), eq(0L), eq(PROVIDER),
+                    eq(CredentialAuditAction.BIND), eq(CredentialAuditAction.OPERATOR_ADMIN),
+                    eq("batch add as standby (DISABLED)"));
+        }
+    }
 }
