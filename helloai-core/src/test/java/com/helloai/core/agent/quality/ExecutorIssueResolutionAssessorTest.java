@@ -80,7 +80,7 @@ class ExecutorIssueResolutionAssessorTest {
     }
 
     private LlmProviderProfile provider(String code) {
-        return new LlmProviderProfile(code, null, null, null, null, 1);
+        return new LlmProviderProfile(code, null, null, null, null, 1, null);
     }
 
     // ════════════════════════════════════════════════════════════

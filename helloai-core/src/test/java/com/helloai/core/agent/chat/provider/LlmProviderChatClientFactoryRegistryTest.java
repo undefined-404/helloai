@@ -54,7 +54,7 @@ class LlmProviderChatClientFactoryRegistryTest {
     }
 
     private LlmProviderProfile llmProvider(String providerCode, String protocolType) {
-        return new LlmProviderProfile(providerCode, null, null, null, protocolType, 1);
+        return new LlmProviderProfile(providerCode, null, null, null, protocolType, 1, null);
     }
 
     private Agent agent() {

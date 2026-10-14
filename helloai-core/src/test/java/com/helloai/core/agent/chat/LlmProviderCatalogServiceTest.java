@@ -52,7 +52,7 @@ class LlmProviderCatalogServiceTest {
 
     private LlmProviderProfile llmProvider(String providerCode, String providerName,
                                            String protocolType, Integer enabled) {
-        return new LlmProviderProfile(providerCode, providerName, null, null, protocolType, enabled);
+        return new LlmProviderProfile(providerCode, providerName, null, null, protocolType, enabled, null);
     }
 
     private Agent agent(String modelType) {

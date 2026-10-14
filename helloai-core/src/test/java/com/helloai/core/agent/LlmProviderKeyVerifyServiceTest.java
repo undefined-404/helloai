@@ -46,7 +46,7 @@ class LlmProviderKeyVerifyServiceTest {
     }
 
     private LlmProviderProfile provider(String defaultModel) {
-        return new LlmProviderProfile(PROVIDER_CODE, null, null, defaultModel, "OPENAI_COMPATIBLE", 1);
+        return new LlmProviderProfile(PROVIDER_CODE, null, null, defaultModel, "OPENAI_COMPATIBLE", 1, null);
     }
 
     @Test
