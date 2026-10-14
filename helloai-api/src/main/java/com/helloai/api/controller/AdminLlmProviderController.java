@@ -2,10 +2,12 @@ package com.helloai.api.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.admin.CreateLlmProviderRequest;
+import com.helloai.api.dto.admin.LlmProviderApiKeyResponse;
 import com.helloai.api.dto.admin.LlmProviderModelResponse;
 import com.helloai.api.dto.admin.LlmProviderResponse;
 import com.helloai.api.dto.admin.UpdateLlmProviderRequest;
 import com.helloai.common.base.R;
+import com.helloai.core.agent.dto.ApiKeySaveOutcome;
 import com.helloai.core.agent.service.LlmProviderKeyVerifyService;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.system.entity.LlmProvider;
@@ -154,10 +156,13 @@ public class AdminLlmProviderController {
      *
      * <p>请求体为纯字符串（apiKey 明文），使用 {@link String} 直接接收避免 Jackson 把数字等
      * 误识别为 JSON 节点。空值返回 400。</p>
+     *
+     * <p>`M-6`：同一 provider 下同一 Key 二次录入 ⇒ 返回 {@code created=false} +
+     * 「已存在」文案，**不重复落库**；响应含 Key 指纹（不暴露明文）。</p>
      */
     @SaCheckPermission("llm-provider:key")
     @PutMapping("/saveApiKeyById/{id}")
-    public R<Void> saveApiKey(@PathVariable("id") Long id, @RequestBody String apiKey) {
+    public R<LlmProviderApiKeyResponse> saveApiKey(@PathVariable("id") Long id, @RequestBody String apiKey) {
         if (apiKey == null || apiKey.isBlank()) {
             return R.fail("apiKey 不能为空");
         }
@@ -165,10 +170,10 @@ public class AdminLlmProviderController {
         if (p == null) {
             return R.fail("Provider 不存在");
         }
-        platformProviderConfigService.saveApiKey(p.getProviderCode(), apiKey);
-        log.info("管理员配置平台级 API Key 已生效: id={}, provider={}",
-                id, p.getProviderCode());
-        return R.ok();
+        ApiKeySaveOutcome outcome = platformProviderConfigService.saveApiKey(p.getProviderCode(), apiKey);
+        log.info("管理员配置平台级 API Key: id={}, provider={}, created={}, fingerprint={}",
+                id, p.getProviderCode(), outcome.created(), outcome.fingerprint());
+        return R.ok(LlmProviderApiKeyResponse.from(outcome));
     }
 
     /**

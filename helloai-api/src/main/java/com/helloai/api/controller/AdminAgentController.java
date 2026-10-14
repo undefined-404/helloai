@@ -14,6 +14,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.core.system.crypto.CredentialFingerprint;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.agent.entity.ActivityLog;
@@ -319,12 +320,16 @@ public class AdminAgentController {
     //  重置 Key
     // ══════════════════════════════════════════════════════════════
 
+    /**
+     * 重置 Agent 的对外 API Key，一次性回显明文并附指纹（`M-6`）。
+     */
     @SaCheckPermission("agent:key")
     @PostMapping("/resetKeyById/{id}")
     public R<ApiKeyResponse> resetKey(@PathVariable("id") Long id) {
         String newKey = agentService.resetApiKey(id);
         ApiKeyResponse response = new ApiKeyResponse();
         response.setApiKey(newKey);
+        response.setFingerprint(CredentialFingerprint.of(newKey));
         return R.ok(response);
     }
 

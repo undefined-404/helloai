@@ -1089,8 +1089,13 @@ async function handleSaveKey() {
   try {
     // 后端 /api/admin/llm-providers/{id}/api-key 接收纯字符串，request.ts 默认按 JSON 提交会多包一层引号；
     // 这里用 settingsApi 中显式声明 Content-Type: text/plain 的版本。
-    await settingsApi.saveLlmProviderApiKey(providerId, newApiKey.value.trim())
-    ElMessage.success('API Key 已生效，无需重启')
+    const result = await settingsApi.saveLlmProviderApiKey(providerId, newApiKey.value.trim())
+    // `M-6`：同 provider 内同指纹 ⇒ 后端未重复落库
+    if (result?.created === false) {
+      ElMessage.warning(`该 API Key 已存在，未重复保存${result.fingerprint ? `（指纹 ${result.fingerprint}）` : ''}`)
+    } else {
+      ElMessage.success('API Key 已生效，无需重启')
+    }
     keyDialogVisible.value = false
     await loadProviders()
     // 保存后自动验证连通性（最小请求探测）

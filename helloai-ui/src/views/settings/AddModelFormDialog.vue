@@ -142,6 +142,20 @@
       class="verify-panel"
     >
       <el-alert
+        v-if="savedKeyExisted"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="overwrite-alert"
+      >
+        <template #title>
+          该 API Key 已存在，未重复保存
+        </template>
+        <div class="verify-message">
+          指纹 {{ savedKeyFingerprint || '—' }}（同供应商内同一把 Key 只保留一份）
+        </div>
+      </el-alert>
+      <el-alert
         v-if="verifyResult"
         :type="verifyResult.success ? 'success' : 'error'"
         :closable="false"
@@ -227,6 +241,10 @@ const verifying = ref(false)
 const phase = ref<'form' | 'done'>('form')
 const verifyResult = ref<ApiKeyVerifyResult | null>(null)
 const savedProviderId = ref<number | null>(null)
+/** `M-6`：本次保存是否命中「该 Key 已存在」（同 provider 内同指纹）。 */
+const savedKeyExisted = ref(false)
+/** `M-6`：命中已有 Key 时展示其指纹。 */
+const savedKeyFingerprint = ref('')
 
 const draft = reactive({
   providerCode: '',
@@ -275,6 +293,8 @@ watch(visible, (v) => {
   phase.value = 'form'
   verifyResult.value = null
   savedProviderId.value = null
+  savedKeyExisted.value = false
+  savedKeyFingerprint.value = ''
   draft.providerCode = props.initial?.providerCode || PROVIDER_CATALOG[0].providerCode
   draft.billingType = 'API_KEY'
   draft.apiKey = ''
@@ -316,7 +336,13 @@ async function handleSubmit() {
       })
       providerId = created.id
     }
-    await settingsApi.saveLlmProviderApiKey(providerId, draft.apiKey.trim())
+    const keyResult = await settingsApi.saveLlmProviderApiKey(providerId, draft.apiKey.trim())
+    // `M-6`：同 provider 内同指纹 ⇒ 后端未重复落库，前端如实提示
+    savedKeyExisted.value = keyResult?.created === false
+    savedKeyFingerprint.value = keyResult?.fingerprint || ''
+    if (savedKeyExisted.value) {
+      ElMessage.warning('该 API Key 已存在，未重复保存')
+    }
     savedProviderId.value = providerId
     emit('added', providerId)
     await runVerify(providerId)

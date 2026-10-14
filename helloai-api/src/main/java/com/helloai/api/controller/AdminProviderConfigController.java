@@ -1,10 +1,12 @@
 package com.helloai.api.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import com.helloai.api.dto.admin.LlmProviderApiKeyResponse;
 import com.helloai.api.dto.admin.ProviderApiKeyRequest;
 import com.helloai.api.dto.admin.ProviderConfigItem;
 import com.helloai.api.dto.admin.ProviderSettingsRequest;
 import com.helloai.common.base.R;
+import com.helloai.core.agent.dto.ApiKeySaveOutcome;
 import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import lombok.RequiredArgsConstructor;
@@ -53,17 +55,21 @@ public class AdminProviderConfigController {
 
     /**
      * 写入（轮换）平台级 API Key，实时生效无需重启。
+     *
+     * <p>`M-6`：同一 provider 下同一 Key 二次录入 ⇒ 返回 {@code created=false} +
+     * 「已存在」文案，**不重复落库**。</p>
      */
     @SaCheckPermission("platform-provider:edit")
     @PutMapping("/saveApiKeyByProvider/{provider}")
-    public R<Void> saveApiKey(@PathVariable("provider") String provider,
-                              @RequestBody ProviderApiKeyRequest req) {
+    public R<LlmProviderApiKeyResponse> saveApiKey(@PathVariable("provider") String provider,
+                                                   @RequestBody ProviderApiKeyRequest req) {
         if (req == null || req.getApiKey() == null || req.getApiKey().isBlank()) {
             return R.fail("apiKey 不能为空");
         }
-        platformProviderConfigService.saveApiKey(provider, req.getApiKey());
-        log.info("管理员配置平台级 API Key 已生效: provider={}", provider);
-        return R.ok();
+        ApiKeySaveOutcome outcome = platformProviderConfigService.saveApiKey(provider, req.getApiKey());
+        log.info("管理员配置平台级 API Key: provider={}, created={}, fingerprint={}",
+                provider, outcome.created(), outcome.fingerprint());
+        return R.ok(LlmProviderApiKeyResponse.from(outcome));
     }
 
     /**

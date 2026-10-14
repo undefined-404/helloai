@@ -97,6 +97,17 @@ export interface ApiKeyVerifyResult {
   elapsedMs?: number
 }
 
+/**
+ * API Key 保存结果（`M-6`，后端 saveApiKeyById / saveApiKeyByProvider 响应）。
+ * `created=false` 表示同 provider 下该 Key 已存在（未重复保存）。
+ */
+export interface ApiKeySaveResult {
+  created: boolean
+  /** Key 指纹（SHA-256 前缀，24 字符）；不可逆，不暴露明文。 */
+  fingerprint?: string
+  message?: string
+}
+
 export const settingsApi = {
   getStatus() {
     return request.get<any, { setupFinished: boolean; hasUsers: boolean; userCount: number; registerEnabled?: boolean }>(paths.setup.getStatus)
@@ -158,9 +169,13 @@ export const settingsApi = {
   toggleLlmProvider(id: number) {
     return request.put(paths.admin.llmProviderToggle(id), {})
   },
-  /** 写入 API Key（请求体为纯字符串的 apiKey 明文）。 */
+  /**
+   * 写入 API Key（请求体为纯字符串的 apiKey 明文）。
+   *
+   * @returns `created=false` ⇒ 该 Key 已存在（`M-6` 同 provider 内同指纹去重）
+   */
   saveLlmProviderApiKey(id: number, apiKey: string) {
-    return request.put(paths.admin.llmProviderApiKey(id), apiKey, {
+    return request.put<any, ApiKeySaveResult>(paths.admin.llmProviderApiKey(id), apiKey, {
       headers: { 'Content-Type': 'text/plain' }
     })
   },
