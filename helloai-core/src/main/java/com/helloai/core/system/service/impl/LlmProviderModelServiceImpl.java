@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.core.system.entity.LlmProviderModel;
 import com.helloai.core.system.mapper.LlmProviderModelMapper;
+import com.helloai.core.system.port.ModelCapabilities;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.system.service.LlmProviderModelService;
 import lombok.RequiredArgsConstructor;
@@ -12,7 +13,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * LLM Provider 模型业务服务实现。
@@ -44,7 +47,25 @@ public class LlmProviderModelServiceImpl extends ServiceImpl<LlmProviderModelMap
             throw new BizException("默认模型必须在已选模型列表中");
         }
 
-        // 先删除该 Provider 的所有现有模型（物理删除，因为有关联唯一约束）
+        // `M-9`（QA-M9-04）：本次是「先删后插」整表重写，重插必须**复用既有行的能力谓词**，
+        // 否则「编辑 provider 模型列表」这种常规动作会把 reasoning / webSearch / input 模态
+        // 静默清零（比改造前多丢 thinking），且静态守卫与 `V110` 的一次性断言都抓不到。
+        // ⇒ 读旧行必须在 `remove` **之前**：`remove` 走 @TableLogic 逻辑删除（SET deleted=1），
+        //   删后默认查询已看不到这些行，故先建「归一 modelName → 旧谓词」索引。
+        Map<String, Map<String, Object>> priorCapabilities = new LinkedHashMap<>();
+        List<LlmProviderModel> priorModels = list(new LambdaQueryWrapper<LlmProviderModel>()
+                .eq(LlmProviderModel::getProviderId, providerId));
+        if (priorModels != null) {
+            for (LlmProviderModel prior : priorModels) {
+                if (prior.getModelName() == null) {
+                    continue;
+                }
+                priorCapabilities.put(prior.getModelName().trim(), prior.getCapabilities());
+            }
+        }
+
+        // 先删除该 Provider 的所有现有模型（@TableLogic 逻辑删除；部分唯一索引
+        // uk_provider_model_active 仅约束 deleted=0 ⇒ 逻辑删后同 (provider_id, model_name) 可重插）
         remove(new LambdaQueryWrapper<LlmProviderModel>()
                 .eq(LlmProviderModel::getProviderId, providerId));
 
@@ -54,13 +75,23 @@ public class LlmProviderModelServiceImpl extends ServiceImpl<LlmProviderModelMap
             if (modelName == null || modelName.isBlank()) {
                 continue;
             }
+            // 键的归一与插入侧一致：插入用 modelName.trim()，故复用查表也用同一套归一，
+            // 否则 " x " 与 "x" 会被判成两把而丢谓词。
+            String normalizedName = modelName.trim();
             LlmProviderModel model = new LlmProviderModel();
             model.setProviderId(providerId);
             model.setProviderCode(providerCode);
-            model.setModelName(modelName.trim());
-            model.setIsDefault(modelName.trim().equals(defaultModel) ? 1 : 0);
+            model.setModelName(normalizedName);
+            model.setIsDefault(normalizedName.equals(defaultModel) ? 1 : 0);
             model.setEnabled(1);
             model.setSortOrder(sortOrder);
+            // `V112` 已摘掉 capabilities 列默认值 ⇒ 任何 INSERT 必须显式写谓词（否则 NOT NULL 违约）。
+            // 优先复用既有谓词（逐字保留，含未知模态 token）；仅当该 modelName 原本不存在、
+            // 或旧谓词为 null/空 时才落保守面（对齐 V110 列默认为空的 fail-closed 口径）。
+            Map<String, Object> reused = priorCapabilities.get(normalizedName);
+            model.setCapabilities(reused == null || reused.isEmpty()
+                    ? ModelCapabilities.conservative().toRawMap()
+                    : reused);
             sortOrder += 10;
             save(model);
         }
@@ -134,6 +165,9 @@ public class LlmProviderModelServiceImpl extends ServiceImpl<LlmProviderModelMap
         // 排序放到最后
         long maxSort = llmProviderModelQueryService.countByProviderId(providerId);
         model.setSortOrder((int) (maxSort * 10 + 100));
+        // `M-9`：`V112` 摘掉 capabilities 列默认值后，新增模型必须显式写谓词（否则 NOT NULL 违约 →
+        // 「添加模型」500）。新行能力未知 ⇒ 保守面（text-only、无 reasoning/工具/联网，fail-closed）。
+        model.setCapabilities(ModelCapabilities.conservative().toRawMap());
         save(model);
 
         log.info("Provider 模型已添加: providerId={}, modelName={}, isDefault={}", providerId, modelName, isDefault);

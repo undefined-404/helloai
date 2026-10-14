@@ -3,6 +3,7 @@ package com.helloai.core.system.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.core.system.entity.LlmProviderModel;
 import com.helloai.core.system.port.LlmProviderModelProfile;
+import com.helloai.core.system.port.ModelCapabilities;
 import com.helloai.core.system.mapper.LlmProviderModelMapper;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import lombok.RequiredArgsConstructor;
@@ -123,8 +124,11 @@ public class LlmProviderModelQueryServiceImpl implements LlmProviderModelQuerySe
     @Override
     public LlmProviderModelProfile findCapabilityProfileByModelType(String modelType) {
         LlmProviderModel model = findCapabilityByModelType(modelType);
+        // 语义与 findCapabilityByModelType 逐字一致（不存在/已删 ⇒ null）；仅换内容为谓词快照。
+        // 谓词解析归一（缺键 / 类型不符 / 空数组 ⇒ 保守面；未知模态 token 原样保留）收口于
+        // ModelCapabilities#fromRaw（M-9：V52 两列退役，能力判据切到 capabilities 谓词）。
         return model == null ? null
-                : new LlmProviderModelProfile(model.getCapabilitySkills(), model.getAvailableOptionalSkills());
+                : new LlmProviderModelProfile(ModelCapabilities.fromRaw(model.getCapabilities()));
     }
 
     @Override

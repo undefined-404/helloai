@@ -5,6 +5,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.helloai.core.system.entity.LlmProviderModel;
 import com.helloai.core.system.mapper.LlmProviderModelMapper;
+import com.helloai.core.system.port.LlmProviderModelProfile;
+import com.helloai.core.system.port.ModelCapabilities;
 import com.helloai.core.system.service.impl.LlmProviderModelQueryServiceImpl;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
@@ -172,18 +174,35 @@ class LlmProviderModelQueryServiceImplTest {
     }
 
     @Test
-    @DisplayName("findCapabilityByModelType：命中模型返回携带能力列的实体")
+    @DisplayName("findCapabilityByModelType：命中模型返回携带能力谓词的实体")
     void findCapabilityByModelType_found_returnsModel() {
         LlmProviderModel m = model("deepseek-v4-flash", 1, 1);
-        m.setCapabilitySkills(List.of("thinking"));
-        m.setAvailableOptionalSkills(List.of("shell", "code-review"));
+        m.setCapabilities(ModelCapabilities.conservative().toRawMap());
         when(mapper.selectOne(any())).thenReturn(m);
 
         LlmProviderModel result = service.findCapabilityByModelType("deepseek:deepseek-v4-flash");
 
         assertThat(result).isNotNull();
-        assertThat(result.getCapabilitySkills()).containsExactly("thinking");
-        assertThat(result.getAvailableOptionalSkills()).containsExactly("shell", "code-review");
+        assertThat(result.getCapabilities()).containsKeys("input", "output", "reasoning");
+    }
+
+    @Test
+    @DisplayName("findCapabilityProfileByModelType（M-9 换内容）：命中 ⇒ 谓词快照；未命中/非法 ⇒ null")
+    void findCapabilityProfileByModelType_wrapsPredicateOrNull() {
+        LlmProviderModel m = model("deepseek-v4-flash", 1, 1);
+        m.setCapabilities(ModelCapabilities.conservative().toRawMap());
+        when(mapper.selectOne(any())).thenReturn(m);
+
+        LlmProviderModelProfile profile = service.findCapabilityProfileByModelType("deepseek:deepseek-v4-flash");
+        assertThat(profile).isNotNull();
+        assertThat(profile.capabilities()).isNotNull();
+        assertThat(profile.capabilities().inputModalities()).containsExactly("text");
+        assertThat(profile.capabilities().webSearch()).isFalse();
+
+        // 未命中 ⇒ null（语义与 findCapabilityByModelType 逐字一致）
+        when(mapper.selectOne(any())).thenReturn(null);
+        assertThat(service.findCapabilityProfileByModelType("deepseek:deepseek-v5")).isNull();
+        assertThat(service.findCapabilityProfileByModelType("  ")).isNull();
     }
 
     @Test

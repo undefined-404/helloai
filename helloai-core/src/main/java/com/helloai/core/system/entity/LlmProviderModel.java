@@ -7,7 +7,7 @@ import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
-import java.util.List;
+import java.util.Map;
 
 /**
  * LLM Provider 模型配置。
@@ -41,18 +41,15 @@ public class LlmProviderModel extends BaseEntity {
     private Integer sortOrder;
 
     /**
-     * 模型能力锁定技能（JSONB）：注册/编辑 Agent 时强制追加，不可取消。
+     * 模型能力谓词（JSONB，`M-9` 起为技能判定的唯一依据）。
      *
-     * <p>内置模型默认 {@code ["thinking"]}；新模型未回填时取列默认值。</p>
+     * <p>形态：{@code {"input":[模态],"output":[模态],"reasoning":bool,"toolCalling":bool,"webSearch":bool}}。
+     * `V112` 已**摘掉列默认值**（结构性 fail-fast）——任何 {@code INSERT} 必须显式写谓词，
+     * 否则 NOT NULL 违约；新增模型由 {@code LlmProviderModelServiceImpl} 写保守面。</p>
+     *
+     * <p>消费方经 {@link com.helloai.core.system.port.ModelCapabilities#fromRaw} 归一读取
+     * （未知模态 token 原样保留、判定忽略、不抛错）。</p>
      */
     @TableField(typeHandler = PgJsonbTypeHandler.class)
-    private List<String> capabilitySkills;
-
-    /**
-     * 模型可扩展技能白名单（JSONB）：注册时前端仅展示此集合，后端 validateAgentSkills 校验。
-     *
-     * <p>内置模型默认 {@code ["shell","code-review"]}；联网模型（kimi/qwen/minimax）回填 web-search。</p>
-     */
-    @TableField(typeHandler = PgJsonbTypeHandler.class)
-    private List<String> availableOptionalSkills;
+    private Map<String, Object> capabilities;
 }

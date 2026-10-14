@@ -45,16 +45,15 @@ public interface LlmProviderModelQueryService {
     /**
      * 按 modelType（形如 providerCode:modelName）查询模型能力配置。
      *
-     * <p>返回实体携带 {@code capabilitySkills} / {@code availableOptionalSkills} 两列，
-     * 供 Agent 技能推导与 skill-options 端点使用；模型不存在或已删除时返回 null。</p>
+     * <p>返回实体（`M-9` 起）携带能力谓词列 {@code capabilities}；模型不存在或已删除时返回 null。</p>
      */
     LlmProviderModel findCapabilityByModelType(String modelType);
 
     /**
-     * 按 modelType 查询模型能力配置的【只读快照】（RM5 批 3）。
+     * 按 modelType 查询模型能力配置的【只读快照】（RM5 批 3；`M-9` 换内容）。
      *
      * <p>语义与 {@link #findCapabilityByModelType} 逐字一致（模型不存在或已删除返回 null），
-     * 但只暴露 {@code capabilitySkills} / {@code availableOptionalSkills} 两列，
+     * 但只暴露能力谓词 {@link com.helloai.core.system.port.ModelCapabilities}，
      * 供 agent 域技能推导使用，避免其 import {@code system.entity.LlmProviderModel}。</p>
      */
     LlmProviderModelProfile findCapabilityProfileByModelType(String modelType);
