@@ -10,12 +10,14 @@ import com.helloai.api.dto.admin.LlmProviderModelResponse;
 import com.helloai.api.dto.admin.LlmProviderResponse;
 import com.helloai.api.dto.admin.UpdateLlmProviderRequest;
 import com.helloai.common.base.R;
+import com.helloai.core.agent.SkillCapabilityRequirements;
 import com.helloai.core.agent.dto.ApiKeyBatchSaveOutcome;
 import com.helloai.core.agent.dto.ApiKeySaveOutcome;
 import com.helloai.core.agent.service.LlmProviderKeyVerifyService;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.system.entity.LlmProvider;
 import com.helloai.core.system.entity.LlmProviderModel;
+import com.helloai.core.system.port.ModelCapabilities;
 import com.helloai.core.system.port.PlatformApiKeyChange;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.system.service.LlmProviderModelService;
@@ -435,6 +437,11 @@ public class AdminLlmProviderController {
      * {@code deepseek:deepseek-v4-flash}（URL 中冒号需 {@code encodeURIComponent}）；
      * 模型未识别（表中不存在/已删除）时返回降级默认值并标注 {@code degraded=true}，
      * 前端提示「模型未上架，建议使用已上架模型」。</p>
+     *
+     * <p><b>`M-9`</b>：两列表由能力谓词派生（{@code thinking←reasoning}、{@code web-search←webSearch}；
+     * 作业类型技能恒真，见 {@link com.helloai.core.agent.SkillCapabilityRequirements}）；
+     * 新增 {@code capabilities}（object；{@code degraded=true} 时为 {@code null}）。
+     * 出参字段名与错误码均<b>未变</b>，仅新增 1 个字段。</p>
      */
     @SaCheckPermission("llm-provider:view")
     @GetMapping("/getSkillOptionsByModelType/{modelType}")
@@ -443,17 +450,18 @@ public class AdminLlmProviderController {
         body.put("modelType", modelType);
         LlmProviderModel capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
         if (capability == null) {
-            // 降级：返回默认可选项，前端提示使用已上架模型
+            // 降级：返回默认可选项，前端提示使用已上架模型（与切换前逐字一致）
             body.put("capabilitySkills", List.of());
             body.put("availableOptionalSkills", List.of("shell", "code-review"));
             body.put("degraded", true);
+            body.put("capabilities", null);
             return R.ok(body);
         }
-        body.put("capabilitySkills", capability.getCapabilitySkills() != null
-                ? capability.getCapabilitySkills() : List.of());
-        body.put("availableOptionalSkills", capability.getAvailableOptionalSkills() != null
-                ? capability.getAvailableOptionalSkills() : List.of());
+        ModelCapabilities caps = ModelCapabilities.fromRaw(capability.getCapabilities());
+        body.put("capabilitySkills", SkillCapabilityRequirements.lockedSkills(caps));
+        body.put("availableOptionalSkills", SkillCapabilityRequirements.optionalSkills(caps));
         body.put("degraded", false);
+        body.put("capabilities", caps.toRawMap());
         return R.ok(body);
     }
 

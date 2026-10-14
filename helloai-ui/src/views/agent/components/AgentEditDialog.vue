@@ -67,9 +67,9 @@
         </el-input>
       </el-form-item>
       <el-form-item label="技能">
-        <!-- V52 三段式：模型能力锁定 tag（不可取消，自动并入） -->
+        <!-- V52 三段式：模型能力锁定 tag（不可取消，自动并入）；M-9：capabilitySkills 为空时不渲染该段 -->
         <div
-          v-if="form.modelType && !skillDegraded"
+          v-if="form.modelType && !skillDegraded && skillCap.length"
           class="skill-cap-row"
         >
           <el-tag
