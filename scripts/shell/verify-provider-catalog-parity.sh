@@ -16,12 +16,16 @@
 # 覆盖完整性（★防「新增预置静默不受保护」）：
 #   从 providerCatalog.ts 反解全部 providerCode，凡既不在「有种子集」、也不在
 #   「显式无种子白名单」⇒ 判 FAIL。守卫白名单必须与目录枚举同源核对，不得靠人工记忆。
-#   全部预置（含无种子项）另做「协议枚举合法 + baseUrl 不带 /v1」两个结构性检查（D-b 类）。
+#   全部预置（含无种子项）另做三个结构性检查：协议枚举合法 / baseUrl 不带 /v1（D-b 类） /
+#   catalogId 非空（M-2② 新增维度——models.dev 目录 id 是 defaultModel 的归属锚点）。
+# M-3（V109）后：9 个内置预置全部有种子（NO_SEED 清空）；yml 段仅遗留 4 家保留，
+#   故 yml 比对按「有段才比」进行，另加反向检查「yml 段必须 ∈ SEEDED」。
 #
 # 用法：
 #   bash scripts/shell/verify-provider-catalog-parity.sh                   # EXIT=0 全部一致
 #   bash scripts/shell/verify-provider-catalog-parity.sh --inject-deviation  # 反证①：篡改期望 ⇒ EXIT=1
 #   bash scripts/shell/verify-provider-catalog-parity.sh --inject-catalog    # 反证②：篡改目录 ⇒ EXIT=1
+#   bash scripts/shell/verify-provider-catalog-parity.sh --inject-missing-catalog-id  # 反证③：抹 catalogId ⇒ EXIT=1
 # ============================================================
 set -uo pipefail
 export LANG=zh_CN.UTF-8
@@ -38,17 +42,23 @@ JAVA_DEEPSEEK="$ROOT/helloai-core/src/main/java/com/helloai/core/agent/chat/prov
 #   - moonshot : V49:79-90 + V61（moonshot-v1-*/kimi-k2.5 下线 → kimi-k3）
 #   - minimax  : V49:108-116 + V108（M2.5/M2.7 全系列即将下线 → MiniMax-M3）
 #   - dashscope: V49:94-104 + V101（'qwen-plus' 目录已无 → qwen3.7-plus）
-SEEDED=(deepseek moonshot minimax dashscope)
+#   - openai / anthropic / xai / mistral / groq : V109（M-3 目录种子，补 llm_provider 行 + 模型清单）
+SEEDED=(deepseek moonshot minimax dashscope openai anthropic xai mistral groq)
 declare -A SEED_DEFAULT=(
   [deepseek]=deepseek-v4-flash
   [moonshot]=kimi-k3
   [minimax]=MiniMax-M3
   [dashscope]=qwen3.7-plus
+  [openai]=gpt-4o
+  [anthropic]=claude-sonnet-4-5
+  [xai]=grok-4.7
+  [mistral]=mistral-large-latest
+  [groq]=llama-3.3-70b-versatile
 )
 
-# 显式「无迁移种子」白名单：运行时经 createLlmProvider 建档（无 V46 行、无 yml 段、无模型行），
-# 故三方一致性不适用。★M-3（模型目录种子）落地后这些 provider 应转入 SEEDED 并收回本白名单。
-NO_SEED=(openai anthropic xai mistral groq)
+# 「无迁移种子」白名单：**M-3（V109）落地后已清空** —— 9 个内置预置全部有种子。
+# 保留空数组，使「目录枚举 ⊆ SEEDED ∪ NO_SEED」这条覆盖完整性写法不变（新增预置仍会被拦）。
+NO_SEED=()
 
 # ---------- 反证开关 ----------
 INJECT_MODE="${1:-}"
@@ -65,6 +75,12 @@ elif [[ "$INJECT_MODE" == "--inject-catalog" ]]; then
   mkdir -p "$ROOT/tmp"
   TMP_CATALOG="$ROOT/tmp/.provider-catalog-inject.ts"
   sed "s#baseUrl: 'https://api.openai.com'#baseUrl: 'https://api.openai.com/v1'#" "$CATALOG" > "$TMP_CATALOG"
+  CATALOG="$TMP_CATALOG"
+elif [[ "$INJECT_MODE" == "--inject-missing-catalog-id" ]]; then
+  # 反证③：抹掉某条预置的 catalogId ⇒ 检查 6（M-2②）必须报失配
+  mkdir -p "$ROOT/tmp"
+  TMP_CATALOG="$ROOT/tmp/.provider-catalog-inject-cid.ts"
+  sed "/    catalogId: 'groq',/d" "$CATALOG" > "$TMP_CATALOG"
   CATALOG="$TMP_CATALOG"
 fi
 
@@ -94,6 +110,27 @@ yml_default() {
   ' "$YML" | sed -n 's/.*default-model:[[:space:]]*${[A-Z_]*:\([^}]*\)}.*/\1/p'
 }
 
+# yml 是否存在该 provider 段。yml 是**遗留载体**：V46 起 provider 已改 DB 驱动，
+# M-3（V109）只为历史 4 家保留 yml 段，**新增 provider 一律不建段** ⇒ 比对仅对「有段者」生效。
+yml_has_block() {
+  local code="$1"
+  awk -v code="$code" '
+    /^  providers:/ { inb = 1; next }
+    inb && /^  [a-z]/ { exit }
+    inb && $0 ~ "^    " code ":" { found = 1; exit }
+    END { exit !found }
+  ' "$YML"
+}
+
+# yml providers 段内的全部 provider code（反向：防出现「非 SEEDED」野段）
+yml_provider_codes() {
+  awk '
+    /^  providers:/ { inb = 1; next }
+    inb && /^  [a-z]/ { exit }
+    inb && /^    [a-z0-9-]+:/ { sub(/^    /, ""); sub(/:.*/, ""); print }
+  ' "$YML"
+}
+
 # Java 常量：FALLBACK_MODELS 的 "code", "model"
 java_fallback() {
   local code="$1"
@@ -109,7 +146,8 @@ java_deepseek_default() {
 
 # ---------- 检查 1：覆盖完整性（目录枚举 ↔ 守卫白名单）----------
 declare -A KNOWN=()
-for c in "${SEEDED[@]}" "${NO_SEED[@]}"; do KNOWN[$c]=1; done
+for c in "${SEEDED[@]}"; do KNOWN[$c]=1; done
+for c in ${NO_SEED[@]+"${NO_SEED[@]}"}; do KNOWN[$c]=1; done
 covered=0
 while read -r code; do
   [[ -z "$code" ]] && continue
@@ -149,7 +187,9 @@ while read -r code; do
   fi
 done < <(catalog_codes)
 
-# ---------- 检查 3：有种子 provider 的四方一致性 ----------
+# ---------- 检查 3：有种子 provider 的多方一致性 ----------
+# 参与比对的载体按「该 provider 实际具备的」取：
+#   ① 前端预置（9 家全部）② yml（仅遗留 4 家仍有段）③ Java 兜底常量（有条目才比）
 for code in "${SEEDED[@]}"; do
   expected="${SEED_DEFAULT[$code]}"
   fe="$(front_field "$code" defaultModel)"
@@ -160,7 +200,7 @@ for code in "${SEEDED[@]}"; do
     echo "[FAIL] $code 前端预置 defaultModel='$fe' ≠ 种子真值 '$expected'"
     ok=0
   fi
-  if [[ "$ym" != "$expected" ]]; then
+  if yml_has_block "$code" && [[ "$ym" != "$expected" ]]; then
     echo "[FAIL] $code application.yml default-model='$ym' ≠ 种子真值 '$expected'"
     ok=0
   fi
@@ -168,9 +208,25 @@ for code in "${SEEDED[@]}"; do
     echo "[FAIL] $code Java 兜底 FALLBACK_MODELS='$jf' ≠ 种子真值 '$expected'（D-d：验证会 404）"
     ok=0
   fi
-  [[ "$ok" == 1 ]] && echo "[ OK ] $code 一致 defaultModel='$expected'（含 Java 兜底$( [[ -n "$jf" ]] && echo '' || echo '：无条目' )）"
+  yml_flag="$( yml_has_block "$code" && echo '含 yml 段' || echo '无 yml 段' )"
+  [[ "$ok" == 1 ]] && echo "[ OK ] $code 一致 defaultModel='$expected'（$yml_flag；Java 兜底$( [[ -n "$jf" ]] && echo '' || echo '：无条目' )）"
   [[ "$ok" == 0 ]] && FAILS=$((FAILS + 1))
 done
+
+# ---------- 检查 3b：yml providers 段不得有「非 SEEDED」野段（反向）----------
+# ★yml 是遗留载体（DB 驱动后不再新增段）⇒ 比对按「有段才比」。为避免该条件化
+#   造成「yml 载体被整体删除却静默通过」，此处补一道整体缺失兜底（不硬编码条数）。
+if [[ -z "$(yml_provider_codes)" ]]; then
+  echo "[FAIL] application.yml 的 helloai.providers 段为空或解析失败 ⇒ yml 载体整体缺失，请核查"
+  FAILS=$((FAILS + 1))
+fi
+while read -r code; do
+  [[ -z "$code" ]] && continue
+  if [[ -z "${SEED_DEFAULT[$code]:-}" ]]; then
+    echo "[FAIL] application.yml helloai.providers.$code 段不在 SEEDED ⇒ yml 与种子集脱节，请同步"
+    FAILS=$((FAILS + 1))
+  fi
+done < <(yml_provider_codes)
 
 # ---------- 检查 4：Java 兜底常量不得存在「非内置 provider」残留 ----------
 declare -A SEEDED_SET=()
@@ -193,6 +249,18 @@ if [[ "$jdm" != "${SEED_DEFAULT[deepseek]}" ]]; then
 else
   echo "[ OK ] deepseek Java 末位兜底 DEFAULT_MODEL='$jdm'"
 fi
+
+# ---------- 检查 6：全部预置的 catalogId 非空（M-2② 新增维度，防静默缺失）----------
+missing_cid=0
+while read -r code; do
+  [[ -z "$code" ]] && continue
+  cid="$(front_field "$code" catalogId)"
+  if [[ -z "$cid" ]]; then
+    echo "[FAIL] $code 缺 catalogId（models.dev 目录 id）⇒ M-3 种子无从锚定，请补齐"
+    FAILS=$((FAILS + 1)); missing_cid=$((missing_cid + 1))
+  fi
+done < <(catalog_codes)
+[[ "$missing_cid" == 0 ]] && echo "[ OK ] 全部预置 catalogId（models.dev 目录 id）非空"
 
 echo "== verify-provider-catalog-parity: 预置 $covered 条（有种子 ${#SEEDED[@]} + 无种子白名单 ${#NO_SEED[@]}）；$([ $FAILS -eq 0 ] && echo 全部通过 || echo "${FAILS} 处失配")"
 exit $FAILS
