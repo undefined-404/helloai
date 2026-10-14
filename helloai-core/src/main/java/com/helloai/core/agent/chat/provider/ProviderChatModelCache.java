@@ -21,7 +21,8 @@ import java.util.function.Supplier;
  *
  * <h3>缓存粒度</h3>
  * <ul>
- *     <li>key：{@code protocolType + provider + baseUrlHash + apiKeyHash + model}（五元组）</li>
+ *     <li>key：{@code protocolType + provider + baseUrlHash + apiKeyHash + model}（五元组）；
+ *         配置了 {@code extraConfig} 端点路径覆盖时追加第六段（M-5，见六元组重载）</li>
  *     <li>不保存明文 apiKey：仅保留 SHA-256 hex 前 8 位作为指纹，避免缓存结构意外泄漏</li>
  *     <li>不同 provider / protocolType / model 的 ChatModel 完全隔离</li>
  * </ul>
@@ -142,6 +143,29 @@ public class ProviderChatModelCache {
      * @param model        模型名（大小写敏感；null/blank 归 default 桶）
      */
     public static String buildKey(String provider, String apiKey, String baseUrl, String protocolType, String model) {
+        return buildKey(provider, apiKey, baseUrl, protocolType, model, null);
+    }
+
+    /**
+     * 构造缓存 key（六元组，M-5 起把 {@code extraConfig} 的端点路径覆盖并入 key）。
+     *
+     * <p><b>为何并入</b>：缓存 key 已含 {@code baseUrl} 指纹（同一 provider 换基址即换桶）；
+     * 端点路径覆盖（{@code completionsPath} / {@code messagesPath}）与 baseUrl 同属「决定实际请求
+     * URL 的配置」，若不入 key，则管理员改了覆盖项后仍会命中旧 ChatModel ⇒ 请求打到旧路径，
+     * 且不会自愈直到重启。</p>
+     *
+     * <p><b>兼容旧 key</b>：{@code endpointPath} 为 {@code null}/空白时**不追加任何段**，
+     * 生成的 key 与五元组签名逐字一致 ⇒ 既有缓存与既有测试不受影响。</p>
+     *
+     * @param provider     provider 名（大小写不敏感）
+     * @param apiKey       明文 apiKey（仅用于 hash，不存储）
+     * @param baseUrl      base url（允许 null，对应 null safeHash）
+     * @param protocolType 协议类型（OPENAI_COMPATIBLE / ANTHROPIC_COMPATIBLE / deepseek 等）
+     * @param model        模型名（大小写敏感；null/blank 归 default 桶）
+     * @param endpointPath 端点路径覆盖（{@code extraConfig} 的 completionsPath / messagesPath；允许 null）
+     */
+    public static String buildKey(String provider, String apiKey, String baseUrl, String protocolType, String model,
+                                  String endpointPath) {
         String normalizedProvider = provider != null ? provider.toLowerCase(Locale.ROOT) : "unknown";
         String protocolSegment = protocolType != null && !protocolType.isBlank()
                 ? protocolType.toLowerCase(Locale.ROOT)
@@ -151,8 +175,13 @@ public class ProviderChatModelCache {
         String baseUrlFingerprint = baseUrl != null && !baseUrl.isBlank()
                 ? Integer.toHexString(baseUrl.hashCode())
                 : "default";
-        return protocolSegment + "::" + normalizedProvider + "::" + baseUrlFingerprint + "::" + apiKeyFingerprint
+        String key = protocolSegment + "::" + normalizedProvider + "::" + baseUrlFingerprint + "::" + apiKeyFingerprint
                 + "::" + modelSegment;
+        // 未配置端点路径覆盖 ⇒ 不追加段，保持旧 key 逐字不变
+        if (endpointPath != null && !endpointPath.isBlank()) {
+            key = key + "::" + endpointPath.trim();
+        }
+        return key;
     }
 
     private static String sha256Prefix8(String input) {

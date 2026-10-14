@@ -57,16 +57,18 @@ public class AnthropicCompatibleProtocolFactory implements LlmProviderChatClient
             throw new BizException("apiKey 不能为空");
         }
         String baseUrl = platformProviderConfigService.getBaseUrl(provider.providerCode());
+        String messagesPath = ExtraConfigPaths.path(provider.extraConfig(), ExtraConfigPaths.MESSAGES_PATH);
         String cacheKey = ProviderChatModelCache.buildKey(
-                provider.providerCode(), apiKeyPlaintext, baseUrl, PROTOCOL_TYPE, model);
+                provider.providerCode(), apiKeyPlaintext, baseUrl, PROTOCOL_TYPE, model, messagesPath);
 
         return cache.getOrCompute(cacheKey,
-                () -> buildChatModel(provider, apiKeyPlaintext, baseUrl, model));
+                () -> buildChatModel(provider, apiKeyPlaintext, baseUrl, messagesPath, model));
     }
 
     private ChatModel buildChatModel(LlmProviderProfile provider,
                                      String apiKey,
                                      String baseUrl,
+                                     String messagesPath,
                                      String requestedModel) {
         AgentProviderProperties.ProviderConfig config =
                 providerProperties.getConfig(provider.providerCode());
@@ -78,11 +80,16 @@ public class AnthropicCompatibleProtocolFactory implements LlmProviderChatClient
                 ? baseUrl
                 : provider.baseUrl();
 
-        AnthropicApi anthropicApi = AnthropicApi.builder()
+        AnthropicApi.Builder apiBuilder = AnthropicApi.builder()
                 .apiKey(apiKey)
                 .baseUrl(effectiveBaseUrl)
-                .restClientBuilder(RestClient.builder().requestFactory(requestFactory))
-                .build();
+                .restClientBuilder(RestClient.builder().requestFactory(requestFactory));
+
+        // M-5：extraConfig.messagesPath 覆盖默认 /v1/messages（未配置 ⇒ 不设置，走默认）
+        if (messagesPath != null) {
+            apiBuilder.completionsPath(messagesPath);
+        }
+        AnthropicApi anthropicApi = apiBuilder.build();
 
         String effectiveModel = requestedModel != null && !requestedModel.isBlank()
                 ? requestedModel

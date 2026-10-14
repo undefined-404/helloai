@@ -1,5 +1,7 @@
 package com.helloai.core.system.port;
 
+import java.util.Map;
+
 /**
  * LLM Provider 只读快照（system 域自有的对外数据契约）。
  *
@@ -8,9 +10,14 @@ package com.helloai.core.system.port;
  * 消费方 {@code agent → system.port} 为顺向合法，从此不再 import {@code system.entity.LlmProvider}。</p>
  *
  * <p><b>字段只纳入消费方实际读取项</b>：{@code providerCode} / {@code providerName} /
- * {@code baseUrl} / {@code defaultModel} / {@code protocolType} / {@code enabled}
- * （agent 域 chat 工厂、Catalog、KeyVerify、PlatformProviderConfig、
+ * {@code baseUrl} / {@code defaultModel} / {@code protocolType} / {@code enabled} /
+ * {@code extraConfig}（agent 域 chat 工厂、Catalog、KeyVerify、PlatformProviderConfig、
  * ExecutorIssueResolutionAssessor 实测并集）。</p>
+ *
+ * <p><b>{@code extraConfig}（M-5 新增，追加末尾）</b>：源 {@code llm_provider.extra_config}(JSONB)。
+ * 消费方为 {@code OpenAiCompatibleProtocolFactory} / {@code AnthropicCompatibleProtocolFactory}，
+ * 读取 {@code completionsPath} / {@code messagesPath} 覆盖默认请求路径；
+ * 未配置 ⇒ {@code null}，走 Spring AI 各自的默认路径。该字段**只读不写**（写入仍走实体）。</p>
  */
 public record LlmProviderProfile(
         String providerCode,
@@ -18,6 +25,7 @@ public record LlmProviderProfile(
         String baseUrl,
         String defaultModel,
         String protocolType,
-        Integer enabled
+        Integer enabled,
+        Map<String, Object> extraConfig
 ) {
 }

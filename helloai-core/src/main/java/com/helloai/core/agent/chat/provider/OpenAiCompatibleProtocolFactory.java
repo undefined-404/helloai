@@ -56,16 +56,18 @@ public class OpenAiCompatibleProtocolFactory implements LlmProviderChatClientFac
             throw new BizException("apiKey 不能为空");
         }
         String baseUrl = platformProviderConfigService.getBaseUrl(provider.providerCode());
+        String completionsPath = ExtraConfigPaths.path(provider.extraConfig(), ExtraConfigPaths.COMPLETIONS_PATH);
         String cacheKey = ProviderChatModelCache.buildKey(
-                provider.providerCode(), apiKeyPlaintext, baseUrl, PROTOCOL_TYPE, model);
+                provider.providerCode(), apiKeyPlaintext, baseUrl, PROTOCOL_TYPE, model, completionsPath);
 
         return cache.getOrCompute(cacheKey,
-                () -> buildChatModel(provider, apiKeyPlaintext, baseUrl, model));
+                () -> buildChatModel(provider, apiKeyPlaintext, baseUrl, completionsPath, model));
     }
 
     private ChatModel buildChatModel(LlmProviderProfile provider,
                                      String apiKey,
                                      String baseUrl,
+                                     String completionsPath,
                                      String requestedModel) {
         AgentProviderProperties.ProviderConfig config =
                 providerProperties.getConfig(provider.providerCode());
@@ -77,11 +79,16 @@ public class OpenAiCompatibleProtocolFactory implements LlmProviderChatClientFac
                 ? baseUrl
                 : provider.baseUrl();
 
-        OpenAiApi openAiApi = OpenAiApi.builder()
+        OpenAiApi.Builder apiBuilder = OpenAiApi.builder()
                 .apiKey(apiKey)
                 .baseUrl(effectiveBaseUrl)
-                .restClientBuilder(RestClient.builder().requestFactory(requestFactory))
-                .build();
+                .restClientBuilder(RestClient.builder().requestFactory(requestFactory));
+
+        // M-5：extraConfig.completionsPath 覆盖默认 /v1/chat/completions（未配置 ⇒ 不设置，走默认）
+        if (completionsPath != null) {
+            apiBuilder.completionsPath(completionsPath);
+        }
+        OpenAiApi openAiApi = apiBuilder.build();
 
         // defaultModel 优先级：调用方传入 > provider.defaultModel > 兜底
         String effectiveModel = requestedModel != null && !requestedModel.isBlank()

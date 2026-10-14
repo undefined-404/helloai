@@ -21,7 +21,7 @@ public final class LlmProviderProfileMapper {
             return null;
         }
         return new LlmProviderProfile(p.getProviderCode(), p.getProviderName(), p.getBaseUrl(),
-                p.getDefaultModel(), p.getProtocolType(), p.getEnabled());
+                p.getDefaultModel(), p.getProtocolType(), p.getEnabled(), p.getExtraConfig());
     }
 
     public static List<LlmProviderProfile> toProfiles(List<LlmProvider> providers) {
