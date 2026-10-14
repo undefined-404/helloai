@@ -116,6 +116,14 @@ export const paths = {
     llmProviderApiKey: (id: string | number) => `/admin/llm-providers/saveApiKeyById/${enc(id)}`,
     /** `M-7` 批量写入（请求体为纯字符串，可含多把）。 */
     llmProviderApiKeys: (id: string | number) => `/admin/llm-providers/saveApiKeysById/${enc(id)}`,
+    /** `M-8` Key 列表（主 / 备 / 历史，不含密文）。 */
+    llmProviderApiKeyList: (id: string | number) => `/admin/llm-providers/listApiKeysByProviderId/${enc(id)}`,
+    /** `M-8` 手动切换启用位。 */
+    llmProviderApiKeyActivate: (id: string | number, credentialId: string | number) => `/admin/llm-providers/activateApiKeyByProviderIdAndCredentialId/${enc(id)}/${enc(credentialId)}`,
+    /** `M-8` 停用（停用启用位时会自动顶替最旧备位）。 */
+    llmProviderApiKeyDeactivate: (id: string | number, credentialId: string | number) => `/admin/llm-providers/deactivateApiKeyByProviderIdAndCredentialId/${enc(id)}/${enc(credentialId)}`,
+    /** `M-8` 删除（软删）。 */
+    llmProviderApiKeyDelete: (id: string | number, credentialId: string | number) => `/admin/llm-providers/deleteApiKeyByProviderIdAndCredentialId/${enc(id)}/${enc(credentialId)}`,
     llmProviderVerifyApiKey: (id: string | number) => `/admin/llm-providers/verifyApiKeyById/${enc(id)}`,
     llmProviderModels: (id: string | number) => `/admin/llm-providers/listModelsByProviderId/${enc(id)}`,
     llmProviderModelCreate: (id: string | number) => `/admin/llm-providers/addModelByProviderId/${enc(id)}`,

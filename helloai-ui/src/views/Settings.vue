@@ -346,6 +346,14 @@
                     >
                       vault
                     </el-tag>
+                    <el-button
+                      size="small"
+                      plain
+                      class="key-manage-btn"
+                      @click="openApiKeysDialog(selectedProvider)"
+                    >
+                      管理 Key
+                    </el-button>
                   </el-descriptions-item>
                   <el-descriptions-item label="状态">
                     <el-tag
@@ -689,6 +697,12 @@
       :initial="addModelInitial"
       @added="handleModelAdded"
     />
+    <!-- `M-8` Key 主备管理（列表 / 手动切换 / 停用 / 删除） -->
+    <ProviderApiKeysDialog
+      v-model="apiKeysDialogVisible"
+      :provider="apiKeysDialogProvider"
+      @changed="handleApiKeysChanged"
+    />
   </div>
 </template>
 
@@ -717,6 +731,7 @@ import {
 } from '@/api/settings'
 import ProviderPickerDialog from './settings/ProviderPickerDialog.vue'
 import AddModelFormDialog from './settings/AddModelFormDialog.vue'
+import ProviderApiKeysDialog from './settings/ProviderApiKeysDialog.vue'
 import type { CatalogProvider } from './settings/providerCatalog'
 
 const formRef = ref()
@@ -774,6 +789,9 @@ watch(selectedProvider, () => {
 
 const keyDialogVisible = ref(false)
 const keyDialogProvider = ref<LlmProviderResponse | null>(null)
+/** `M-8`：Key 主备管理弹窗（列表 / 手动切换 / 停用 / 删除）。 */
+const apiKeysDialogVisible = ref(false)
+const apiKeysDialogProvider = ref<LlmProviderResponse | null>(null)
 const newApiKey = ref('')
 
 const formDialogVisible = ref(false)
@@ -1077,6 +1095,17 @@ function openKeyDialog(row: LlmProviderResponse) {
   keyDialogProvider.value = row
   newApiKey.value = ''
   keyDialogVisible.value = true
+}
+
+/** `M-8`：打开 Key 主备管理弹窗（列表 / 手动切换 / 停用 / 删除）。 */
+function openApiKeysDialog(row: LlmProviderResponse) {
+  apiKeysDialogProvider.value = row
+  apiKeysDialogVisible.value = true
+}
+
+/** `M-8`：主备状态变过 ⇒ 刷新 Provider 列表（脱敏值 / 是否已配置可能都变了）。 */
+async function handleApiKeysChanged() {
+  await loadProviders()
 }
 
 async function handleSaveKey() {
@@ -1629,6 +1658,10 @@ onMounted(() => {
 }
 .key-source {
   margin-left: 6px;
+}
+/* `M-8`「管理 Key」入口（主备列表 / 手动切换） */
+.key-manage-btn {
+  margin-left: 10px;
 }
 
 /* 主卡底部保存区 sheet-footer ========================================== */

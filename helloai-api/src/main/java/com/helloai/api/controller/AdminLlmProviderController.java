@@ -3,6 +3,8 @@ package com.helloai.api.controller;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.admin.CreateLlmProviderRequest;
 import com.helloai.api.dto.admin.LlmProviderApiKeyBatchResponse;
+import com.helloai.api.dto.admin.LlmProviderApiKeyChangeResponse;
+import com.helloai.api.dto.admin.LlmProviderApiKeyItemResponse;
 import com.helloai.api.dto.admin.LlmProviderApiKeyResponse;
 import com.helloai.api.dto.admin.LlmProviderModelResponse;
 import com.helloai.api.dto.admin.LlmProviderResponse;
@@ -14,6 +16,7 @@ import com.helloai.core.agent.service.LlmProviderKeyVerifyService;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.system.entity.LlmProvider;
 import com.helloai.core.system.entity.LlmProviderModel;
+import com.helloai.core.system.port.PlatformApiKeyChange;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.system.service.LlmProviderModelService;
 import com.helloai.core.system.service.LlmProviderQueryService;
@@ -34,6 +37,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -49,6 +53,10 @@ import java.util.stream.Collectors;
  *   <li>PUT    /api/admin/llm-providers/toggleById/{id} 启用 / 禁用</li>
  *   <li>PUT    /api/admin/llm-providers/saveApiKeyById/{id}  写入 API Key（走 credential_vault）</li>
  *   <li>PUT    /api/admin/llm-providers/saveApiKeysById/{id} 批量写入 API Key（`M-7`，一次粘贴多把）</li>
+ *   <li>GET    /api/admin/llm-providers/listApiKeysByProviderId/{id}  Key 列表（`M-8`，主 / 备 / 历史）</li>
+ *   <li>PUT    /api/admin/llm-providers/activateApiKeyByProviderIdAndCredentialId/{id}/{credentialId}   手动切换启用位（`M-8`）</li>
+ *   <li>PUT    /api/admin/llm-providers/deactivateApiKeyByProviderIdAndCredentialId/{id}/{credentialId} 停用（`M-8`）</li>
+ *   <li>DELETE /api/admin/llm-providers/deleteApiKeyByProviderIdAndCredentialId/{id}/{credentialId}     删除（`M-8`，软删）</li>
  *   <li>POST   /api/admin/llm-providers/verifyApiKeyById/{id} 验证 API Key（最小请求探测）</li>
  *   <li>GET    /api/admin/llm-providers/listModelsByProviderId/{id}           模型列表（含禁用）</li>
  *   <li>POST   /api/admin/llm-providers/addModelByProviderId/{id}               添加模型</li>
@@ -206,6 +214,100 @@ public class AdminLlmProviderController {
                 id, p.getProviderCode(), outcome.added(), outcome.alreadyExists(),
                 outcome.primaryActivated());
         return R.ok(LlmProviderApiKeyBatchResponse.from(outcome));
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  `M-8` 多 Key 主备管理
+    //
+    //  红线 `N-1`：只做**手动**主/备切换。不做按健康度 / 配额 / 限流的自动换 Key
+    //  （不移植 magpie internal/gateway/fallback.go），也不做加权 routing。
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * `M-8` 列出该 Provider 的平台级 API Key（主 / 备 / 历史，不含密文）。
+     *
+     * <p>只读端点，故复用 {@code llm-provider:view} 权限，与 {@code /list} 同级。</p>
+     */
+    @SaCheckPermission("llm-provider:view")
+    @GetMapping("/listApiKeysByProviderId/{id}")
+    public R<List<LlmProviderApiKeyItemResponse>> listApiKeys(@PathVariable("id") Long id) {
+        LlmProvider p = providerService.getById(id);
+        if (p == null) {
+            return R.fail("Provider 不存在");
+        }
+        List<LlmProviderApiKeyItemResponse> items = platformProviderConfigService
+                .listApiKeys(p.getProviderCode())
+                .stream()
+                .map(LlmProviderApiKeyItemResponse::from)
+                .collect(Collectors.toList());
+        return R.ok(items);
+    }
+
+    /**
+     * `M-8` 手动把指定备位升为启用位（原启用位降为备位）。
+     *
+     * <p>路径同时带 {@code providerId} 与 {@code credentialId}：后者必须属于前者，
+     * 否则服务层 fail-close 拒绝（防跨 Provider 误操作）。</p>
+     */
+    @SaCheckPermission("llm-provider:key")
+    @PutMapping("/activateApiKeyByProviderIdAndCredentialId/{id}/{credentialId}")
+    public R<LlmProviderApiKeyChangeResponse> activateApiKey(
+            @PathVariable("id") Long id,
+            @PathVariable("credentialId") Long credentialId) {
+        LlmProvider p = providerService.getById(id);
+        if (p == null) {
+            return R.fail("Provider 不存在");
+        }
+        PlatformApiKeyChange change =
+                platformProviderConfigService.activateApiKey(p.getProviderCode(), credentialId);
+        log.info("管理员手动切换平台级 API Key 启用位: id={}, provider={}, previousActiveId={}, newActiveId={}",
+                id, p.getProviderCode(), change.previousActiveId(), change.activeId());
+        return R.ok(LlmProviderApiKeyChangeResponse.from(change));
+    }
+
+    /**
+     * `M-8` 停用平台级 Key。
+     *
+     * <p>停用**启用位**时自动把最旧的一把备位顶为启用位；无备位可顶则拒绝
+     * （不得让 provider 静默变成「未配置」）。停用**备位**是幂等空操作。</p>
+     */
+    @SaCheckPermission("llm-provider:key")
+    @PutMapping("/deactivateApiKeyByProviderIdAndCredentialId/{id}/{credentialId}")
+    public R<LlmProviderApiKeyChangeResponse> deactivateApiKey(
+            @PathVariable("id") Long id,
+            @PathVariable("credentialId") Long credentialId) {
+        LlmProvider p = providerService.getById(id);
+        if (p == null) {
+            return R.fail("Provider 不存在");
+        }
+        PlatformApiKeyChange change =
+                platformProviderConfigService.deactivateApiKey(p.getProviderCode(), credentialId);
+        log.info("管理员停用平台级 API Key: id={}, provider={}, credentialId={}, newActiveId={}",
+                id, p.getProviderCode(), credentialId, change.activeId());
+        return R.ok(LlmProviderApiKeyChangeResponse.from(change));
+    }
+
+    /**
+     * `M-8` 删除（软删）平台级 Key。
+     *
+     * <p>删除**启用位**时同样先顶替；删除**备位 / 历史行**直接放行。软删保留行以备审计追溯
+     * （{@code credential_audit_log} 仍有指向它的记录）。</p>
+     */
+    @SaCheckPermission("llm-provider:key")
+    @DeleteMapping("/deleteApiKeyByProviderIdAndCredentialId/{id}/{credentialId}")
+    public R<LlmProviderApiKeyChangeResponse> deleteApiKey(
+            @PathVariable("id") Long id,
+            @PathVariable("credentialId") Long credentialId) {
+        LlmProvider p = providerService.getById(id);
+        if (p == null) {
+            return R.fail("Provider 不存在");
+        }
+        PlatformApiKeyChange change =
+                platformProviderConfigService.deleteApiKey(p.getProviderCode(), credentialId);
+        log.info("管理员删除平台级 API Key: id={}, provider={}, credentialId={}, wasActive={}, newActiveId={}",
+                id, p.getProviderCode(), credentialId,
+                Objects.equals(change.previousActiveId(), credentialId), change.activeId());
+        return R.ok(LlmProviderApiKeyChangeResponse.from(change));
     }
 
     /**

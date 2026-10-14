@@ -124,6 +124,31 @@ export interface ApiKeyBatchSaveResult {
   message?: string
 }
 
+/** `M-8` Key 列表的一行（不含密文）。 */
+export interface LlmProviderApiKeyItem {
+  id: number
+  /** `ACTIVE`（启用位 / 主）| `DISABLED`（备位）| `EXPIRED`（轮换淘汰的历史行）。 */
+  status: 'ACTIVE' | 'DISABLED' | 'EXPIRED'
+  /** 是否当前启用位（后端由 status 推导，前端不再重复该判据）。 */
+  primary: boolean
+  /** 明文指纹（24 字符，不可逆）；切换 / 停用时用它点名。 */
+  fingerprint?: string
+  /** 脱敏展示值（前 4 + … + 后 4）；secretRef 型或解密失败时为 null。 */
+  masked?: string | null
+  createTime?: string
+  remark?: string
+}
+
+/** `M-8` 主备操作结果（切换 / 停用 / 删除）。 */
+export interface LlmProviderApiKeyChange {
+  credentialId: number
+  fingerprint?: string
+  previousActiveId?: number | null
+  activeId?: number | null
+  /** 本次是否改变了「哪一把是启用位」（后端由前后 activeId 推导）。 */
+  activeChanged: boolean
+}
+
 export const settingsApi = {
   getStatus() {
     return request.get<any, { setupFinished: boolean; hasUsers: boolean; userCount: number; registerEnabled?: boolean }>(paths.setup.getStatus)
@@ -205,6 +230,23 @@ export const settingsApi = {
     return request.put<any, ApiKeyBatchSaveResult>(paths.admin.llmProviderApiKeys(id), rawText, {
       headers: { 'Content-Type': 'text/plain' }
     })
+  },
+  // ---- `M-8` 多 Key 主备（手动切换 / 停用 / 删除；无自动 failover）----
+  /** Key 列表（主 / 备 / 历史，不含密文；明文仅以 masked 脱敏形态出现）。 */
+  listLlmProviderApiKeys(id: number) {
+    return request.get<any, LlmProviderApiKeyItem[]>(paths.admin.llmProviderApiKeyList(id))
+  },
+  /** 手动把指定备位升为启用位（原启用位降为备位）。 */
+  activateLlmProviderApiKey(id: number, credentialId: number) {
+    return request.put<any, LlmProviderApiKeyChange>(paths.admin.llmProviderApiKeyActivate(id, credentialId))
+  },
+  /** 停用；停用启用位时后端会自动把最旧备位顶为启用位，无备位可顶则报错。 */
+  deactivateLlmProviderApiKey(id: number, credentialId: number) {
+    return request.put<any, LlmProviderApiKeyChange>(paths.admin.llmProviderApiKeyDeactivate(id, credentialId))
+  },
+  /** 删除（软删）；删除启用位时同样先顶替。 */
+  deleteLlmProviderApiKey(id: number, credentialId: number) {
+    return request.delete<any, LlmProviderApiKeyChange>(paths.admin.llmProviderApiKeyDelete(id, credentialId))
   },
   /** 验证 Provider API Key（最小请求直探端点，耗时最长约 20s）。 */
   verifyLlmProviderApiKey(id: number) {
