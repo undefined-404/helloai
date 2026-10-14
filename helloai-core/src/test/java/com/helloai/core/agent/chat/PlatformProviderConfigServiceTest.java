@@ -3,9 +3,12 @@ package com.helloai.core.agent.chat;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;
 import com.helloai.common.constant.CredentialOwnerType;
+import com.helloai.common.constant.CredentialStatus;
 import com.helloai.common.crypto.CredentialCryptoService;
 import com.helloai.core.system.crypto.CredentialFingerprint;
 import com.helloai.core.system.port.CredentialSecret;
+import com.helloai.core.system.port.PlatformApiKeyChange;
+import com.helloai.core.system.port.PlatformApiKeyView;
 import com.helloai.core.system.service.CredentialVaultService;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import com.helloai.core.system.service.SysConfigService;
@@ -35,7 +38,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.OffsetDateTime;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -174,13 +179,14 @@ class PlatformProviderConfigServiceTest {
         }
 
         @Test
-        @DisplayName("maskApiKey：解密后仅保留尾 4 位")
-        void shouldMaskTailFour() {
+        @DisplayName("maskApiKey：`M-8` 起统一走 SecretMask 口径（前 4 + … + 后 4）")
+        void shouldMaskWithUnifiedSecretMaskRule() {
             when(credentialVaultService.getActivePlatformApiKeySecret(PROVIDER))
                     .thenReturn(platformVault(null, "cipher-vault"));
             when(credentialCryptoService.decryptFromBase64("cipher-vault")).thenReturn("sk-abc12345");
 
-            assertThat(configService.maskApiKey(PROVIDER)).isEqualTo("****2345");
+            // 旧口径为 "****2345"；`M-8` 与「Key 列表」逐行脱敏共用 SecretMask，改为前 4 + … + 后 4
+            assertThat(configService.maskApiKey(PROVIDER)).isEqualTo("sk-a…2345");
         }
 
         @Test
@@ -413,6 +419,94 @@ class PlatformProviderConfigServiceTest {
                     .isInstanceOf(BizException.class).hasMessageContaining("未解析");
             assertThatThrownBy(() -> configService.saveApiKeys(PROVIDER, null))
                     .isInstanceOf(BizException.class).hasMessageContaining("未解析");
+        }
+    }
+
+    @Nested
+    @DisplayName("`M-8` 多 Key 主备：编排与缓存失效")
+    class MultiKeyStandby {
+
+        @Test
+        @DisplayName("listApiKeys：委托 vault 列表；只读操作不清 ChatModel 缓存")
+        void shouldDelegateListWithoutClearingCache() {
+            PlatformApiKeyView view = new PlatformApiKeyView(1L, CredentialStatus.ACTIVE, "fp-a",
+                    "sk-a…1234", OffsetDateTime.now(), null);
+            when(credentialVaultService.listPlatformApiKeyViews(PROVIDER)).thenReturn(List.of(view));
+
+            List<PlatformApiKeyView> result = configService.listApiKeys(PROVIDER);
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).id()).isEqualTo(1L);
+            assertThat(result.get(0).status()).isEqualTo(CredentialStatus.ACTIVE);
+            verify(providerChatModelCache, never()).clear();
+        }
+
+        @Test
+        @DisplayName("★activateApiKey：启用位变了必须清 ChatModel 缓存，否则新 Key 不生效（旧实例仍持旧 Key）")
+        void shouldClearCacheOnActivate() {
+            when(credentialVaultService.activatePlatformApiKeyCredential(2L, PROVIDER, "admin"))
+                    .thenReturn(new PlatformApiKeyChange(2L, "fp-s", 1L, 2L));
+
+            PlatformApiKeyChange change = configService.activateApiKey(PROVIDER, 2L);
+
+            assertThat(change.activeId()).isEqualTo(2L);
+            assertThat(change.previousActiveId()).isEqualTo(1L);
+            verify(providerChatModelCache).clear();
+        }
+
+        @Test
+        @DisplayName("★deactivateApiKey：无条件的缓存失效（停用 / 顶替都可能在动启用位）")
+        void shouldClearCacheOnDeactivate() {
+            when(credentialVaultService.deactivatePlatformApiKeyCredential(1L, PROVIDER, "admin"))
+                    .thenReturn(new PlatformApiKeyChange(1L, "fp-a", 1L, 2L));
+
+            configService.deactivateApiKey(PROVIDER, 1L);
+
+            verify(providerChatModelCache).clear();
+        }
+
+        @Test
+        @DisplayName("★deleteApiKey：删除后必须清缓存（已删除的 Key 不可再被调用）")
+        void shouldClearCacheOnDelete() {
+            when(credentialVaultService.deletePlatformApiKeyCredential(3L, PROVIDER, "admin"))
+                    .thenReturn(new PlatformApiKeyChange(3L, "fp-e", 1L, 1L));
+
+            configService.deleteApiKey(PROVIDER, 3L);
+
+            verify(providerChatModelCache).clear();
+        }
+
+        @Test
+        @DisplayName("provider / credentialId 为空 ⇒ fail-close：不触库、不清缓存")
+        void shouldRejectInvalidArgumentsBeforeTouchingVault() {
+            assertThatThrownBy(() -> configService.activateApiKey(" ", 1L))
+                    .isInstanceOf(BizException.class).hasMessageContaining("provider");
+            assertThatThrownBy(() -> configService.activateApiKey(PROVIDER, null))
+                    .isInstanceOf(BizException.class).hasMessageContaining("credentialId");
+            assertThatThrownBy(() -> configService.deactivateApiKey(PROVIDER, null))
+                    .isInstanceOf(BizException.class).hasMessageContaining("credentialId");
+            assertThatThrownBy(() -> configService.deleteApiKey(" ", 1L))
+                    .isInstanceOf(BizException.class).hasMessageContaining("provider");
+            assertThatThrownBy(() -> configService.listApiKeys(null))
+                    .isInstanceOf(BizException.class).hasMessageContaining("provider");
+
+            verify(credentialVaultService, never()).activatePlatformApiKeyCredential(any(), anyString(), anyString());
+            verify(credentialVaultService, never()).deactivatePlatformApiKeyCredential(any(), anyString(), anyString());
+            verify(credentialVaultService, never()).deletePlatformApiKeyCredential(any(), anyString(), anyString());
+            verify(providerChatModelCache, never()).clear();
+        }
+
+        @Test
+        @DisplayName("vault 层拒绝（如「唯一启用 Key 不可停用」）⇒ 异常透传，且不清缓存")
+        void shouldPropagateVaultRejectionAndKeepCache() {
+            when(credentialVaultService.deactivatePlatformApiKeyCredential(1L, PROVIDER, "admin"))
+                    .thenThrow(new BizException("这是该 Provider 唯一的启用 Key"));
+
+            assertThatThrownBy(() -> configService.deactivateApiKey(PROVIDER, 1L))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("唯一的启用 Key");
+
+            verify(providerChatModelCache, never()).clear();
         }
     }
 }

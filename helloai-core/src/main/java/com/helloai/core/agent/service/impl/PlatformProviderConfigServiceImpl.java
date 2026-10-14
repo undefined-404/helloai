@@ -5,13 +5,17 @@ import com.helloai.core.agent.dto.ApiKeyBatchSaveOutcome;
 import com.helloai.core.agent.dto.ApiKeySaveOutcome;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;
+import com.helloai.common.constant.CredentialAuditAction;
 import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.common.crypto.CredentialCryptoService;
 import com.helloai.core.shared.util.KeyTextSplitter;
+import com.helloai.core.shared.util.SecretMask;
 import com.helloai.core.system.crypto.CredentialFingerprint;
 import com.helloai.core.agent.chat.provider.ProviderChatModelCache;
 import com.helloai.core.system.port.CredentialSecret;
 import com.helloai.core.system.port.LlmProviderProfile;
+import com.helloai.core.system.port.PlatformApiKeyChange;
+import com.helloai.core.system.port.PlatformApiKeyView;
 import com.helloai.core.system.service.CredentialVaultService;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import com.helloai.core.system.service.SysConfigService;
@@ -48,6 +52,9 @@ public class PlatformProviderConfigServiceImpl implements PlatformProviderConfig
 
     /** PLATFORM 级凭证的固定占位归属 ID（与 vault 侧平台级查询口径一致）。 */
     private static final long PLATFORM_OWNER_ID = 0L;
+
+    /** 平台级 Key 管理动作的操作者标识（复用 `M-8` 审计动作常量，避免在本域另造一份口径）。 */
+    private static final String OPERATOR_ADMIN = CredentialAuditAction.OPERATOR_ADMIN;
 
     private final CredentialVaultService credentialVaultService;
     private final CredentialCryptoService credentialCryptoService;
@@ -220,6 +227,87 @@ public class PlatformProviderConfigServiceImpl implements PlatformProviderConfig
                 primaryActivated, addedFingerprints);
     }
 
+    // ── `M-8` 多 Key 主备：列表 / 手动切换 / 停用 / 删除（**无**自动 failover，红线 `N-1`）──
+
+    /**
+     * `M-8` 列出该 provider 的平台级 API Key 条目（主 / 备 / 历史）。只读，不清缓存。
+     */
+    @Override
+    public List<PlatformApiKeyView> listApiKeys(String provider) {
+        if (provider == null || provider.isBlank()) {
+            throw new BizException("provider 不能为空");
+        }
+        return credentialVaultService.listPlatformApiKeyViews(provider);
+    }
+
+    /**
+     * `M-8` 手动切换启用位。编排 = 校验 + 改启用位（system 域，事务内先降后升）+ 清缓存。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public PlatformApiKeyChange activateApiKey(String provider, Long credentialId) {
+        requireCredentialId(credentialId);
+        requireProvider(provider);
+        PlatformApiKeyChange change =
+                credentialVaultService.activatePlatformApiKeyCredential(credentialId, provider, OPERATOR_ADMIN);
+        clearChatModelCache(provider, "手动切换启用位");
+        return change;
+    }
+
+    /**
+     * `M-8` 停用平台级 Key（停用启用位时自动顶替最旧备位；无备位可顶则拒绝）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public PlatformApiKeyChange deactivateApiKey(String provider, Long credentialId) {
+        requireCredentialId(credentialId);
+        requireProvider(provider);
+        PlatformApiKeyChange change =
+                credentialVaultService.deactivatePlatformApiKeyCredential(credentialId, provider, OPERATOR_ADMIN);
+        clearChatModelCache(provider, "停用平台级 Key");
+        return change;
+    }
+
+    /**
+     * `M-8` 删除（软删）平台级 Key。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public PlatformApiKeyChange deleteApiKey(String provider, Long credentialId) {
+        requireCredentialId(credentialId);
+        requireProvider(provider);
+        PlatformApiKeyChange change =
+                credentialVaultService.deletePlatformApiKeyCredential(credentialId, provider, OPERATOR_ADMIN);
+        clearChatModelCache(provider, "删除平台级 Key");
+        return change;
+    }
+
+    private static void requireCredentialId(Long credentialId) {
+        if (credentialId == null) {
+            throw new BizException("credentialId 不能为空");
+        }
+    }
+
+    private static void requireProvider(String provider) {
+        if (provider == null || provider.isBlank()) {
+            throw new BizException("provider 不能为空");
+        }
+    }
+
+    /**
+     * 清理 ChatModel 缓存（`M-8`）。
+     *
+     * <p><b>为何无条件清、而不像 `M-7` 那样「有新增才清」</b>：`M-7` 的新增全部落在
+     * **备位**，对启用位无影响，故可省；而 `M-8` 三个操作**都可能改变哪一把 Key 正在被使用**
+     * （切换必然；停用 / 删除启用位会顶替），且停用 / 删除会移除一把已存在的 Key ——
+     * 「宁可多清一次（代价只是重建一次 ChatModel 实例），不可漏清（代价是继续拿已停用
+     * 或已删除的 Key 发请求）」。</p>
+     */
+    private void clearChatModelCache(String provider, String action) {
+        providerChatModelCache.clear();
+        log.info("平台级 Key 管理动作完成并清理 ChatModel 缓存: provider={}, action={}", provider, action);
+    }
+
     /**
      * 保存 provider 的 Base URL / 默认模型到 sys_config（传空表示清除覆盖，回到 yml 默认）。
      */
@@ -250,17 +338,24 @@ public class PlatformProviderConfigServiceImpl implements PlatformProviderConfig
     }
 
     /**
-     * 脱敏展示平台级 API Key：仅保留尾 4 位，前缀 {@code ****}。
+     * 脱敏展示平台级 API Key（当前启用位）。
+     *
+     * <p>`M-8` 起口径统一到 {@link SecretMask}（迁自 magpie {@code provider.go:1501-1506}：
+     * 前 4 + {@code …} + 后 4），与「Key 列表」逐行脱敏**共用同一个实现**。原口径为自有的
+     * {@code "****" + 尾 4}，与列表口径并存会构成「同一件事两处判据 ⇒ 必分叉」，故一并切换。</p>
      *
      * @return 脱敏串；未配置返回 null
      */
+    @Override
     public String maskApiKey(String provider) {
         String plaintext = getApiKey(provider);
+        // 与旧口径保持一致的「未配置」语义：null / 空白 ⇒ null（前端据此渲染「未配置」，
+        // 而不是把空串渲染成一串点号）。这是「未配置」与「已配置后的脱敏展示」的判别，
+        // 不属于脱敏口径本身，故留在调用点。
         if (plaintext == null || plaintext.isBlank()) {
             return null;
         }
-        String tail = plaintext.length() <= 4 ? plaintext : plaintext.substring(plaintext.length() - 4);
-        return "****" + tail;
+        return SecretMask.mask(plaintext);
     }
 
     /**
