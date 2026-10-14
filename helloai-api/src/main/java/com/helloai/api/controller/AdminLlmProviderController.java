@@ -2,11 +2,13 @@ package com.helloai.api.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.admin.CreateLlmProviderRequest;
+import com.helloai.api.dto.admin.LlmProviderApiKeyBatchResponse;
 import com.helloai.api.dto.admin.LlmProviderApiKeyResponse;
 import com.helloai.api.dto.admin.LlmProviderModelResponse;
 import com.helloai.api.dto.admin.LlmProviderResponse;
 import com.helloai.api.dto.admin.UpdateLlmProviderRequest;
 import com.helloai.common.base.R;
+import com.helloai.core.agent.dto.ApiKeyBatchSaveOutcome;
 import com.helloai.core.agent.dto.ApiKeySaveOutcome;
 import com.helloai.core.agent.service.LlmProviderKeyVerifyService;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
@@ -46,6 +48,7 @@ import java.util.stream.Collectors;
  *   <li>DELETE /api/admin/llm-providers/deleteById/{id} 删除（内置不可）</li>
  *   <li>PUT    /api/admin/llm-providers/toggleById/{id} 启用 / 禁用</li>
  *   <li>PUT    /api/admin/llm-providers/saveApiKeyById/{id}  写入 API Key（走 credential_vault）</li>
+ *   <li>PUT    /api/admin/llm-providers/saveApiKeysById/{id} 批量写入 API Key（`M-7`，一次粘贴多把）</li>
  *   <li>POST   /api/admin/llm-providers/verifyApiKeyById/{id} 验证 API Key（最小请求探测）</li>
  *   <li>GET    /api/admin/llm-providers/listModelsByProviderId/{id}           模型列表（含禁用）</li>
  *   <li>POST   /api/admin/llm-providers/addModelByProviderId/{id}               添加模型</li>
@@ -174,6 +177,35 @@ public class AdminLlmProviderController {
         log.info("管理员配置平台级 API Key: id={}, provider={}, created={}, fingerprint={}",
                 id, p.getProviderCode(), outcome.created(), outcome.fingerprint());
         return R.ok(LlmProviderApiKeyResponse.from(outcome));
+    }
+
+    /**
+     * `M-7` **批量**写入平台级 API Key：一次粘贴多把（换行 / 逗号 / 分号 / 空格分隔）。
+     *
+     * <p>请求体同样是纯字符串（可能含多把），空值返回 400。服务端拆分 + 剥引号 + 输入内去重，
+     * 再逐把与库内指纹比对：命中即跳过、不重复落库。</p>
+     *
+     * <p>`M-8` 之前 `credential_vault` 仍是「同 (owner, provider, type) 只可一条 ACTIVE」，
+     * 故本批**只有在该 provider 尚无启用凭证时**才把首把升为 ACTIVE，其余与已在主 Key 之后新增的
+     * 一把一律落 {@code DISABLED} 备位（不覆盖正在使用的主 Key）—— 备位转正归 `M-8`。</p>
+     */
+    @SaCheckPermission("llm-provider:key")
+    @PutMapping("/saveApiKeysById/{id}")
+    public R<LlmProviderApiKeyBatchResponse> saveApiKeys(@PathVariable("id") Long id,
+                                                         @RequestBody String rawText) {
+        if (rawText == null || rawText.isBlank()) {
+            return R.fail("apiKey 不能为空");
+        }
+        LlmProvider p = providerService.getById(id);
+        if (p == null) {
+            return R.fail("Provider 不存在");
+        }
+        ApiKeyBatchSaveOutcome outcome =
+                platformProviderConfigService.saveApiKeys(p.getProviderCode(), rawText);
+        log.info("管理员批量配置平台级 API Key: id={}, provider={}, added={}, alreadyExists={}, primaryActivated={}",
+                id, p.getProviderCode(), outcome.added(), outcome.alreadyExists(),
+                outcome.primaryActivated());
+        return R.ok(LlmProviderApiKeyBatchResponse.from(outcome));
     }
 
     /**

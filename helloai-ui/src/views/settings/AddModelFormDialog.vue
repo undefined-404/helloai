@@ -59,11 +59,31 @@
         prop="apiKey"
       >
         <el-input
+          v-if="!batchMode"
           v-model="draft.apiKey"
           type="password"
           show-password
           :placeholder="existingProvider ? '输入新 Key，将覆盖现有密钥' : '输入供应商 API Key'"
         />
+        <el-input
+          v-else
+          v-model="draft.apiKey"
+          type="textarea"
+          :autosize="{ minRows: 3, maxRows: 8 }"
+          placeholder="一次粘贴多把 Key：支持换行 / 逗号 / 分号 / 空格分隔，服务端自动去重"
+        />
+        <div class="key-mode-row">
+          <el-switch
+            v-model="batchMode"
+            size="small"
+            active-text="批量录入"
+          />
+          <span class="key-mode-hint">
+            {{ batchMode
+              ? '新增的 Key 在不覆盖主 Key 的前提下落为备位，可一次录入多把'
+              : '开启后可一次粘贴多把 Key' }}
+          </span>
+        </div>
         <a
           v-if="selectedEntry && selectedEntry.apiKeyUrl"
           class="key-link"
@@ -156,6 +176,22 @@
         </div>
       </el-alert>
       <el-alert
+        v-if="savedBatchMessage"
+        type="info"
+        :closable="false"
+        show-icon
+        class="overwrite-alert"
+      >
+        <template #title>
+          {{ savedBatchMessage }}
+        </template>
+        <div class="verify-message">
+          {{ savedBatchPrimaryActivated
+            ? '该供应商此前无启用凭证，本批首把已生效'
+            : '新增的 Key 已落为备位，未覆盖正在使用的主 Key' }}
+        </div>
+      </el-alert>
+      <el-alert
         v-if="verifyResult"
         :type="verifyResult.success ? 'success' : 'error'"
         :closable="false"
@@ -245,6 +281,12 @@ const savedProviderId = ref<number | null>(null)
 const savedKeyExisted = ref(false)
 /** `M-6`：命中已有 Key 时展示其指纹。 */
 const savedKeyFingerprint = ref('')
+/** `M-7`：是否走批量录入（多把粘贴）；关时是原有的单把密码输入。 */
+const batchMode = ref(false)
+/** `M-7`：批量录入结果文案（「新增 N 把 / 已存在 M 把」）。 */
+const savedBatchMessage = ref('')
+/** `M-7`：本批是否把首把升为启用位（false ⇒ 新增全落备位）。 */
+const savedBatchPrimaryActivated = ref(false)
 
 const draft = reactive({
   providerCode: '',
@@ -295,6 +337,9 @@ watch(visible, (v) => {
   savedProviderId.value = null
   savedKeyExisted.value = false
   savedKeyFingerprint.value = ''
+  batchMode.value = false
+  savedBatchMessage.value = ''
+  savedBatchPrimaryActivated.value = false
   draft.providerCode = props.initial?.providerCode || PROVIDER_CATALOG[0].providerCode
   draft.billingType = 'API_KEY'
   draft.apiKey = ''
@@ -336,12 +381,24 @@ async function handleSubmit() {
       })
       providerId = created.id
     }
-    const keyResult = await settingsApi.saveLlmProviderApiKey(providerId, draft.apiKey.trim())
-    // `M-6`：同 provider 内同指纹 ⇒ 后端未重复落库，前端如实提示
-    savedKeyExisted.value = keyResult?.created === false
-    savedKeyFingerprint.value = keyResult?.fingerprint || ''
-    if (savedKeyExisted.value) {
-      ElMessage.warning('该 API Key 已存在，未重复保存')
+    if (batchMode.value) {
+      // `M-7` 批量录入：服务端拆分 + 去重，返回「新增 N 把 / 已存在 M 把」
+      const batchResult = await settingsApi.saveLlmProviderApiKeys(providerId, draft.apiKey.trim())
+      savedBatchMessage.value = batchResult?.message || ''
+      savedBatchPrimaryActivated.value = !!batchResult?.primaryActivated
+      if (!batchResult?.added) {
+        ElMessage.warning(batchResult?.message || '未新增任何 Key')
+      } else {
+        ElMessage.success(batchResult.message || '批量保存完成')
+      }
+    } else {
+      const keyResult = await settingsApi.saveLlmProviderApiKey(providerId, draft.apiKey.trim())
+      // `M-6`：同 provider 内同指纹 ⇒ 后端未重复落库，前端如实提示
+      savedKeyExisted.value = keyResult?.created === false
+      savedKeyFingerprint.value = keyResult?.fingerprint || ''
+      if (savedKeyExisted.value) {
+        ElMessage.warning('该 API Key 已存在，未重复保存')
+      }
     }
     savedProviderId.value = providerId
     emit('added', providerId)
@@ -390,6 +447,17 @@ async function runVerify(providerId: number) {
 }
 .key-link:hover {
   text-decoration: underline;
+}
+/* `M-7` 单把 / 批量录入切换行 */
+.key-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.key-mode-hint {
+  font-size: 12px;
+  color: var(--ha-muted);
 }
 .overwrite-alert {
   margin-bottom: 14px;

@@ -114,6 +114,8 @@ export const paths = {
     llmProviderDelete: (id: string | number) => `/admin/llm-providers/deleteById/${enc(id)}`,
     llmProviderToggle: (id: string | number) => `/admin/llm-providers/toggleById/${enc(id)}`,
     llmProviderApiKey: (id: string | number) => `/admin/llm-providers/saveApiKeyById/${enc(id)}`,
+    /** `M-7` 批量写入（请求体为纯字符串，可含多把）。 */
+    llmProviderApiKeys: (id: string | number) => `/admin/llm-providers/saveApiKeysById/${enc(id)}`,
     llmProviderVerifyApiKey: (id: string | number) => `/admin/llm-providers/verifyApiKeyById/${enc(id)}`,
     llmProviderModels: (id: string | number) => `/admin/llm-providers/listModelsByProviderId/${enc(id)}`,
     llmProviderModelCreate: (id: string | number) => `/admin/llm-providers/addModelByProviderId/${enc(id)}`,

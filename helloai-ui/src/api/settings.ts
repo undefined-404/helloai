@@ -108,6 +108,22 @@ export interface ApiKeySaveResult {
   message?: string
 }
 
+/**
+ * API Key **批量**保存结果（`M-7`，后端 saveApiKeysById 响应）。
+ *
+ * - `added` / `alreadyExists` 构成验收口径文案「新增 N 把 / 已存在 M 把」；
+ * - `primaryActivated=true` 表示该供应商此前无启用凭证，本批首把已生效；
+ *   否则新增的 Key 全部落为**备位**（不覆盖正在使用的主 Key），转正属 `M-8`。
+ */
+export interface ApiKeyBatchSaveResult {
+  added: number
+  alreadyExists: number
+  primaryActivated: boolean
+  /** 新落库各把的指纹（24 字符，不可逆），顺序与输入一致。 */
+  addedFingerprints?: string[]
+  message?: string
+}
+
 export const settingsApi = {
   getStatus() {
     return request.get<any, { setupFinished: boolean; hasUsers: boolean; userCount: number; registerEnabled?: boolean }>(paths.setup.getStatus)
@@ -176,6 +192,17 @@ export const settingsApi = {
    */
   saveLlmProviderApiKey(id: number, apiKey: string) {
     return request.put<any, ApiKeySaveResult>(paths.admin.llmProviderApiKey(id), apiKey, {
+      headers: { 'Content-Type': 'text/plain' }
+    })
+  },
+  /**
+   * `M-7` 批量写入 API Key：请求体为纯字符串，可一次粘贴多把
+   * （换行 / 逗号 / 分号 / 空格分隔，服务端剥引号 + 输入内去重）。
+   *
+   * @returns 「新增 N 把 / 已存在 M 把」计数；`primaryActivated` 标明首把是否已生效
+   */
+  saveLlmProviderApiKeys(id: number, rawText: string) {
+    return request.put<any, ApiKeyBatchSaveResult>(paths.admin.llmProviderApiKeys(id), rawText, {
       headers: { 'Content-Type': 'text/plain' }
     })
   },
