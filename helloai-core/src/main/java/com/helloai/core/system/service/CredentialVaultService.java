@@ -72,7 +72,7 @@ public interface CredentialVaultService extends IService<CredentialVault> {
      *
      * <p>先只支持单条启用态记录；后续多 Provider / 多版本轮换再继续扩展。</p>
      *
-     * @param fingerprint 明文指纹（`M-6`，{@code com.helloai.common.crypto.CredentialFingerprint#of}）；
+     * @param fingerprint 明文指纹（`M-6`，{@code com.helloai.core.system.crypto.CredentialFingerprint#of}）；
      *                    {@code secretRef} 型凭证传 {@code null}
      */
     CredentialVault saveAgentApiKeyCredential(Long agentId, String provider,
@@ -151,6 +151,26 @@ public interface CredentialVaultService extends IService<CredentialVault> {
      * @return 本次实际补写的行数
      */
     int backfillFingerprints(CredentialOwnerType ownerType, Long ownerId, String provider);
+
+    // ── `M-7` 批量录入：备位（DISABLED）落库 ─────────────────────────────
+
+    /**
+     * 落一条**平台级备位** API Key 凭证（{@code status=DISABLED}），**不触碰当前 ACTIVE 凭证**。
+     *
+     * <p>供 `M-7` 批量录入使用：对齐 magpie {@code AddKeys}（{@code keys.go:183-222}）在
+     * 「已有主 key」时**只往备位追加、不覆盖主 key**的语义。`credential_vault` 的部分唯一索引
+     * （{@code uk_credential_vault_*_active}）**只约束 {@code status='ACTIVE'}**，故批量备位落库
+     * 不会冲突；备位转正是 `M-8`（多 Key 主备切换）的职责。</p>
+     *
+     * @param provider       LLM Provider
+     * @param encryptedValue AES-GCM 密文
+     * @param remark         审计备注
+     * @param fingerprint    明文指纹（`M-6` 口径）
+     * @return 新建的 DISABLED 凭证
+     */
+    CredentialVault saveDisabledPlatformApiKeyCredential(String provider,
+                                                         String encryptedValue,
+                                                         String remark, String fingerprint);
 
     /**
      * 人工停用凭证（N-004 收口）。

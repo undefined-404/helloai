@@ -1,5 +1,6 @@
 package com.helloai.core.agent.service;
 
+import com.helloai.core.agent.dto.ApiKeyBatchSaveOutcome;
 import com.helloai.core.agent.dto.ApiKeySaveOutcome;
 
 /**
@@ -37,6 +38,28 @@ public interface PlatformProviderConfigService {
      * @return 保存结果（是否新增 + 指纹），供调用方提示「已存在」
      */
     ApiKeySaveOutcome saveApiKey(String provider, String apiKey);
+
+    /**
+     * `M-7` 批量保存平台级 API Key：把一次粘贴的文本拆成多把，逐把去重后落库。
+     *
+     * <p><b>拆分</b>：{@link com.helloai.core.shared.util.KeyTextSplitter}（迁自 magpie
+     * {@code internal/provider/keys.go:165-178}），支持换行 / 逗号 / 分号 / 空格分隔，
+     * 两端剥引号，输入内**去重且保序**。</p>
+     *
+     * <p><b>去重</b>：与单把 {@link #saveApiKey} 同一口径 —— 作用域 = owner + provider，
+     * 比对 `M-6` 指纹，**含历史 EXPIRED/DISABLED 行**；命中即跳过、不重复落库。</p>
+     *
+     * <p><b>落库形态</b>（对齐 magpie {@code AddKeys} {@code keys.go:183-222}）：该 provider
+     * **尚无 ACTIVE 凭证** ⇒ 本批**首把**升为 ACTIVE（"首把为主"）；**已有 ACTIVE** ⇒ 本批新增
+     * 一律落 `status='DISABLED'` **备位**，**不覆盖正在使用的主 Key**。备位转正属 `M-8`
+     * （多 Key 主备），本批只负责"存进来 + 报清楚"。</p>
+     *
+     * @param provider LLM Provider
+     * @param rawText  粘贴的原始文本（可含多把 Key）
+     * @return 批量结果（新增把数 / 已存在把数 / 是否升了首把 / 新增指纹列表）
+     * @throws com.helloai.common.base.BizException provider 为空，或文本中未解析出任何 Key
+     */
+    ApiKeyBatchSaveOutcome saveApiKeys(String provider, String rawText);
 
     /**
      * 保存 provider 的 Base URL 与默认模型（写 sys_config）。

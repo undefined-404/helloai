@@ -1,11 +1,13 @@
 package com.helloai.core.agent.service.impl;
 
 import com.helloai.core.agent.service.PlatformProviderConfigService;
+import com.helloai.core.agent.dto.ApiKeyBatchSaveOutcome;
 import com.helloai.core.agent.dto.ApiKeySaveOutcome;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;
 import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.common.crypto.CredentialCryptoService;
+import com.helloai.core.shared.util.KeyTextSplitter;
 import com.helloai.core.system.crypto.CredentialFingerprint;
 import com.helloai.core.agent.chat.provider.ProviderChatModelCache;
 import com.helloai.core.system.port.CredentialSecret;
@@ -17,6 +19,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 平台级 LLM Provider 配置服务（先启动后配置）。
@@ -147,6 +152,72 @@ public class PlatformProviderConfigServiceImpl implements PlatformProviderConfig
         log.info("平台级 API Key 已轮换并清理 ChatModel 缓存: provider={}, fingerprint={}",
                 provider, fingerprint);
         return ApiKeySaveOutcome.ofCreated(fingerprint);
+    }
+
+    /**
+     * `M-7` 批量保存平台级 API Key。
+     *
+     * <p>流程：拆分（{@link KeyTextSplitter}，迁自 magpie {@code SplitKeys}）→ 补齐历史行指纹
+     * （同 `M-6` 前置）→ **一次性全批判重**（分类为"新增 / 已存在"）→ 按「是否已有启用位」决定
+     * 首把升 ACTIVE 还是全部落 DISABLED 备位 → 计数返回。</p>
+     *
+     * <p><b>为何先全批判重、再统一落库</b>：本批各把互不相同（{@link KeyTextSplitter} 已按
+     * magpie 口径在输入内去重），故"先全判"与"边判边落"在本批内**结果相同**；采用前者是为了让
+     * 计数**不依赖"拆分器一定会去重"这一前提** —— 若将来拆分策略放宽（例如允许同批重复），
+     * 边判边落的写法会把同批刚落库的重复把计成"已存在"，使「新增 N 把」静默退化。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ApiKeyBatchSaveOutcome saveApiKeys(String provider, String rawText) {
+        if (provider == null || provider.isBlank()) {
+            throw new BizException("provider 不能为空");
+        }
+        List<String> keys = KeyTextSplitter.split(rawText);
+        if (keys.isEmpty()) {
+            throw new BizException("未解析到任何 API Key（支持换行 / 逗号 / 分号 / 空格分隔）");
+        }
+        // `M-6` 同款前置：先补齐历史行指纹，否则「升级前录入过的 Key」判不出重复
+        credentialVaultService.backfillFingerprints(
+                CredentialOwnerType.PLATFORM, PLATFORM_OWNER_ID, provider);
+
+        List<String> newKeys = new ArrayList<>();
+        int alreadyExists = 0;
+        for (String key : keys) {
+            String fingerprint = CredentialFingerprint.of(key);
+            if (credentialVaultService.existsFingerprint(
+                    CredentialOwnerType.PLATFORM, PLATFORM_OWNER_ID, provider, fingerprint)) {
+                alreadyExists++;
+            } else {
+                newKeys.add(key);
+            }
+        }
+        if (newKeys.isEmpty()) {
+            log.info("批量录入：全部已存在，未落任何行: provider={}, alreadyExists={}", provider, alreadyExists);
+            return ApiKeyBatchSaveOutcome.of(0, alreadyExists, false, List.of());
+        }
+
+        // 已有启用位 ⇒ 本批新增全部进备位（不覆盖正在用的主 Key，对齐 magpie AddKeys）
+        boolean hadActive = credentialVaultService.hasActivePlatformCredential(provider);
+        boolean primaryActivated = false;
+        List<String> addedFingerprints = new ArrayList<>(newKeys.size());
+        for (int i = 0; i < newKeys.size(); i++) {
+            String key = newKeys.get(i);
+            String fingerprint = CredentialFingerprint.of(key);
+            String encrypted = credentialCryptoService.encryptToBase64(key);
+            if (!hadActive && i == 0) {
+                credentialVaultService.rotatePlatformApiKey(provider, encrypted, null,
+                        "`M-7` 批量录入（首把升为启用位）", fingerprint);
+                primaryActivated = true;
+            } else {
+                credentialVaultService.saveDisabledPlatformApiKeyCredential(provider, encrypted,
+                        "`M-7` 批量录入（备位，待 `M-8` 启用）", fingerprint);
+            }
+            addedFingerprints.add(fingerprint);
+        }
+        providerChatModelCache.clear();
+        log.info("批量录入完成: provider={}, added={}, alreadyExists={}, primaryActivated={}",
+                provider, addedFingerprints.size(), alreadyExists, primaryActivated);
+        return ApiKeyBatchSaveOutcome.of(addedFingerprints.size(), alreadyExists,
+                primaryActivated, addedFingerprints);
     }
 
     /**

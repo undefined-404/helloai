@@ -242,6 +242,40 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
                 encryptedValue, secretRef, null, remark, fingerprint);
     }
 
+    // ── `M-7` 批量录入：备位（DISABLED）落库 ─────────────────────────────
+
+    /**
+     * 落一条平台级**备位** API Key 凭证（{@code status=DISABLED}），**不动当前 ACTIVE 凭证**。
+     *
+     * <p>与 {@link #savePlatformApiKeyCredential} 的关键区别：后者会把原 ACTIVE 降级并新落一条
+     * ACTIVE（"顶替"语义），本方法**只追加备位**（"并存"语义）—— 这正是 `M-7` 批量录入需要的：
+     * 已有主 Key 时粘贴多把不能让正在使用的那把被顶掉（对齐 magpie {@code AddKeys}）。</p>
+     *
+     * <p>并发安全由 DB 兜底：`uk_credential_vault_*_active` 部分唯一索引**只覆盖
+     * {@code status='ACTIVE'}** 的行，备位行不参与该约束，故多条 DISABLED 可共存。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public CredentialVault saveDisabledPlatformApiKeyCredential(String provider,
+                                                                String encryptedValue,
+                                                                String remark, String fingerprint) {
+        CredentialVault vault = new CredentialVault();
+        vault.setOwnerType(CredentialOwnerType.PLATFORM);
+        vault.setOwnerId(0L);
+        vault.setProvider(provider);
+        vault.setCredentialType(CredentialType.API_KEY);
+        vault.setEncryptedValue(encryptedValue);
+        vault.setStatus(CredentialStatus.DISABLED);
+        vault.setRemark(remark);
+        vault.setFingerprint(fingerprint);
+        save(vault);
+        // 审计复用 BIND（"新增一条绑定"），detail 标明备位语义以便与启用位区分
+        recordAudit(vault, CredentialAuditAction.BIND, CredentialAuditAction.OPERATOR_ADMIN,
+                "batch add as standby (DISABLED)");
+        log.info("平台级备位 API Key 已落库: provider={}, fingerprint={}", provider, fingerprint);
+        return vault;
+    }
+
     private CredentialVault saveApiKeyCredential(CredentialOwnerType ownerType, Long ownerId,
                                                  String provider,
                                                  String encryptedValue, String secretRef,
