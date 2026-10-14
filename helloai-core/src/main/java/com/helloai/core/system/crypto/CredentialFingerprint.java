@@ -20,10 +20,16 @@ import java.util.HexFormat;
  * 用**全量** SHA-256 hex 在 SQL 里精确定位行；本类是「去重 / 区分标识」，只用
  * **前 {@link #HEX_LENGTH} 个字符**，两者输出口径与用途均不同，故不合并。</p>
  *
- * <p>口径对齐 magpie {@code internal/access/access.go:420-421}
- * （{@code sum := sha256.Sum256([]byte(secret)); hex.EncodeToString(sum[:12])}）：
- * 取摘要**前 12 字节**转小写十六进制，即 {@value #HEX_LENGTH} 个字符。
+ * <p>口径：取摘要**前 12 字节**转小写十六进制，即 {@value #HEX_LENGTH} 个字符。
  * API Key 属高熵随机串，无需加盐或迭代 KDF。</p>
+ *
+ * <p><b>★与 magpie 的关系（2026-10-14 订正）</b>：magpie 存在**两个同名「指纹」、语义不同** ——
+ * {@code internal/provider/keys.go:69-70} 用「SHA-256 前 5 字节 / 10 字符」标识**供应商 API Key**
+ * （{@code AddKeys} 去重即用该值比对，{@code keys.go:194,198}）；而
+ * {@code internal/access/access.go:417-419} 的 {@code legacyLANKey} 用「前 12 字节 / 24 字符」
+ * 标识 **LAN 调用方访问令牌**，与供应商 Key 无关。本类取 12 字节是**对 magpie 供应商 Key 口径的
+ * 有意加强**（以留碰撞余量），**并非**对齐 magpie 的供应商 Key 口径（5 字节）。本 javadoc 早期
+ * 版本引 {@code access.go:420-421} 作为对齐依据，属**归属错误**，已在此订正。</p>
  *
  * <p><b>比较作用域</b>：指纹只在**同一 provider 内**比较 —— 同一把 Key 被两个
  * provider 合法复用时，不应互相判重。</p>
