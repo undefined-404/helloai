@@ -5,15 +5,20 @@
  * providerCode 为唯一关联键：选中预置项 = 为既有内置供应商写入/覆盖 API Key；
  * 目录之外选择「自定义供应商」才走 createLlmProvider 新建流程。
  *
- * <p><b>★取值口径（三处必须一致，改一处必核另两处）</b>：本目录的
+ * <p><b>★取值口径（四方必须一致，改一处必核另三方）</b>：本目录的
  * {@code protocolType / baseUrl / defaultModel} 是**平台内置供应商的规范注册信息**，
  * 唯一真值来源：
  * <ol>
  *   <li>{@code helloai-start/src/main/resources/application.yml} 的 {@code helloai.providers.*}；</li>
  *   <li>迁移种子与订正：{@code V46}（provider 种子）/ {@code V49}（模型目录）/ {@code V61}（moonshot 下线）/
- *       {@code V101}（defaultModel 与目录默认位对齐）；</li>
+ *       {@code V101}（defaultModel 与目录默认位对齐）/ {@code V108}（minimax 换代）；</li>
+ *   <li>Java 兜底常量：{@code LlmProviderKeyVerifyServiceImpl.FALLBACK_MODELS}（D-d，404 命门）
+ *       与 {@code DeepSeekProviderChatClientFactory.DEFAULT_MODEL}（D-e）；</li>
  *   <li>{@code llm_provider_model} 中该 provider 的 {@code is_default=1} 模型。</li>
  * </ol>
+ * 四方一致性由 {@code scripts/shell/verify-provider-catalog-parity.sh} 守卫（接入门禁 3）。
+ * <p><b>{@code catalogId}</b> 是该厂商在 <b>models.dev</b> 目录中的键（⇐ magpie {@code PresetDef.Catalog}），
+ * 为 {@code defaultModel} 的归属锚点；{@code M-3}（模型目录种子）据此拉取模型清单落 {@code llm_provider_model}。
  * <b>教训（2026-10-13 实测）</b>：本目录曾长期留存 {@code deepseek-chat} / {@code moonshot-v1-8k} /
  * {@code qwen-turbo} / {@code MiniMax-Text-01} 四个陈旧值——其中 {@code moonshot-v1-8k} 已下线（调用 404，
  * 见 V61 注释）为「验证失败」直接根因，{@code deepseek-chat} 已不在模型目录内（见 V101 注释）导致注册被拒。
@@ -36,8 +41,13 @@ export interface CatalogProvider {
   protocolType: ProtocolType
   baseUrl: string
   defaultModel: string
-  /** 官方 API Key 获取页（表单「获取 API 密钥」链接）。 */
-  apiKeyUrl: string
+  /**
+   * models.dev 目录 id（⇐ magpie `PresetDef.Catalog`）：该厂商在 models.dev 目录中的键。
+   * `defaultModel` 必须落在该目录下；`M-3`（模型目录种子）据此拉取模型清单。
+   */
+  catalogId: string
+  /** 官方 API Key 获取页（表单「获取 API 密钥」链接）⇐ magpie `KeysURL`；本地 / 免 Key 供应商可缺省。 */
+  apiKeyUrl?: string
 }
 
 export const PROVIDER_CATALOG: CatalogProvider[] = [
@@ -51,6 +61,7 @@ export const PROVIDER_CATALOG: CatalogProvider[] = [
     baseUrl: 'https://api.deepseek.com',
     // 目录默认位（llm_provider_model.is_default=1，V101 订正）：旧值 'deepseek-chat' 已不在目录内
     defaultModel: 'deepseek-v4-flash',
+    catalogId: 'deepseek',
     apiKeyUrl: 'https://platform.deepseek.com/api_keys'
   },
   {
@@ -64,6 +75,7 @@ export const PROVIDER_CATALOG: CatalogProvider[] = [
     baseUrl: 'https://api.moonshot.cn',
     // moonshot-v1 全系列 2026-08-31 已下线（404，V61 订正）：切目录默认位 kimi-k3
     defaultModel: 'kimi-k3',
+    catalogId: 'moonshotai',
     apiKeyUrl: 'https://platform.moonshot.cn/console/api-keys'
   },
   {
@@ -77,6 +89,7 @@ export const PROVIDER_CATALOG: CatalogProvider[] = [
     baseUrl: 'https://api.minimaxi.com/anthropic',
     // M2.5 / M2.7 全系列即将下线（V108 订正）：切现役 MiniMax-M3（参考 magpie workbuddy.go:91 / factory.go:625）
     defaultModel: 'MiniMax-M3',
+    catalogId: 'minimax',
     apiKeyUrl: 'https://platform.minimaxi.com/user-center/basic-information/interface-key'
   },
   {
@@ -90,6 +103,7 @@ export const PROVIDER_CATALOG: CatalogProvider[] = [
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode',
     // 目录默认位（V101 订正）：旧值 'qwen-turbo' 已不在目录内
     defaultModel: 'qwen3.7-plus',
+    catalogId: 'alibaba',
     apiKeyUrl: 'https://bailian.console.aliyun.com/?apiKey=1#/api-key'
   },
   {
@@ -101,6 +115,7 @@ export const PROVIDER_CATALOG: CatalogProvider[] = [
     protocolType: 'OPENAI_COMPATIBLE',
     baseUrl: 'https://api.openai.com',
     defaultModel: 'gpt-4o',
+    catalogId: 'openai',
     apiKeyUrl: 'https://platform.openai.com/api-keys'
   },
   {
@@ -112,6 +127,7 @@ export const PROVIDER_CATALOG: CatalogProvider[] = [
     protocolType: 'ANTHROPIC_COMPATIBLE',
     baseUrl: 'https://api.anthropic.com',
     defaultModel: 'claude-sonnet-4-5',
+    catalogId: 'anthropic',
     apiKeyUrl: 'https://console.anthropic.com/settings/keys'
   },
   {
@@ -123,6 +139,7 @@ export const PROVIDER_CATALOG: CatalogProvider[] = [
     protocolType: 'OPENAI_COMPATIBLE',
     baseUrl: 'https://api.x.ai',
     defaultModel: 'grok-4.7',
+    catalogId: 'xai',
     apiKeyUrl: 'https://console.x.ai'
   },
   {
@@ -134,6 +151,7 @@ export const PROVIDER_CATALOG: CatalogProvider[] = [
     protocolType: 'OPENAI_COMPATIBLE',
     baseUrl: 'https://api.mistral.ai',
     defaultModel: 'mistral-large-latest',
+    catalogId: 'mistral',
     apiKeyUrl: 'https://console.mistral.ai/api-keys'
   },
   {
@@ -145,6 +163,7 @@ export const PROVIDER_CATALOG: CatalogProvider[] = [
     protocolType: 'OPENAI_COMPATIBLE',
     baseUrl: 'https://api.groq.com/openai',
     defaultModel: 'llama-3.3-70b-versatile',
+    catalogId: 'groq',
     apiKeyUrl: 'https://console.groq.com/keys'
   }
 ]

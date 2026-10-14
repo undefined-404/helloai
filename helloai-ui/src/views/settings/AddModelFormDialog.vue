@@ -65,7 +65,7 @@
           :placeholder="existingProvider ? '输入新 Key，将覆盖现有密钥' : '输入供应商 API Key'"
         />
         <a
-          v-if="selectedEntry"
+          v-if="selectedEntry && selectedEntry.apiKeyUrl"
           class="key-link"
           :href="selectedEntry.apiKeyUrl"
           target="_blank"
