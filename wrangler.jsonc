@@ -1,17 +1,23 @@
 {
   // ============================================================
-  // Cloudflare Workers / Pages 部署配置
+  // Cloudflare Workers 静态站点部署配置
   // ------------------------------------------------------------
-  // 用途：把 docs-site/ 作为静态站点发布到 Cloudflare。
-  //   - Workers 流程（Workers Builds）：读 assets.directory
-  //   - Pages 流程（Connect to Git）：读 pages_build_output_dir
-  // 两者指向同一目录，任一流程都能正确发布站点。
+  // 用途：把 docs-site/ 作为纯静态站点发布到 Cloudflare Workers。
   //
-  // ★ 注意：name 必须与 Cloudflare 控制台里的项目名完全一致，
-  //   否则部署会因名称不匹配而失败。当前项目名：helloai
+  // ★ 为什么用 Workers 而非 legacy Pages 流程：
+  //   Cloudflare 控制台的 Deploy command 是 `npx wrangler deploy`
+  //   （Workers Builds 流程）。若同时配置 pages_build_output_dir，
+  //   wrangler 会把项目判定为 Pages 项目并告警：
+  //     "It seems that you have run wrangler deploy on a Pages project"
+  //   故此处**只保留 assets.directory**，与 Workers 流程严格对应。
+  //   （实测：去掉该字段后告警消失，仍正确读取 24 个文件）
+  //
+  // ★ name 必须与 Cloudflare 控制台的项目名完全一致，否则部署失败。
+  //   当前项目名：helloai
   //
   // ★ 站点内容：docs-site/（index.html + 6 张交互图 + 9 张 SVG + 4 张 PNG）
-  //   修改站点内容后，先跑 scripts/sync-docs-site.sh 同步资源再提交。
+  //   修改资源后先跑 `bash scripts/sync-docs-site.sh` 同步，再提交推送，
+  //   Cloudflare 会自动重新部署。
   // ============================================================
   "$schema": "node_modules/wrangler/config-schema.json",
 
@@ -24,8 +30,5 @@
   // 静态资源目录：站点内容所在位置
   "assets": {
     "directory": "./docs-site"
-  },
-
-  // Pages 流程读取的构建输出目录（与 assets.directory 指向同一目录）
-  "pages_build_output_dir": "./docs-site"
+  }
 }
