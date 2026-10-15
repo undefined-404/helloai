@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/协议-MCP-blue" alt="MCP">
 </p>
 
-> 🧭 **单页交互版**：[在线站点](https://helloai-docs.pages.dev) —— 这份 README 的全文，加上 6 张可拖拽 / 滚轮缩放 / 悬停高亮的架构图，融合在同一页里。（部署在 Cloudflare Pages；域名以实际部署结果为准）
+> 🧭 **单页交互版**：[在线站点](https://helloai.456qwe-3.workers.dev/) —— 这份 README 的全文，加上 6 张可拖拽 / 滚轮缩放 / 悬停高亮的架构图，融合在同一页里。（部署在 Cloudflare Workers；`workers.dev` 在部分网络环境可能无法访问）
 
 > **算力上限不取决于你的服务器，而取决于你有多少台终端。**
 
@@ -120,17 +120,6 @@ HelloAI 希望把多个 Agent 组织起来：
 
 ## 🎬 它怎么工作？（30 秒版）
 
-```
-你：帮我实现一个订单支付模块
-
-HelloAI：追问澄清 → 拆解为带依赖的子任务草案 → 你确认 → 跨终端派活
-
-        API设计 ──→ Backend ──→ 测试 ──→ Review
-         (Qoder)    (Codex)   (Claude)  (平台内 LLM)
-
-        不合格 → 带着修改意见打回重做
-        合格   → 整合为完整交付 + zip 下载
-```
 
 **你只需要做两件事**：描述需求 + 确认草案。其余全部自动流转。
 
