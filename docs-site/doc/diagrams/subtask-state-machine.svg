@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 756" width="720" height="756" role="img" aria-label="子任务状态机含暂停处置">
+  <style>
+    svg {
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --success: #1DC981;
+      --warning: #EFAA17;
+      --danger: #E8463A;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .title { fill: var(--text); font: 500 16px/24px var(--font-sans); }
+    .th { fill: var(--text); font: 500 14px/20px var(--font-sans); }
+    .ts { fill: var(--text-muted); font: 400 12px/18px var(--font-sans); }
+    .leg { fill: var(--text-muted); font: 400 12px/18px var(--font-sans); }
+    .g-neutral rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5; }
+    .g-success rect { fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success); stroke-width: 1.5; }
+    .g-warning rect { fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning); stroke-width: 1.5; }
+    .g-danger rect { fill: color-mix(in srgb, var(--danger) 14%, transparent); stroke: var(--danger); stroke-width: 1.5; }
+    .e-brand { stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-neutral { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .cap { fill: var(--surface); stroke: var(--border); }
+  </style>
+  <defs>
+    <marker id="mk-n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--text-muted);"/>
+    </marker>
+    <marker id="mk-b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--brand);"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="718" height="754" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="20" y="34">子任务全状态机（11 态 · 含 PAUSED 恢复/换人处置）</text>
+  <g transform="translate(0,52)">
+    <g class="g-neutral">
+      <rect x="235" y="50" width="170" height="54" rx="8"/>
+      <text class="th" x="320" y="74" text-anchor="middle">草案待审</text>
+      <text class="ts" x="320" y="92" text-anchor="middle">PENDING_PLAN_REVIEW</text>
+    </g>
+    <g class="g-neutral">
+      <rect x="235" y="150" width="170" height="54" rx="8"/>
+      <text class="th" x="320" y="174" text-anchor="middle">待分配</text>
+      <text class="ts" x="320" y="192" text-anchor="middle">PENDING · 依赖就绪</text>
+    </g>
+    <g class="g-neutral">
+      <rect x="235" y="250" width="170" height="54" rx="8"/>
+      <text class="th" x="320" y="274" text-anchor="middle">已分配</text>
+      <text class="ts" x="320" y="292" text-anchor="middle">ASSIGNED</text>
+    </g>
+    <g class="g-neutral">
+      <rect x="235" y="350" width="170" height="54" rx="8"/>
+      <text class="th" x="320" y="374" text-anchor="middle">执行中</text>
+      <text class="ts" x="320" y="392" text-anchor="middle">IN_PROGRESS</text>
+    </g>
+    <g class="g-neutral">
+      <rect x="235" y="450" width="170" height="54" rx="8"/>
+      <text class="th" x="320" y="474" text-anchor="middle">待审核</text>
+      <text class="ts" x="320" y="492" text-anchor="middle">REVIEW</text>
+    </g>
+    <g class="g-success">
+      <rect x="235" y="550" width="170" height="54" rx="27"/>
+      <text class="th" x="320" y="574" text-anchor="middle">完成</text>
+      <text class="ts" x="320" y="592" text-anchor="middle">DONE · 解锁下游</text>
+    </g>
+    <g class="g-neutral">
+      <rect x="45" y="350" width="110" height="54" rx="8"/>
+      <text class="th" x="100" y="374" text-anchor="middle">已暂停</text>
+      <text class="ts" x="100" y="392" text-anchor="middle">PAUSED · 恢复/换人</text>
+    </g>
+    <g class="g-neutral">
+      <rect x="505" y="50" width="160" height="54" rx="27"/>
+      <text class="th" x="585" y="74" text-anchor="middle">已取消</text>
+      <text class="ts" x="585" y="92" text-anchor="middle">CANCELLED · 拒绝/级联</text>
+    </g>
+    <g class="g-danger">
+      <rect x="505" y="250" width="160" height="54" rx="8"/>
+      <text class="th" x="585" y="274" text-anchor="middle">死信</text>
+      <text class="ts" x="585" y="292" text-anchor="middle">DEAD_LETTER · 熔断</text>
+    </g>
+    <g class="g-warning">
+      <rect x="505" y="350" width="160" height="54" rx="8"/>
+      <text class="th" x="585" y="374" text-anchor="middle">阻塞</text>
+      <text class="ts" x="585" y="392" text-anchor="middle">BLOCKED · 失败/超时/换人</text>
+    </g>
+    <g class="g-warning">
+      <rect x="505" y="450" width="160" height="54" rx="8"/>
+      <text class="th" x="585" y="474" text-anchor="middle">返工</text>
+      <text class="ts" x="585" y="492" text-anchor="middle">REWORK · 重执行</text>
+    </g>
+    <path class="e-brand" d="M320 104 L320 150" marker-end="url(#mk-b)"/>
+    <path class="e-brand" d="M320 204 L320 250" marker-end="url(#mk-b)"/>
+    <path class="e-brand" d="M320 304 L320 350" marker-end="url(#mk-b)"/>
+    <path class="e-brand" d="M320 404 L320 450" marker-end="url(#mk-b)"/>
+    <path class="e-brand" d="M320 504 L320 550" marker-end="url(#mk-b)"/>
+    <g><rect class="cap" x="335" y="117" width="66" height="20" rx="9"/><text class="ts" x="368" y="131" text-anchor="middle">用户确认</text></g>
+    <g><rect class="cap" x="328" y="217" width="81" height="20" rx="9"/><text class="ts" x="368" y="231" text-anchor="middle">分配 Agent</text></g>
+    <g><rect class="cap" x="335" y="317" width="66" height="20" rx="9"/><text class="ts" x="368" y="331" text-anchor="middle">开始执行</text></g>
+    <g><rect class="cap" x="435" y="400" width="66" height="20" rx="9"/><text class="ts" x="468" y="413" text-anchor="middle">提交产出</text></g>
+    <g><rect class="cap" x="335" y="517" width="66" height="20" rx="9"/><text class="ts" x="368" y="531" text-anchor="middle">审核通过</text></g>
+    <path class="e-neutral" d="M405 77 L505 77" marker-end="url(#mk-n)"/>
+    <g><rect class="cap" x="422" y="45" width="66" height="20" rx="9"/><text class="ts" x="455" y="59" text-anchor="middle">用户拒绝</text></g>
+    <path class="e-neutral" d="M235 285 L185 285 L185 177 L235 177" marker-end="url(#mk-n)"/>
+    <g><rect class="cap" x="70" y="221" width="97" height="20" rx="9"/><text class="ts" x="118" y="235" text-anchor="middle">超时/离线回收</text></g>
+    <path class="e-neutral" d="M235 365 L155 365" marker-end="url(#mk-n)"/>
+    <path class="e-neutral" d="M155 395 L235 395" marker-end="url(#mk-n)"/>
+    <g><rect class="cap" x="162" y="370" width="70" height="20" rx="9"/><text class="ts" x="197" y="384" text-anchor="middle">恢复 / 换人</text></g>
+    <path class="e-neutral" d="M405 377 L505 377" marker-end="url(#mk-n)"/>
+    <g><rect class="cap" x="410" y="354" width="90" height="20" rx="9"/><text class="ts" x="455" y="370" text-anchor="middle">失败/超时/换人</text></g>
+    <path class="e-neutral" d="M405 477 L505 477" marker-end="url(#mk-n)"/>
+    <g><rect class="cap" x="422" y="445" width="66" height="20" rx="9"/><text class="ts" x="455" y="459" text-anchor="middle">审核驳回</text></g>
+    <path class="e-neutral" d="M585 450 L585 427 L350 427 L350 404" marker-end="url(#mk-n)"/>
+    <path class="e-neutral" d="M665 377 L675 377 L675 177 L405 177" marker-end="url(#mk-n)"/>
+    <g><rect class="cap" x="519" y="145" width="42" height="20" rx="9"/><text class="ts" x="540" y="159" text-anchor="middle">重派</text></g>
+    <path class="e-neutral" d="M405 190 L585 190 L585 250" marker-end="url(#mk-n)"/>
+    <g><rect class="cap" x="462" y="202" width="66" height="20" rx="9"/><text class="ts" x="495" y="216" text-anchor="middle">重派熔断</text></g>
+    <path class="e-neutral" d="M505 277 L405 277" marker-end="url(#mk-n)"/>
+    <g><rect class="cap" x="422" y="245" width="66" height="20" rx="9"/><text class="ts" x="455" y="259" text-anchor="middle">人工指派</text></g>
+    <line x1="60" y1="652" x2="96" y2="652" style="stroke: var(--brand); stroke-width: 2; stroke-linecap: round;"/>
+    <text class="leg" x="104" y="656">主流程</text>
+    <line x1="168" y1="652" x2="204" y2="652" style="stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round;"/>
+    <text class="leg" x="212" y="656">回退 / 异常路径</text>
+    <rect x="315" y="643" width="16" height="16" rx="4" style="fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success);"/>
+    <text class="leg" x="339" y="656">完成终态</text>
+    <rect x="411" y="643" width="16" height="16" rx="4" style="fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning);"/>
+    <text class="leg" x="435" y="656">阻塞 / 返工</text>
+    <rect x="514" y="643" width="16" height="16" rx="4" style="fill: color-mix(in srgb, var(--danger) 14%, transparent); stroke: var(--danger);"/>
+    <text class="leg" x="538" y="656">死信待人工</text>
+    <text class="ts" x="45" y="678">PAUSED 处置：① 恢复 resume() → IN_PROGRESS（恢复执行）；② 换人 = 组合转移（无直接出边）resume() → block() → 重调度链</text>
+    <text class="ts" x="45" y="696">换人完整路径：PAUSED → IN_PROGRESS → BLOCKED → PENDING → ASSIGNED，复用 BLOCKED 重调度链（熔断 / 选人 / fallback 完全一致）</text>
+  </g>
+</svg>

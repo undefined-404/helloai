@@ -1,0 +1,189 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 986" width="760" height="986" role="img" aria-label="总任务整合报告生成流程与状态迭代">
+  <style>
+    svg {
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --success: #1DC981;
+      --warning: #EFAA17;
+      --danger: #E8463A;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .title { fill: var(--text); font: 500 16px/24px var(--font-sans); }
+    .sub { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .th { fill: var(--text); font: 500 13px/18px var(--font-sans); }
+    .ts { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .tp { fill: var(--text); font: 500 12px/18px var(--font-sans); }
+    .leg { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .g-neutral rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5; }
+    .g-brand rect { fill: var(--brand-soft); stroke: var(--brand); stroke-width: 2; }
+    .g-success rect { fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success); stroke-width: 1.5; }
+    .g-warning rect { fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning); stroke-width: 1.5; }
+    .g-danger rect { fill: color-mix(in srgb, var(--danger) 14%, transparent); stroke: var(--danger); stroke-width: 1.5; }
+    .g-panel rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 3; }
+    .e-brand { stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-neutral { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-dash { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .leader { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+    .cap { fill: var(--surface); stroke: var(--border); }
+    .code { font: 400 10px/14px "SF Mono", Consolas, monospace; }
+  </style>
+  <defs>
+    <marker id="mkf-b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--brand);"/>
+    </marker>
+    <marker id="mkf-n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--text-muted);"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="758" height="984" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="20" y="32">总任务整合报告：生成 · 审查 · 返工流程与状态迭代</text>
+  <text class="sub" x="20" y="50">触发自「全部有效子任务 DONE」· 两段式（大纲 → 正文）· 报告审查独立于子任务审查</text>
+
+  <!-- 主链 中心 x=250 -->
+  <g>
+    <g class="g-neutral">
+      <rect x="100" y="66" width="300" height="44" rx="8"/>
+      <text class="th" x="250" y="84" text-anchor="middle">全部有效子任务 DONE / CANCELLED</text>
+      <text class="ts" x="250" y="101" text-anchor="middle">SubTaskCompletionListener 幂等 CAS 收尾</text>
+    </g>
+    <path class="e-brand" d="M250,110 V134" marker-end="url(#mkf-b)"/>
+    <g><rect class="cap" x="240" y="112" width="130" height="18" rx="9"/><text class="ts" x="305" y="125" text-anchor="middle">task_auto_completed</text></g>
+
+    <g class="g-brand">
+      <rect x="100" y="134" width="300" height="44" rx="8"/>
+      <text class="th" x="250" y="153" text-anchor="middle">Task DONE → 触发报告生成</text>
+      <text class="ts" x="250" y="170" text-anchor="middle">FinalReport CAS：→ GENERATING（乐观锁）</text>
+    </g>
+    <path class="e-brand" d="M250,178 V202" marker-end="url(#mkf-b)"/>
+
+    <g class="g-neutral">
+      <rect x="100" y="202" width="300" height="56" rx="8"/>
+      <text class="th" x="250" y="222" text-anchor="middle">收集 DONE 子任务产出</text>
+      <text class="ts" x="250" y="240" text-anchor="middle">无产出 → 抛异常（不生成空报告）</text>
+    </g>
+    <path class="e-brand" d="M250,258 V282" marker-end="url(#mkf-b)"/>
+
+    <g class="g-neutral">
+      <rect x="100" y="282" width="300" height="50" rx="8"/>
+      <text class="th" x="250" y="302" text-anchor="middle">① 大纲先行（两段式第一段）</text>
+      <text class="ts" x="250" y="320" text-anchor="middle">plannerPickerPort 选 Planner · 归并出纲</text>
+    </g>
+    <path class="e-brand" d="M250,332 V356" marker-end="url(#mkf-b)"/>
+    <g><rect class="cap" x="204" y="334" width="176" height="18" rx="9"/><text class="ts" x="292" y="347" text-anchor="middle">task_final_report_outline_ready</text></g>
+
+    <g class="g-neutral">
+      <rect x="100" y="356" width="300" height="56" rx="8"/>
+      <text class="th" x="250" y="376" text-anchor="middle">② 正文渲染（截断阶梯降档重试）</text>
+      <text class="ts" x="250" y="394" text-anchor="middle">SECTION_OUTPUT_LIMITS 逐档收紧</text>
+      <text class="ts" x="250" y="410" text-anchor="middle">token 上限错误才降档，其余直接失败</text>
+    </g>
+    <path class="e-brand" d="M250,412 V436" marker-end="url(#mkf-b)"/>
+    <g><rect class="cap" x="200" y="414" width="176" height="18" rx="9"/><text class="ts" x="288" y="427" text-anchor="middle">task_final_report_llm_call_start</text></g>
+
+    <g class="g-brand">
+      <rect x="100" y="436" width="300" height="56" rx="8"/>
+      <text class="th" x="250" y="456" text-anchor="middle">写回 + 触发审查（同一事务）</text>
+      <text class="ts" x="250" y="474" text-anchor="middle">FinalReportPersistService.persistAndRequestReview</text>
+      <text class="ts" x="250" y="490" text-anchor="middle">审查开 → REVIEWING；关 → 直接 DONE</text>
+    </g>
+    <path class="e-brand" d="M250,492 V516" marker-end="url(#mkf-b)"/>
+    <g><rect class="cap" x="228" y="494" width="150" height="18" rx="9"/><text class="ts" x="303" y="507" text-anchor="middle">task_final_report_generated</text></g>
+
+    <g class="g-neutral">
+      <rect x="100" y="516" width="300" height="62" rx="8"/>
+      <text class="th" x="250" y="536" text-anchor="middle">报告审查（独立 Reviewer）</text>
+      <text class="ts" x="250" y="554" text-anchor="middle">机械硬违规 → 直接驳回（不给 LLM 放行）</text>
+      <text class="ts" x="250" y="570" text-anchor="middle">自审自过硬守卫 · 选不到 reviewer → skip</text>
+    </g>
+    <path class="e-brand" d="M250,578 V604" marker-end="url(#mkf-b)"/>
+
+    <g class="g-brand">
+      <rect x="140" y="604" width="220" height="44" rx="8"/>
+      <text class="th" x="250" y="632" text-anchor="middle">审查结论分流</text>
+    </g>
+
+    <path class="e-brand" d="M180,648 L140,686" marker-end="url(#mkf-b)"/>
+    <g><rect class="cap" x="118" y="660" width="44" height="18" rx="9"/><text class="ts" x="140" y="673" text-anchor="middle">通过</text></g>
+    <g class="g-success">
+      <rect x="30" y="686" width="220" height="52" rx="8"/>
+      <text class="th" x="140" y="706" text-anchor="middle">FinalReport → DONE 闭环结束</text>
+      <text class="ts" x="140" y="724" text-anchor="middle">final_report_agent_id 记录生成者</text>
+    </g>
+    <path class="e-brand" d="M320,648 L360,686" marker-end="url(#mkf-b)"/>
+    <g><rect class="cap" x="340" y="660" width="44" height="18" rx="9"/><text class="ts" x="362" y="673" text-anchor="middle">驳回</text></g>
+    <g class="g-warning">
+      <rect x="356" y="686" width="220" height="52" rx="8"/>
+      <text class="th" x="466" y="706" text-anchor="middle">未达上限 → rework 重生成</text>
+      <text class="ts" x="466" y="724" text-anchor="middle">带 reviewFeedback 重跑（≤上限）</text>
+    </g>
+    <path class="e-dash" d="M466,738 V772 H250 V648" marker-end="url(#mkf-n)"/>
+    <g><rect class="cap" x="300" y="750" width="150" height="18" rx="9"/><text class="ts" x="375" y="763" text-anchor="middle">反馈注入 → 回审查分流</text></g>
+
+    <path class="e-brand" d="M140,738 V800" marker-end="url(#mkf-b)"/>
+    <g class="g-success">
+      <rect x="30" y="800" width="220" height="40" rx="20"/>
+      <text class="th" x="140" y="825" text-anchor="middle">task_final_report_review_passed</text>
+    </g>
+  </g>
+
+  <!-- 右侧 -->
+  <g class="g-panel"><rect x="600" y="66" width="138" height="286" rx="12"/></g>
+  <text class="tp" x="614" y="88">报告 timeline 事件</text>
+  <text class="code" x="614" y="110" fill="#4B3FE3">task_auto_completed</text>
+  <text class="code" x="614" y="132" fill="#4B3FE3">..._outline_ready</text>
+  <text class="code" x="614" y="154" fill="#4B3FE3">..._llm_call_start</text>
+  <text class="code" x="614" y="176" fill="#4B3FE3">..._generated</text>
+  <text class="code" x="614" y="198" fill="#4B3FE3">..._review_passed</text>
+  <text class="ts" x="614" y="224">报告链只有 _start，无 _end</text>
+  <text class="ts" x="614" y="244">（与子任务 LLM 链不同）</text>
+  <text class="ts" x="614" y="274">审查侧：</text>
+  <text class="code" x="614" y="296" fill="#EFAA17">..._review_rejected</text>
+  <text class="code" x="614" y="316" fill="#EFAA17">..._review_skipped</text>
+  <text class="code" x="614" y="336" fill="#EFAA17">..._max_review_reached</text>
+
+  <g class="g-warning"><rect x="600" y="366" width="138" height="230" rx="12"/></g>
+  <text class="tp" x="614" y="388">停复杂 / 结束情形</text>
+  <text class="ts" x="614" y="410">· 选不到 reviewer → skip</text>
+  <text class="ts" x="614" y="428">· reviewer=写作者 → skip</text>
+  <text class="ts" x="614" y="446">· verdict 不可解析 → unparseable</text>
+  <text class="ts" x="614" y="464">· 审查 LLM 失败 → failed</text>
+  <text class="ts" x="614" y="482">· 陈旧版本 → discarded_stale</text>
+  <text class="ts" x="614" y="500">· 达返工上限 → max_review</text>
+  <text class="ts" x="614" y="518">  _reached（保留待人工）</text>
+  <text class="ts" x="614" y="544">skip 即收敛 DONE（不静默判 pass）</text>
+  <text class="ts" x="614" y="566">final_report_prev_agent_id</text>
+  <text class="ts" x="614" y="584">= 被覆盖的上一版生成者</text>
+
+  <!-- 底部：状态迭代 -->
+  <g class="g-panel"><rect x="24" y="860" width="714" height="96" rx="10"/></g>
+  <text class="tp" x="40" y="882">状态迭代（FinalReportStatus，与 TaskStatus 独立）</text>
+  <g>
+    <rect x="40" y="896" width="70" height="24" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+    <text class="ts" x="75" y="912" text-anchor="middle">NONE</text>
+    <path class="e-neutral" d="M110,908 H128" marker-end="url(#mkf-n)"/>
+    <rect x="130" y="896" width="106" height="24" rx="12" style="fill: var(--brand-soft); stroke: var(--brand);"/>
+    <text class="ts" x="183" y="912" text-anchor="middle">GENERATING</text>
+    <path class="e-neutral" d="M236,908 H254" marker-end="url(#mkf-n)"/>
+    <rect x="256" y="896" width="104" height="24" rx="12" style="fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning);"/>
+    <text class="ts" x="308" y="912" text-anchor="middle">REVIEWING</text>
+    <path class="e-neutral" d="M360,908 H378" marker-end="url(#mkf-n)"/>
+    <rect x="380" y="896" width="86" height="24" rx="12" style="fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success);"/>
+    <text class="ts" x="423" y="912" text-anchor="middle">DONE</text>
+    <text class="ts" x="482" y="912">驳回 → 回 GENERATING 重生成（REVIEWING → GENERATING）</text>
+  </g>
+  <text class="ts" x="40" y="938">写回被 CAS 接管 → 放弃本轮（不覆盖他人结果、不误判 FAILED）；状态机非法迁移在动库前 fail-fast</text>
+
+  <line x1="24" y1="972" x2="60" y2="972" style="stroke: var(--brand); stroke-width: 2; stroke-linecap: round;"/>
+  <text class="leg" x="68" y="976">主链</text>
+  <line x1="130" y1="972" x2="166" y2="972" style="stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round;"/>
+  <text class="leg" x="174" y="976">驳回返工</text>
+  <rect x="290" y="964" width="16" height="16" rx="4" style="fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success);"/>
+  <text class="leg" x="314" y="976">闭环结束</text>
+  <rect x="400" y="964" width="16" height="16" rx="4" style="fill: var(--brand-soft); stroke: var(--brand);"/>
+  <text class="leg" x="424" y="976">生成中</text>
+</svg>

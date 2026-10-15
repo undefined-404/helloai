@@ -1,0 +1,177 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 1160" width="720" height="1160" role="img" aria-label="Reviewer 审核全流程图">
+  <style>
+    svg {
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --success: #1DC981;
+      --warning: #EFAA17;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .title { fill: var(--text); font: 500 16px/24px var(--font-sans); }
+    .th { fill: var(--text); font: 500 14px/20px var(--font-sans); }
+    .ts { fill: var(--text-muted); font: 400 12px/18px var(--font-sans); }
+    .tp { fill: var(--text); font: 500 12px/18px var(--font-sans); }
+    .leg { fill: var(--text-muted); font: 400 12px/18px var(--font-sans); }
+    .g-neutral rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5; }
+    .g-brand rect { fill: var(--brand-soft); stroke: var(--brand); stroke-width: 2; }
+    .g-success rect { fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success); stroke-width: 1.5; }
+    .g-warning rect { fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning); stroke-width: 1.5; }
+    .g-wrail rect { fill: color-mix(in srgb, var(--warning) 8%, transparent); stroke: var(--warning); stroke-width: 1.5; stroke-dasharray: 5 4; }
+    .g-panel rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 3; }
+    .e-brand { stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-neutral { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-dash { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .leader { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+    .cap { fill: var(--surface); stroke: var(--border); }
+  </style>
+  <defs>
+    <marker id="mk-n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--text-muted);"/>
+    </marker>
+    <marker id="mk-b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--brand);"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="718" height="1158" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="20" y="34">Reviewer 审核全流程：触发 · 门控 · 双审 · 核验 · 抽检</text>
+  <g transform="translate(0,52)">
+    <g class="g-neutral">
+      <rect x="250" y="48" width="220" height="44" rx="22"/>
+      <text class="th" x="360" y="75" text-anchor="middle">Executor 提交 → REVIEW</text>
+    </g>
+    <text class="ts" x="478" y="72">含返工重提交 ↻</text>
+    <g class="g-neutral">
+      <rect x="250" y="122" width="220" height="56" rx="8"/>
+      <text class="th" x="360" y="146" text-anchor="middle">三路触发（容错）</text>
+      <text class="ts" x="360" y="166" text-anchor="middle">L1 事件 · L2 MQ · L3 孤儿扫描 30s</text>
+    </g>
+    <g class="g-neutral">
+      <rect x="250" y="208" width="220" height="56" rx="8"/>
+      <text class="th" x="360" y="232" text-anchor="middle">互斥锁 tryLock</text>
+      <text class="ts" x="360" y="252" text-anchor="middle">review:lock:{id} · TTL 120s</text>
+    </g>
+    <text class="ts" x="478" y="236">抢占失败→跳过</text>
+    <g class="g-neutral">
+      <rect x="250" y="294" width="220" height="116" rx="8"/>
+      <text class="th" x="360" y="318" text-anchor="middle">规则门控（fail-close）</text>
+      <text class="ts" x="360" y="340" text-anchor="middle">① 状态=REVIEW（防重）</text>
+      <text class="ts" x="360" y="360" text-anchor="middle">② 返工&lt;3（熔断→人工）</text>
+      <text class="ts" x="360" y="380" text-anchor="middle">③ 执行密集·提交者能力预检</text>
+      <text class="ts" x="360" y="400" text-anchor="middle">④ 证据硬检查（无产出/无附件）</text>
+    </g>
+    <g class="g-neutral">
+      <rect x="250" y="440" width="220" height="76" rx="8"/>
+      <text class="th" x="360" y="464" text-anchor="middle">双审判定</text>
+      <text class="ts" x="360" y="484" text-anchor="middle">开关 + difficulty=HIGH</text>
+      <text class="ts" x="360" y="504" text-anchor="middle">+ 未指定 reviewerAgentId</text>
+    </g>
+    <g class="g-neutral">
+      <rect x="250" y="546" width="220" height="92" rx="8"/>
+      <text class="th" x="360" y="570" text-anchor="middle">双审并行核验</text>
+      <text class="ts" x="360" y="590" text-anchor="middle">互异模型并行 · 90s deadline</text>
+      <text class="ts" x="360" y="610" text-anchor="middle">候选&lt;2 或全同模型 → 降级单审</text>
+    </g>
+    <g class="g-neutral">
+      <rect x="43" y="546" width="170" height="92" rx="8"/>
+      <text class="th" x="128" y="570" text-anchor="middle">单审 pickSingle</text>
+      <text class="ts" x="128" y="590" text-anchor="middle">指定→优选→回退链</text>
+      <text class="ts" x="128" y="610" text-anchor="middle">REVIEWER→PLANNER 兜底</text>
+    </g>
+    <g class="g-brand">
+      <rect x="250" y="668" width="220" height="88" rx="8"/>
+      <text class="th" x="360" y="692" text-anchor="middle">核验执行引擎</text>
+      <text class="ts" x="360" y="712" text-anchor="middle">渲染 Prompt → LLM → 解析 verdict</text>
+      <text class="ts" x="360" y="732" text-anchor="middle">单审/双审/抽检共用口径</text>
+    </g>
+    <g class="g-panel">
+      <rect x="43" y="668" width="187" height="102" rx="8"/>
+      <text class="tp" x="55" y="690">证据一次装配（不分先后）</text>
+      <text class="ts" x="55" y="710">· 四要素+产出(≤4000字)</text>
+      <text class="ts" x="55" y="728">· 附件清单(可读性标注)</text>
+      <text class="ts" x="55" y="746">· 文本附件正文 8000/件</text>
+      <text class="ts" x="55" y="764">· 总24000·媒体不可见标注</text>
+    </g>
+    <path class="leader" d="M230,712 H250"/>
+    <g class="g-wrail">
+      <rect x="545" y="240" width="145" height="206" rx="16"/>
+      <text class="th" x="617" y="266" text-anchor="middle">停 REVIEW</text>
+      <text class="ts" x="617" y="286" text-anchor="middle">人工介入兜底</text>
+      <text class="ts" x="560" y="316">· 返工熔断 ≥3</text>
+      <text class="ts" x="560" y="334">· 提交者无本机能力</text>
+      <text class="ts" x="560" y="352">· 无证据支撑</text>
+      <text class="ts" x="560" y="370">· verdict 不可解析</text>
+      <text class="ts" x="560" y="388">· 双审分歧/不完整</text>
+      <text class="ts" x="560" y="414">不改状态·等人工</text>
+    </g>
+    <g class="g-success">
+      <rect x="80" y="790" width="180" height="56" rx="28"/>
+      <text class="th" x="170" y="812" text-anchor="middle">DONE 完成</text>
+      <text class="ts" x="170" y="832" text-anchor="middle">隐式评分·解锁下游</text>
+    </g>
+    <g class="g-warning">
+      <rect x="380" y="790" width="240" height="76" rx="8"/>
+      <text class="th" x="500" y="814" text-anchor="middle">REWORK 返工</text>
+      <text class="ts" x="500" y="834" text-anchor="middle">reviewHistory 累积·附件失效</text>
+      <text class="ts" x="500" y="854" text-anchor="middle">补发命令 ↻ 重提交回 REVIEW</text>
+    </g>
+    <g class="g-panel">
+      <rect x="43" y="900" width="307" height="150" rx="8"/>
+      <text class="tp" x="55" y="924">抽检 ReviewerRecheckTask（只度量）</text>
+      <text class="ts" x="55" y="946">· 每小时调度 + ShedLock 实例互斥</text>
+      <text class="ts" x="55" y="964">· 7 天窗口内 APPROVED 审查记录</text>
+      <text class="ts" x="55" y="982">· 抽样 5% · 下限 1 · 上限 20 条/轮</text>
+      <text class="ts" x="55" y="1000">· 重选 Reviewer 复判（同一执行引擎）</text>
+      <text class="ts" x="55" y="1018">· 分歧 = 放水标记 review_recheck_log</text>
+      <text class="ts" x="55" y="1036">· 不改状态 · 不落 review_record</text>
+    </g>
+    <g class="g-panel">
+      <rect x="370" y="900" width="320" height="150" rx="8"/>
+      <text class="tp" x="382" y="924">历史驳回的参考（核验 Prompt 不注入）</text>
+      <text class="ts" x="382" y="946">· Reviewer 每轮独立判定（8 占位符无历史）</text>
+      <text class="ts" x="382" y="964">· 执行者返工：reviewHistory 注入执行上下文</text>
+      <text class="ts" x="382" y="982">· 重提交后 LLM 评估 issues 解决度→回填</text>
+      <text class="ts" x="382" y="1000">· 返工≥3 熔断 → 转人工介入</text>
+      <text class="ts" x="382" y="1018">· 任务迭代报告读 rejectionHistory</text>
+    </g>
+    <path class="e-brand" d="M360,92 V122" marker-end="url(#mk-b)"/>
+    <path class="e-brand" d="M360,178 V208" marker-end="url(#mk-b)"/>
+    <path class="e-brand" d="M360,264 V294" marker-end="url(#mk-b)"/>
+    <path class="e-brand" d="M360,410 V440" marker-end="url(#mk-b)"/>
+    <path class="e-brand" d="M360,516 V546" marker-end="url(#mk-b)"/>
+    <g><rect class="cap" x="366" y="522" width="28" height="20" rx="10"/><text class="ts" x="380" y="536" text-anchor="middle">是</text></g>
+    <path class="e-brand" d="M250,478 H136 V546" marker-end="url(#mk-b)"/>
+    <g><rect class="cap" x="176" y="456" width="28" height="20" rx="10"/><text class="ts" x="190" y="470" text-anchor="middle">否</text></g>
+    <path class="e-brand" d="M400,638 V668" marker-end="url(#mk-b)"/>
+    <path class="e-brand" d="M128,638 V652 H300 V668" marker-end="url(#mk-b)"/>
+    <path class="e-dash" d="M250,592 H213" marker-end="url(#mk-n)"/>
+    <path class="e-brand" d="M320,756 L180,790" marker-end="url(#mk-b)"/>
+    <g><rect class="cap" x="310" y="762" width="44" height="20" rx="10"/><text class="ts" x="332" y="776" text-anchor="middle">通过</text></g>
+    <path class="e-brand" d="M400,756 L480,790" marker-end="url(#mk-b)"/>
+    <g><rect class="cap" x="486" y="758" width="44" height="20" rx="10"/><text class="ts" x="508" y="772" text-anchor="middle">驳回</text></g>
+    <path class="e-dash" d="M470,352 H545" marker-end="url(#mk-n)"/>
+    <text class="ts" x="485" y="344">门控不过</text>
+    <path class="e-dash" d="M470,592 H620 V446" marker-end="url(#mk-n)"/>
+    <text class="ts" x="485" y="584">分歧/不完整</text>
+    <path class="e-dash" d="M470,712 H645 V446" marker-end="url(#mk-n)"/>
+    <text class="ts" x="485" y="704">不可解析</text>
+    <path class="e-dash" d="M170,846 V900" marker-end="url(#mk-n)"/>
+    <g><rect class="cap" x="185" y="858" width="150" height="20" rx="10"/><text class="ts" x="260" y="872" text-anchor="middle">review_record APPROVED</text></g>
+    <path class="e-dash" d="M500,866 V900" marker-end="url(#mk-n)"/>
+    <g><rect class="cap" x="515" y="872" width="96" height="20" rx="10"/><text class="ts" x="563" y="886" text-anchor="middle">驳回轮次累积</text></g>
+    <line x1="43" y1="1082" x2="79" y2="1082" style="stroke: var(--brand); stroke-width: 2; stroke-linecap: round;"/>
+    <text class="leg" x="85" y="1086">主流程</text>
+    <line x1="140" y1="1082" x2="176" y2="1082" style="stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round;"/>
+    <text class="leg" x="182" y="1086">虚线=异常/旁路</text>
+    <rect x="290" y="1074" width="16" height="16" rx="4" style="fill: color-mix(in srgb, var(--warning) 8%, transparent); stroke: var(--warning);"/>
+    <text class="leg" x="312" y="1086">停 REVIEW 人工</text>
+    <rect x="416" y="1074" width="16" height="16" rx="4" style="fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success);"/>
+    <text class="leg" x="438" y="1086">完成</text>
+    <rect x="486" y="1074" width="16" height="16" rx="4" style="fill: var(--brand-soft); stroke: var(--brand);"/>
+    <text class="leg" x="508" y="1086">核验焦点</text>
+  </g>
+</svg>

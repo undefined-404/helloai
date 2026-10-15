@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/协议-MCP-blue" alt="MCP">
 </p>
 
-> 🧭 **单页交互版**：[README.html](README.html) —— 这份 README 的全文，加上 6 张可拖拽 / 滚轮缩放 / 悬停高亮的架构图，融合在同一页里。
+> 🧭 **单页交互版**：[在线站点](https://helloai-docs.pages.dev) —— 这份 README 的全文，加上 6 张可拖拽 / 滚轮缩放 / 悬停高亮的架构图，融合在同一页里。（部署在 Cloudflare Pages；域名以实际部署结果为准）
 
 > **算力上限不取决于你的服务器，而取决于你有多少台终端。**
 
