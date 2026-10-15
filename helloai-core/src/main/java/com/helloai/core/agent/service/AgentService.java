@@ -97,6 +97,14 @@ public interface AgentService extends IService<Agent> {
     List<Agent> listActive();
 
     /**
+     * 在岗（ACTIVE）Agent 的技能标签集合（G-022 拆解侧承接者校验用）。
+     *
+     * <p>返回<b>投影</b>而非实体：拆解侧（planner 域）只需判「是否存在可承接者」，
+     * 不应依赖 {@code Agent} 实体类型（§7.2 端口反转，避免跨域实体泄漏）。</p>
+     */
+    List<List<String>> listActiveSkillSets();
+
+    /**
      * 可指派执行者候选：role=EXECUTOR 且 ACTIVE。
      *
      * <p>内部 LLM Agent（API_KEY_LLM）由平台代为调用，无视在线态恒可指派；

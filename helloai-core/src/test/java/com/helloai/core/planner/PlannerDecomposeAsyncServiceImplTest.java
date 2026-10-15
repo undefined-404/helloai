@@ -940,4 +940,66 @@ class PlannerDecomposeAsyncServiceImplTest {
                 eq(TASK_ID), isNull(), eq("task_plan_uncertainty_missing"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  G-022 拆解侧前置校验：声明的技能须有在岗 Agent 可承接（告警而非阻断）
+    // ══════════════════════════════════════════════════════════════
+
+    private SkillPackage engDocStandard() {
+        return new SkillPackage("eng-doc-standard", "1.0.0", "文档规范",
+                List.of(), List.of(), List.of(), Map.of(), Map.of(), List.of(), "eng-doc-standard.md");
+    }
+
+    @Test
+    @DisplayName("G-022 拆解侧前置校验：声明的技能无任何在岗 Agent 具备 → task_plan_skill_unmatched 告警，草案照常落库")
+    void shouldWarnWhenNoActiveAgentCoversRequiredSkills() {
+        when(agentSkillSpecService.listPackages()).thenReturn(List.of(engDocStandard()));
+        // 在岗 Agent 只具备 thinking，无 eng-doc-standard ⇒ 无承接者
+        when(agentService.listActiveSkillSets()).thenReturn(List.of(List.of("thinking")));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"文档产出","content":"c","deliverable":"d","acceptance":"a",
+                          "requiredSkills":["eng-doc-standard"]}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 告警而非阻断：草案仍落库
+        verify(subTaskService).saveDrafts(any());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_skill_unmatched"),
+                eq(AgentRole.PLANNER), eq(9L), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+                .containsEntry("draftSeq", 1)
+                .containsEntry("title", "文档产出")
+                .containsEntry("requiredSkills", List.of("eng-doc-standard"))
+                .containsEntry("activeAgentCount", 1);
+    }
+
+    @Test
+    @DisplayName("G-022 拆解侧前置校验：存在可承接的在岗 Agent → 不记告警")
+    void shouldNotWarnWhenActiveAgentCoversRequiredSkills() {
+        when(agentSkillSpecService.listPackages()).thenReturn(List.of(engDocStandard()));
+        // 在岗 Agent 具备 eng-doc-standard ⇒ 有承接者
+        when(agentService.listActiveSkillSets()).thenReturn(List.of(List.of("eng-doc-standard")));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"文档产出","content":"c","deliverable":"d","acceptance":"a",
+                          "requiredSkills":["eng-doc-standard"]}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_skill_unmatched"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
 }

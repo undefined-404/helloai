@@ -374,6 +374,8 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         Long taskId = task.id();
         List<SubTaskDraft> drafts = new ArrayList<>(items.size());
         String generatedAt = OffsetDateTime.now().toString();
+        // G-022 拆解侧前置校验：在岗 Agent 技能集合只查一次（避免逐草案 N+1）
+        List<List<String>> activeAgentSkillSets = activeAgentSkillSets();
         for (PlanDraftItem item : items) {
             List<UncertaintyDraft> uncertainties =
                     normalizeUncertainties(taskId, resolveUncertainties(item), planner);
@@ -384,6 +386,9 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                         AgentRole.PLANNER, planner.id(),
                         Map.of("draftSeq", drafts.size() + 1, "title", item.getTitle()));
             }
+            List<String> keptSkills = filterRequiredSkills(taskId, item.getRequiredSkills(), planner);
+            // G-022 拆解侧前置校验（告警而非阻断）：声明技能须有在岗 Agent 可承接
+            auditSkillCoverage(taskId, drafts.size() + 1, item.getTitle(), keptSkills, activeAgentSkillSets, planner);
             Map<String, Object> context = new HashMap<>();
             context.put("plannerAgentId", planner.id());
             context.put("plannerAgentName", planner.name());
@@ -392,7 +397,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                     item.getDeliverable(), item.getAcceptance(),
                     resolveSubTaskPriority(item.getPriority(), task.priority()),
                     Boolean.TRUE.equals(item.getContract()) ? 1 : 0,
-                    filterRequiredSkills(taskId, item.getRequiredSkills(), planner),
+                    keptSkills,
                     item.getConstraints(), SubTaskStatus.PENDING_PLAN_REVIEW, context, uncertainties));
         }
         // D5 兜底审计：任务 openQuestions 非空但拆解产物无任何 UNCONFIRMED 继承 → WARN（不阻断）
@@ -490,6 +495,42 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             }
         }
         return kept;
+    }
+
+    /**
+     * G-022 拆解侧前置校验：草案声明技能后，校验当前在岗 Agent 中是否存在可承接者
+     * —— {@code agent.skills ⊇ required_skills}（AND 语义，走 {@link SkillNormalizer#matches}，
+     * 与选人门 {@code AgentSelector} 同一匹配器，防规则漂移）。
+     *
+     * <p>无承接者 ⇒ 记 timeline {@code task_plan_skill_unmatched}。<b>告警而非阻断</b>：
+     * ① Agent 可能在拆解后被注册 / 重注册（引用边回填在岗技能）；② 阻断会让整批拆解失败，
+     * 损失远大于「保留草案 + 可观测告警」；③ 与 {@link #filterRequiredSkills} 的「有疑问不阻断」口径一致。
+     * 本校验消除的正是「静默等待」——原状态下子任务永久 PENDING，仅事后由
+     * {@code SubTaskPendingOrphanTask} 记 {@code sub_task_no_candidate} 才在时间线可见。</p>
+     */
+    private void auditSkillCoverage(Long taskId, int draftSeq, String title, List<String> requiredSkills,
+                                    List<List<String>> activeAgentSkillSets, PlannerAgentRef planner) {
+        if (requiredSkills == null || requiredSkills.isEmpty()) {
+            return;
+        }
+        boolean covered = activeAgentSkillSets.stream()
+                .anyMatch(agentSkills -> SkillNormalizer.matches(agentSkills, requiredSkills));
+        if (covered) {
+            return;
+        }
+        taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_SKILL_UNMATCHED.code(),
+                AgentRole.PLANNER, planner.id(),
+                Map.of("draftSeq", draftSeq,
+                        "title", title != null ? title : "",
+                        "requiredSkills", requiredSkills,
+                        "activeAgentCount", activeAgentSkillSets.size()));
+    }
+
+    /** 在岗 Agent 的技能标签集合（G-022 承接者校验专用；一次查询避免逐草案 N+1）。
+     * 经 {@link AgentService} 投影方法获取，不 import agent 实体（§7.2 端口反转）。 */
+    private List<List<String>> activeAgentSkillSets() {
+        List<List<String>> sets = agentService.listActiveSkillSets();
+        return sets != null ? sets : List.of();
     }
 
     private String normalizePriority(String priority) {

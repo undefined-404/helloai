@@ -144,6 +144,7 @@ public enum TimelineEventCode {
     TASK_PLAN_LLM_CALL_START("task_plan_llm_call_start", "拆解调模型", "开始请求大模型进行任务拆解"),
     TASK_PLAN_REJECTED("task_plan_rejected", "驳回拆解", "拆解草案被驳回"),
     TASK_PLAN_SKILL_FILTERED("task_plan_skill_filtered", "拆解技能被过滤", "草案中的技能不在已知目录，过滤后不落库"),
+    TASK_PLAN_SKILL_UNMATCHED("task_plan_skill_unmatched", "拆解技能无承接者", "草案声明的技能当前无任何在岗 Agent 具备，将静默等待派发（不再不可见）；请补充具备该技能的 Agent 或调整指派"),
     TASK_PLAN_TIMEOUT_RECOVERED("task_plan_timeout_recovered", "拆解超时恢复", "拆解超时由定时任务恢复（重置为可重试）"),
     TASK_PLAN_UNCERTAINTY_DEGRADED("task_plan_uncertainty_degraded", "不确定性降级", "不确定性条目的类型不在白名单内，降级处理"),
     TASK_PLAN_UNCERTAINTY_MISSING("task_plan_uncertainty_missing", "不确定性缺失", "草案未申报待确认的不确定性（提示可能漏报）"),

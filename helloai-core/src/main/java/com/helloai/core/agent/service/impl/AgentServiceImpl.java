@@ -42,11 +42,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Agent 核心服务实现。负责 Agent 注册、CRUD、enrichment 查询、级联删除。
@@ -301,6 +303,13 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     public List<Agent> listActive() {
         return lambdaQuery().eq(Agent::getStatus, AgentStatus.ACTIVE)
                 .orderByDesc(Agent::getScore).list();
+    }
+
+    @Override
+    public List<List<String>> listActiveSkillSets() {
+        return listActive().stream()
+                .map(Agent::getSkills)
+                .collect(Collectors.toList());
     }
 
     @Override
