@@ -20,6 +20,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -85,6 +86,10 @@ class ExecutionResultHandlerTest {
     // 804 归属校验：失败回写前读执行记录状态（@InjectMocks 缺 mock 会注入 null 导致 NPE）
     @Mock
     private com.helloai.core.agent.service.AgentExecutionRecordService agentExecutionRecordService;
+
+    // HIGH-3（2026-10-15）：AGENT_COMPLETED 埋点；失败须 fail-fast（原 try-catch 吞掉）
+    @Mock
+    private com.helloai.core.agent.event.AgentEventRecorder agentEventRecorder;
 
     @InjectMocks
     private ExecutionResultHandler executionResultHandler;
@@ -277,5 +282,185 @@ class ExecutionResultHandlerTest {
         executionResultHandler.handleFailure(22L, 11L, 44L, new RuntimeException("boom"));
 
         verify(subTaskCommandPort).block(22L, null, null);
+    }
+
+    // ================================================================
+    // HIGH-2（2026-10-15）：结果原子化落地
+    // ================================================================
+
+    @Test
+    @DisplayName("HIGH-2: 成功结果 → 同一次调用内【记录终态化 + 结果回写】双到位")
+    void applyResultAtomicallyShouldFinalizeRecordAndApplySuccess() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+        when(agentExecutionRecordService.markSuccess(eq(44L), any())).thenReturn(true);
+
+        AgentResult result = AgentResult.success("done", "stop", "RuntimeTurnExecutor", 12);
+        executionResultHandler.applyResultAtomically(44L, 22L, 11L, result);
+
+        // 记录终态化（原第 5 步）
+        verify(agentExecutionRecordService).markSuccess(eq(44L), any());
+        // 结果回写（原第 6 步）——与上面同一事务，不再有两个提交点之间的窗口
+        verify(subTaskCommandPort).submit(22L);
+    }
+
+    @Test
+    @DisplayName("HIGH-2: 失败结果 → markFailed + block，且不误触 submit")
+    void applyResultAtomicallyShouldFinalizeRecordAndBlockOnFailure() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+        when(agentExecutionRecordService.markFailed(eq(44L), any(), any())).thenReturn(true);
+
+        AgentResult result = AgentResult.failure("boom", "error", "RuntimeTurnExecutor");
+        executionResultHandler.applyResultAtomically(44L, 22L, 11L, result);
+
+        verify(agentExecutionRecordService).markFailed(eq(44L), any(), any());
+        verify(subTaskCommandPort).block(eq(22L), any(), any());
+        verify(subTaskCommandPort, never()).submit(any());
+    }
+
+    @Test
+    @DisplayName("HIGH-2: recordId 为 null ⇒ 跳过记录终态化，仅做结果回写（原语义保持）")
+    void applyResultAtomicallyWithoutRecordIdSkipsRecord() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+
+        executionResultHandler.applyResultAtomically(null, 22L, 11L,
+                AgentResult.success("done", "stop", "RuntimeTurnExecutor", 1));
+
+        verify(agentExecutionRecordService, never()).markSuccess(any(), any());
+        verify(agentExecutionRecordService, never()).markFailed(any(), any(), any());
+        verify(subTaskCommandPort).submit(22L);
+    }
+
+    @Test
+    @DisplayName("HIGH-2: 记录已被超时补偿抢先终态化（mark 返回 false）⇒ 仍继续回写，不中断")
+    void applyResultAtomicallyContinuesWhenRecordAlreadyCompensated() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+        // 记录已被 ExecutionCompensationTask 终态化 ⇒ CAS 拒绝
+        when(agentExecutionRecordService.markSuccess(eq(44L), any())).thenReturn(false);
+
+        executionResultHandler.applyResultAtomically(44L, 22L, 11L,
+                AgentResult.success("done", "stop", "RuntimeTurnExecutor", 7));
+
+        // 关键：写入被拒不得阻断结果回写（与原第 5 步「只 warn 不返回」语义一致）
+        verify(subTaskCommandPort).submit(22L);
+    }
+
+    @Test
+    @DisplayName("HIGH-2: result 为 null ⇒ 空操作，不触发任何下游（防御式）")
+    void applyResultAtomicallyWithNullResultIsNoOp() {
+        executionResultHandler.applyResultAtomically(44L, 22L, 11L, null);
+
+        verify(agentExecutionRecordService, never()).markSuccess(any(), any());
+        verify(subTaskQueryPort, never()).findById(any());
+    }
+
+    // ================================================================
+    // G4（2026-10-15）：内部执行幂等键接 recordId
+    // ================================================================
+
+    @Test
+    @DisplayName("G4: 结果应用写入 record:<recordId> 幂等键（激活原先对内部执行恒 null 的死码分支）")
+    void applyResultAtomicallyCarriesRecordIdempotencyKey() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+        when(agentExecutionRecordService.markSuccess(eq(44L), any())).thenReturn(true);
+
+        executionResultHandler.applyResultAtomically(44L, 22L, 11L,
+                AgentResult.success("done", "stop", "RuntimeTurnExecutor", 3));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskCommandPort).updateContext(eq(22L), ctxCaptor.capture());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> lastExecution =
+                (Map<String, Object>) ctxCaptor.getValue().get("lastExecution");
+        assertThat(lastExecution).containsEntry("idempotencyKey", "record:44");
+    }
+
+    @Test
+    @DisplayName("G4: recordId 为 null ⇒ 幂等键仍为 null（保持原语义，不造伪键）")
+    void applyResultAtomicallyWithoutRecordHasNullKey() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+
+        executionResultHandler.applyResultAtomically(null, 22L, 11L,
+                AgentResult.success("done", "stop", "RuntimeTurnExecutor", 3));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskCommandPort).updateContext(eq(22L), ctxCaptor.capture());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> lastExecution =
+                (Map<String, Object>) ctxCaptor.getValue().get("lastExecution");
+        assertThat(lastExecution).containsEntry("idempotencyKey", null);
+    }
+
+    @Test
+    @DisplayName("G4 ★反证: 同 record 的第二次上报被判 idempotent_duplicate（重复不再二次 apply）")
+    void duplicateReportWithSameKeyIsIdempotent() {
+        // 第一次：lastExecution 尚无记录 ⇒ 正常 apply
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+        ExecutionResultHandler.ExecutionResultApplyResult first = executionResultHandler.handleReport(
+                reportOf(22L, 44L, "record:44"));
+        assertThat(first.isIdempotent()).isFalse();
+        assertThat(first.isApplied()).isTrue();
+
+        // 第二次：子任务已带同一 idempotencyKey（模拟第一次已回写 context）⇒ 命中幂等分支
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshotWithLastKey(22L, 33L, SubTaskStatus.IN_PROGRESS, "record:44"));
+        ExecutionResultHandler.ExecutionResultApplyResult second = executionResultHandler.handleReport(
+                reportOf(22L, 44L, "record:44"));
+        assertThat(second.isIdempotent()).isTrue();
+        assertThat(second.getStatus()).isEqualTo("idempotent_duplicate");
+        // 关键：两次上报合计只 submit 一次 ⇒ 第二次没有二次 apply（幂等生效）
+        // （第一次合法提交 1 次；若幂等分支未生效，这里会是 2 次）
+        verify(subTaskCommandPort, org.mockito.Mockito.times(1)).submit(22L);
+    }
+
+    private static com.helloai.core.agent.command.ExecutionResultReport reportOf(
+            Long subTaskId, Long agentId, String idempotencyKey) {
+        com.helloai.core.agent.command.ExecutionResultReport report =
+                new com.helloai.core.agent.command.ExecutionResultReport();
+        report.setSubTaskId(subTaskId);
+        report.setAgentId(agentId);
+        report.setSource("INTERNAL");
+        report.setIdempotencyKey(idempotencyKey);
+        report.setSuccess(true);
+        report.setOutput("done");
+        return report;
+    }
+
+    private static SubTaskSnapshot snapshotWithLastKey(Long id, Long taskId, SubTaskStatus status, String key) {
+        return SubTaskSnapshot.builder()
+                .id(id)
+                .taskId(taskId)
+                .status(status)
+                .title("sub-task-" + id)
+                .context(Map.of("lastExecution", Map.of("idempotencyKey", key)))
+                .build();
+    }
+
+    // ================================================================
+    // HIGH-3（2026-10-15）：事件写失败必须 fail-fast（不再假装「不阻断」）
+    // ================================================================
+
+    @Test
+    @DisplayName("HIGH-3: 事件记录失败 ⇒ 直接抛出（原实现 try-catch 吞掉，导致注定回滚的事务继续空转）")
+    void eventRecordFailurePropagates() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+        // record 与本事务合并（REQUIRED）：失败会把事务标记 rollback-only ⇒ 必须让异常现场暴露
+        org.mockito.Mockito.doThrow(new RuntimeException("agent_event insert failed"))
+                .when(agentEventRecorder).record(any(), any(), any(), anyInt(), anyInt(), any(), any(), anyMap());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        executionResultHandler.handleSuccess(22L, 11L,
+                                AgentResult.success("done", "stop", "RuntimeTurnExecutor", 1)))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("agent_event insert failed");
     }
 }

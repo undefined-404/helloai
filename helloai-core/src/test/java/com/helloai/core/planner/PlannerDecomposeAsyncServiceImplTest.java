@@ -329,7 +329,7 @@ class PlannerDecomposeAsyncServiceImplTest {
     void shouldFilterRequiredSkillsAndPersistConstraints() {
         when(agentSkillSpecService.listPackages()).thenReturn(List.of(
                 new SkillPackage("eng-doc-standard", "1.0.0", "文档规范",
-                        List.of(), List.of(), Map.of(), Map.of(), List.of(), "eng-doc-standard.md")));
+                        List.of(), List.of(), List.of(), Map.of(), Map.of(), List.of(), "eng-doc-standard.md")));
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
@@ -362,7 +362,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         List<SkillPackage> many = new ArrayList<>();
         for (int i = 1; i <= 21; i++) {
             many.add(new SkillPackage("skill-" + i, "1.0.0", "描述" + i,
-                    List.of(), List.of(), Map.of(), Map.of(), List.of(), "skill-" + i + ".md"));
+                    List.of(), List.of(), List.of(), Map.of(), Map.of(), List.of(), "skill-" + i + ".md"));
         }
         when(agentSkillSpecService.listPackages()).thenReturn(many);
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());

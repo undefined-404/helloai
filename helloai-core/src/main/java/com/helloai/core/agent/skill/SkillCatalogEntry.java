@@ -17,7 +17,7 @@ public record SkillCatalogEntry(SkillPackage spec, String error) {
 
     public SkillCatalogEntry {
         spec = spec == null
-                ? new SkillPackage("", "", "", List.of(), List.of(), Map.of(), Map.of(), List.of(), "")
+                ? new SkillPackage("", "", "", List.of(), List.of(), List.of(), Map.of(), Map.of(), List.of(), "")
                 : spec;
     }
 
@@ -29,7 +29,8 @@ public record SkillCatalogEntry(SkillPackage spec, String error) {
     public static SkillCatalogEntry corrupt(String fileName, String error) {
         String safeName = stem(fileName);
         SkillPackage degraded = new SkillPackage(
-                safeName, "", "", List.of(), List.of(), Map.of(), Map.of(), List.of(), fileName == null ? "" : fileName);
+                safeName, "", "", List.of(), List.of(), List.of(), Map.of(), Map.of(), List.of(),
+                fileName == null ? "" : fileName);
         return new SkillCatalogEntry(degraded, error);
     }
 

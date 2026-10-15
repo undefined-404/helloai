@@ -1,6 +1,8 @@
 package com.helloai.core.agent.service.impl;
 
 import com.helloai.core.agent.service.HeartbeatService;
+import com.helloai.core.agent.AgentSkillDeriver;
+import com.helloai.core.agent.SkillCapabilityRequirements;
 import com.helloai.core.agent.SkillNormalizer;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.service.McpToolService.AckResult;
@@ -15,6 +17,7 @@ import com.helloai.core.agent.service.McpToolService.ReportBlockedResult;
 import com.helloai.core.agent.service.McpToolService.SubmitResultResult;
 import com.helloai.core.agent.service.McpToolService.UploadArtifactResult;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentStatus;
@@ -42,6 +45,11 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
+import com.helloai.core.agent.skill.SkillPackage;
+import com.helloai.core.agent.skill.SkillPackageCatalog;
+import com.helloai.core.system.port.LlmProviderModelProfile;
+import com.helloai.core.system.port.ModelCapabilities;
+import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
 import com.helloai.core.shared.util.UpstreamAttachmentRenderer;
@@ -94,6 +102,15 @@ public class McpToolServiceImpl implements McpToolService {
     private final TaskRunningSpecPort taskRunningSpecPort;
     /** P1 认领准入闸门可观测：认领被拒落 task_timeline（{@code sub_task_claim_rejected}，write-only 降级）。 */
     private final TaskTimelinePort taskTimelinePort;
+    /**
+     * `QA-M9-03`（2026-10-15）：checkIn 自报技能的能力校验依赖。
+     *
+     * <p>{@code skillPackageCatalog} 供技能包引用边（{@code requiredBaseCapabilities}）解析；
+     * {@code llmProviderModelQueryService} 供模型能力谓词读取。两者只服务
+     * {@code filterReportedSkillsByCapability}，与打卡主链其余部分无关。</p>
+     */
+    private final SkillPackageCatalog skillPackageCatalog;
+    private final LlmProviderModelQueryService llmProviderModelQueryService;
 
     // 依赖产出单条内容截断上限：**口径单源**，见 UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS
     //（该类是两个消费方共用的预算算法宿主）。
@@ -755,6 +772,25 @@ public class McpToolServiceImpl implements McpToolService {
      * 只增不减——某次打卡漏报不会清掉历史已声明技能；无新增时不写库。
      * 失败仅告警并返回 null（打卡主链不受影响）。</p>
      *
+     * <p><b>★能力校验（2026-10-15，`QA-M9-03` 收口）</b>：自报技能此前<b>完全绕过</b>
+     * 模型能力校验——任一持牌 Agent 可经本工具把标准技能（含模型不支持的）与技能包
+     * 写进 {@code agent.skills}，选人处随即按这些标签派发 ⇒ 「声明不越出模型实际能力」
+     * 被本入口绕过（实测：{@code inner-deepseek-flash-excutor} 被塞了
+     * {@code web-search} + {@code eng-web-research}，而其模型
+     * {@code deepseek-v4-flash} 的 {@code webSearch=false}）。
+     * 现改为：<b>标准技能与技能包</b>走注册链同款判据
+     * （{@link AgentSkillDeriver#STANDARD_SKILLS} ∪ frontmatter
+     * {@code requiredBaseCapabilities} 引用边），越界项<b>丢弃并告警</b>，
+     * 自定义技能仍放行（平台侧能力声明，与模型原生能力无关）。</p>
+     *
+     * <p><b>作用域限定 {@code API_KEY_LLM}</b>：外部 Agent（{@code CLI_CLIENT} /
+     * {@code WEB_BROWSER}）的模型由其自身掌控，平台无从判其能力（与
+     * {@code agent.capabilities} 模态三键的同源口径一致）⇒ 只对内部 LLM 收口，
+     * 不拦外部 Agent 的自报。</p>
+     *
+     * <p><b>丢弃而非抛错</b>：本方法在打卡主链上，自报越界属 Agent 侧不自知，
+     * 抛错会把整个打卡打断（Agent 连不上岗）。告警保留可观测性。</p>
+     *
      * @return 合并后的完整技能列表；本次未上报或合并失败返回 null
      */
     private List<String> mergeReportedSkills(Long agentId, List<String> reportedSkills) {
@@ -767,8 +803,10 @@ public class McpToolServiceImpl implements McpToolService {
                 return null;
             }
             List<String> existing = SkillNormalizer.normalizeAll(agent.getSkills());
+            List<String> reported = SkillNormalizer.normalizeAll(reportedSkills);
+            List<String> accepted = filterReportedSkillsByCapability(agentId, agent, reported);
             LinkedHashSet<String> merged = new LinkedHashSet<>(existing);
-            merged.addAll(SkillNormalizer.normalizeAll(reportedSkills));
+            merged.addAll(accepted);
             List<String> result = new ArrayList<>(merged);
             if (!result.equals(existing)) {
                 agent.setSkills(result);
@@ -781,6 +819,73 @@ public class McpToolServiceImpl implements McpToolService {
             log.warn("checkIn 技能上报合并失败（不阻断打卡）: agentId={}, err={}", agentId, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 按模型能力过滤自报技能（{@code QA-M9-03}）。
+     *
+     * <p>判据与注册链<b>同源</b>：标准技能走
+     * {@link SkillCapabilityRequirements#satisfies}，技能包走
+     * {@link SkillCapabilityRequirements#satisfiesPackage}（引用边），
+     * 二者都由 {@code SkillCapabilityRequirements} 这一唯一实现点给出。</p>
+     *
+     * <p>非 {@code API_KEY_LLM} / 无 modelType / 未识别模型（{@code caps == null}）
+     * ⇒ 原样放行（降级口径与注册链一致）。</p>
+     */
+    private List<String> filterReportedSkillsByCapability(Long agentId, Agent agent, List<String> reported) {
+        if (reported == null || reported.isEmpty()) {
+            return reported == null ? List.of() : reported;
+        }
+        if (agent == null
+                || agent.getAccessType() != AgentAccessType.API_KEY_LLM
+                || agent.getModelType() == null || agent.getModelType().isBlank()) {
+            // 外部 Agent：平台不掌控其模型，无从判能力（不拦）
+            return reported;
+        }
+        LlmProviderModelProfile profile =
+                llmProviderModelQueryService.findCapabilityProfileByModelType(agent.getModelType());
+        if (profile == null || profile.capabilities() == null) {
+            // 未识别模型：降级放行（与 validateAgentSkills 的 profile==null 早返回同口径）
+            return reported;
+        }
+        ModelCapabilities caps = profile.capabilities();
+        List<SkillPackage> packages = skillPackageCatalog.healthyPackages();
+        List<String> accepted = new ArrayList<>(reported.size());
+        List<String> rejected = new ArrayList<>();
+        for (String skill : reported) {
+            boolean ok;
+            if (AgentSkillDeriver.STANDARD_SKILLS.contains(skill)) {
+                ok = SkillCapabilityRequirements.satisfies(skill, caps);
+            } else {
+                SkillPackage pkg = findPackage(packages, skill);
+                // 未登记的标签视为自定义技能 → 豁免（与注册链「自定义技能豁免」同口径）
+                ok = pkg == null || SkillCapabilityRequirements.satisfiesPackage(
+                        pkg.requiredBaseCapabilities(), caps);
+            }
+            if (ok) {
+                accepted.add(skill);
+            } else {
+                rejected.add(skill);
+            }
+        }
+        if (!rejected.isEmpty()) {
+            log.warn("checkIn 自报技能越出模型能力，已丢弃: agentId={}, modelType={}, rejected={}",
+                    agentId, agent.getModelType(), rejected);
+        }
+        return accepted;
+    }
+
+    /** 按标签查技能包（严格匹配，不归一化——与目录层口径一致）。 */
+    private SkillPackage findPackage(List<SkillPackage> packages, String label) {
+        if (packages == null) {
+            return null;
+        }
+        for (SkillPackage pkg : packages) {
+            if (pkg != null && label.equals(pkg.name())) {
+                return pkg;
+            }
+        }
+        return null;
     }
 
     // ================================================================

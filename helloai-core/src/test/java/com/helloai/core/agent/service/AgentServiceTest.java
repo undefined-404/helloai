@@ -16,6 +16,7 @@ import com.helloai.core.agent.mapper.BrowserSessionMapper;
 import com.helloai.core.agent.mapper.ConversationArchiveMapper;
 import com.helloai.core.agent.mapper.ConversationMessageMapper;
 import com.helloai.core.agent.mapper.TeamMemberMapper;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.agent.port.SubTaskStatsPort;
 import com.helloai.core.agent.quality.mapper.AgentQualityProfileMapper;
@@ -95,6 +96,9 @@ class AgentServiceTest {
     private AgentMcpServerService agentMcpServerService;
     @Mock
     private LlmProviderModelQueryService llmProviderModelQueryService;
+    /** G-022：技能包自动挂载依赖（不设桩 ⇒ mock 默认返回空列表 ⇒ 行为等同挂载前）。 */
+    @Mock
+    private AgentSkillSpecService agentSkillSpecService;
     @Mock
     private AgentApiKeyCipher agentApiKeyCipher;
     @Mock
@@ -108,7 +112,7 @@ class AgentServiceTest {
                 teamMemberMapper,
                 agentMcpServerService, agentApiKeyCipher,
                 new AgentCredentialService(agentMapper, agentApiKeyCipher),
-                new AgentSkillPolicyService(agentMapper, llmProviderModelQueryService),
+                new AgentSkillPolicyService(agentMapper, llmProviderModelQueryService, agentSkillSpecService),
                 new AgentLifecycleService(agentMapper, taskTimelinePort),
                 new AgentStatsService(agentMapper, subTaskStatsPort, rewardService, activityLogService)));
     }

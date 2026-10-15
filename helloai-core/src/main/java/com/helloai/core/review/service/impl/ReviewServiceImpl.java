@@ -203,8 +203,16 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
     /**
      * 人工审核终态事件记录（REVIEW_APPROVED / REVIEW_REJECTED，Run 级 turn=0/step=0）。
      * 与自动核验 recordReviewEventSafely 同构：同事务双写 agent_event + outbox，
-     * 供 B3 对账终态投影校验（DONE → review_approved、REWORK → review_rejected/rework_started）；
-     * 事件 write-only，失败仅告警不阻断审查主链路。
+     * 供 B3 对账终态投影校验（DONE → review_approved、REWORK → review_rejected/rework_started）。
+     *
+     * <p><b>★事务语义订正（2026-10-15，原注释「事件 write-only，失败不阻断主链路」是错的）</b>：
+     * 本方法的唯一调用方 {@link #createReview} 带 {@code @Transactional}，
+     * 而 {@code agentEventRecorder.record} 与之<b>合并同一事务</b> ⇒ 事件 insert 失败会把该事务
+     * 标记 rollback-only，<b>人工审核的通过/驳回一并回滚</b>，最终在 commit 处抛
+     * {@code UnexpectedRollbackException}。下方 try-catch 只挡得住<b>异常冒泡</b>，
+     * 挡不住事务标记 ⇒ <b>并非真正的「不阻断」</b>。
+     * 保留 try-catch 是为了让上下文日志（type/subTaskId）跟得上，但须知道：
+     * 一旦触发，本次审查事务注定回滚。详见 {@link AgentEventRecorder#record} 契约。</p>
      */
     private void recordReviewEventSafely(SubTaskView subTask, Long reviewerAgentId, AgentEventType eventType,
                                          int score, String issues, String comment, long round) {
@@ -224,7 +232,11 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
                     subTask.taskId(), subTask.id(), 0, 0,
                     eventType, reviewerAgentId, payload);
         } catch (Exception e) {
-            log.warn("Agent 事件记录失败（事件 write-only，降级不阻断主链路）: type={}, subTaskId={}, err={}",
+            // ⚠ 本 catch 不放行失败：调用方事务已被标记 rollback-only，本次审查事务注定回滚。
+            //   此处只补一条定位用的日志，便于把「commit 处的 UnexpectedRollbackException」
+            //   与真正的根因（事件表写失败）关联起来。
+            log.warn("Agent 事件记录失败（本审查事务将被标记 rollback-only，故本次人工审查将整体回滚）:"
+                            + " type={}, subTaskId={}, err={}",
                     eventType, subTask.id(), e.getMessage());
         }
     }

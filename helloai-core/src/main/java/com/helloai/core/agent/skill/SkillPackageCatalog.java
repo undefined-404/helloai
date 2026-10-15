@@ -214,6 +214,7 @@ public class SkillPackageCatalog {
                 row.getVersion(),
                 row.getDescription(),
                 row.getRequiredTools(),
+                row.getRequiredBaseCapabilities(),
                 row.getDependencies(),
                 row.getInputSchema(),
                 row.getOutputSchema(),

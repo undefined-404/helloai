@@ -4,6 +4,10 @@ name: eng-doc-standard
 version: "1.0.0"
 description: "文档规范：接口文档化、自查产出四元组格式"
 requiredTools: []
+# G-022 引用边**有意留空**（恒真）：文档规范是纯文本产出纪律，
+# 任何可产出文本的模型都能承接；声明谓词只会凭空缩小可派面（48 个 `reasoning=false`
+# 模型会因一条不相关的谓词被拒），属「新增拒绝面」而非「消除越界」。
+requiredBaseCapabilities: []
 dependencies: []
 inputSchema: {}
 outputSchema: {}

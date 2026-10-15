@@ -10,6 +10,7 @@ import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.review.quality.RepeatedFailureGate;
 import com.helloai.core.review.picker.ReviewerPicker;
+import com.helloai.core.review.ReviewLockTtlResolver;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.service.impl.SubTaskReviewServiceImpl;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
@@ -123,6 +124,11 @@ class SubTaskReviewServiceTest {
     @Mock
     private AgentEventRecorder agentEventRecorder;
 
+    /** `MED-3`：锁 TTL 解析器。本套件不测 TTL 口径（另见 ReviewLockTtlResolverTest），
+     *  此处只提供固定有效值让锁路径可达。 */
+    @Mock
+    private ReviewLockTtlResolver reviewLockTtlResolver;
+
     private SubTaskReviewService reviewService;
 
     @BeforeEach
@@ -130,6 +136,8 @@ class SubTaskReviewServiceTest {
         // §6.142 双审并行：默认用同步直跑 Executor（supplyAsync 立即执行，保证确定性，不引入真实线程）；
         // 并行语义用例单独换真实线程池重建（见 shouldRunDualVerdictsInParallel）
         reviewService = buildService(command -> command.run());
+        // MED-3：锁有效 TTL 由解析器给出（本套件固定 120s；口径本身由 ReviewLockTtlResolverTest 覆盖）
+        lenient().when(reviewLockTtlResolver.effectiveTtlSeconds()).thenReturn(120L);
         // §6.142 选取职责迁入 Picker：单审默认返回 9L REVIEWER（双审/指定用例单独 stub）
         lenient().when(reviewerPicker.pickSingle(any())).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         // §6.142 双审默认关闭：既有用例保持单审语义（双审用例单独 stub true）
@@ -160,6 +168,7 @@ class SubTaskReviewServiceTest {
                         subTaskService),
                 taskTimelineService, executionCommandService, dispatchProperties,
                 conversationService, recordReviewService, redissonClient,
+                reviewLockTtlResolver,
                 new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
                 new VerdictParser(new ObjectMapper()),
                 reviewerPicker, reviewProperties, agentQualityProfileService, executor, agentEventRecorder,
@@ -318,6 +327,55 @@ class SubTaskReviewServiceTest {
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_passed"),
                 eq(AgentRole.REVIEWER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("MED-2: 结论自相矛盾（pass=true 但 score=1）→ 拒收、转人工、不 complete")
+    void shouldRejectInconsistentVerdictWhenPassButScoreBelowMinimum() {
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        // pass=true 与 score=1 矛盾：prompt 明规则「pass=true 时 score 不低于 3」
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": true, \"score\": 1, \"issues\": \"\", \"comment\": \"自相矛盾\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        // 不得放行交付
+        verify(subTaskService, never()).complete(anyLong());
+        // 也不得当作普通驳回走返工（矛盾结论不构成有效判定）
+        verify(subTaskService, never()).rework(anyLong(), any());
+        // 停 REVIEW 转人工，理由码固定
+        verify(subTaskService).markManualIntervention(eq(SUB_TASK_ID), eq("reviewer_score_inconsistent"), anyMap());
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_score_inconsistent"),
+                eq(AgentRole.REVIEWER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("MED-2 边界: pass=true 且 score 恰好为 3 → 正常放行（下限含端）")
+    void shouldAcceptVerdictAtMinimumPassScore() {
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": true, \"score\": 3, \"issues\": \"\", \"comment\": \"基本达标\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).complete(SUB_TASK_ID);
+        verify(subTaskService, never()).markManualIntervention(anyLong(), any(), anyMap());
+    }
+
+    @Test
+    @DisplayName("MED-2 边界: pass=false 且 score=5 → 不触发矛盾判定（只管 pass=true 侧）")
+    void shouldNotTriggerConsistencyGuardOnRejectPath() {
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 5, \"issues\": \"缺证据\", \"comment\": \"\"}", "stop", "llm", 100));
+        when(agentService.getProfileById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
+        when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
+        verify(subTaskService, never()).markManualIntervention(eq(SUB_TASK_ID), eq("reviewer_score_inconsistent"), anyMap());
     }
 
     @Test

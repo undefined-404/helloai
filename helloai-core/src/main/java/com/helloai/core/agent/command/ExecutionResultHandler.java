@@ -1,5 +1,6 @@
 package com.helloai.core.agent.command;
 
+import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
@@ -75,7 +76,15 @@ public class ExecutionResultHandler {
     private final TaskRunningSpecPort taskRunningSpecPort;
     private final ExecutionOutputParser executionOutputParser;
     private final ExecutorDoneIssuesBackfiller executorDoneIssuesBackfiller;
-    /** 事件记录器（AGENT_COMPLETED 埋点；事件 write-only，失败仅告警不阻断回写）。 */
+    /**
+     * 事件记录器（AGENT_COMPLETED 埋点）。
+     *
+     * <p><b>★事务语义（2026-10-15 订正）</b>：{@code record} 与<b>本类事务合并</b>
+     * （{@code @Transactional(REQUIRED)}），任一遍写失败会把共享事务标记 rollback-only
+     * ⇒ 本方法整体回滚。故调用点<b>不得</b>用 try-catch 假装「降级不阻断」——
+     * 那只挡得住异常冒泡、挡不住回滚，且会让后续工作在注定回滚的事务里空转。
+     * 详见 {@link AgentEventRecorder#record} 的契约说明。</p>
+     */
     private final AgentEventRecorder agentEventRecorder;
     /** 执行会话服务（终态 COMPLETED/FAILED；best-effort 不阻断回写）。 */
     private final AgentSessionService agentSessionService;
@@ -84,11 +93,25 @@ public class ExecutionResultHandler {
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
+        doHandleSuccess(subTaskId, agentId, result, null);
+    }
+
+    /**
+     * 成功回写主体（`G4`，2026-10-15 抽出以便携带幂等键）。
+     *
+     * <p><b>为什么要把 {@code idempotencyKey} 传进来</b>：{@code handleReport} 的幂等分支
+     * （见其内「{@code idempotent_duplicate}」判定）<b>要求 key 非空</b>才生效，
+     * 而在此之前内部执行链恒传 {@code null} ⇒ 该分支对内部执行是<b>死码</b>，
+     * 唯一防护退化为「读 {@code subTask.status()} 再动作」的 TOCTOU 检查。</p>
+     *
+     * @param idempotencyKey 幂等键；{@code null} ⇒ 保持原语义（仅状态守卫）
+     */
+    private void doHandleSuccess(Long subTaskId, Long agentId, AgentResult result, String idempotencyKey) {
         ExecutionResultReport report = new ExecutionResultReport();
         report.setSubTaskId(subTaskId);
         report.setAgentId(agentId);
         report.setSource("INTERNAL");
-        report.setIdempotencyKey(null);
+        report.setIdempotencyKey(idempotencyKey);
         report.setSuccess(result.isSuccess());
         report.setExecutorName(result.getExecutorName());
         report.setFinishReason(result.getFinishReason());
@@ -97,6 +120,82 @@ public class ExecutionResultHandler {
         report.setThinking(result.getThinking());
         report.setError(null);
         handleReport(report);
+    }
+
+    /**
+     * 内部执行链的幂等键口径（`G4`，2026-10-15）。
+     *
+     * <p>取 {@code record:<recordId>}——{@code recordId}（{@code agent_execution_record.id}）
+     * <b>每次执行唯一</b>且已随命令透传到调用现场，无需改动
+     * {@code ExecutionCommand} / {@code AgentTask} 契约。语义正好：
+     * 同一 record 重放 ⇒ 同键 ⇒ 命中既有幂等分支返回 {@code idempotent_duplicate}；
+     * 新一次执行 ⇒ 新 record ⇒ 新键 ⇒ 不误判为重复。</p>
+     *
+     * @param recordId 执行记录 ID；{@code null} ⇒ 无键（保持原语义）
+     */
+    private static String idempotencyKeyOf(Long recordId) {
+        return recordId == null ? null : "record:" + recordId;
+    }
+
+    /**
+     * <b>原子化「执行记录终态化 + 结果回写」</b>（`HIGH-2` 修复，2026-10-15）。
+     *
+     * <p><b>修的缺陷</b>：消费链原先把这两件事放在<b>两个独立事务</b>里，且顺序是
+     * 「先 <i>记录终态</i>，后 <i>结果回写</i>」。两者提交之间若崩溃，会留下
+     * <b>记录 = SUCCESS 但子任务仍 IN_PROGRESS</b> 的僵尸态——而两条恢复链都覆盖不到它：
+     * {@code ExecutionCompensationTask} 只扫 {@code PENDING} / {@code RUNNING} 超时
+     * （这条记录已是终态 SUCCESS），{@code ExecutionCommandPoller} 只扫 {@code PENDING}。
+     * 结果是<b>成功产出被静默丢弃</b>，且无幂等重放（`LocalExecutionCommandConsumer` 的
+     * `markRunning` CAS 也因记录已终态而拒绝重入）。</p>
+     *
+     * <p><b>修法</b>：把「记录 CAS 终态」与「结果回写」收进<b>同一事务</b>
+     * （本方法、两个 {@code @Transactional(REQUIRED)} 下游方法天然加入本事务）。
+     * 任一步失败 ⇒ 整体回滚 ⇒ 记录<b>退回 RUNNING</b>、子任务<b>留在 IN_PROGRESS</b>
+     * ⇒ 由 {@code ExecutionCompensationTask}（`running-timeout-minutes`，默认 10）判定超时
+     * 并落 {@code sub_task_execution_timeout_reassign} 事件 + 转 BLOCKED
+     * ⇒ <b>失败从「静默丢结果」变为「可见且可由既有改派链恢复」</b>。
+     * 判据：宁可要一个显式的、可恢复的失败，也不要一个静默的成功丢失。</p>
+     *
+     * <p><b>为什么不改成「先回写后终态化」</b>：那会把窗口挪到另一侧——崩溃时得到
+     * 「子任务已 DONE 但记录仍 RUNNING」，而超时补偿对已 DONE 的子任务会因
+     * {@code status == IN_PROGRESS} 守卫而不动它，记录却停在 RUNNING 无人认领，
+     * 同样是一个需要额外恢复链的僵尸态。事务化是唯一不需要新增恢复链的解法。</p>
+     *
+     * <p><b>调用方</b>：{@code LocalExecutionCommandConsumer#runViaRuntime} 第 5+6 步
+     * （原两段独立代码已合并为本方法调用）。</p>
+     *
+     * @param recordId  执行记录 ID（null ⇒ 跳过记录终态化，仅做结果回写，保持原语义）
+     * @param subTaskId 子任务 ID
+     * @param agentId   执行 Agent ID
+     * @param result    执行结果（{@code success=false} ⇒ 走失败回写，错误文案取 {@code output}）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void applyResultAtomically(Long recordId, Long subTaskId, Long agentId, AgentResult result) {
+        if (result == null) {
+            return;
+        }
+        // 1) 执行记录 CAS：终态覆盖（成功 → markSuccess；失败 → markFailed）
+        if (recordId != null) {
+            boolean marked = result.isSuccess()
+                    ? agentExecutionRecordService.markSuccess(recordId, result.getTokenUsage())
+                    : agentExecutionRecordService.markFailed(recordId, result.getOutput(), result.getTokenUsage());
+            if (!marked) {
+                // 记录已被超时补偿抢先终态化 —— 仍继续回写（与原语义一致），但留痕
+                log.warn("执行记录终态写入被拒绝(记录已超时补偿): recordId={}, success={}",
+                        recordId, result.isSuccess());
+            }
+        }
+        // 2) 结果回写（同事务；失败则第 1 步一并回滚，不再产生「记录终态但子任务未应用」的僵尸态）
+        if (result.isSuccess()) {
+            // `G4`（2026-10-15）：携带 recordId 派生的幂等键，使 handleReport 的
+            // idempotent_duplicate 分支对内部执行**不再死码**（原恒传 null ⇒ 只有状态 TOCTOU 守卫）。
+            doHandleSuccess(subTaskId, agentId, result, idempotencyKeyOf(recordId));
+        } else {
+            String errMsg = result.getOutput() != null
+                    ? result.getOutput()
+                    : (result.getErrorMessage() != null ? result.getErrorMessage() : "agent_runtime_failed");
+            handleFailure(subTaskId, agentId, result.getThinking(), new BizException(errMsg));
+        }
     }
 
     /**
@@ -294,21 +393,24 @@ public class ExecutionResultHandler {
                             "tokens", report.getTokenUsage(),
                             "idempotencyKey", report.getIdempotencyKey()));
             // AGENT_COMPLETED（Turn 端点事件 step=0；失败路径不发，ADR §5.3）
-            try {
-                agentEventRecorder.record(
-                        AgentEventContextResolver.resolveRunId(subTask.taskId()),
-                        subTask.taskId(), report.getSubTaskId(),
-                        AgentEventContextResolver.resolveTurn(subTask.reworkCount(), subTask.attemptTotal()), 0,
-                        AgentEventType.AGENT_COMPLETED, report.getAgentId(),
-                        safeMap("success", report.isSuccess(),
-                                "source", report.getSource(),
-                                "executor", report.getExecutorName(),
-                                "finishReason", report.getFinishReason(),
-                                "tokens", report.getTokenUsage()));
-            } catch (Exception e) {
-                log.warn("Agent 事件记录失败（事件 write-only，降级不阻断主链路）: type={}, subTaskId={}, err={}",
-                        AgentEventType.AGENT_COMPLETED, report.getSubTaskId(), e.getMessage());
-            }
+            // ★HIGH-3（2026-10-15）fail-fast：原实现把本调用包在 try-catch 里并声称
+            //   「事件 write-only，降级不阻断主链路」——该说法是**错的**：
+            //   `record` 与本事务合并（REQUIRED），insert 失败会把本事务标记 rollback-only，
+            //   try-catch 挡不住回滚；后果是「catch 后继续 publish 事件 / 注册同步 / 推进
+            //   子任务状态（全是注定回滚的无效工作），最终在 commit 处抛
+            //   UnexpectedRollbackException —— 与真正的根因（事件表写失败）隔了很远」。
+            //   现直接调用、不捕获：让失败**在写点现场**暴露，且不再空转。
+            //   事务结果不变（同样整体回滚），变的是可诊断性。
+            agentEventRecorder.record(
+                    AgentEventContextResolver.resolveRunId(subTask.taskId()),
+                    subTask.taskId(), report.getSubTaskId(),
+                    AgentEventContextResolver.resolveTurn(subTask.reworkCount(), subTask.attemptTotal()), 0,
+                    AgentEventType.AGENT_COMPLETED, report.getAgentId(),
+                    safeMap("success", report.isSuccess(),
+                            "source", report.getSource(),
+                            "executor", report.getExecutorName(),
+                            "finishReason", report.getFinishReason(),
+                            "tokens", report.getTokenUsage()));
             // 核验门控：事务提交后异步触发 LLM 自动核验（AFTER_COMMIT 监听），
             // 核验 LLM 调用不阻塞结果回报事务；是否启用由监听侧按配置判定
             applicationEventPublisher.publishEvent(

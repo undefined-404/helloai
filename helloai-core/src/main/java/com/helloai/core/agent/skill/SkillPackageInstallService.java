@@ -223,6 +223,9 @@ public class SkillPackageInstallService {
         }
         row.setDescription(spec.description());
         row.setRequiredTools(spec.requiredTools());
+        // G-022 引用边：显式写入 frontmatter 解析值（`V113` 已摘不得靠默认值兜底——
+        // 存量行为空集是事实，但新装包若漏写会静默丢引用边 ⇒ 让「只写不读」不成立）。
+        row.setRequiredBaseCapabilities(spec.requiredBaseCapabilities());
         row.setDependencies(spec.dependencies());
         row.setInputSchema(spec.inputSchema());
         row.setOutputSchema(spec.outputSchema());

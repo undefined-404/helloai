@@ -26,6 +26,8 @@ import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.service.impl.McpToolServiceImpl;
+import com.helloai.core.agent.skill.SkillPackageCatalog;
+import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
@@ -91,6 +93,9 @@ class McpToolServiceTest {
     @Mock private AgentDutyLeaseService agentDutyLeaseService;
     @Mock private TaskRunningSpecPort taskRunningSpecPort;
     @Mock private TaskTimelinePort taskTimelinePort;
+    /** `QA-M9-03`：checkIn 自报技能的能力校验依赖。 */
+    @Mock private SkillPackageCatalog skillPackageCatalog;
+    @Mock private LlmProviderModelQueryService llmProviderModelQueryService;
 
     private McpToolService mcpToolService;
 
@@ -100,7 +105,8 @@ class McpToolServiceTest {
                 agentService, agentInboxService, agentMcpServerService,
                 subTaskQueryPort, subTaskCommandPort, heartbeatService,
                 attachmentPort, agentExecutionRecordService, executionResultHandler, agentEventRecorder,
-                agentDutyLeaseService, taskRunningSpecPort, taskTimelinePort);
+                agentDutyLeaseService, taskRunningSpecPort, taskTimelinePort,
+                skillPackageCatalog, llmProviderModelQueryService);
 
         Agent agent = new Agent();
         agent.setId(AGENT_ID);

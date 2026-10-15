@@ -34,10 +34,36 @@ public class ReviewProperties {
     private DualReviewConsensusPolicy dualReviewConsensusPolicy = DualReviewConsensusPolicy.REQUIRE_BOTH;
 
     /**
-     * 双审单侧核验超时（秒）。默认 90，严格收进核验互斥锁 TTL（120s）内：
+     * 核验互斥锁 TTL <b>下限</b>（秒）。默认 <b>240</b>。
+     *
+     * <p><b>★不变量（`MED-3`，2026-10-15 修复）：锁 TTL 不得短于单次核验 LLM 调用的最坏时长。</b>
+     * 原实现硬编码 120s，而读取超时默认 {@code 180000ms}（{@code AgentProviderProperties
+     * .ProviderConfig.readTimeoutMs}）⇒ <b>180s &gt; 120s</b>：单审调用可合法跑到 180s，
+     * 锁却在 120s 就过期，中间留出窗口让 L1 事件 / L2 MQ / L3 孤儿扫描抢到已过期锁，
+     * 对同一子任务并发核验（重复 {@code review_record} → 画像重复计数）。</p>
+     *
+     * <p><b>★本值语义 = 下限，不是精确值</b>：有效 TTL 由
+     * {@code ReviewLockTtlResolver} 计算为
+     * {@code max(本值, 各 provider 读超时最大值 + 1s 余量)}。
+     * 之所以不采用「配置不对就 fail-fast」，是因为 {@code read-timeout-ms} <b>按 profile 分档</b>
+     * （默认 180s、{@code application-dev.yml} 为整合报告长输出设 600s，且该文件是
+     * {@code skip-worktree} 的本地私有件、不可提交）⇒ fail-fast 会导致 fresh clone 的
+     * dev profile 起不来。该不变量方向唯一（只能调大），故自动抬高是安全的，同时 WARN 留痕。</p>
+     *
+     * <p><b>为什么原先没暴露</b>：{@link #dualReviewTimeoutSeconds} 早已按同一推理收紧到 90s
+     * （见其 javadoc），但那条不变量是按<b>双审路径</b>推导的 —— 单审路径<b>没有 deadline</b>，
+     * 其时长上界由 provider 读超时决定，故双审安全<b>不代表</b>单审安全。
+     * <b>同一功能的两条路径，安全属性要分开验证。</b></p>
+     */
+    private long lockTtlSeconds = 240;
+
+    /**
+     * 双审单侧核验超时（秒）。默认 90。
+     *
+     * <p><b>必须严格收进核验互斥锁 TTL（{@link #lockTtlSeconds}）内</b>：
      * deadline 在加锁之后才起算，若超时 ≥ 锁 TTL，双审窗口必然超出锁有效期，
      * 锁释放后 L1/L2/L3 触发源可抢到已过期锁重复双审（重复 review_record →
-     * 画像重复计数）。90s 保证整个双审窗口（等待 + 落库 + 时间线）落在锁内。
+     * 画像重复计数）。90s 保证整个双审窗口（等待 + 落库 + 时间线）落在锁内。</p>
      */
     private long dualReviewTimeoutSeconds = 90;
 

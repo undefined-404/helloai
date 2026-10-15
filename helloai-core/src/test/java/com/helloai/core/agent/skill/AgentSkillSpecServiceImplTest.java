@@ -140,7 +140,7 @@ class AgentSkillSpecServiceImplTest {
     @Test
     @DisplayName("SkillPackage 构造器将 null 字段规范化为默认值")
     void shouldNormalizeNullFieldsInSkillPackage() {
-        SkillPackage pkg = new SkillPackage(null, null, null, null, null, null, null, null, null);
+        SkillPackage pkg = new SkillPackage(null, null, null, null, null, null, null, null, null, null);
         assertThat(pkg.name()).isEmpty();
         assertThat(pkg.version()).isEmpty();
         assertThat(pkg.description()).isEmpty();

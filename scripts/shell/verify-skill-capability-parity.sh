@@ -12,11 +12,22 @@
 #      的文件必须在「语义位置」写 `capabilities`（剥掉 SQL 注释后按词边界匹配，
 #      防注释绕过）；（白名单 = 既有冻结迁移文件，只对新文件生效）
 #      —— `V112` 摘掉 capabilities 列默认值后，不写谓词的新插入行会 NOT NULL 违约。
+#   S4 技能包引用边词表闭合（G-022，2026-10-15）：内置技能包 frontmatter 的
+#      `requiredBaseCapabilities` 元素必须 ∈ `predicateVocabulary()`
+#      （`SkillCapabilityRequirements` 登记的 reasonING/webSearch/toolCalling）
+#      ——拼错的谓词会**放宽**而非收紧匹配（空提供集的包含判定恒真），
+#      属放宽型失效方向，必须 fail-closed。
+#   S5 技能包白名单同步（G-022）：`SkillPackageParser.KNOWN_KEYS` 必须含
+#      `requiredBaseCapabilities`，且 `SkillPackage` record 的分量数与之匹配
+#      ——防「frontmatter 加了键但解析器不认」（= 契约半改，最难发现）。
 #
 # 地面真值：
 #   · 后端词表      helloai-core/src/main/java/com/helloai/core/agent/AgentSkillDeriver.java
 #   · 前端词表      helloai-ui/src/constants/agentSkills.ts
 #   · 谓词映射      helloai-core/src/main/java/com/helloai/core/agent/SkillCapabilityRequirements.java
+#   · 技能包解析    helloai-core/src/main/java/com/helloai/core/agent/skill/SkillPackageParser.java
+#   · 技能包 record helloai-core/src/main/java/com/helloai/core/agent/skill/SkillPackage.java
+#   · 内置技能包    helloai-core/src/main/resources/skills/plugins/*.md
 #   · 迁移目录      helloai-start/src/main/resources/db/migration/
 #
 # 用法：
@@ -25,6 +36,8 @@
 #   bash scripts/shell/verify-skill-capability-parity.sh --inject-ghost-column  # 反证②：某源文件写退役列 ⇒ EXIT≠0
 #   bash scripts/shell/verify-skill-capability-parity.sh --inject-legacy-insert # 反证③：新增只写旧列的迁移 ⇒ EXIT≠0
 #   bash scripts/shell/verify-skill-capability-parity.sh --inject-comment-bypass # 反证④：旧列 + 注释含 capabilities ⇒ EXIT≠0（QA-M9-02 回归锁）
+#   bash scripts/shell/verify-skill-capability-parity.sh --inject-bad-predicate  # 反证⑤：技能包声明未登记谓词 ⇒ EXIT≠0
+#   bash scripts/shell/verify-skill-capability-parity.sh --inject-unknown-key    # 反证⑥：解析器白名单缺键 ⇒ EXIT≠0
 #
 # 零外部依赖（bash + grep/awk/sed），CI 可跑。
 # 【实现约定】刻意不使用 `while read … done < <(…)` 形态：本仓 Windows/Git Bash 下该形态
@@ -38,6 +51,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 JAVA_DERIVER="$ROOT/helloai-core/src/main/java/com/helloai/core/agent/AgentSkillDeriver.java"
 JAVA_REQ="$ROOT/helloai-core/src/main/java/com/helloai/core/agent/SkillCapabilityRequirements.java"
+JAVA_PARSER="$ROOT/helloai-core/src/main/java/com/helloai/core/agent/skill/SkillPackageParser.java"
+JAVA_PKG="$ROOT/helloai-core/src/main/java/com/helloai/core/agent/skill/SkillPackage.java"
+SKILL_PKG_DIR="$ROOT/helloai-core/src/main/resources/skills/plugins"
 TS="$ROOT/helloai-ui/src/constants/agentSkills.ts"
 MIG_DIR="$ROOT/helloai-start/src/main/resources/db/migration"
 SELF="$ROOT/scripts/shell/verify-skill-capability-parity.sh"
@@ -72,6 +88,7 @@ trap cleanup EXIT
 
 EXTRA_S2_FILES=()
 EXTRA_MIG_FILES=()
+EXTRA_PKG_FILES=()
 if [[ "$INJECT_MODE" == "--inject-missing-skill" ]]; then
   # 反证①：前端词表删掉 thinking ⇒ 三源应失配
   mkdir -p "$ROOT/tmp"
@@ -105,6 +122,33 @@ elif [[ "$INJECT_MODE" == "--inject-comment-bypass" ]]; then
   } > "$TMP_MIG_C"
   TMP_FILES+=("$TMP_MIG_C")
   EXTRA_MIG_FILES+=("$TMP_MIG_C")
+elif [[ "$INJECT_MODE" == "--inject-bad-predicate" ]]; then
+  # 反证⑤（G-022）：注入一个声明**未登记谓词**的技能包 ⇒ S4 应 FAIL
+  #   （必须真会拦：空提供集的 containsAll 恒真 ⇒ 拼错的谓词会**放宽**匹配，
+  #     是放宽型失效方向，漏放即等于没有引用边约束）
+  mkdir -p "$ROOT/tmp"
+  TMP_PKG_MD="$ROOT/tmp/.bad-predicate-inject.md"
+  {
+    printf -- '---\n'
+    printf 'name: eng-bad-predicate\n'
+    printf 'version: "1.0.0"\n'
+    printf 'description: "反证用：声明未登记谓词"\n'
+    printf 'requiredBaseCapabilities:\n'
+    printf '  - totallyBogusPredicate\n'
+    printf -- '---\n\n# 正文\n'
+  } > "$TMP_PKG_MD"
+  TMP_FILES+=("$TMP_PKG_MD")
+  EXTRA_PKG_FILES+=("$TMP_PKG_MD")
+elif [[ "$INJECT_MODE" == "--inject-unknown-key" ]]; then
+  # 反证⑥（G-022）：把解析器白名单里的 requiredBaseCapabilities 抹掉 ⇒ S5 应 FAIL
+  #   （模拟「frontmatter 加了键但解析器不认」= 契约半改，最难发现的一类漂移）
+  mkdir -p "$ROOT/tmp"
+  TMP_PARSER="$ROOT/tmp/.parser-no-key-inject.java"
+  grep -v '"requiredBaseCapabilities"' "$JAVA_PARSER" \
+    | sed 's|"requiredTools", "requiredBaseCapabilities",|"requiredTools",|' \
+    | sed 's|"requiredTools", "requiredBaseCapabilities"|"requiredTools"|' > "$TMP_PARSER"
+  TMP_FILES+=("$TMP_PARSER")
+  JAVA_PARSER="$TMP_PARSER"
 elif [[ -n "$INJECT_MODE" ]]; then
   printf '[verify-skill-capability-parity] 未知反证开关：%s\n' "$INJECT_MODE" >&2
   exit 64
@@ -232,5 +276,80 @@ else
 fi
 
 # ============================================================
-echo "== verify-skill-capability-parity: S1 三源同集合 / S2 两列退役无回写 / S3 新迁移写谓词 —— $([ "$FAILS" -eq 0 ] && echo 全部通过 || echo "${FAILS} 处失配")"
+# S4 技能包引用边词表闭合（G-022）
+# ============================================================
+# 为什么必须 fail-closed：判定式是 `requires ⊆ provides`，
+# 若 requires 里的谓词名拼错，则该元素在 provides 中**必然查不到**——
+#   但我们判定的是「**全部** requires 都被 provides 覆盖」，
+#   未登记谓词会让覆盖失败（安全方向）。
+#   真正的放宽风险在另一处：`unsatisfiedPackages` / 批量判定若把未登记谓词
+#   **静默丢弃**，则技能变成「无条件可派」＝约束失效。
+#   故此处要求：frontmatter 声明的谓词必须 ∈ 已登记词表，非法即 FAIL。
+predicate_vocabulary() {
+  # 真值源 =谓词常量**声明**（`private static final String PREDICATE_X = "x";`），
+  # 不用 `predicateVocabulary()` 的方法体——后者是 `return Set.of(...)` 单行形态，
+  # 解析它会随代码排版漂移；常量声明是「词 ⇒ 值」的唯一登记处，且换行安全。
+  grep -oE 'PREDICATE_[A-Z_]+[[:space:]]*=[[:space:]]*"[A-Za-z0-9]+"' "$JAVA_REQ" \
+    | sed -E 's/.*=[[:space:]]*"([A-Za-z0-9]+)"/\1/' | sort -u
+}
+
+# 提取某技能包 frontmatter 里 requiredBaseCapabilities 的元素
+pkg_required_caps() {
+  awk '
+    BEGIN { in_fm = 0; in_key = 0 }
+    /^---[[:space:]]*$/ { if (in_fm) { exit } else { in_fm = 1 } }
+    in_fm && /^requiredBaseCapabilities[[:space:]]*:/ { in_key = 1; rest = $0; sub(/^requiredBaseCapabilities[[:space:]]*:[[:space:]]*/, "", rest); if (rest != "") print rest; next }
+    in_fm && in_key {
+      if ($0 ~ /^[[:space:]]*-[[:space:]]*/) { sub(/^[[:space:]]*-[[:space:]]*/, ""); print }
+      else if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) { next }
+      else { in_key = 0 }
+    }
+  ' "$1" | sed -E 's/^["'"'"']//; s/["'"'"']$//' | grep -v '^$' | grep -v '^\[' | sort -u
+}
+
+PRED_VOCAB="$(predicate_vocabulary)"
+[[ -z "$PRED_VOCAB" ]] && fail "S4 predicateVocabulary 解析为空（解析逻辑失配源码形态？）"
+
+PKG_FILES="$(ls -1 "$SKILL_PKG_DIR"/*.md 2>/dev/null || true)"
+for f in ${EXTRA_PKG_FILES[@]+"${EXTRA_PKG_FILES[@]}"}; do
+  PKG_FILES="$(printf '%s\n%s\n' "$PKG_FILES" "$f")"
+done
+
+S4_OFFENDERS=""
+for f in $PKG_FILES; do
+  [[ -f "$f" ]] || continue
+  for p in $(pkg_required_caps "$f"); do
+    if ! printf '%s\n' "$PRED_VOCAB" | grep -qxF "$p"; then
+      S4_OFFENDERS="$(printf '%s\t%s\n%s' "$S4_OFFENDERS" "${f#"$ROOT"/}" "$p")"
+    fi
+  done
+done
+S4_OFFENDERS="$(printf '%s' "$S4_OFFENDERS" | sed '/^$/d' | sort -u || true)"
+S4_COUNT="$(printf '%s\n' "$S4_OFFENDERS" | grep -c . || true)"
+if [[ "$S4_COUNT" == 0 ]]; then
+  ok "S4 技能包 requiredBaseCapabilities 谓词均已登记（词表：$(printf '%s' "$PRED_VOCAB" | tr '\n' ' ')）"
+else
+  printf '%s\n' "$S4_OFFENDERS" | sed 's/^/[FAIL] S4 技能包声明未登记谓词：/'
+  FAILS=$((FAILS + S4_COUNT))
+fi
+
+# ============================================================
+# S5 技能包解析器白名单同步（G-022）
+# ============================================================
+S5_KEY='requiredBaseCapabilities'
+# 5a 解析器 KNOWN_KEYS 必须含该键
+if grep -qE "\"$S5_KEY\"" "$JAVA_PARSER"; then
+  ok "S5a SkillPackageParser.KNOWN_KEYS 含 $S5_KEY（契约 8→9 键已同步）"
+else
+  fail "S5a SkillPackageParser.KNOWN_KEYS 缺 $S5_KEY —— frontmatter 加了键但解析器不认 ⇒ 技能包被判 corrupt（G-022 契约半改）"
+fi
+# 5b SkillPackage record 必须有该分量（分量名含该键）
+if grep -qE "List<String> $S5_KEY" "$JAVA_PKG"; then
+  ok "S5b SkillPackage record 含 $S5_KEY 分量"
+else
+  fail "S5b SkillPackage record 缺 $S5_KEY 分量（解析器认了但 record 接不住 ⇒ 反序列化丢字段）"
+fi
+
+# ============================================================
+echo "== verify-skill-capability-parity: S1 三源同集合 / S2 两列退役无回写 / S3 新迁移写谓词 / S4 技能包谓词词表闭合 / S5 解析器键同步 —— $([ "$FAILS" -eq 0 ] && echo 全部通过 || echo "${FAILS} 处失配")"
 exit $FAILS

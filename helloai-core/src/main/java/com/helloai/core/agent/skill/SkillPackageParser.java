@@ -14,9 +14,9 @@ import java.util.Set;
 /**
  * frontmatter YAML → {@link SkillPackage}（REF-1.1b / REF-1.2b）。
  *
- * <p><b>已知字段白名单 = 8 个</b>：{@code name / version / description / requiredTools /
- * dependencies / inputSchema / outputSchema / validationRules}。{@code fileName} <b>禁止出现</b>
- * ——它由目录扫描推导，写进 frontmatter 就是第二个事实源。</p>
+ * <p><b>已知字段白名单 = 9 个</b>：{@code name / version / description / requiredTools /
+ * requiredBaseCapabilities / dependencies / inputSchema / outputSchema / validationRules}。
+ * {@code fileName} <b>禁止出现</b> ——它由目录扫描推导，写进 frontmatter 就是第二个事实源。</p>
  *
  * <p><b>失败一律抛 {@link SkillCorruptException}</b>，消息面向人：未知字段 / 缺必填 / 类型不符 /
  * 值为空 / 重复键 / YAML 语法错，逐类给出可操作的提示（如「version 需要加引号」）。</p>
@@ -29,15 +29,24 @@ public final class SkillPackageParser {
     private SkillPackageParser() {
     }
 
-    /** 已知顶层字段（白名单；新增字段须同批更新本集合，否则旧文件会被判 corrupt）。 */
+    /**
+     * 已知顶层字段（白名单；新增字段须同批更新本集合，否则旧文件会被判 corrupt）。
+     *
+     * <p>★{@code requiredBaseCapabilities} 于 {@code G-022} 补入（8→9）：它是细粒度技能包
+     * 指向粗粒度模型能力的<b>引用边</b>，缺它则选人处 AND 匹配跨命名空间恒失败。
+     * 本字段<b>非必填</b>（缺省空集 = 无能力要求，行为与补入前逐字一致）。
+     * 契约联动四处：①本集合 ②{@code SkillPackage} record ③4 个内置技能包 frontmatter
+     * ④{@code verify-skill-packages.ps1} + golden 夹具。
+     */
     private static final Set<String> KNOWN_KEYS = Set.of(
-            "name", "version", "description", "requiredTools",
+            "name", "version", "description", "requiredTools", "requiredBaseCapabilities",
             "dependencies", "inputSchema", "outputSchema", "validationRules");
 
     /** 必填字段。 */
     private static final List<String> REQUIRED_KEYS = List.of("name", "version", "description");
 
-    private static final List<String> LIST_KEYS = List.of("requiredTools", "dependencies", "validationRules");
+    private static final List<String> LIST_KEYS = List.of(
+            "requiredTools", "requiredBaseCapabilities", "dependencies", "validationRules");
 
     private static final List<String> MAP_KEYS = List.of("inputSchema", "outputSchema");
 
@@ -68,13 +77,14 @@ public final class SkillPackageParser {
         String description = requireText(root, "description");
 
         List<String> requiredTools = optionalTextList(root, "requiredTools");
+        List<String> requiredBaseCapabilities = optionalTextList(root, "requiredBaseCapabilities");
         List<String> dependencies = optionalTextList(root, "dependencies");
         List<String> validationRules = optionalTextList(root, "validationRules");
         Map<String, Object> inputSchema = optionalSchema(root, "inputSchema");
         Map<String, Object> outputSchema = optionalSchema(root, "outputSchema");
 
-        return new SkillPackage(name, version, description, requiredTools, dependencies,
-                inputSchema, outputSchema, validationRules, fileName);
+        return new SkillPackage(name, version, description, requiredTools, requiredBaseCapabilities,
+                dependencies, inputSchema, outputSchema, validationRules, fileName);
     }
 
     private static Map<String, Object> loadRoot(String yamlText) throws SkillCorruptException {

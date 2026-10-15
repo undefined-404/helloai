@@ -71,7 +71,7 @@ class SkillCatalogControllerTest {
     @DisplayName("字段逐项映射（含 schema / 规则 / fileName）")
     void fieldsAreMapped() {
         SkillPackage spec = new SkillPackage("eng-code-review", "1.0.0", "代码评审规范：接口契约",
-                List.of("web_search"), List.of("dep-a"),
+                List.of("web_search"), List.of(), List.of("dep-a"),
                 Map.of("type", "object"), Map.of("type", "array"), List.of("规则一"), "eng-code-review.md");
         when(skillPackageCatalog.entries()).thenReturn(List.of(SkillCatalogEntry.healthy(spec)));
 
@@ -109,9 +109,9 @@ class SkillCatalogControllerTest {
     @Test
     @DisplayName("描述无全角冒号 → label 取整串；描述为空 → label 退化为 name")
     void labelDerivationEdgeCases() {
-        SkillPackage noColon = new SkillPackage("a", "1.0.0", "无冒号描述", List.of(), List.of(),
+        SkillPackage noColon = new SkillPackage("a", "1.0.0", "无冒号描述", List.of(), List.of(), List.of(),
                 Map.of(), Map.of(), List.of(), "a.md");
-        SkillPackage blankDesc = new SkillPackage("b", "1.0.0", "", List.of(), List.of(),
+        SkillPackage blankDesc = new SkillPackage("b", "1.0.0", "", List.of(), List.of(), List.of(),
                 Map.of(), Map.of(), List.of(), "b.md");
         when(skillPackageCatalog.entries()).thenReturn(List.of(
                 SkillCatalogEntry.healthy(noColon), SkillCatalogEntry.healthy(blankDesc)));
@@ -131,6 +131,6 @@ class SkillCatalogControllerTest {
             default -> "联网调研规范";
         };
         return new SkillPackage(name, "1.0.0", shortDescription + "：其余描述",
-                List.of(), List.of(), Map.of(), Map.of(), List.of(), name + ".md");
+                List.of(), List.of(), List.of(), Map.of(), Map.of(), List.of(), name + ".md");
     }
 }

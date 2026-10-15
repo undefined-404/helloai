@@ -166,7 +166,7 @@ class InternalLlmExecutorToolsTest {
     @DisplayName("REF-8.3 internal_list_skills：返回全量技能目录（name/version/description/requiredTools）")
     void shouldListSkills() {
         SkillPackage pkg = new SkillPackage("eng-code-review", "1.0.0", "代码评审规范",
-                List.of("search_knowledge"), List.of(), Map.of(), Map.of(), List.of(), "eng-code-review.md");
+                List.of("search_knowledge"), List.of(), List.of(), Map.of(), Map.of(), List.of(), "eng-code-review.md");
         when(agentSkillSpecService.listPackages()).thenReturn(List.of(pkg));
 
         Object result = tools.internalListSkills();

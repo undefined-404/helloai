@@ -77,6 +77,33 @@ public class AgentQualityProfileServiceImpl
         return Math.max(0, Math.min(100, score));
     }
 
+    /**
+     * 核验侧质量分（`MED-1`，2026-10-15）—— 口径与「为什么分角色」见接口 javadoc。
+     *
+     * <p>只读 {@code reviewerReviewedCount} / {@code reviewerDisagreementCount} 两个
+     * 此前**全仓零消费**的字段；执行侧指标一律不参与（同一 Agent 兼作执行者与核验者时，
+     * 两套分互不污染）。</p>
+     *
+     * <p><b>无信号 ⇒ {@code null}</b>（不是 0 分）：核验次数为 0 表示「尚无可评估的核验行为」，
+     * 把它当 0 分会在排序里**惩罚新人 Reviewer**；调用方按中性档处理（同
+     * {@code computeQualityScore} 里「无首轮数据按中性 50 计」的既有约定）。</p>
+     */
+    @Override
+    public Integer computeReviewerQualityScore(Long agentId) {
+        AgentQualityProfile profile = getProfile(agentId);
+        if (profile == null) {
+            return null;
+        }
+        int reviewed = nz(profile.getReviewerReviewedCount());
+        if (reviewed == 0) {
+            return null;
+        }
+        int disagreement = nz(profile.getReviewerDisagreementCount());
+        // 分歧率封顶 100（分歧次数理论上不应超过核验次数，脏数据也不放大惩罚）
+        int disagreementRate = Math.min(100, Math.max(0, disagreement) * 100 / reviewed);
+        return Math.max(0, Math.min(100, 100 - disagreementRate));
+    }
+
     @Override
     public String renderHistorySection(Long agentId) {
         AgentQualityProfile profile = getProfile(agentId);

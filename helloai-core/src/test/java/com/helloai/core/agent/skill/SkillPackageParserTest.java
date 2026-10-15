@@ -152,9 +152,37 @@ class SkillPackageParserTest {
     @DisplayName("已知字段白名单为 8 个（不含 fileName）")
     void knownKeysContract() {
         assertThat(SkillPackageParser.knownKeys())
+                // ★8→9 键（`G-022`，2026-10-15）：`requiredBaseCapabilities` 补入——
+                // 细粒度技能包指向粗粒度模型能力的引用边。契约变更，此断言是「白名单基数」
+                // 的守门点，加键必须同批更新它。
                 .containsExactlyInAnyOrder("name", "version", "description", "requiredTools",
-                        "dependencies", "inputSchema", "outputSchema", "validationRules")
+                        "requiredBaseCapabilities", "dependencies", "inputSchema", "outputSchema",
+                        "validationRules")
                 .doesNotContain("fileName");
+    }
+
+    @Test
+    @DisplayName("G-022 引用边：requiredBaseCapabilities 可解析；缺省为空集；类型不符报可读错误")
+    void requiredBaseCapabilitiesParsing() throws Exception {
+        // 显式声明 → 原样解析（顺序保序）
+        SkillPackage declared = SkillPackageParser.parse("eng-x.md",
+                MINIMAL + "\nrequiredBaseCapabilities:\n  - webSearch\n  - reasoning\n");
+        assertThat(declared.requiredBaseCapabilities()).containsExactly("webSearch", "reasoning");
+
+        // 显式空列表 → 空集
+        SkillPackage empty = SkillPackageParser.parse("eng-x.md",
+                MINIMAL + "\nrequiredBaseCapabilities: []\n");
+        assertThat(empty.requiredBaseCapabilities()).isEmpty();
+
+        // 缺省（不写该键）→ 空集（存量已安装包即此形态）
+        SkillPackage absent = SkillPackageParser.parse("eng-x.md", MINIMAL);
+        assertThat(absent.requiredBaseCapabilities()).isEmpty();
+
+        // 类型不符（写映射而非列表）→ 可读错误，而非静默吞掉
+        assertThatThrownBy(() -> SkillPackageParser.parse("eng-x.md",
+                MINIMAL + "\nrequiredBaseCapabilities:\n  webSearch: true\n"))
+                .isInstanceOf(SkillCorruptException.class)
+                .hasMessageContaining("requiredBaseCapabilities");
     }
 
     @Test

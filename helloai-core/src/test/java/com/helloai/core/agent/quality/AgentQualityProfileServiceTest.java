@@ -127,6 +127,90 @@ class AgentQualityProfileServiceTest {
     }
 
     // ════════════════════════════════════════════════════════════
+    //  MED-1 computeReviewerQualityScore（核验侧角色质量分）
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("MED-1: 无画像 → null（无信号，不得当作 0 分惩罚）")
+    void reviewerScoreNoProfile() {
+        doReturn(null).when(service).getProfile(AGENT_ID);
+        assertThat(service.computeReviewerQualityScore(AGENT_ID)).isNull();
+    }
+
+    @Test
+    @DisplayName("MED-1: 核验次数为 0 → null（新人 Reviewer 尚无履历）")
+    void reviewerScoreZeroReviewed() {
+        AgentQualityProfile p = new AgentQualityProfile();
+        p.setAgentId(AGENT_ID);
+        p.setReviewerReviewedCount(0);
+        p.setReviewerDisagreementCount(0);
+        doReturn(p).when(service).getProfile(AGENT_ID);
+        assertThat(service.computeReviewerQualityScore(AGENT_ID)).isNull();
+    }
+
+    @Test
+    @DisplayName("MED-1: 零分歧 → 100；分歧率 50% → 50（只降档不剔除）")
+    void reviewerScoreByDisagreementRate() {
+        AgentQualityProfile clean = new AgentQualityProfile();
+        clean.setAgentId(AGENT_ID);
+        clean.setReviewerReviewedCount(10);
+        clean.setReviewerDisagreementCount(0);
+        doReturn(clean).when(service).getProfile(AGENT_ID);
+        assertThat(service.computeReviewerQualityScore(AGENT_ID)).isEqualTo(100);
+
+        AgentQualityProfile half = new AgentQualityProfile();
+        half.setAgentId(AGENT_ID);
+        half.setReviewerReviewedCount(10);
+        half.setReviewerDisagreementCount(5);
+        doReturn(half).when(service).getProfile(AGENT_ID);
+        assertThat(service.computeReviewerQualityScore(AGENT_ID)).isEqualTo(50);
+    }
+
+    @Test
+    @DisplayName("MED-1: 全分歧 → 0（下限不越界，且仍是合法候选而非剔除）")
+    void reviewerScoreFloorIsZero() {
+        AgentQualityProfile p = new AgentQualityProfile();
+        p.setAgentId(AGENT_ID);
+        p.setReviewerReviewedCount(4);
+        p.setReviewerDisagreementCount(4);
+        doReturn(p).when(service).getProfile(AGENT_ID);
+        assertThat(service.computeReviewerQualityScore(AGENT_ID)).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("MED-1: 分歧次数 > 核验次数（脏数据）→ 分歧率封顶 100，不产生负分")
+    void reviewerScoreClampsDirtyData() {
+        AgentQualityProfile p = new AgentQualityProfile();
+        p.setAgentId(AGENT_ID);
+        p.setReviewerReviewedCount(2);
+        p.setReviewerDisagreementCount(99);
+        doReturn(p).when(service).getProfile(AGENT_ID);
+        assertThat(service.computeReviewerQualityScore(AGENT_ID)).isZero();
+    }
+
+    @Test
+    @DisplayName("MED-1: 两套分互不污染 —— 执行侧满分不影响核验侧、反之亦然")
+    void reviewerScoreIsIndependentOfExecutorScore() {
+        // 执行侧满分（reviewed=10 全首轮通过、均分 5），但核验侧从未履职 ⇒ 核验分 null
+        AgentQualityProfile executorOnly = profile(10, 10, 10, 10, 50);
+        executorOnly.setReviewerReviewedCount(0);
+        executorOnly.setReviewerDisagreementCount(0);
+        doReturn(executorOnly).when(service).getProfile(AGENT_ID);
+        assertThat(service.computeQualityScore(AGENT_ID)).isEqualTo(100);
+        assertThat(service.computeReviewerQualityScore(AGENT_ID)).isNull();
+
+        // 反向：执行侧无数据，核验侧有分歧 ⇒ 执行分 null、核验分 50
+        AgentQualityProfile reviewerOnly = new AgentQualityProfile();
+        reviewerOnly.setAgentId(AGENT_ID);
+        reviewerOnly.setReviewedCount(0);
+        reviewerOnly.setReviewerReviewedCount(10);
+        reviewerOnly.setReviewerDisagreementCount(5);
+        doReturn(reviewerOnly).when(service).getProfile(AGENT_ID);
+        assertThat(service.computeQualityScore(AGENT_ID)).isNull();
+        assertThat(service.computeReviewerQualityScore(AGENT_ID)).isEqualTo(50);
+    }
+
+    // ════════════════════════════════════════════════════════════
     //  renderHistorySection
     // ════════════════════════════════════════════════════════════
 

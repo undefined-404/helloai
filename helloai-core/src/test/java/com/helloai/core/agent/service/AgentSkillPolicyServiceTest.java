@@ -4,6 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.core.agent.AgentSkillDeriver;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.system.port.LlmProviderModelProfile;
 import com.helloai.core.system.port.ModelCapabilities;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
@@ -35,11 +36,13 @@ class AgentSkillPolicyServiceTest {
     private AgentMapper agentMapper;
     @Mock
     private LlmProviderModelQueryService llmProviderModelQueryService;
+    @Mock
+    private AgentSkillSpecService agentSkillSpecService;
 
     private static final String MODEL = "deepseek:deepseek-v4-flash";
 
     private AgentSkillPolicyService service() {
-        return new AgentSkillPolicyService(agentMapper, llmProviderModelQueryService);
+        return new AgentSkillPolicyService(agentMapper, llmProviderModelQueryService, agentSkillSpecService);
     }
 
     private void stubCaps(String modelType, boolean reasoning, boolean webSearch) {

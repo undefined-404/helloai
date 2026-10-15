@@ -1,6 +1,6 @@
 # scripts/ 索引
 
-本目录是 HelloAI 的验证与运维脚本库。共 **87 个 PowerShell（`powershell/` 86 + 根目录 `run-it-local.ps1`）+ 31 个 Shell + 1 个 Java 工具 + 1 个 SQL**（**2026-10-12 按 `git ls-files` 重新校准**：PowerShell 84→86 = 当日新增的两个 REF-8 脚本；Shell 28→30 = 同批 macOS 侧补齐的同名 .sh；**2026-10-13 Shell 30→31 = 新增 `shell/verify-provider-catalog-parity.sh`（M-2③ 供应商注册信息一致性守卫，`794cd631` 建、`d20a0160` 扩全；同批 `shell/gen-provider-catalog.py` 为 .py，不属本行口径）**；此前该行自 2026-10-11 起未随新增同步——**新增脚本必须先 `git add` 再同步本行**，否则 `verify-executor-doc-parity.sh` S6 红），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（`scripts/ci/`）。
+本目录是 HelloAI 的验证与运维脚本库。共 **87 个 PowerShell（`powershell/` 86 + 根目录 `run-it-local.ps1`）+ 32 个 Shell + 1 个 Java 工具 + 1 个 SQL**（**2026-10-12 按 `git ls-files` 重新校准**：PowerShell 84→86 = 当日新增的两个 REF-8 脚本；Shell 28→30 = 同批 macOS 侧补齐的同名 .sh；**2026-10-13 Shell 30→31 = 新增 `shell/verify-provider-catalog-parity.sh`（M-2③ 供应商注册信息一致性守卫，`794cd631` 建、`d20a0160` 扩全；同批 `shell/gen-provider-catalog.py` 为 .py，不属本行口径）**；**2026-10-15 Shell 31→32 = 新增 `shell/verify-skill-capability-parity.sh`（`M-9` 技能/能力三源 parity 守卫，`7ca82558` 建、`D-2026-10-15-1` 扩为 S1~S5）——该行自 2026-10-14 起漏同步，是跑门禁时由 `verify-executor-doc-parity.sh` S6 当场抓出的欠账，非本次新增所致**；此前该行自 2026-10-11 起未随新增同步——**新增脚本必须先 `git add` 再同步本行**，否则 `verify-executor-doc-parity.sh` S6 红），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（`scripts/ci/`）。
 
 - `ci/`：**跨平台 CI 门禁与架构守卫**（bash，Git Bash / Linux CI 通用；详细见下方第六节）
 - `powershell/`：Windows 侧（pwsh / Windows PowerShell 5.1），含全部规范类与大部分 E2E 验收脚本
@@ -97,7 +97,7 @@ $env:HELLOAI_ADMIN_PASSWORD = '<你的管理员登录口令>'   # PowerShell
 
 ### 仅 sh（macOS/Linux 侧）
 
-verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-planner-chat-dual-mode、verify-deps-context-e2e、verify-external-executor-e2e、verify-redispatch-in-progress、verify-provider-catalog-parity（另有与 ps1 对实现的 12 个见上表）
+verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-planner-chat-dual-mode、verify-deps-context-e2e、verify-external-executor-e2e、verify-redispatch-in-progress、verify-provider-catalog-parity、verify-skill-capability-parity（另有与 ps1 对实现的 12 个见上表）
 
 **《差距表》结构守卫（bash 实现，**已在门禁 3 内执行**）**：`shell/verify-doc-gap-table.sh` —— 《差距表》结构守卫，四项只读断言：① 表格完整性（每行竖线数 == 表头，防裸 `|` 切格）② 无转义竖线 ③ 处置列首词 ∈ 九态词集（`协作规约 §6.3`）+ 一行一态 + 矩阵 20 行齐备 ④ 矩阵两列无过程叙述信号（日期 / 用例数 / 施工动词 / 分期标签 / 代码行号）。建立背景见 `LOG-20261009-014`；**2026-10-11 由 zsh 改 bash 实现并接入 `ci-gate.sh` 门禁 3**（原 zsh 在无 zsh 环境 `emulate: command not found` 后落空却仍 EXIT=0 —— 静默假绿，致状态词漂移累积），见 `LOG-20261011-010`；配套口径见《差距表》§0「状态词表」。
 
@@ -113,6 +113,8 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 建立背景、存量债务（46 个未登记码）见 `LOG-20261010-013`；单一来源收口与前端字典化见 `LOG-20261011-006`；判据锚点 `REF-6.8`。
 
 **供应商注册信息一致性守卫（bash，**已在门禁 3 内执行**）**：`shell/verify-provider-catalog-parity.sh` —— 治「预置目录 / 迁移种子 / `application.yml` / Java 兜底常量」四处的内置供应商**默认模型漂移**（历史缺陷 `D-a`~`D-f`：`moonshot-v1-8k` 已下线 ⇒ 密钥验证 404 直接根因；`deepseek-chat` / `qwen-plus` / `MiniMax-Text-01` 已不在模型目录 ⇒ 注册被拒）。断言：① **覆盖完整性**——从 `providerCatalog.ts` 反解全部 `providerCode`，与「有种子集 `SEEDED` ∪ 显式无种子白名单 `NO_SEED`」集合比对，归类漏了即红（防新增预置**静默不受保护**）；② **四方比对**（有种子项）——预置 `defaultModel` ↔ 种子 `llm_provider_model.is_default=1` ↔ `application.yml` `default-model` ↔ `LlmProviderKeyVerifyServiceImpl.FALLBACK_MODELS` / `DeepSeekProviderChatClientFactory.DEFAULT_MODEL`；③ **全预置结构性检查**（含无种子项）——`protocolType` ∈ 工厂支持枚举、`baseUrl` 不得自带 `/v1`（否则拼成 `/v1/v1/chat/completions`）。**双向反证**：`--inject-deviation`（篡改期望）/ `--inject-catalog`（篡改目录副本，副本落 `tmp/`）均须 EXIT≠0。**真值口径**：唯一真值是 `llm_provider_model.is_default=1`（`application.yml` 自身也会漂移——2026-10-13 实测其 2/4 为陈旧值）。建号 `M-2③`（`plan` §11）；建立 `794cd631`、扩全 `d20a0160`，见 `LOG-20261013-015`/`-016`。
+
+**技能/能力词表一致性守卫（bash，**已在门禁 3 内执行**）**：`shell/verify-skill-capability-parity.sh` —— 治「模型能力谓词 ↔ 技能标签 ↔ 技能包引用边」三处漂移。断言五项：`S1` **三源同集合** —— 后端 `AgentSkillDeriver.STANDARD_SKILLS` ⇔ 前端 `agentSkills.ts` ⇔ `SkillCapabilityRequirements.REQUIRED` 键集（任一处增删而另两处未同步 ⇒ 前端可选而后端判定不了）；`S2` **退役列无回写** —— `capability_skills` / `available_optional_skills`（`M-9` 已 `V112` 物理删列）只允许出现在白名单迁移内，出现在其他任何源文件即红（防「列的代码幽灵」复发）；`S3` **新迁移必须写谓词** —— 凡 `INSERT INTO llm_provider_model` 的新迁移须在语义位置写 `capabilities`，判定**剥 SQL 注释 + 词边界匹配**（整文件子串匹配会被「注释里出现 capabilities」绕过，属**自证陷阱**）；`S4` **技能包谓词词表闭合**（`D-2026-10-15-1`）—— 内置技能包 frontmatter 的 `requiredBaseCapabilities` 元素必须 ∈ 已登记谓词词表（**拼错的谓词会「放宽」而非收紧匹配**，属放宽型失效方向，必须 fail-closed）；`S5` **解析器键同步** —— `SkillPackageParser.KNOWN_KEYS` 与 `SkillPackage` record 分量须同时含 `requiredBaseCapabilities`（防「frontmatter 加了键但解析器不认」的契约半改）。**反证开关**：`--inject-missing-skill`（S1）· `--inject-ghost-column`（S2）· `--inject-legacy-insert` / `--inject-comment-bypass`（S3）· `--inject-bad-predicate`（S4）· `--inject-unknown-key`（S5）——**守卫的真实验证强度要用「独立手工注入」测，作者内置开关能拦 ≠ 不可绕过**。建立 `7ca82558`（`M-9`），扩为 S4/S5 见 `D-2026-10-15-1` / `LOG-20261014-009` / `LOG-20261015-001`。
 
 **一次性/生成辅助**：`shell/gen-provider-catalog.py` —— 从 magpie `presets.go` + `models.dev/api.json` 生成 `providerCatalog.ts` 的结构骨架（`defaultModel` 取该 provider 当前可用文本对话模型的启发式默认；`baseUrl` 自动去 `/v1`；`monogram`/`brandColor`/`tagline` 留人工）。仅供策展审阅，**不直接改文件**；`M-1` 建号（`plan` §11），见 `LOG-20261013-015`。
 

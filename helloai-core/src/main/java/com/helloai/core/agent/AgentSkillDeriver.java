@@ -86,7 +86,7 @@ public final class AgentSkillDeriver {
      *
      * <p>优先级：① 模型能力锁定（{@code lockedSkills}，始终追加不可取消）→
      * ② accessType 兜底基础技能 → ③ explicitSkills：标准技能按能力谓词判定（{@link SkillCapabilityRequirements#satisfies}）、
-     * 自定义技能豁免放行（D2=A）→ ④ 名称/描述关键词兜底。<br>
+     * 自定义技能豁免放行（D2=A）→ ④ 名称/描述关键词兜底 → ⑤ <b>技能包自动挂载</b>（`G-022`）。<br>
      * 已识别模型（{@code caps != null}）时对结果净化：标准技能不满足谓词则移除（如 deepseek 模型描述含"搜索"
      * 也不会推导出 web-search）；未识别模型（{@code caps == null}）不净化，与 {@link #derive} 行为一致。</p>
      *
@@ -94,17 +94,29 @@ public final class AgentSkillDeriver {
      * {@link ModelCapabilities}；「已识别」判据由「白名单非空」改为 {@code caps != null}；
      * {@code reasoning=false} ⇒ 结果不含 {@code thinking}（裁定 ①），{@code webSearch=false} ⇒ 不含 {@code web-search}。</p>
      *
+     * <p><b>★⑤ `G-022` 技能包自动挂载（2026-10-15）</b>：选人处
+     * {@code AgentSelectionConstraints} 对 {@code required_skills} 做 AND 匹配，而拆解侧
+     * （本地 PG 实测 34/34 行）产出的全是 {@code eng-*} 技能包标签、能力侧只有粗粒度能力标签
+     * ⇒ 跨命名空间恒失败、子任务永久 PENDING。修法不是统一词表，而是<b>让能力侧
+     * 自动带上「本模型能承接的技能包」</b>：对引用边可满足的技能包，把其标签并入
+     * {@code agent.skills}。于是选人处的 AND 匹配在两个命名空间之间<b>有了真实的边</b>，
+     * 且边由模型事实（谓词）驱动、随模型目录变化自动重算。
+     * ★不统一词表的理由：统一词表会迫使技能包点名模型，而 DSH 判据是
+     * <b>「技能不点名模型」≠「技能不提需求」</b>——两者不可混同。</p>
+     *
      * @param type           接入类型（决定基础技能；null 按无基础技能处理）
      * @param name           Agent 名称（可为 null）
      * @param description    Agent 描述（可为 null）
      * @param explicitSkills 用户显式传入的技能（可为 null/空）
      * @param caps           模型能力谓词快照（可为 null = 未识别模型降级）
+     * @param packageLabels  可挂载技能包标签（可为 null/空 = 无技能包面，行为与补入 ⑤ 前逐字一致）
      * @return 清洗后的技能列表（非 null）
      */
     public static List<String> deriveWithCapabilities(
             AgentAccessType type, String name, String description,
             List<String> explicitSkills,
-            ModelCapabilities caps) {
+            ModelCapabilities caps,
+            List<String> packageLabels) {
 
         LinkedHashSet<String> result = new LinkedHashSet<>();
 
@@ -138,12 +150,29 @@ public final class AgentSkillDeriver {
             }
         }
 
-        // 已识别模型（caps != null）：净化标准技能越界项（自定义技能保留）
+        // ⑤ G-022 技能包自动挂载：幂等并入（显式已声明的标签不重复）
+        if (packageLabels != null) {
+            result.addAll(packageLabels);
+        }
+
+        // 已识别模型（caps != null）：净化标准技能越界项（自定义技能与技能包保留）
         if (caps != null) {
             result.removeIf(s -> STANDARD_SKILLS.contains(s)
                     && !SkillCapabilityRequirements.satisfies(s, caps));
         }
         return new ArrayList<>(result);
+    }
+
+    /**
+     * 上一重载的兼容入口（无技能包面；行为与补入 ⑤ 前<b>逐字一致</b>）。
+     *
+     * <p>供不关心技能包面的调用方与既有测试使用。</p>
+     */
+    public static List<String> deriveWithCapabilities(
+            AgentAccessType type, String name, String description,
+            List<String> explicitSkills,
+            ModelCapabilities caps) {
+        return deriveWithCapabilities(type, name, description, explicitSkills, caps, null);
     }
 
     /**

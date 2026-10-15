@@ -92,6 +92,7 @@ public enum TimelineEventCode {
     SUB_TASK_REVIEW_SKIP_NO_CAPABILITY("sub_task_review_skip_no_capability", "核验跳过（无本机能力）", "执行密集任务由无本机能力 Agent 提交，自动核验跳过"),
     SUB_TASK_REVIEW_SKIP_NO_EVIDENCE("sub_task_review_skip_no_evidence", "核验跳过（无证据）", "无产出证据支撑，自动核验跳过"),
     SUB_TASK_REVIEWER_DISAGREEMENT("sub_task_reviewer_disagreement", "双审分歧", "两位评审结论不一致，转人工介入"),
+    SUB_TASK_REVIEW_SCORE_INCONSISTENT("sub_task_review_score_inconsistent", "核验结论矛盾", "核验给出 pass=true 但 score 低于及格线，结论自相矛盾，转人工介入（MED-2）"),
     SUB_TASK_SESSION_INTERRUPTED("sub_task_session_interrupted", "会话中断", "执行会话被中断（payload 保留上下文摘要）"),
     SUB_TASK_SPEC_CONTEXT_LOADED("sub_task_spec_context_loaded", "装配任务上下文", "执行 Agent 已装配任务全局上下文与直接前置产出，作为本次执行的参考"),
     SUB_TASK_UNCLAIMED_TIMEOUT_REASSIGN("sub_task_unclaimed_timeout_reassign", "超时未领取改派", "分配后 Agent 超时未领取，系统自动改派其他 Agent"),

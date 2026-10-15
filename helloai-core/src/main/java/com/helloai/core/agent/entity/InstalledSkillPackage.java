@@ -43,6 +43,21 @@ public class InstalledSkillPackage extends BaseEntity {
     @TableField(typeHandler = PgJsonbTypeHandler.class)
     private List<String> requiredTools;
 
+    /**
+     * 技能包所需的<b>模型能力谓词</b>（`G-022` 引用边；{@code V113} 新增列）。
+     *
+     * <p>与 {@link #requiredTools} <b>正交且不可互推</b>：后者是「需要哪些<b>工具</b>」
+     * （程序化能力，喂 {@code ToolRegistry}），本字段是「需要哪类<b>模型能力</b>」
+     * （谓词，喂 {@code llm_provider_model.capabilities}）。
+     * 判定式：<b>技能可派 ⟺ 本字段 ⊆ 模型 provides</b>。</p>
+     *
+     * <p>缺省空集 = 无能力要求（存量已安装包均如此：装入时该 frontmatter 键尚不存在）。
+     * 元素取值域 = {@code SkillCapabilityRequirements.provides} 的谓词词表
+     * （{@code reasoning} / {@code webSearch} / {@code toolCalling}）。</p>
+     */
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
+    private List<String> requiredBaseCapabilities;
+
     /** 依赖的其它技能标签。 */
     @TableField(typeHandler = PgJsonbTypeHandler.class)
     private List<String> dependencies;

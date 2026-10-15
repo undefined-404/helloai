@@ -16,6 +16,7 @@ import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.review.picker.ReviewerPicker;
+import com.helloai.core.review.ReviewLockTtlResolver;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.support.ReviewChannel;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
@@ -92,8 +93,15 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     /** §6.82 批次 D：核验互斥锁（防 L1/L2/L3 三路并发双审），key = review:lock:{subTaskId}
      *  （v1.2 §阶段1：setIfAbsent 自旋锁迁 Redisson RLock，key 不变兼容存量） */
     private static final String REVIEW_LOCK_PREFIX = "review:lock:";
-    /** 锁 leaseTime 兜底：覆盖 LLM 调用超时窗口，显式 leaseTime 禁看门狗，崩溃残留自动过期 */
-    private static final long REVIEW_LOCK_TTL_SECONDS = 120;
+
+    /**
+     * 核验通过的评分下限（MED-2，2026-10-15）。
+     *
+     * <p>与评审 prompt 的明规则同源：`prompts/subtask-review.md`「score 为 1~5 整数…
+     * <b>pass=true 时 score 不低于 3</b>」。此前代码不校验该一致性 ⇒ 矛盾评分被放行，
+     * 现作为拒收门限（{@code pass=true 且 score < 本值} ⇒ 结论不可用，转人工）。</p>
+     */
+    private static final int MIN_PASS_SCORE = 3;
 
     private final SubTaskService subTaskService;
     private final AgentService agentService;
@@ -106,6 +114,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     private final ReviewService reviewService;
     /** §6.82 核验互斥锁客户端（v1.2 §阶段1：Redis setIfAbsent 迁 Redisson RLock）。 */
     private final RedissonClient redissonClient;
+    /** 核验锁 TTL 解析（`MED-3`）：有效值 = max(配置值, provider 读超时上界 + 余量)。 */
+    private final ReviewLockTtlResolver reviewLockTtlResolver;
     private final ReviewEvidenceAssembler reviewEvidenceAssembler;
     private final VerdictParser verdictParser;
     /** §6.142 双审/抽检：选取职责收口（原 pickReviewerAgent 三段私有方法迁出）。 */
@@ -135,6 +145,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                                     ConversationService conversationService,
                                     ReviewService reviewService,
                                     RedissonClient redissonClient,
+                                    ReviewLockTtlResolver reviewLockTtlResolver,
                                     ReviewEvidenceAssembler reviewEvidenceAssembler,
                                     VerdictParser verdictParser,
                                     ReviewerPicker reviewerPicker,
@@ -152,6 +163,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         this.conversationService = conversationService;
         this.reviewService = reviewService;
         this.redissonClient = redissonClient;
+        this.reviewLockTtlResolver = reviewLockTtlResolver;
         this.reviewEvidenceAssembler = reviewEvidenceAssembler;
         this.verdictParser = verdictParser;
         this.reviewerPicker = reviewerPicker;
@@ -233,8 +245,12 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         }
         RLock lock = redissonClient.getLock(REVIEW_LOCK_PREFIX + subTaskId);
         try {
-            // waitTime=0 保持"抢占失败即跳过"语义；显式 leaseTime 禁看门狗，TTL 兜底口径与旧 setIfAbsent 一致
-            boolean locked = lock.tryLock(0, REVIEW_LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+            // waitTime=0 保持"抢占失败即跳过"语义；显式 leaseTime 禁看门狗，TTL 兜底口径与旧 setIfAbsent 一致。
+            // ★MED-3（2026-10-15）：TTL 改由 ReviewLockTtlResolver 提供「有效值」——
+            //   = max(helloai.review.lock-ttl-seconds, 各 provider 读超时最大值 + 余量)。
+            //   原硬编码 120s < 读超时（默认 180s / dev 档 600s）⇒ 单审可跑到读超时才结束，
+            //   而锁已过期，留出并发核验窗口（重复 review_record / 画像重复计数）。
+            boolean locked = lock.tryLock(0, reviewLockTtlResolver.effectiveTtlSeconds(), TimeUnit.SECONDS);
             if (!locked) {
                 log.debug("自动核验跳过：已有核验进行中（防双审）, subTaskId={}", subTaskId);
                 return;
@@ -416,6 +432,28 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                     "assistant", "agent", resultText, channel.toolName("result"));
         } catch (Exception e) {
             log.warn("核验结果对话流写入失败（不阻断核验）: subTaskId={}, err={}", subTaskId, e.getMessage());
+        }
+
+        // MED-2（2026-10-15 修复）：核验结论自相矛盾拒收。
+        // prompt 明规则「pass=true 时 score 不低于 3」（prompts/subtask-review.md:87），
+        // 但此前代码无条件接受 pass=true ⇒ 矛盾评分（pass=true/score=1）被直接放行，
+        // 等于把「评审太宽容」这个本该被纠正的信号当成有效判定。
+        // 现按既有「不可判定」口径处理（同双审分歧）：不改状态、停 REVIEW、转人工。
+        int passScore = verdict.getScore() != null ? verdict.getScore() : 0;
+        if (Boolean.TRUE.equals(verdict.getPass()) && passScore < MIN_PASS_SCORE) {
+            subTaskService.markManualIntervention(subTaskId, "reviewer_score_inconsistent",
+                    new HashMap<>(Map.of(
+                            "score", passScore,
+                            "minPassScore", MIN_PASS_SCORE,
+                            "channel", channel != null ? channel.name() : "",
+                            "reviewerAgentId", reviewer.id())));
+            log.warn("核验结论自相矛盾（pass=true 但 score={} < {}），停 REVIEW 转人工: subTaskId={}, reviewerAgentId={}",
+                    passScore, MIN_PASS_SCORE, subTaskId, reviewer.id());
+            taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
+                    TimelineEventCode.SUB_TASK_REVIEW_SCORE_INCONSISTENT.code(), AgentRole.REVIEWER, reviewer.id(),
+                    VerdictParser.safeMap("score", passScore, "minPassScore", MIN_PASS_SCORE,
+                            "comment", verdict.getComment()));
+            return;
         }
 
         if (Boolean.TRUE.equals(verdict.getPass())) {

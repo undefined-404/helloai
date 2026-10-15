@@ -8,8 +8,12 @@ import com.helloai.core.agent.AgentSkillDeriver;
 import com.helloai.core.agent.SkillCapabilityRequirements;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.system.port.LlmProviderModelProfile;
+import com.helloai.core.system.port.ModelCapabilities;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -22,16 +26,20 @@ import java.util.List;
  * （能力驱动 / 基础推导）与 modelType 格式、可用性、角色唯一性校验，
  * 与 {@link AgentSkillDeriver} 纯函数配合，职责内聚于技能策略域。</p>
  */
+@Slf4j
 @Service
 public class AgentSkillPolicyService {
 
     private final AgentMapper agentMapper;
     private final LlmProviderModelQueryService llmProviderModelQueryService;
+    private final AgentSkillSpecService agentSkillSpecService;
 
     public AgentSkillPolicyService(AgentMapper agentMapper,
-                                   LlmProviderModelQueryService llmProviderModelQueryService) {
+                                   LlmProviderModelQueryService llmProviderModelQueryService,
+                                   AgentSkillSpecService agentSkillSpecService) {
         this.agentMapper = agentMapper;
         this.llmProviderModelQueryService = llmProviderModelQueryService;
+        this.agentSkillSpecService = agentSkillSpecService;
     }
 
     /**
@@ -72,11 +80,17 @@ public class AgentSkillPolicyService {
         }
     }
 
-    /**
-     * 收口技能落库推导。
+/**
+ * 收口技能落库推导。
      *
-     * <p>API_KEY_LLM 且 modelType 已识别 → 能力驱动推导（能力锁定 + 谓词过滤 + 自定义豁免）；
-     * 其他接入类型或未识别模型 → 走基础推导（显式优先）。</p>
+     * <p>API_KEY_LLM 且 modelType 已识别 → 能力驱动推导（能力锁定 + 谓词过滤 + 自定义豁免+
+     * <b>技能包自动挂载</b>）；其他接入类型或未识别模型 → 走基础推导（显式优先）。</p>
+     *
+     * <p><b>★技能包自动挂载（`G-022`，2026-10-15）</b>：内部 LLM Agent 的
+     * {@code skills} 由模型谓词派生（粗粒度），而拆解侧 {@code required_skills}
+     * 全是 {@code eng-*} 技能包（细粒度）⇒ 选人处 AND 匹配跨命名空间恒失败。
+     * 本方法把「本模型谓词可承接的技能包标签」并入落库值，
+     * 使两个命名空间之间存在<b>由模型事实驱动</b>的边。</p>
      */
     public List<String> deriveSkillsForRegistration(Agent agent, List<String> explicitSkills) {
         if (agent == null) {
@@ -87,14 +101,53 @@ public class AgentSkillPolicyService {
         if (accessType == AgentAccessType.API_KEY_LLM && modelType != null && !modelType.isBlank()) {
             LlmProviderModelProfile profile = llmProviderModelQueryService.findCapabilityProfileByModelType(modelType);
             if (profile != null) {
+                ModelCapabilities caps = profile.capabilities();
                 return AgentSkillDeriver.deriveWithCapabilities(
                         accessType, agent.getName(), agent.getRemark(),
                         explicitSkills,
-                        profile.capabilities());
+                        caps,
+                        mountablePackageLabels(caps));
             }
         }
         // 非 API_KEY_LLM / 未识别模型：基础推导（显式优先，不合并基础技能）
         return AgentSkillDeriver.derive(accessType, agent.getName(), agent.getRemark(), explicitSkills);
+    }
+
+    /**
+     * 本模型谓词可承接的平台技能包标签（`G-022` 挂载面）。
+     *
+     * <p>判定逐包走 {@link SkillCapabilityRequirements#satisfiesPackage}（唯一判据），
+     * 引用边来自 {@code SkillPackage.requiredBaseCapabilities}（frontmatter 新增键 /
+     * {@code V113} 新增列）；空引用边的技能包（作业规范类）恒可挂载。</p>
+     *
+     * <p><b>只喂健康包</b>（{@code listPackages()} 已按目录语义过滤坏包）——坏包若被挂载，
+     * 会让 Agent「可被指派但注入不出内容且无提示」（同
+     * {@code SkillPackageCatalog} 目录面/健康面的口径差异）。</p>
+     *
+     * <p>技能包面不可用（目录未就绪 / 抛错）时返回空列表 ⇒ 行为退化为挂载前逐字一致，
+     * <b>不让技能面故障阻断 Agent 注册</b>。</p>
+     */
+    private List<String> mountablePackageLabels(ModelCapabilities caps) {
+        try {
+            List<SkillPackage> packages = agentSkillSpecService.listPackages();
+            if (packages == null || packages.isEmpty()) {
+                return List.of();
+            }
+            List<String> mountable = new ArrayList<>();
+            for (SkillPackage pkg : packages) {
+                String label = pkg == null ? null : pkg.name();
+                if (label == null || label.isBlank()) {
+                    continue;
+                }
+                if (SkillCapabilityRequirements.satisfiesPackage(pkg.requiredBaseCapabilities(), caps)) {
+                    mountable.add(label);
+                }
+            }
+            return mountable;
+        } catch (RuntimeException e) {
+            log.warn("技能包目录读取失败，Agent 技能推导跳过技能包挂载（降级为挂载前行为）: reason={}", e.toString());
+            return List.of();
+        }
     }
 
     /**

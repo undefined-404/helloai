@@ -1,6 +1,7 @@
 package com.helloai.core.agent.service.impl;
 
 import com.helloai.core.agent.chat.AgentProviderResolver;
+import com.helloai.core.agent.chat.ConcurrencyGuardedChatModel;
 import com.helloai.core.agent.chat.LlmCallConcurrencyGuard;
 import com.helloai.core.agent.service.AgentChatClientService;
 import com.helloai.common.base.BizException;
@@ -156,6 +157,24 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
      */
     @Override
     public ChatModel buildChatModel(Agent agent, String provider, String apiKeyPlaintext) {
+        ChatModel raw = buildRawChatModel(agent, provider, apiKeyPlaintext);
+        // ★G8（2026-10-15）：出口统一包并发限流装饰器 —— 执行链（RuntimeTurnExecutor →
+        // ChatModelToolLoop / ContextCompactor / FinalReportFenceHook）此前拿的是裸 ChatModel，
+        // 完全绕过 LlmCallConcurrencyGuard（其 javadoc 却声称覆盖「执行」）⇒ maxConcurrentLlmCalls
+        // 对最高频路径失效。在此包装即全覆盖，且与 chat 路径（buildChatClient 的独立缝、
+        // 已自带守卫）不重复获取许可（避免信号量死锁）。
+        // mock 模式不占许可（本地即时返回无上游压力），与 chat 路径判定口径一致。
+        return new ConcurrencyGuardedChatModel(
+                raw, llmCallConcurrencyGuard, !executionProperties.isMockMode());
+    }
+
+    /**
+     * 原 {@code buildChatModel} 主体（未包装版）。
+     *
+     * <p>拆出仅为让「装配裸模型」与「叠加并发限流」两件事可分别测试；
+     * 生产调用方应走 {@link #buildChatModel}（带限流）。</p>
+     */
+    private ChatModel buildRawChatModel(Agent agent, String provider, String apiKeyPlaintext) {
         if (executionProperties.isMockMode()) {
             return new MockChatModel(
                     executionProperties.getProvider(),

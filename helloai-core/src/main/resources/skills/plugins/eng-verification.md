@@ -5,6 +5,12 @@ name: eng-verification
 version: "1.0.0"
 description: "验证规范：最小证据集 / 证据真实可复现 / 断言有效性 / 环境可复现"
 requiredTools: []
+# G-022 引用边**有意留空**（恒真）：本技能的验证纪律要求「命令 + 实测输出」，
+# 但**执行命令的能力维度是 `requiredTools` / `toolCalling`，不是模型原生推理**。
+# ⚠️ 若在此声明 `toolCalling`，实测有 **8 个模型 `toolCalling=false`** 会立即被拒——
+# 那是超出「消除越界」范围的新增拒绝面（M-9 已裁定 `toolCalling` 谓词
+# 「已备、暂不消费」）。真实缺口在工具面（内部 LLM 拿不到执行工具），不在谓词面。
+requiredBaseCapabilities: []
 dependencies: []
 inputSchema: {}
 outputSchema:

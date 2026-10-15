@@ -5,6 +5,13 @@ name: eng-code-review
 version: "1.0.0"
 description: "代码评审规范：接口契约 / 生命周期与并发 / 验证强度 / 范围与必要性（C1~C4）"
 requiredTools: []
+# G-022 引用边**有意留空**（恒真）：本技能是「输出四元组格式」的**作业规范**，
+# 执行它只需要模型能按格式产出结构化文本，不需要模型原生推理 / 联网 / 工具能力。
+# 判据与 `SkillCapabilityRequirements.REQUIRED` 中 `code-review` 恒真的依据同源
+# （M-9 实测：`available_optional_skills` 差集只有 `web-search`）——
+# 「作业类型标签」与「模型原生能力」是两个正交维度，不在此处硬塞谓词。
+# 若将来要求评审必须先查证外部证据，应改声明 `requiredTools`，而非声明 `reasoning`。
+requiredBaseCapabilities: []
 dependencies: []
 inputSchema: {}
 outputSchema:

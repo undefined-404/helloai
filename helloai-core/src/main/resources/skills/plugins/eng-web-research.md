@@ -7,6 +7,14 @@ description: "联网调研规范：检索目标先行 / 多词覆盖 / 来源可
 requiredTools:
   - web_search
   - search_knowledge
+# G-022 引用边：本技能的核心动作是「联网检索」，而联网检索在平台侧是
+# provider 级**工具可用性**（`llm_provider_model.capabilities.webSearch`），
+# 与 `web-search` 标准技能同一事实源（M-9 已证 `web-search ⟸ webSearch` 严格双射）。
+# ⇒声明 webSearch 即是「本技能可派的必要条件」。
+# 实测依据：承载 Agent 若为 deepseek 系（webSearch=false），本技能对它**不可派**
+# —— 这正是「技能要的联网能力模型侧声明没有」的缺口，由本边消解。
+requiredBaseCapabilities:
+  - webSearch
 dependencies: []
 inputSchema: {}
 outputSchema: {}

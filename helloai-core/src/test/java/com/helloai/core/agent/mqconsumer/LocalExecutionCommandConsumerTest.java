@@ -109,7 +109,6 @@ class LocalExecutionCommandConsumerTest {
             when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
-            when(agentExecutionRecordService.markSuccess(44L, null)).thenReturn(true);
             // 工具 / 环境由消费侧 agent 域解析注入装配器。
             // L3 P1-1（2026-10-06）：消费侧改调「按接入类型过滤」的 getEnabledToolsForAccess，
             // 本用例 accessType=API_KEY_LLM ⇒ 内部 LLM 执行者，注入清单应为过滤后的可注入集。
@@ -133,12 +132,13 @@ class LocalExecutionCommandConsumerTest {
             verify(contextAssembler).assemble(any(), same(subTask), same(agent), any(), any());
             verify(agentRuntime).execute(same(ctx));
             verify(contextAssembler).afterTurn(same(subTask), same(agent), eq(1), any());
-            // record CAS 由消费侧代理执行
+            // record CAS 由消费侧代理执行（先占记录）
             verify(agentExecutionRecordService).markRunning(44L);
-            verify(agentExecutionRecordService).markSuccess(44L, null);
+            // HIGH-2（2026-10-15）：记录终态化 + 结果回写已合并为**一次原子调用**；
+            // 消费侧不再直调 markSuccess / handleSuccess（两者之间的崩溃窗口会静默丢结果）。
+            verify(agentExecutionRecordService, never()).markSuccess(any(), any());
             verify(agentExecutionRecordService, never()).markFailed(any(), any(), any());
-            // 回写：AgentResult 映射（成功 + executorName=RuntimeTurnExecutor）
-            verify(executionResultHandler).handleSuccess(eq(22L), eq(11L), argThat(r ->
+            verify(executionResultHandler).applyResultAtomically(eq(44L), eq(22L), eq(11L), argThat(r ->
                     r.isSuccess()
                             && "out".equals(r.getOutput())
                             && "STOP".equals(r.getFinishReason())
@@ -163,7 +163,6 @@ class LocalExecutionCommandConsumerTest {
             when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
-            when(agentExecutionRecordService.markFailed(44L, "run failed", null)).thenReturn(true);
             when(contextAssembler.assemble(any(), any(), any(), any(), any()))
                     .thenReturn(assembledContext());
             when(agentRuntime.execute(any(AgentContext.class)))
@@ -176,11 +175,13 @@ class LocalExecutionCommandConsumerTest {
             localExecutionCommandConsumer.consume(baseCommand());
 
             verify(agentExecutionRecordService).markRunning(44L);
-            verify(agentExecutionRecordService).markFailed(44L, "run failed", null);
+            // HIGH-2（2026-10-15）：记录终态化 + 结果回写已合并为**一次原子调用** ——
+            // 消费侧不再分别直调 markFailed / handleFailure（两者之间的崩溃窗口会留下
+            // 「记录已终态但子任务未应用」的僵尸态）。故此处改为断言原子入口被调用一次。
+            verify(agentExecutionRecordService, never()).markFailed(any(), any(), any());
             verify(agentExecutionRecordService, never()).markSuccess(any(), any());
-            // 失败回写：handleFailure（thinking 随失败透传的四参重载；本用例 thinking=null）
-            verify(executionResultHandler).handleFailure(eq(22L), eq(11L),
-                    nullable(String.class), argThat(e -> e instanceof RuntimeException));
+            verify(executionResultHandler).applyResultAtomically(eq(44L), eq(22L), eq(11L), argThat(r ->
+                    !r.isSuccess() && "run failed".equals(r.getErrorMessage())));
             verify(executionResultHandler, never()).handleSuccess(any(), any(), any());
         }
 

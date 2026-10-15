@@ -1,6 +1,5 @@
 package com.helloai.core.agent.mqconsumer;
 
-import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.TimelineEventCode;
@@ -231,28 +230,17 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             return;
         }
 
-        // 5. 执行记录 CAS：终态覆盖（SUCCESS → markSuccess；FAILED / TIMEOUT → markFailed）；
-        // tokenUsage 随终态落库（B5：loop 全部轮次累加，provider 未返回时为 null）
-        if (command.getRecordId() != null) {
-            boolean marked = result.getStatus() == ExecutionStatus.SUCCESS
-                    ? agentExecutionRecordService.markSuccess(command.getRecordId(), result.getTokenUsage())
-                    : agentExecutionRecordService.markFailed(command.getRecordId(), result.getOutput(),
-                            result.getTokenUsage());
-            if (!marked) {
-                log.warn("{} 写入被拒绝(记录已超时补偿): recordId={}", result.getStatus(), command.getRecordId());
-            }
-        }
-
-        // 6. 结果回写（成功 → submit → REVIEW + 物化；失败 → block + 失败轨迹）
-        if (result.getStatus() == ExecutionStatus.SUCCESS) {
-            executionResultHandler.handleSuccess(command.getSubTaskId(), command.getAgentId(), toAgentResult(result));
-        } else {
-            // thinking 随失败一同透传（B 方案配套）：空产出被 A 判 FAILED 时，模型思维链仍需落
-            // conversation_message（toolName=sub_task_execute_thinking），供前端可见
-            executionResultHandler.handleFailure(command.getSubTaskId(), command.getAgentId(),
-                    result.getThinking(),
-                    new BizException(result.getOutput() != null ? result.getOutput() : "agent_runtime_failed"));
-        }
+        // 5+6. 结果原子化落地（`HIGH-2` 修复，2026-10-15）：执行记录终态化 与 结果回写
+        //      收进**同一事务**。
+        //      · 修复前：第 5 步 markSuccess/markFailed 与第 6 步 handleSuccess/handleFailure
+        //        是两个独立事务，且顺序「先终态、后回写」⇒ 两者之间崩溃会留下
+        //        「记录 = SUCCESS 但子任务仍 IN_PROGRESS」的僵尸态，而超时补偿只扫
+        //        PENDING/RUNNING、Poller 只扫 PENDING ⇒ **成功产出被静默丢弃且无重放**。
+        //      · 修复后：任一步失败 ⇒ 整体回滚 ⇒ 记录退回 RUNNING ⇒ 由
+        //        ExecutionCompensationTask 超时判定并落 timeline + 转 BLOCKED
+        //        ⇒ 失败可见且可经既有改派链恢复。
+        executionResultHandler.applyResultAtomically(command.getRecordId(), command.getSubTaskId(),
+                command.getAgentId(), toAgentResult(result));
         log.info("执行命令消费成功(route=agent_runtime): subTaskId={}, agentId={}, recordId={}, status={}",
                 command.getSubTaskId(), command.getAgentId(), command.getRecordId(), result.getStatus());
     }

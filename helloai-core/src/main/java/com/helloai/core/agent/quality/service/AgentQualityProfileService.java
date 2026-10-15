@@ -36,6 +36,26 @@ public interface AgentQualityProfileService extends IService<AgentQualityProfile
     Integer computeQualityScore(Long agentId);
 
     /**
+     * 计算<b>核验侧</b>质量分（0~100，null 安全）—— role-aware 质量分（`MED-1`，2026-10-15）。
+     *
+     * <p><b>为什么要分角色</b>：{@link #computeQualityScore} 只用<b>执行侧</b>指标
+     * （{@code reviewedCount} / {@code firstPassRate} / {@code totalScore}），
+     * 而选人处 {@code AgentSelector} 的 {@code qualityRank} 对<b>任何角色</b>都调它
+     * ⇒ 选 Reviewer 时算的是「这个 Agent 执行得好不好」，与其核验能力无关；
+     * 从未执行过的 Reviewer 直接算不出分（{@code null} ⇒ 0 档），
+     * 而它真实的核验信号 {@code reviewerDisagreementCount} 此前<b>全仓零读取</b>。</p>
+     *
+     * <p><b>口径</b>：{@code 100 - 分歧率}（分歧率 = 分歧次数 / 核验次数 × 100，封顶 100）。
+     * 分歧率高<b>不等于判错</b>——也可能是严格的正确判断 ⇒ 只影响档位（软排序），
+     * <b>不做硬过滤、不停用</b>，与 {@code qualityRank} 的「软排序维度」语义一致。</p>
+     *
+     * @param agentId Agent ID
+     * @return 0~100 核验侧质量分；无画像或<b>核验次数为 0</b> 时返回 {@code null}
+     *         （= 无信号，调用方按中性处理，勿当作 0 分惩罚）
+     */
+    Integer computeReviewerQualityScore(Long agentId);
+
+    /**
      * 渲染「## 你的历史表现」节（注入执行 Prompt 用）。
      *
      * <p>包含累计评审数、一次通过率、最常见驳回原因 TOP3 与本轮提醒语；
