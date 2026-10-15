@@ -32,13 +32,15 @@ public class McpAuthFilterConfig {
 
     private final AuthService authService;
     private final AgentAuthPort agentAuthPort;
+    // D-2：会话鉴权上下文（Redis 存储，多实例单一事实源）
+    private final McpAuthContext mcpAuthContext;
     // 阶段五：存在性探测改 Optional 注入（无 Bean 时 empty，orElseGet 兜底 SimpleMeterRegistry）
     private final Optional<MeterRegistry> meterRegistryProvider;
 
     @Bean
     public FilterRegistrationBean<McpAuthFilter> mcpAuthFilterRegistration() {
         MeterRegistry meterRegistry = meterRegistryProvider.orElseGet(SimpleMeterRegistry::new);
-        McpAuthFilter filter = new McpAuthFilter(authService, agentAuthPort, meterRegistry);
+        McpAuthFilter filter = new McpAuthFilter(authService, agentAuthPort, meterRegistry, mcpAuthContext);
         FilterRegistrationBean<McpAuthFilter> registration = new FilterRegistrationBean<>(filter);
         registration.addUrlPatterns("/mcp/*");
         registration.setName("mcpAuthFilter");

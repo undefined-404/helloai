@@ -1,6 +1,8 @@
 package com.helloai.core.agent.mcp;
 
 import cn.dev33.satoken.exception.SaTokenException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helloai.common.base.BizException;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
@@ -14,10 +16,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.redisson.api.RBucket;
+import org.redisson.api.RedissonClient;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -25,15 +32,19 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
- * McpAuthFilter 单测：
+ * McpAuthFilter 单测（D-2 改造后：鉴权上下文经 Redis，测试用内存假 bucket 承接）：
  *
  * <ul>
- *   <li>SDK 404「Session not found」时 SESSION_AUTH 联动清理（SSE 断开即失效，不应残留 30min）</li>
+ *   <li>SDK 404「Session not found」时 Redis 鉴权上下文联动清理（SSE 断开即失效，不应残留到 TTL）</li>
  *   <li>404 body 附修复提示（重新握手 / REST 别名通道）</li>
- *   <li>非 404（如 200 正常响应）不误伤：SESSION_AUTH 保留、body 不改写</li>
+ *   <li>非 404（如 200 正常响应）不误伤：Redis 条目保留、body 不改写</li>
  *   <li>401 无凭证仍返回 JSON-RPC 风格 error</li>
  * </ul>
  */
@@ -50,23 +61,44 @@ class McpAuthFilterTest {
     @Mock
     private AgentAuthPort agentAuthPort;
 
+    @Mock
+    private RedissonClient redissonClient;
+
+    @Mock
+    private RBucket<String> bucket;
+
+    /** 内存假 Redis：key（含前缀）→ JSON 值。 */
+    private final Map<String, String> store = new HashMap<>();
+
+    private McpAuthContext mcpAuthContext;
     private McpAuthFilter filter;
     private MockHttpServletRequest request;
     private MockHttpServletResponse response;
 
     @BeforeEach
     void setUp() {
-        filter = new McpAuthFilter(authService, agentAuthPort, new SimpleMeterRegistry());
+        // 全用例共享的 Redis 行为打桩（非每例都用到 ⇒ lenient，规避 STRICT_STUBS 误报）
+        lenient().when(redissonClient.<String>getBucket(anyString())).thenReturn(bucket);
+        lenient().when(bucket.get()).thenAnswer(inv -> store.get(McpAuthContext.KEY_PREFIX + SESSION_ID));
+        lenient().doAnswer(inv -> {
+            store.put(McpAuthContext.KEY_PREFIX + SESSION_ID, inv.getArgument(0));
+            return null;
+        }).when(bucket).set(anyString(), anyLong(), any(TimeUnit.class));
+        lenient().doAnswer(inv -> store.remove(McpAuthContext.KEY_PREFIX + SESSION_ID) != null)
+                .when(bucket).delete();
+        lenient().when(bucket.expire(anyLong(), any(TimeUnit.class))).thenReturn(true);
+
+        mcpAuthContext = new McpAuthContext(redissonClient, new ObjectMapper(), 30L);
+        filter = new McpAuthFilter(authService, agentAuthPort, new SimpleMeterRegistry(), mcpAuthContext);
         request = new MockHttpServletRequest("POST", "/mcp/messages");
         request.setParameter("sessionId", SESSION_ID);
         request.addHeader("Authorization", "Bearer fake-api-key");
         response = new MockHttpServletResponse();
-        McpAuthContext.evict(SESSION_ID);
     }
 
     @AfterEach
     void tearDown() {
-        McpAuthContext.evict(SESSION_ID);
+        mcpAuthContext.evict(SESSION_ID);
     }
 
     private Agent mockAgent() {
@@ -88,18 +120,18 @@ class McpAuthFilterTest {
     }
 
     @Test
-    @DisplayName("SDK 404 Session not found：SESSION_AUTH 联动清理 + body 附修复提示")
+    @DisplayName("SDK 404 Session not found：Redis 鉴权上下文联动清理 + body 附修复提示")
     void sdk404_evictsAuthAndAppendsFixHint() throws Exception {
         when(agentAuthPort.validateApiKey("fake-api-key")).thenReturn(mockAgent());
-        // 模拟该 session 之前已鉴权通过
-        McpAuthContext.put(SESSION_ID, AGENT_ID, "test-executor", "agent");
-        assertNotNull(McpAuthContext.nameBySessionId(SESSION_ID), "前置：SESSION_AUTH 应有该 session");
+        // 模拟该 session 之前已鉴权通过（filter 的 put 会写入）
+        mcpAuthContext.put(SESSION_ID, AGENT_ID, "test-executor", "agent");
+        assertNotNull(mcpAuthContext.nameBySessionId(SESSION_ID), "前置：Redis 应有该 session");
 
         filter.doFilter(request, response, chainWithSdk404());
 
         assertEquals(404, response.getStatus());
-        // 1) SESSION_AUTH 已联动清理（与 SDK session 生命周期对齐，不再残留 30min）
-        assertNull(McpAuthContext.nameBySessionId(SESSION_ID), "404 后 SESSION_AUTH 应被联动清理");
+        // 1) Redis 已联动清理（与 SDK session 生命周期对齐，不等 TTL 过期）
+        assertNull(mcpAuthContext.nameBySessionId(SESSION_ID), "404 后 Redis 鉴权上下文应被联动清理");
         // 2) body 保留原始错误并追加修复提示
         String body = response.getContentAsString(StandardCharsets.UTF_8);
         assertTrue(body.contains("Session not found"), "原始错误信息应保留");
@@ -109,10 +141,10 @@ class McpAuthFilterTest {
     }
 
     @Test
-    @DisplayName("正常 200 响应：SESSION_AUTH 保留、body 不改写")
+    @DisplayName("正常 200 响应：Redis 鉴权上下文保留、body 不改写")
     void normalResponse_keepsAuthAndBody() throws Exception {
         when(agentAuthPort.validateApiKey("fake-api-key")).thenReturn(mockAgent());
-        McpAuthContext.put(SESSION_ID, AGENT_ID, "test-executor", "agent");
+        mcpAuthContext.put(SESSION_ID, AGENT_ID, "test-executor", "agent");
 
         FilterChain okChain = (req, resp) -> {
             HttpServletResponse httpResp = (HttpServletResponse) resp;
@@ -122,7 +154,7 @@ class McpAuthFilterTest {
         filter.doFilter(request, response, okChain);
 
         assertEquals(200, response.getStatus());
-        assertNotNull(McpAuthContext.nameBySessionId(SESSION_ID), "200 响应不应清理 SESSION_AUTH");
+        assertNotNull(mcpAuthContext.nameBySessionId(SESSION_ID), "200 响应不应清理 Redis 鉴权上下文");
         assertEquals("ok", response.getContentAsString(StandardCharsets.UTF_8), "body 不应被改写");
     }
 
@@ -130,7 +162,7 @@ class McpAuthFilterTest {
     @DisplayName("非 Session not found 的 404（如路径 404）：不附修复提示")
     void sdk404_otherMessage_noFixHint() throws Exception {
         when(agentAuthPort.validateApiKey("fake-api-key")).thenReturn(mockAgent());
-        McpAuthContext.put(SESSION_ID, AGENT_ID, "test-executor", "agent");
+        mcpAuthContext.put(SESSION_ID, AGENT_ID, "test-executor", "agent");
 
         FilterChain other404 = (req, resp) -> {
             HttpServletResponse httpResp = (HttpServletResponse) resp;

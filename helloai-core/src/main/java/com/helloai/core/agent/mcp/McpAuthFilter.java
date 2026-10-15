@@ -63,6 +63,8 @@ public class McpAuthFilter extends OncePerRequestFilter {
 
     private final AuthService authService;
     private final AgentAuthPort agentAuthPort;
+    /** D-2：鉴权上下文已外置 Redis（多实例单一事实源），此处持 bean 引用。 */
+    private final McpAuthContext mcpAuthContext;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Counter adminSuccess;
     private final Counter agentSuccess;
@@ -71,9 +73,11 @@ public class McpAuthFilter extends OncePerRequestFilter {
     private final Counter agentFailure;
     private final Counter exceptionFailure;
 
-    public McpAuthFilter(AuthService authService, AgentAuthPort agentAuthPort, MeterRegistry meterRegistry) {
+    public McpAuthFilter(AuthService authService, AgentAuthPort agentAuthPort, MeterRegistry meterRegistry,
+                         McpAuthContext mcpAuthContext) {
         this.authService = authService;
         this.agentAuthPort = agentAuthPort;
+        this.mcpAuthContext = mcpAuthContext;
         this.adminSuccess = meterRegistry.counter("helloai.mcp.auth", "result", "success", "type", "admin");
         this.agentSuccess = meterRegistry.counter("helloai.mcp.auth", "result", "success", "type", "agent");
         this.missingCredentialFailure = meterRegistry.counter("helloai.mcp.auth", "result", "fail", "type", "none", "reason", "missing_credential");
@@ -103,7 +107,7 @@ public class McpAuthFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         // 包装响应缓冲 body，用于 SDK 404「Session not found」时附修复提示
-        // 并联动清理 SESSION_AUTH（SDK session 绑定 SSE 连接，断开即回收，此处同步 evict 避免残留）
+        // 并联动清理 Redis 中的鉴权上下文（SDK session 绑定 SSE 连接，断开即回收，此处同步 evict 避免残留）
         BufferedResponseWrapper wrapped = new BufferedResponseWrapper(response);
         try {
             // 0) 提取 sessionId（用于 鉴权上下文关联）
@@ -118,7 +122,7 @@ public class McpAuthFilter extends OncePerRequestFilter {
                 request.setAttribute(McpAuthContext.AUTH_NAME, session.displayName());
                 request.setAttribute(McpAuthContext.AUTH_TYPE, "admin");
                 // 鉴权：用 sessionId 关联（RequestContextHolder 在 boundedElastic 线程无效）
-                McpAuthContext.put(sessionId, session.id(), session.displayName(), "admin");
+                mcpAuthContext.put(sessionId, session.id(), session.displayName(), "admin");
                 adminSuccess.increment();
                 log.debug("MCP admin auth OK: adminId={}, name={}, sessionId={}", session.id(), session.displayName(), sessionId);
                 filterChain.doFilter(request, wrapped);
@@ -137,7 +141,7 @@ public class McpAuthFilter extends OncePerRequestFilter {
                     request.setAttribute(McpAuthContext.AUTH_NAME, agent.getName());
                     request.setAttribute(McpAuthContext.AUTH_TYPE, "agent");
                     // 鉴权：用 sessionId 关联
-                    McpAuthContext.put(sessionId, agent.getId(), agent.getName(), "agent");
+                    mcpAuthContext.put(sessionId, agent.getId(), agent.getName(), "agent");
                     agentSuccess.increment();
                     log.debug("MCP agent auth OK: agentId={}, name={}, sessionId={}", agent.getId(), agent.getName(), sessionId);
                     filterChain.doFilter(request, wrapped);
@@ -192,8 +196,8 @@ public class McpAuthFilter extends OncePerRequestFilter {
      *
      * <ul>
      *   <li>SDK 返回 404（session 已从 SDK sessions map 移除，即 SSE 连接已断开）时，
-     *       {@link McpAuthContext#evict} 联动清理 SESSION_AUTH——SDK session 生命周期
-     *       严格绑定 SSE 连接（onComplete/onTimeout 即回收），鉴权缓存不应残留到 30min TTL。</li>
+     *       {@link McpAuthContext#evict} 联动清理 Redis 鉴权上下文——SDK session 生命周期
+     *       严格绑定 SSE 连接（onComplete/onTimeout 即回收），鉴权缓存不应残留到 TTL 过期。</li>
      *   <li>404 body 附修复提示：SDK 仅输出 {@code Session not found: xxx}，外部 agent
      *       无法知道下一步怎么恢复，这里统一追加「重新握手 / 改走 REST 别名通道」指引。</li>
      * </ul>
@@ -202,10 +206,10 @@ public class McpAuthFilter extends OncePerRequestFilter {
         if (wrapped.getStatus() != HttpStatus.NOT_FOUND.value()) {
             return;
         }
-        // 1) SESSION_AUTH 联动清理（session 已失效，鉴权缓存无保留价值）
+        // 1) 鉴权上下文联动清理（session 已失效，无保留价值）
         if (sessionId != null && !sessionId.isBlank()) {
-            McpAuthContext.evict(sessionId);
-            log.info("MCP 404 Session not found: sessionId={}，SESSION_AUTH 联动清理", sessionId);
+            mcpAuthContext.evict(sessionId);
+            log.info("MCP 404 Session not found: sessionId={}，鉴权上下文联动清理", sessionId);
         }
         // 2) body 附修复提示（仅当 body 可解析为 JSON 且是 Session not found 时改写）
         String body = wrapped.getBodyAsString();

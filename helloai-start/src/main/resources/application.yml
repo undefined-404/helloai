@@ -127,6 +127,16 @@ helloai:
     inbox:
       expire-hours: 168
       cleanup-enabled: true
+  # MCP 会话鉴权上下文（D-2 修复）：原 static ConcurrentMap 进程级注册表在多实例部署下
+  # 「握手落 A、调用落 B ⇒ 401」（现象像鉴权 bug 不像架构 bug，探活也解决不了）。
+  # 现改为 Redis RBucket 外置（key = helloai:mcp:session-auth:{sessionId}，CODE_STYLE §20.1），
+  # 读取滑动续期（等价原 lastAccessAtMs 刷新语义）；原两个进程内清理器
+  # （core SessionAuthCleaner 30min / job McpSessionAuthCleanupTask 120min）已删除——
+  # 进程内扫描看不到跨实例写入的 key，Redis TTL 分布式且免扫描，留着即死代码。
+  # session-auth-ttl-minutes：默认 30，取原 core 清理器口径（SSE 长连接留足余量）；
+  # 调大只影响「无读写后的过期回收延迟」，不影响活跃会话（每次读取续期）。
+  mcp:
+    session-auth-ttl-minutes: 30
   # 对话并发优化 A 项：active() 写节流窗口（毫秒，<=0 不节流）。
   # 每轮对话 LLM 前都会 active()，窗口内同一 Agent 只做一次完整双写，消除 DB 行锁排队与写放大。
   heartbeat:

@@ -51,14 +51,16 @@ import java.util.List;
 public class McpMcpServer {
 
     private final McpToolService mcpToolService;
+    /** D-2：会话鉴权上下文（Redis 存储，多实例单一事实源）。 */
+    private final McpAuthContext mcpAuthContext;
 
     /**
-     * 从 _sessionId 参数直接拿 sessionId → 查 SESSION_AUTH → 返鉴权主体 ID。
+     * 从 _sessionId 参数直接拿 sessionId → 查 Redis 鉴权上下文 → 返鉴权主体 ID。
      * 客户端显式透传 sessionId（spring-ai 1.1.0 不支持隐式注入）。
      */
     private Long requireAuthId(String sessionId, String _sessionId) {
         String sid = (_sessionId != null && !_sessionId.isBlank()) ? _sessionId : sessionId;
-        return McpAuthContext.requireAuthId(sid);
+        return mcpAuthContext.requireAuthId(sid);
     }
 
     // ================================================================
