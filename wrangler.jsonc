@@ -1,0 +1,31 @@
+{
+  // ============================================================
+  // Cloudflare Workers / Pages 部署配置
+  // ------------------------------------------------------------
+  // 用途：把 docs-site/ 作为静态站点发布到 Cloudflare。
+  //   - Workers 流程（Workers Builds）：读 assets.directory
+  //   - Pages 流程（Connect to Git）：读 pages_build_output_dir
+  // 两者指向同一目录，任一流程都能正确发布站点。
+  //
+  // ★ 注意：name 必须与 Cloudflare 控制台里的项目名完全一致，
+  //   否则部署会因名称不匹配而失败。当前项目名：helloai
+  //
+  // ★ 站点内容：docs-site/（index.html + 6 张交互图 + 9 张 SVG + 4 张 PNG）
+  //   修改站点内容后，先跑 scripts/sync-docs-site.sh 同步资源再提交。
+  // ============================================================
+  "$schema": "node_modules/wrangler/config-schema.json",
+
+  // 项目名（必须与 Cloudflare 控制台一致）
+  "name": "helloai",
+
+  // 兼容日期：Cloudflare 要求的运行时行为基准
+  "compatibility_date": "2026-10-15",
+
+  // 静态资源目录：站点内容所在位置
+  "assets": {
+    "directory": "./docs-site"
+  },
+
+  // Pages 流程读取的构建输出目录（与 assets.directory 指向同一目录）
+  "pages_build_output_dir": "./docs-site"
+}
