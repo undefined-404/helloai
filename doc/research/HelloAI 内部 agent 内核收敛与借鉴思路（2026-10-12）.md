@@ -9,6 +9,7 @@
 > **缘起**：承 `doc/research/HelloAI 自建 java-harness 可行性分析（2026-10-12）.md`——那篇回答了「要不要从零写一套 java-harness」（结论：不；按 DSH 思路补半套，2–4 人月）。本篇回答**剩下的那半个问题**：**「补半套」具体怎么补、把散在 helloai-core 的执行碎块怎么收敛成一个内部 agent 内核、以及每一步分别借鉴开源里哪一处的哪一段思路。**
 > **关联**：`doc/review/HelloAI 内部 LLM 执行链与开源 agent 架构比对（2026-10-12）.md`（差距 D1–D6 事实源）· `doc/research/Agent 运行时开源选型参考（2026-10-12）.md` · `doc/research/HelloAI 自建 java-harness 可行性分析（2026-10-12）.md`（本篇的可行性依据）。
 > **证据口径**：开源库为本地实际代码实测（带 `path:line`，DSH=`E:/workspace/deepseek-harness-master`、octop=`E:/workspace/octop-harness-main`）；HelloAI 为本仓实测。为「思路」，不含排期进度——如需推进，另立 `plan/` 或 `design/`。
+> **⚠️ 2026-10-15 订正指针（`D-2026-10-15-6`，记录 `LOG-20261015-007`）**：本文关于 **`REF-8.4` 拦截链**的两处判断**已被后续实施推翻**：① 「拦截链 = Spring AI **Advisors** 唯一挂点」（§1.6.4 / §3 表等）——实际落地形态 = **循环自有 `LoopHook` 三档**（`beforeRequest` / `onRequestError` / `beforeTerminate`；三处硬约束见 `plan §10.7.3`，全仓 `Advisor` 0 引用）；② 「A+B 挂**同一**挂点」——已订正为 **B 挂拦截链、A 出列落 `ResilientDispatcher`**（`plan §10.7.2`）。`REF-8.4` **已于 2026-10-13 交付**（四件套）。**本文是 2026-10-12 的时间点快照**，**正文（全文，含「Advisors 唯一挂点」的一切表述）一律保留原样**，仅以本指针标记口径演进。
 
 ---
 
