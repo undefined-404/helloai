@@ -24,8 +24,6 @@ HelloAI 的思路不一样。你把需求告诉它，它**先追问澄清**你�
 
 **干活的 AI 不必是同一厂商、不必在同一台机器上、也不必改一行代码。** Qoder / Trae / Codex CLI / Claude Code——任何一台终端上的任何一款 AI 助手，经 MCP 协议接入后即成为平台里的"数字员工"。
 
-![HelloAI 跨终端跨产品架构](doc/diagrams/helloai-architecture.svg)
-
 ---
 
 ## 💎 为什么是 HelloAI？
