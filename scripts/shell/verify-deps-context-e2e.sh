@@ -217,9 +217,12 @@ log "--- end ---"
 # 断言：双前置同时注入，不覆盖
 # ============================================================
 log "STEP12: assert dual-predecessor content co-exists in prompt"
-print -r -- "$PROMPT" | grep -q "## 依赖产出参考（直接前置）" || fail "missing dependency section header"
-print -r -- "$PROMPT" | grep -q "### 前置 1：前置一：收集竞品资料" || fail "missing predecessor 1 (sub1) block"
-print -r -- "$PROMPT" | grep -q "### 前置 2：前置二：收集用户反馈" || fail "missing predecessor 2 (sub2) block"
+# ★ 判据不写 `print -r -- "$X" | grep -q …`：`grep -q` 命中即退出 ⇒ 上游收 SIGPIPE(141)，
+#   本脚本启用 `set -o pipefail` ⇒ 整条管道判非零 ⇒ **间歇性假 FAIL**（同族机理见
+#   scripts/ci/check-shell-portability.sh P3）。`$PROMPT` 为多行长文本，命中位置任意 ⇒ 必踩。
+[ "$(print -r -- "$PROMPT" | grep -c "## 依赖产出参考（直接前置）")" -gt 0 ] || fail "missing dependency section header"
+[ "$(print -r -- "$PROMPT" | grep -c "### 前置 1：前置一：收集竞品资料")" -gt 0 ] || fail "missing predecessor 1 (sub1) block"
+[ "$(print -r -- "$PROMPT" | grep -c "### 前置 2：前置二：收集用户反馈")" -gt 0 ] || fail "missing predecessor 2 (sub2) block"
 # 内容本体：两条前置的产出都必须出现（任一被覆盖即失败）
 # 注意：head -c 按字节截断会切坏 UTF-8 中文产生非法字节序列（BSD grep 报 illegal byte
 # sequence），故先取首行再用 zsh 字符切片（多字节安全）
@@ -227,10 +230,10 @@ KEY1="$(print -r -- "$OUT1" | head -n 1)"
 KEY1="${KEY1:0:40}"
 KEY2="$(print -r -- "$OUT2" | head -n 1)"
 KEY2="${KEY2:0:40}"
-print -r -- "$PROMPT" | grep -qF -- "$KEY1" || fail "sub1 content NOT in prompt (overwritten?): $KEY1"
-print -r -- "$PROMPT" | grep -qF -- "$KEY2" || fail "sub2 content NOT in prompt (overwritten?): $KEY2"
+[ "$(print -r -- "$PROMPT" | grep -cF -- "$KEY1")" -gt 0 ] || fail "sub1 content NOT in prompt (overwritten?): $KEY1"
+[ "$(print -r -- "$PROMPT" | grep -cF -- "$KEY2")" -gt 0 ] || fail "sub2 content NOT in prompt (overwritten?): $KEY2"
 # 不应出现第三个前置块
-print -r -- "$PROMPT" | grep -q "### 前置 3" && fail "unexpected predecessor 3 block" || true
+[ "$(print -r -- "$PROMPT" | grep -c "### 前置 3")" -gt 0 ] && fail "unexpected predecessor 3 block" || true
 
 log "STEP13: assert sub_task_spec_context_loaded timeline with dep stats"
 TIMELINE="$(http_json GET "$BASE_URL/api/sub-tasks/$SUB3_ID/timeline" "-")"

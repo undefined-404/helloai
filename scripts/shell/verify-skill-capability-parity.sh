@@ -40,6 +40,10 @@
 #   bash scripts/shell/verify-skill-capability-parity.sh --inject-unknown-key    # 反证⑥：解析器白名单缺键 ⇒ EXIT≠0
 #
 # 零外部依赖（bash + grep/awk/sed），CI 可跑。
+# 【实现约定 · bash 3.2 兼容】禁用 `declare -A` 等 bash 4+ 语法；变量插值后紧跟全角标点时
+#   必须写 `${VAR}` —— `$VAR（` 在 bash 3.2 + UTF-8 locale（本脚本自设 `LANG=zh_CN.UTF-8`）下
+#   会把多字节字符的**首字节并入变量名**，`set -u` 下「中止脚本却 EXIT=0」⇒ 其后的断言
+#   全部未执行却被记成通过（静默假绿）。机械守卫：`scripts/ci/check-shell-portability.sh`。
 # 【实现约定】刻意不使用 `while read … done < <(…)` 形态：本仓 Windows/Git Bash 下该形态
 #   与循环体内命令替换组合会偶发挂起（实测），故一律用「先取列表 → 纯管道/for over array」。
 # ============================================================
@@ -247,8 +251,14 @@ strip_sql_comments() {
   ' "$1"
 }
 # 该文件在「语义位置」是否真的写了 capabilities 列（注释内出现不算）
+# ★ 不得写成 `strip_sql_comments "$1" | grep -qE …`（本脚本 `set -o pipefail`）：
+#   `grep -q` 命中即退出 ⇒ 上游 `awk` 收 SIGPIPE（141）⇒ 整条管道判**非零** ⇒
+#   **间歇性假 FAIL**（同族机理与实测见 LOG-20261015-008；`grep -c` 读全部输入、不早退）。
+#   机械守卫：scripts/ci/check-shell-portability.sh（P3）。
 has_capabilities_column() {
-  strip_sql_comments "$1" | grep -qE '(^|[^A-Za-z0-9_])capabilities([^A-Za-z0-9_]|$)'
+  local n
+  n="$(strip_sql_comments "$1" | grep -cE '(^|[^A-Za-z0-9_])capabilities([^A-Za-z0-9_]|$)')"
+  [ "${n:-0}" -gt 0 ]
 }
 INSERT_RE='INSERT[[:space:]]+INTO[[:space:]]+llm_provider_model([^_A-Za-z0-9]|$)'
 # 含「精确表名 INSERT」的迁移，去掉冻结白名单后，取其中「未写 capabilities」者
@@ -319,7 +329,8 @@ S4_OFFENDERS=""
 for f in $PKG_FILES; do
   [[ -f "$f" ]] || continue
   for p in $(pkg_required_caps "$f"); do
-    if ! printf '%s\n' "$PRED_VOCAB" | grep -qxF "$p"; then
+    # ★ 同上：不用 `printf … | grep -qxF "$p"`（早退 + pipefail ⇒ 假 FAIL）
+    if [ "$(printf '%s\n' "$PRED_VOCAB" | grep -cxF "$p")" -eq 0 ]; then
       S4_OFFENDERS="$(printf '%s\t%s\n%s' "$S4_OFFENDERS" "${f#"$ROOT"/}" "$p")"
     fi
   done
@@ -339,7 +350,7 @@ fi
 S5_KEY='requiredBaseCapabilities'
 # 5a 解析器 KNOWN_KEYS 必须含该键
 if grep -qE "\"$S5_KEY\"" "$JAVA_PARSER"; then
-  ok "S5a SkillPackageParser.KNOWN_KEYS 含 $S5_KEY（契约 8→9 键已同步）"
+  ok "S5a SkillPackageParser.KNOWN_KEYS 含 ${S5_KEY}（契约 8→9 键已同步）"
 else
   fail "S5a SkillPackageParser.KNOWN_KEYS 缺 $S5_KEY —— frontmatter 加了键但解析器不认 ⇒ 技能包被判 corrupt（G-022 契约半改）"
 fi

@@ -62,8 +62,11 @@ d3=$(search_top "$TMP/q3.txt"); [ "$d3" = "manual-rag" ] && ok "Q向量库 → m
 
 echo "[S4] 引用溯源取分片（REF-4.3，/api/kb/chunk/{source}/{idx}）"
 C1=$(curl -s -G "$BASE/api/kb/chunk/manual-rag/0" -H "X-Admin-Token: $TOKEN")
-echo "$C1" | grep -q '"content"' && echo "$C1" | grep -q '"source":"manual-rag"' \
-  && ok "chunk/manual-rag/0 返回分片" || bad "chunk/manual-rag/0 异常: $(echo "$C1" | head -c 120)"
+if [[ "$C1" == *'"content"'* && "$C1" == *'"source":"manual-rag"'* ]]; then
+  ok "chunk/manual-rag/0 返回分片"
+else
+  bad "chunk/manual-rag/0 异常: $(echo "$C1" | head -c 120)"
+fi
 MISS=$(curl -s -G "$BASE/api/kb/chunk/does-not-exist/9" -H "X-Admin-Token: $TOKEN" | grep -oE '"code":[0-9]+' | head -1)
 [ "$MISS" != '"code":200' ] && ok "chunk 不存在分片被拒" || bad "chunk 不存在分片未拒（${MISS}）"
 

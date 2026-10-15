@@ -127,7 +127,7 @@ if [ "$USE_DB" = "1" ]; then
   printf '\n-- 地面真值模式（--db：库内 distinct event_type）--\n'
   if ! command -v docker >/dev/null 2>&1; then
     info "SKIP 未找到 docker 命令（不制造假失败）"
-  elif ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$PG_CONTAINER"; then
+  elif [ "$(docker ps --format '{{.Names}}' 2>/dev/null | grep -cx "$PG_CONTAINER")" -eq 0 ]; then
     info "SKIP 容器 ${PG_CONTAINER} 未运行（不制造假失败）"
   else
     db_codes="$(docker exec "$PG_CONTAINER" psql -U postgres -d "$PG_DB" -tAc \

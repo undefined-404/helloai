@@ -1,6 +1,6 @@
 # scripts/ 索引
 
-本目录是 HelloAI 的验证与运维脚本库。共 **87 个 PowerShell（`powershell/` 86 + 根目录 `run-it-local.ps1`）+ 32 个 Shell + 1 个 Java 工具 + 1 个 SQL**（**2026-10-12 按 `git ls-files` 重新校准**：PowerShell 84→86 = 当日新增的两个 REF-8 脚本；Shell 28→30 = 同批 macOS 侧补齐的同名 .sh；**2026-10-13 Shell 30→31 = 新增 `shell/verify-provider-catalog-parity.sh`（M-2③ 供应商注册信息一致性守卫，`794cd631` 建、`d20a0160` 扩全；同批 `shell/gen-provider-catalog.py` 为 .py，不属本行口径）**；**2026-10-15 Shell 31→32 = 新增 `shell/verify-skill-capability-parity.sh`（`M-9` 技能/能力三源 parity 守卫，`7ca82558` 建、`D-2026-10-15-1` 扩为 S1~S5）——该行自 2026-10-14 起漏同步，是跑门禁时由 `verify-executor-doc-parity.sh` S6 当场抓出的欠账，非本次新增所致**；此前该行自 2026-10-11 起未随新增同步——**新增脚本必须先 `git add` 再同步本行**，否则 `verify-executor-doc-parity.sh` S6 红），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（`scripts/ci/`）。
+本目录是 HelloAI 的验证与运维脚本库。共 **87 个 PowerShell（`powershell/` 86 + 根目录 `run-it-local.ps1`）+ 32 个 Shell + 1 个 Java 工具 + 1 个 SQL**（**2026-10-12 按 `git ls-files` 重新校准**：PowerShell 84→86 = 当日新增的两个 REF-8 脚本；Shell 28→30 = 同批 macOS 侧补齐的同名 .sh；**2026-10-13 Shell 30→31 = 新增 `shell/verify-provider-catalog-parity.sh`（M-2③ 供应商注册信息一致性守卫，`794cd631` 建、`d20a0160` 扩全；同批 `shell/gen-provider-catalog.py` 为 .py，不属本行口径）**；**2026-10-15 Shell 31→32 = 新增 `shell/verify-skill-capability-parity.sh`（`M-9` 技能/能力三源 parity 守卫，`7ca82558` 建、`D-2026-10-15-1` 扩为 S1~S5）——该行自 2026-10-14 起漏同步，是跑门禁时由 `verify-executor-doc-parity.sh` S6 当场抓出的欠账，非本次新增所致**；此前该行自 2026-10-11 起未随新增同步——**新增脚本必须先 `git add` 再同步本行**，否则 `verify-executor-doc-parity.sh` S6 红；**2026-10-15 CI 门禁脚本 4→5 = 新增 `ci/check-shell-portability.sh`（Shell 可移植性守卫，`LOG-20261015-008`）—— 把门禁 3 上「守卫自身失真」的三类缺陷（bash 4 语法致静默假绿 / `$VAR` 后紧跟多字节字符致静默假绿 / 管道右端 `grep -q` + `pipefail` 致间歇假红）变为机械断言。Shell 计数不变：S6 的 `real_sh` 只数 `scripts/shell/*.sh`，`ci/` 侧脚本计入 CI 门禁脚本一栏**），另有 **5 个 CI 门禁脚本 + 1 个架构冻结基线**（`scripts/ci/`）。
 
 - `ci/`：**跨平台 CI 门禁与架构守卫**（bash，Git Bash / Linux CI 通用；详细见下方第六节）
 - `powershell/`：Windows 侧（pwsh / Windows PowerShell 5.1），含全部规范类与大部分 E2E 验收脚本
@@ -158,6 +158,7 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 3. **2026-09-28 整理记录**：
    - 移除误入的外项目脚本 `powershell/下单支付E2E验收.ps1`（Trade Cloud 电商验收，gateway :8299，与本仓库零关联；如需可从 git 历史恢复）。
    - 修复 `verify-code-style-p0-layer.ps1` 对已删除的 `tmp\package-backend.ps1` / `tmp\kill-backend.ps1` / `tmp\wait-backend.ps1` 的三处坏引用（内联等价实现，未经 pwsh 实跑）。
+4. **`ci/check-shell-portability.sh` 的 P3 范围与已知例外（2026-10-15，`LOG-20261015-008`）**：P3（管道右端 `grep -q…`）判 **`scripts/`** 下的 `.sh`，且**与当前是否启用 `pipefail` 无关**——该形态的正确性取决于「生产者恰好一次小写入」这一**隐性前提**，还受 **source 它的调用方**的 `set -o pipefail` 影响（`shell/c3-common.sh` 自身不启用、其调用方 `verify-c3-*.sh` 启用）。**`deploy/` 侧同族 4 处登记为已知例外**（`docker-host-preflight.sh:350` · `init-rabbitmq-admin.sh:111,154` · `middleware/scripts/migrate.sh:77`）：均为一次性部署例程、改动风险大于收益；纳入方式 = 把 P3 的 scope 判据由 `scripts/` 放宽到 `all`。另：`| head -N` 形态本次**未**纳入 P3（多在**赋值**中取首行、其退出码不被检查），若将来出现同族实例再收窄。
 
 ## 六、CI 门禁（ci/，2026-09-29 新增）
 
@@ -170,6 +171,7 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 | `ci/check-arch-freeze.sh` | 跨域依赖守卫。**2026-10-02 起规则表改为「生成式」：20 条手写 → 70 条按依赖链生成**，并补齐三类盲区（A1 组 2 由 4 条硬编组合扩为 6 域全部 30 个有序域对；A2 扫描范围由 `helloai-core` 扩至 `helloai-api`/`job`/`mq`/`start`；A3 新增「前向跨域实体泄漏」计数）。**分两档**：组 1/2（反向依赖 + 跨域 Mapper）「只降不升」→ **硬拦截**；组 3（前向依赖 + 前向实体泄漏）→ **仅提示不拦截**。`--update-baseline` 刷新冻结基线，`--verbose` 打印明细。**性能**：每目录只全树抽一次 import 行 + 一次 awk 完成全部计数（约 11 个子进程），勿退回「每条规则一次 grep」（本机单次 grep ≈ 300ms，70 条规则会慢到 2 分钟以上） |
 | `ci/arch-baseline.txt` | 冻结基线（**70 条**规则的计数快照，自动生成，勿手改数字；按组分段注释，组 3 段标注「仅提示」） |
 | `ci/host-prepare.sh` | **自有主机侧准备与自检**（Gitee Go 主机组跑 CI 时用）：默认只检测；`--install` 装 JDK17/Maven/Node20；`--swap 2G` 给 4G 内存机器建 swap |
+| `ci/check-shell-portability.sh` | **Shell 脚本可移植性守卫**（2026-10-15 建，`LOG-20261015-008`）。治「**守卫自身失真**」——守卫存在 ≠ 守卫生效，守卫报错 ≠ 报了真错。三项只读断言：**P1** bash 4+ 专属语法（关联数组 `declare -A` / `local -A` / `mapfile` / `readarray` / `local -n` / `wait -n` / `${V^^}`）——macOS 自带 bash 3.2 下**该形态能「中止脚本却返回 0」**（实测：`declare -A X=( [k]=v )` 退化后下标走算术求值 ⇒ `set -u` 致命错 ⇒ 退出码 **0**；对照普通变量未绑定返回 1）；**P2** `$VAR` 后紧跟非 ASCII 字符（须写 `${VAR}`）——bash 3.2 + UTF-8 locale 下会把多字节字符**首字节并入变量名**，同样「中止却 EXIT=0」；**P3** 管道右端 `grep -q…`——命中即退出 + `set -o pipefail` ⇒ 上游收 SIGPIPE(141) ⇒ **间歇假红**（实测同族判据 270 次判里误判 **187 次**）。**反证三连**：`--inject-bash4` / `--inject-mb` / `--inject-pipefail` 均须 EXIT≠0；另有**反空转地板**（bash 实现数 < 20 即红）与**自证**（未产出结论行即判未生效）。P1/P2 覆盖全部在册 `.sh`，P3 覆盖 `scripts/`（`deploy/` 侧同族 4 处为**已登记例外**，见 §五.4） |
 
 常用命令：
 
@@ -177,6 +179,7 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 bash scripts/ci/ci-gate.sh                    # 全量，等价于 CI
 bash scripts/ci/ci-gate.sh --quick --skip-ui  # 本地快速自检
 bash scripts/ci/check-arch-freeze.sh          # 只跑架构冻结校验
+bash scripts/ci/check-shell-portability.sh    # 只跑 Shell 可移植性守卫（反证开关见脚本头）
 bash scripts/ci/host-prepare.sh               # 自有主机自检（只读，不改系统）
 ```
 

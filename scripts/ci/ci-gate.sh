@@ -175,62 +175,81 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 门禁 3：架构漂移冻结（跨域反向依赖只降不升）+ 交付文档一致性
+# 门禁 3：静态漂移守卫群（架构冻结 / 交付文档 / 事件码 / 差距表 / 供应商 / 技能能力 / Shell 可移植性）
 # ---------------------------------------------------------------------------
-step "门禁 3 / 5：静态一致性校验（架构漂移冻结 / 交付文档 / 事件码 parity / 差距表结构）"
-if bash "$SCRIPT_DIR/check-arch-freeze.sh"; then
-  ok "跨域反向依赖计数未超冻结基线"
-else
-  bad "跨域反向依赖计数超出冻结基线（新增反向依赖须显式评审并更新基线）"
-fi
+# 【统一执行器】静态守卫**只判退出码是不够的**（LOG-20261015-008 实测）：
+#   bash 3.2 在「数组赋值下标」（`declare -A X=( [k]=v )` 退化后的算术求值）或
+#   「变量名后紧跟多字节字符」（`$VAR（`）处触发 `set -u` 致命错时，会**中止脚本却返回 0**
+#   ⇒ 一条断言都没跑，本门禁却记成 `[ OK ]`。故本门禁按三项合一判定，缺一即判未生效：
+#     ① rc=0；② 输出含 ≥1 行断言（行首可选空白 + `[`）；③ 输出含**完成标记**
+#     （`全部通过` / `全部一致` / `未超冻结基线` / `PASS=N` / `✅`）。
+#   方向是 **fail-closed**：守卫若改了输出格式而不再产出完成标记，会**响亮失败**而非静默通过。
+#   守卫自身的可移植性由 `check-shell-portability.sh` 兜底（P1~P3）。
+run_static_guard() {
+  local label="$1" script="$2"
+  local rc=0 n_assert=0
+  # 路径在函数内解析：函数**自包含**（可整段抽取后 source 做单测，见 LOG-20261015-008 验证节）
+  local guard_log="$ROOT/tmp/.ci-gate-guard.log"
+  mkdir -p "$ROOT/tmp"
+  bash "$script" >"$guard_log" 2>&1 || rc=$?
+  cat "$guard_log"
+  n_assert="$(grep -cE '^[[:space:]]*\[' "$guard_log" || true)"
+  if [ "$rc" -ne 0 ]; then
+    bad "$label —— 失败（exit=${rc}，明细见上方输出）"
+  elif [ "$n_assert" -eq 0 ]; then
+    bad "$label —— 未产出任何断言（exit=0 但输出无断言行）⇒ 按未生效处理（静默假绿同形，见 LOG-20261015-008）"
+  elif ! grep -qE '全部通过|全部一致|未超冻结基线|PASS=[0-9]+|✅' "$guard_log"; then
+    bad "$label —— 未产出完成标记（可能在断言中途退出）⇒ 按未生效处理"
+  else
+    ok "$label"
+  fi
+}
+
+step "门禁 3 / 5：静态一致性校验（架构漂移冻结 / 交付文档 / 事件码 parity / 差距表结构 / 供应商注册 / 技能能力 / Shell 可移植性）"
+
+# 架构漂移冻结（跨域反向依赖只降不升；基线 scripts/ci/arch-baseline.txt）
+run_static_guard "跨域反向依赖计数未超冻结基线" "$SCRIPT_DIR/check-arch-freeze.sh"
 
 # 交付文档一致性（外部 Agent 手册 ↔ 内部手册 ↔ 代码常量）：纯文本、零依赖，CI 可跑。
 # 与 verify-tool-matrix.ps1（需后端在跑 + 管理员口令）互补；见 scripts/README.md 与 LOG-20261010-012。
-if bash "$SCRIPT_DIR/../shell/verify-executor-doc-parity.sh"; then
-  ok "交付文档一致性（工具面三源 / 错误口径黑名单 / 必备口径 / 拼装产物 / 限额常量 / 脚本索引计数）"
-else
-  bad "交付文档一致性失败（详见上方 verify-executor-doc-parity.sh 输出）"
-fi
+run_static_guard "交付文档一致性（工具面三源 / 错误口径黑名单 / 必备口径 / 拼装产物 / 限额常量 / 脚本索引计数）" \
+  "$SCRIPT_DIR/../shell/verify-executor-doc-parity.sh"
 
 # 事件码 parity（后端写入码 ↔ EVENT_META ↔ sequenceFlow.LABEL）：静态模式，零外部依赖。
 # 地面真值模式（--db，库内 distinct event_type）供本地/运维用，需 PG 容器在跑，故不进 CI；
 # 见 scripts/README.md 与 LOG-20261010-013。
-if bash "$SCRIPT_DIR/../shell/verify-event-key-parity.sh"; then
-  ok "事件码 parity（后端码 ↔ 前端事件字典两处，缺登记即回退裸英文）"
-else
-  bad "事件码 parity 失败（详见上方 verify-event-key-parity.sh 输出）"
-fi
+run_static_guard "事件码 parity（后端码 ↔ 前端事件字典两处，缺登记即回退裸英文）" \
+  "$SCRIPT_DIR/../shell/verify-event-key-parity.sh"
 
 # 《差距表》结构守卫（只记当前状态：表格完整性 / 无转义竖线 / 处置列首词∈九态 / 矩阵无过程信号）：
 # 纯文本 + python 正则，零外部依赖，CI 可跑。原为 **zsh 实现**，在无 zsh 的环境（Windows/Git Bash）
 # 会 `emulate: command not found` 后落空且仍 EXIT=0 —— 静默假绿，致「状态词漂移」长期累积
 # （2026-10-11 实测：本表曾漂移 5 处）。已改 **bash 实现**并**接入本门禁**，见 LOG-20261011-010。
-if bash "$SCRIPT_DIR/../shell/verify-doc-gap-table.sh"; then
-  ok "《差距表》结构守卫（表格完整性 / 无转义竖线 / 处置列首词∈九态 / 矩阵两列无过程信号）"
-else
-  bad "《差距表》结构守卫失败（详见上方 verify-doc-gap-table.sh 输出）"
-fi
+run_static_guard "《差距表》结构守卫（表格完整性 / 无转义竖线 / 处置列首词∈九态 / 矩阵两列无过程信号）" \
+  "$SCRIPT_DIR/../shell/verify-doc-gap-table.sh"
 
 # 供应商注册信息一致性守卫（前端预置 ↔ 迁移种子 is_default=1 ↔ application.yml ↔ Java 兜底常量）：
 # 2026-10-13 建（plan §11 M-1/M-2，magpie 借鉴）——防 D-a~D-e 陈旧 defaultModel（404/注册被拒）复发。
 # 同日扩全（LOG-20261013-016）：+ 覆盖完整性（目录 providerCode ↔ 守卫白名单同源核对，杜绝新增预置
 # 静默不受保护）+ 全预置结构性检查（protocolType 枚举合法 / baseUrl 不带 /v1）+ Java 常量第四方（D-d/D-e）。
-if bash "$SCRIPT_DIR/../shell/verify-provider-catalog-parity.sh"; then
-  ok "供应商注册信息一致性守卫（预置 ↔ 种子 ↔ yml ↔ Java 兜底 + 覆盖完整性）"
-else
-  bad "供应商注册信息一致性守卫失败（详见 verify-provider-catalog-parity.sh 输出）"
-fi
+# ★ 本守卫在 2026-10-15 之前**从未真正执行过**：`declare -A` 在 bash 3.2 下中止脚本却返回 0，
+#   被本门禁记成 `[ OK ]`（LOG-20261015-008，C1）。现已改 bash 3 兼容写法。
+run_static_guard "供应商注册信息一致性守卫（预置 ↔ 种子 ↔ yml ↔ Java 兜底 + 覆盖完整性）" \
+  "$SCRIPT_DIR/../shell/verify-provider-catalog-parity.sh"
 
 # 技能/能力词表三源一致性 + V52 两列退役守卫（`M-9`）：
 # S1 后端 STANDARD_SKILLS ⇔ 前端 AGENT_SKILL_OPTIONS ⇔ REQUIRED 键集；
 # S2 V52 两列（模型能力锁定技能 / 可扩展技能白名单）仅允许存在于白名单迁移（防「代码幽灵」）；
 # S3 含 INSERT INTO llm_provider_model 的新迁移必须显式写 capabilities（V112 已摘列默认值）。
-# 纯文本 + grep/awk/sed，零外部依赖，CI 可跑；反证三连见脚本头部用法。
-if bash "$SCRIPT_DIR/../shell/verify-skill-capability-parity.sh"; then
-  ok "技能/能力词表三源一致性 + V52 两列退役守卫（S1 词表 / S2 无回写 / S3 新迁移写谓词）"
-else
-  bad "技能/能力 parity 守卫失败（详见 verify-skill-capability-parity.sh 输出）"
-fi
+# 纯文本 + grep/awk/sed，零外部依赖，CI 可跑；反证六连见脚本头部用法。
+run_static_guard "技能/能力词表三源一致性 + V52 两列退役守卫（S1 词表 / S2 无回写 / S3 新迁移写谓词 / S4 谓词闭合 / S5 解析器键同步）" \
+  "$SCRIPT_DIR/../shell/verify-skill-capability-parity.sh"
+
+# Shell 脚本可移植性守卫（P1 bash4 语法 / P2 变量插值边界 / P3 管道判据）：
+# 2026-10-15 建（LOG-20261015-008）——本门禁上三项「守卫自身失真」缺陷的机械兜底：
+#   C1/C2 静默假绿（bash 3.2 下中止却 EXIT=0）、C3 间歇假红（管道右端 grep -q + pipefail）。
+run_static_guard "Shell 可移植性（bash3 兼容 / 变量插值边界 / 管道右端 grep -q）" \
+  "$SCRIPT_DIR/check-shell-portability.sh"
 
 # ---------------------------------------------------------------------------
 # 门禁 4：前端类型检查 + 构建

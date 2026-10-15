@@ -159,7 +159,10 @@ printf '\n-- S5 文档限额 ↔ 代码常量 --\n'
 
 deps_limit="$(grep -oE 'DEP_CONTENT_MAX_CHARS[[:space:]]*=[[:space:]]*[0-9_]+' "$RENDERER" | sed -E 's/.*=[[:space:]]*//' | tr -d '_' | grep -E '^[0-9]+$' | head -1)"
 deps_line="$(grep -n '整块总预算' "$GUIDE" | head -1)"
-if [ -n "$deps_limit" ] && printf '%s' "$deps_line" | grep -qF "$deps_limit"; then
+# ★ 判据不写 `printf … | grep -qF …`：`grep -q` 命中即退出 ⇒ 上游收 SIGPIPE(141)，本脚本
+#   启用了 `set -o pipefail` ⇒ 整条管道判非零 ⇒ **间歇性假 FAIL**。改「计数」形态（见
+#   scripts/ci/check-shell-portability.sh P3；实测同族判据 270 次误判 187 次）。
+if [ -n "$deps_limit" ] && [ "$(printf '%s' "$deps_line" | grep -cF "$deps_limit")" -gt 0 ]; then
   ok "S5 执行侧注入限额与代码一致（DEP_CONTENT_MAX_CHARS=${deps_limit}）"
 else
   bad "S5 执行侧注入限额不一致：代码 DEP_CONTENT_MAX_CHARS=${deps_limit:-未解析到}，手册含「整块总预算」的行未出现该数字"
@@ -169,8 +172,8 @@ per_file="$(grep -oE 'ATTACHMENT_CONTENT_PER_FILE_LIMIT[[:space:]]*=[[:space:]]*
 total_lim="$(grep -oE 'ATTACHMENT_CONTENT_TOTAL_LIMIT[[:space:]]*=[[:space:]]*[0-9_]+' "$POLICY" | sed -E 's/.*=[[:space:]]*//' | tr -d '_' | grep -E '^[0-9]+$' | head -1)"
 reviewer_line="$(grep -n '每附件' "$REVIEWER_GUIDE" | head -1)"
 if [ -n "$per_file" ] && [ -n "$total_lim" ] \
-   && printf '%s' "$reviewer_line" | grep -qF "$per_file" \
-   && printf '%s' "$reviewer_line" | grep -qF "$total_lim"; then
+   && [ "$(printf '%s' "$reviewer_line" | grep -cF "$per_file")" -gt 0 ] \
+   && [ "$(printf '%s' "$reviewer_line" | grep -cF "$total_lim")" -gt 0 ]; then
   ok "S5 核验侧限额与代码一致（每附件 $per_file / 总计 ${total_lim}）"
 else
   bad "S5 核验侧限额不一致：代码 每附件=${per_file:-?} 总计=${total_lim:-?}，reviewer 手册含「每附件」的行未同时出现两个数字"

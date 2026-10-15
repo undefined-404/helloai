@@ -162,8 +162,12 @@ run_probe_sql() {
       -v ON_ERROR_STOP=1 -X -t -A -F '|' -f "$sqlf" >"$outf" 2>&1
     return $?
   fi
+  # ★ 判据不写 `docker ps … | grep -qx`：`grep -q` 命中即退出 ⇒ 上游 `docker ps` 收
+  #   SIGPIPE(141)；本库由 verify-c3-*.sh（启用 `set -o pipefail`）source ⇒ 整条管道判非零
+  #   ⇒ **间歇性假 FAIL**（`docker ps` 为多行输出，命中位置任意 ⇒ 必踩）。
+  #   见 scripts/ci/check-shell-portability.sh P3。
   if command -v docker >/dev/null 2>&1 && \
-     docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$PG_CONTAINER"; then
+     [ "$(docker ps --format '{{.Names}}' 2>/dev/null | grep -cx "$PG_CONTAINER")" -gt 0 ]; then
     docker exec -i "$PG_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" \
       -v ON_ERROR_STOP=1 -X -t -A -F '|' <"$sqlf" >"$outf" 2>&1
     return $?

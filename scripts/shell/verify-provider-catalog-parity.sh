@@ -26,6 +26,13 @@
 #   bash scripts/shell/verify-provider-catalog-parity.sh --inject-deviation  # 反证①：篡改期望 ⇒ EXIT=1
 #   bash scripts/shell/verify-provider-catalog-parity.sh --inject-catalog    # 反证②：篡改目录 ⇒ EXIT=1
 #   bash scripts/shell/verify-provider-catalog-parity.sh --inject-missing-catalog-id  # 反证③：抹 catalogId ⇒ EXIT=1
+#
+# 【实现约定】**bash 3.2 兼容**（macOS 自带 bash；本仓门禁 3 的真实运行环境之一）：
+#   禁用 `declare -A` 等 bash 4+ 语法 —— 该形态在 `set -u` 下会「中止脚本却 EXIT=0」，
+#   把「未执行任何断言」伪装成通过（静默假绿）。详见下方真值锚点段注释与
+#   `scripts/ci/check-shell-portability.sh`（机械守卫）。
+#   **另**：变量插值后紧跟全角标点时一律写 `${VAR}`（`$VAR（` 在 bash 3.2 + UTF-8 locale
+#   下会把多字节字符首字节并入变量名 ⇒ 同上「中止却 EXIT=0」），同一守卫覆盖。
 # ============================================================
 set -uo pipefail
 export LANG=zh_CN.UTF-8
@@ -44,21 +51,55 @@ JAVA_DEEPSEEK="$ROOT/helloai-core/src/main/java/com/helloai/core/agent/chat/prov
 #   - dashscope: V49:94-104 + V101（'qwen-plus' 目录已无 → qwen3.7-plus）
 #   - openai / anthropic / xai / mistral / groq : V109（M-3 目录种子，补 llm_provider 行 + 模型清单）
 SEEDED=(deepseek moonshot minimax dashscope openai anthropic xai mistral groq)
-declare -A SEED_DEFAULT=(
-  [deepseek]=deepseek-v4-flash
-  [moonshot]=kimi-k3
-  [minimax]=MiniMax-M3
-  [dashscope]=qwen3.7-plus
-  [openai]=gpt-4o
-  [anthropic]=claude-sonnet-4-5
-  [xai]=grok-4.7
-  [mistral]=mistral-large-latest
-  [groq]=llama-3.3-70b-versatile
-)
 
 # 「无迁移种子」白名单：**M-3（V109）落地后已清空** —— 9 个内置预置全部有种子。
 # 保留空数组，使「目录枚举 ⊆ SEEDED ∪ NO_SEED」这条覆盖完整性写法不变（新增预置仍会被拦）。
 NO_SEED=()
+
+# ---------- bash 3 兼容：真值表与集合判定**不得用关联数组** ----------
+# `declare -A` 是 **bash 4+** 语法；本仓门禁 3 的真实运行环境含 macOS 自带 bash 3.2.57。
+# 实测（bash 3.2.57，`set -u` 生效）：
+#   `declare -A X=( [k]=v )` ⇒ `-A` 被判非法选项（stderr，**非致命**）⇒ 该赋值退化为**索引**数组
+#   ⇒ 下标 `[k]` 走**算术求值** ⇒ `k` 未绑定 ⇒ **中止脚本**，但退出码**实测为 0**
+#   （对照：普通变量未绑定返回 1）⇒ 门禁 3 把它记成 `[ OK ]` —— 「静默假绿」。
+# 故全部改用 `case` 查表函数 + 显式覆盖变量；机械守卫：scripts/ci/check-shell-portability.sh。
+# ---- 反证①用的定点覆盖（替代原「原地改写关联数组元素」）----
+SEED_DEFAULT_OVERRIDE_KEY=""
+SEED_DEFAULT_OVERRIDE_VAL=""
+
+# 「期望 defaultModel」的唯一取值入口（含反证覆盖，语义与原 `SEED_DEFAULT[$code]` 一致）
+expected_default() {
+  if [ -n "$SEED_DEFAULT_OVERRIDE_KEY" ] && [ "$1" = "$SEED_DEFAULT_OVERRIDE_KEY" ]; then
+    printf '%s\n' "$SEED_DEFAULT_OVERRIDE_VAL"
+    return 0
+  fi
+  case "$1" in
+    deepseek)  printf '%s\n' 'deepseek-v4-flash' ;;
+    moonshot)  printf '%s\n' 'kimi-k3' ;;
+    minimax)   printf '%s\n' 'MiniMax-M3' ;;
+    dashscope) printf '%s\n' 'qwen3.7-plus' ;;
+    openai)    printf '%s\n' 'gpt-4o' ;;
+    anthropic) printf '%s\n' 'claude-sonnet-4-5' ;;
+    xai)       printf '%s\n' 'grok-4.7' ;;
+    mistral)   printf '%s\n' 'mistral-large-latest' ;;
+    groq)      printf '%s\n' 'llama-3.3-70b-versatile' ;;
+    *) return 1 ;;
+  esac
+}
+
+# 集合成员判定（替代原先两处 `declare -A` 集合）
+in_list() {
+  local needle="$1"
+  shift
+  local item
+  for item in ${1+"$@"}; do
+    [ "$item" = "$needle" ] && return 0
+  done
+  return 1
+}
+is_seeded()  { in_list "$1" ${SEEDED[@]+"${SEEDED[@]}"}; }
+is_no_seed() { in_list "$1" ${NO_SEED[@]+"${NO_SEED[@]}"}; }
+is_covered() { is_seeded "$1" || is_no_seed "$1"; }
 
 # ---------- 反证开关 ----------
 INJECT_MODE="${1:-}"
@@ -67,7 +108,8 @@ cleanup() { [[ -n "$TMP_CATALOG" && -f "$TMP_CATALOG" ]] && rm -f "$TMP_CATALOG"
 trap cleanup EXIT
 if [[ "$INJECT_MODE" == "--inject-deviation" ]]; then
   # 反证①：篡改「期望值」⇒ 三方比对链必须报失配
-  SEED_DEFAULT[deepseek]="__injected_deviation__"
+  SEED_DEFAULT_OVERRIDE_KEY="deepseek"
+  SEED_DEFAULT_OVERRIDE_VAL="__injected_deviation__"
 elif [[ "$INJECT_MODE" == "--inject-catalog" ]]; then
   # 反证②：篡改「目录真值」（临时副本）⇒ 目录解析 + 比对链必须报失配
   # 副本落 $ROOT/tmp（.gitignore:74 已忽略）。★不用 mktemp：本机 TMPDIR 是 Windows 绝对路径，
@@ -100,6 +142,8 @@ front_field() {
 catalog_codes() {
   grep -oE "providerCode: *'[a-z0-9-]+'" "$CATALOG" | sed -E "s/.*'([a-z0-9-]+)'.*/\1/"
 }
+# 单次取值：既供「覆盖完整性」遍历，也供「反向空转检查」判据（见下方 ★）
+CATALOG_CODES="$(catalog_codes)"
 
 # yml：helloai.providers.<code>.default-model（${ENV:fallback} → fallback）
 yml_default() {
@@ -145,23 +189,29 @@ java_deepseek_default() {
 }
 
 # ---------- 检查 1：覆盖完整性（目录枚举 ↔ 守卫白名单）----------
-declare -A KNOWN=()
-for c in "${SEEDED[@]}"; do KNOWN[$c]=1; done
-for c in ${NO_SEED[@]+"${NO_SEED[@]}"}; do KNOWN[$c]=1; done
 covered=0
 while read -r code; do
   [[ -z "$code" ]] && continue
   covered=$((covered + 1))
-  if [[ -z "${KNOWN[$code]:-}" ]]; then
+  if ! is_covered "$code"; then
     echo "[FAIL] 预置 '$code' 未纳入守卫：既无迁移种子，也不在 NO_SEED 白名单"
     echo "        ⇒ 其 defaultModel 漂移不会被拦。请归入 SEEDED 或显式登记到 NO_SEED。"
     FAILS=$((FAILS + 1))
   fi
 done < <(catalog_codes)
 
+# 反空转地板：目录解析为 0 条 ⇒ 上述「完整性」与下方结构性检查**恒真**（守卫存在 ≠ 守卫生效）
+if [ "$covered" -eq 0 ]; then
+  echo "[FAIL] 预置目录解析为 0 条 ⇒ 守卫空转（解析逻辑失配源码形态？）"
+  FAILS=$((FAILS + 1))
+fi
+
 # 反向：有种子 provider 必须仍在目录中，否则本案空转（守卫存在 ≠ 守卫生效）
+# ★ 判据不得写成 `catalog_codes | grep -qx "$code"`：`grep -q` 命中即退出 ⇒ 上游 `sed` 收
+#   SIGPIPE（141），`set -o pipefail` 下整条管道判**非零** ⇒ **间歇性假 FAIL**
+#   （2026-10-15 实测：该形态 270 次判里误判 187 次；`grep -c` 读全部输入、不早退 ⇒ 0 次）。
 for code in "${SEEDED[@]}"; do
-  if ! catalog_codes | grep -qx "$code"; then
+  if [ "$(printf '%s\n' "$CATALOG_CODES" | grep -cx "$code")" -eq 0 ]; then
     echo "[FAIL] 有种子 provider '$code' 已不在预置目录 ⇒ 本案空转，请同步"
     FAILS=$((FAILS + 1))
   fi
@@ -191,7 +241,7 @@ done < <(catalog_codes)
 # 参与比对的载体按「该 provider 实际具备的」取：
 #   ① 前端预置（9 家全部）② yml（仅遗留 4 家仍有段）③ Java 兜底常量（有条目才比）
 for code in "${SEEDED[@]}"; do
-  expected="${SEED_DEFAULT[$code]}"
+  expected="$(expected_default "$code")"
   fe="$(front_field "$code" defaultModel)"
   ym="$(yml_default "$code")"
   jf="$(java_fallback "$code")"
@@ -209,7 +259,7 @@ for code in "${SEEDED[@]}"; do
     ok=0
   fi
   yml_flag="$( yml_has_block "$code" && echo '含 yml 段' || echo '无 yml 段' )"
-  [[ "$ok" == 1 ]] && echo "[ OK ] $code 一致 defaultModel='$expected'（$yml_flag；Java 兜底$( [[ -n "$jf" ]] && echo '' || echo '：无条目' )）"
+  [[ "$ok" == 1 ]] && echo "[ OK ] $code 一致 defaultModel='$expected'（${yml_flag}；Java 兜底$( [[ -n "$jf" ]] && echo '' || echo '：无条目' )）"
   [[ "$ok" == 0 ]] && FAILS=$((FAILS + 1))
 done
 
@@ -222,18 +272,16 @@ if [[ -z "$(yml_provider_codes)" ]]; then
 fi
 while read -r code; do
   [[ -z "$code" ]] && continue
-  if [[ -z "${SEED_DEFAULT[$code]:-}" ]]; then
+  if ! is_seeded "$code"; then
     echo "[FAIL] application.yml helloai.providers.$code 段不在 SEEDED ⇒ yml 与种子集脱节，请同步"
     FAILS=$((FAILS + 1))
   fi
 done < <(yml_provider_codes)
 
 # ---------- 检查 4：Java 兜底常量不得存在「非内置 provider」残留 ----------
-declare -A SEEDED_SET=()
-for c in "${SEEDED[@]}"; do SEEDED_SET[$c]=1; done
 while read -r code; do
   [[ -z "$code" ]] && continue
-  if [[ -z "${SEEDED_SET[$code]:-}" ]]; then
+  if ! is_seeded "$code"; then
     echo "[FAIL] FALLBACK_MODELS 含非内置 provider '$code' ⇒ 兜底表与种子集脱节，请同步"
     FAILS=$((FAILS + 1))
   fi
@@ -243,8 +291,9 @@ done < <(grep -A 12 "FALLBACK_MODELS = Map.of(" "$JAVA_FALLBACK" \
 
 # ---------- 检查 5：DeepSeek 末位兜底（D-e）----------
 jdm="$(java_deepseek_default)"
-if [[ "$jdm" != "${SEED_DEFAULT[deepseek]}" ]]; then
-  echo "[FAIL] DeepSeek DEFAULT_MODEL='$jdm' ≠ 种子真值 '${SEED_DEFAULT[deepseek]}'（D-e）"
+deepseek_expected="$(expected_default deepseek)"
+if [[ "$jdm" != "$deepseek_expected" ]]; then
+  echo "[FAIL] DeepSeek DEFAULT_MODEL='$jdm' ≠ 种子真值 '$deepseek_expected'（D-e）"
   FAILS=$((FAILS + 1))
 else
   echo "[ OK ] deepseek Java 末位兜底 DEFAULT_MODEL='$jdm'"

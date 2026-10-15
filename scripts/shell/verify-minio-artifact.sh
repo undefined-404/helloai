@@ -128,7 +128,9 @@ need_cmd mktemp
 # ---------- G1: MinIO 服务健康 ----------
 log "=== [G1] MinIO service health ==="
 health_ok="false"
-if curl -sS -m 10 -o /dev/null -w "%{http_code}" "$MINIO_HEALTH_URL/minio/health/live" 2>/dev/null | grep -q "200"; then
+# ★ 判据不写 `curl … | grep -q …`（本脚本启用 pipefail）：`grep -q` 命中即退出 ⇒ 上游收
+#   SIGPIPE(141) ⇒ 整条管道判非零 ⇒ 间歇性假 FAIL（见 check-shell-portability.sh P3）。
+if [ "$(curl -sS -m 10 -o /dev/null -w "%{http_code}" "$MINIO_HEALTH_URL/minio/health/live" 2>/dev/null | grep -c "200")" -gt 0 ]; then
   health_ok="true"
 fi
 assert_pass "$health_ok" "G1-MinIO-health" "MinIO health check $MINIO_HEALTH_URL/minio/health/live"
@@ -218,7 +220,7 @@ if [[ "$minio_count" -eq 0 ]]; then
 else
   assert_pass "true" "G2-attachment-list" "存在 minio:// 附件 $minio_count 条，storageUrl/bucket/objectKey 已落库"
   sample_objkey="$(print -r -- "$attachments_json" | jq -r '[.data[]? | select(.storageUrl | startswith("minio://"))][0].objectKey')"
-  if print -r -- "$sample_objkey" | grep -Eq '^[^/]+/[0-9]{4}/[0-9]{2}/[0-9]+/[0-9]+/[0-9a-f]{8}-.+$'; then
+  if [ "$(print -r -- "$sample_objkey" | grep -Ec '^[^/]+/[0-9]{4}/[0-9]{2}/[0-9]+/[0-9]+/[0-9a-f]{8}-.+$')" -gt 0 ]; then
     assert_pass "true" "G2-objectKey-rule" "objectKey 按 归属者/年/月/taskId/subTaskId 组织: $sample_objkey"
   else
     assert_pass "false" "G2-objectKey-rule" "objectKey 不符合目录规范: $sample_objkey"

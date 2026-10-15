@@ -100,7 +100,9 @@ assert_matches() {
   local content="$1"
   local pattern="$2"
   local message="$3"
-  print -r -- "$content" | grep -Eq "$pattern" || fail "$message，未匹配: $pattern"
+  # ★ 判据不写 `print -r -- "$content" | grep -Eq …`（本脚本启用 pipefail）：`grep -q` 命中即退出
+  #   ⇒ 上游收 SIGPIPE(141) ⇒ 整条管道判非零 ⇒ 间歇性假 FAIL。见 check-shell-portability.sh P3。
+  [ "$(print -r -- "$content" | grep -Ec "$pattern")" -gt 0 ] || fail "$message，未匹配: $pattern"
 }
 
 extract_sse_data_json() {
