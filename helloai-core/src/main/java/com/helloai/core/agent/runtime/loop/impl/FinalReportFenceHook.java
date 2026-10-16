@@ -33,10 +33,15 @@ import java.util.List;
  * 痕迹才 fail-close → FAILED。</p>
  *
  * <p><b>自审依据 + 防劣化</b>：收尾 prompt = <b>system（身份/输出契约）+ 原 userPrompt（任务要求）+ 草稿</b>，
- * 使模型能「对照任务要求」核验草稿（而非仅复述草稿）；并采用<b>追加式</b>指令（原样保留草稿正文、仅末尾
- * 追加围栏三行），堵掉「重写草稿 ⇒ 掉细节但带围栏」被 ④ 宽松放行的劣化空间。不喂整段工具调用史 ⇒ 有界，
+ * 使模型能「对照任务要求」核验草稿（而非仅复述草稿）；指令为<b>追加式</b>（原样保留草稿正文、仅末尾追加围栏三行），
+ * 堵掉「重写草稿 ⇒ 掉细节但带围栏」被 ④ 宽松放行的劣化空间。不喂整段工具调用史 ⇒ 有界，
  * 规避长上下文溢出；重跑有界重试一次（覆盖瞬时故障）；收尾那一轮 token 计入累计；iterations 与
  * maxIterations 取 min，不超配置上限。</p>
+ *
+ * <p><b>③ 出口强制（2026-10-16 事故修）</b>：「原样保留草稿正文」只是 prompt 里的<b>指令</b>，模型可能不遵从
+ * ——实测 MiniMax-M3 只回围栏三行，整篇报告被 793 字符自检段顶替。故判定权<b>落在出口</b>：
+ * 收尾轮产出若不包含草稿正文（{@link #preservesDraftBody} 空白无关比对），一律回退「原草稿 + 收尾轮围栏段」，
+ * 既不丢交付物、又照样给出围栏（口径 A 语义不变、不新增拒绝面）。「说了 ≠ 强制」是本钩子的核心教训。</p>
  *
  * <p><b>红线合规</b>：只改 {@link AgentLoopResult}（循环出口），不碰 {@code SubTaskStatus} / 平台
  * 状态机；不动 {@link AgentLoopTermination#messages()}（精简 prompt，避免对循环消息列表产生副作用）。</p>
@@ -51,7 +56,7 @@ public class FinalReportFenceHook implements LoopHook {
      */
     private static final String FINALIZE_HEADER_INSTRUCTION =
             "请对照上面的【本轮任务要求】对《报告草稿》做一次自我审计。"
-                    + "要求：<b>原样保留草稿正文</b>，不得改写、删减或扩写草稿内容；"
+                    + "要求：原样保留草稿正文，不得改写、删减或扩写草稿内容；"
                     + "仅在草稿末尾追加如下围栏三行（不要省略、不要调用任何工具）：\n"
                     + "VERIFICATION:\n- <针对交付物是否满足本轮需求要点的核实说明>\n"
                     + "STATUS: <DONE 或 BLOCKED>\n"
@@ -124,6 +129,20 @@ public class FinalReportFenceHook implements LoopHook {
             log.warn("FinalReportFenceHook: 收尾轮空产出，沿用原草稿（防交付物被清空）");
             return draft;
         }
+        // ③ 防「收尾轮改写丢正文」（2026-10-16 实测事故）：指令虽写明「原样保留草稿正文、
+        // 仅在末尾追加围栏三行」，但模型可能只回围栏三行 —— 此时若直接采用收尾轮正文，
+        // 整篇交付物被 793 字节的自检段顶替（task 2110984337513603074 的整合报告即此形态）。
+        // 「说了」不等于「强制」：判定权必须落在出口，不能交给模型自觉。
+        // 处置：改为「原草稿正文 + 收尾轮围栏段」——既保住交付物，又照样给出围栏
+        // （不新增拒绝面：围栏仍在，出口分类口径 A 的语义不变）。
+        String effectiveText = text;
+        if (!preservesDraftBody(draftText, text)) {
+            String fence = extractFenceBlock(text);
+            effectiveText = fence.isBlank() ? draftText : draftText + "\n\n" + fence;
+            log.warn("FinalReportFenceHook: 收尾轮未原样保留草稿正文（草稿 {} 字符 → 收尾 {} 字符），"
+                            + "回退「草稿 + 围栏段」防交付物被顶替",
+                    draftText.length(), text.length());
+        }
         String thinking = extracted.thinking() != null && !extracted.thinking().isBlank()
                 ? extracted.thinking()
                 : draft.thinking();
@@ -131,7 +150,50 @@ public class FinalReportFenceHook implements LoopHook {
         Integer tokens = ChatModelToolLoop.accumulateUsage(response, draft.tokenUsage());
         // ③c：收尾轮计为额外一次模型轮，与 maxIterations 取 min，不超配置上限
         int iterations = Math.min(draft.iterations() + 1, termination.maxIterations());
-        return AgentLoopResult.stop(text, thinking, iterations, draft.toolCallCount(), tokens);
+        return AgentLoopResult.stop(effectiveText, thinking, iterations, draft.toolCallCount(), tokens);
+    }
+
+    /**
+     * 收尾轮正文是否<b>原样保留</b>了草稿正文（③ 出口判定的纯函数）。
+     *
+     * <p>比对前剔除全部空白字符（含换行 / 制表 / 全角空格外的常规空白），只比对字符序列 ——
+     * 使「模型仅调整了换行或缩进」不被误判为丢正文，而「只回围栏三行」必然判为丢正文。
+     * 空草稿视为保留（无正文可丢）。判定方向为<b>保守</b>：判错时回退原草稿，只会让围栏缺失，
+     * 不会丢掉交付物。</p>
+     *
+     * @param draftText    首轮草稿正文（{@code null} / 空白 ⇒ true）
+     * @param finalizeText 收尾轮正文（{@code null} / 空白 ⇒ false）
+     * @return 收尾轮正文是否包含草稿正文的完整字符序列
+     */
+    static boolean preservesDraftBody(String draftText, String finalizeText) {
+        if (draftText == null || draftText.isBlank()) {
+            return true;
+        }
+        if (finalizeText == null || finalizeText.isBlank()) {
+            return false;
+        }
+        return compact(finalizeText).contains(compact(draftText));
+    }
+
+    /** 从收尾轮正文中取围栏段（自最后一个 {@code VERIFICATION:} 标记起）；无标记返回空串。 */
+    static String extractFenceBlock(String finalizeText) {
+        if (finalizeText == null) {
+            return "";
+        }
+        int idx = finalizeText.lastIndexOf(VerificationFence.MARKER);
+        return idx < 0 ? "" : finalizeText.substring(idx).trim();
+    }
+
+    /** 剔除全部空白字符（空白无关比对用）。 */
+    private static String compact(String s) {
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (!Character.isWhitespace(c)) {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     /** 取消息历史中的 system 提示（首个 SystemMessage 的文本；缺失返回 null）。 */

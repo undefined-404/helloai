@@ -19,6 +19,7 @@ import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.task.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
+import com.helloai.core.shared.util.VerificationFence;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
@@ -258,6 +259,18 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                 if (report == null || report.isBlank()) {
                     throw new BizException("Planner LLM 返回空报告");
                 }
+                // ★ 结构性 fail-close：报告必须含正文，不得只有自检围栏（2026-10-16 实测事故：
+                //   收尾轮把整篇报告顶替成 793 字符的 VERIFICATION 段，本方法只判「非空白」故放行，
+                //   脏报告一路以 DONE 交付。判据 = 剥掉围栏段后仍有正文，非空白即通过、零阈值）。
+                if (VerificationFence.bodyWithoutFence(report).isBlank()) {
+                    throw new BizException("Planner 返回的整合报告缺失正文（仅含自检围栏）: length="
+                            + report.length());
+                }
+                // 交付物净化（2026-10-16）：剥离结尾的自检围栏段。围栏是「提交前自审」的行为契约，
+                // 不是报告内容——报告模板与报告审查提示词均未要求它，但收尾轮（FinalReportFenceHook）
+                // 会把它追加到末尾，前端/归档原样展示（用户实测反馈「报告末尾怎么还有 VERIFICATION…」）。
+                // 剥离放在完整性判据之后：判据看的是「原文有没有正文」，净化看的是「交付物是否干净」。
+                report = VerificationFence.stripTrailingFence(report);
                 OffsetDateTime now = OffsetDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
                 // §12.2/§12.3：写回 + 审查触发（L1 事件 + L2 Outbox）由 FinalReportPersistService
                 // 在同一事务内完成——审查开启时写回 REVIEWING（待审查链收敛 DONE，UI 显示审查中），

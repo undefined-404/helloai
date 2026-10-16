@@ -34,6 +34,54 @@ public final class VerificationFence {
         return output != null && output.contains(MARKER);
     }
 
+    /**
+     * 剥掉围栏段（自<b>最后一个</b> {@code VERIFICATION:} 标记起至末尾）后的正文。
+     *
+     * <p>与 {@link #containsMarker} 同属「唯一事实源」围栏结构读取，供交付物的<b>结构性判据</b>
+     * 复用（例如「整合报告只含自检围栏、正文为空」须 fail-close，而非静默当成功）。
+     * 无标记时原样返回（{@code null} 返回空串）。</p>
+     */
+    public static String bodyWithoutFence(String output) {
+        if (output == null) {
+            return "";
+        }
+        int idx = output.lastIndexOf(MARKER);
+        return idx < 0 ? output : output.substring(0, idx);
+    }
+
+    /**
+     * 剥离<b>结尾处</b>的自检围栏段（交付物净化，2026-10-16）。
+     *
+     * <p>与 {@link #bodyWithoutFence}（无条件结构切分，供完整性判据用）不同，本方法是
+     * <b>条件化</b>剥离：仅当「末个 {@code VERIFICATION:} 之后的尾段自身构成<b>合格</b>围栏」
+     * 且「其前正文<b>非空</b>」时才剥，否则原样返回 —— 使正文里正常出现的 {@code VERIFICATION:}
+     * 字样（例如讲围栏协议的章节）不会被误截断。</p>
+     *
+     * <p><b>为什么需要</b>：围栏是「提交前自审」的<b>行为契约</b>，不是交付物内容 ——
+     * 整合报告模板（{@code prompts/task-final-report.md}）与报告审查提示词都<b>没有</b>要求围栏，
+     * 但 {@code FinalReportFenceHook} 收尾轮会把它追加到产出末尾，前端与归档会原样展示给用户。</p>
+     *
+     * @return 剥离后的正文；无围栏 / 尾段非合格围栏 / 前文为空时原样返回（{@code null} 原样返回）
+     */
+    public static String stripTrailingFence(String output) {
+        if (output == null || output.isBlank()) {
+            return output;
+        }
+        int idx = output.lastIndexOf(MARKER);
+        if (idx <= 0) {
+            return output;
+        }
+        String body = output.substring(0, idx);
+        if (body.isBlank()) {
+            // 纯围栏（无正文）：不在此处处理，交「有没有正文」的完整性判据 fail-close
+            return output;
+        }
+        if (!parse(output.substring(idx)).adequate()) {
+            return output;
+        }
+        return body.stripTrailing();
+    }
+
     /** 解析结果；{@code adequate = present && status 非空}（结构化合格的最低门槛）。 */
     public record Parsed(boolean present, String status, boolean hasNextSteps) {
 

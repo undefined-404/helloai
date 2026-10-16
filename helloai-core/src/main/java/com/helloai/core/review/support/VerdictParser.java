@@ -12,6 +12,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 自动核验判定解析器：把核验 LLM 输出解析为结构化判定 + 渲染/摘要工具。
@@ -45,7 +47,8 @@ public class VerdictParser {
     }
 
     /**
-     * 解析核验判定 JSON；不可解析返回 null（调用方据此停留 REVIEW）。
+     * 解析核验判定 JSON；严格解析不可用时走 {@link #looseVerdict} 宽松兜底；取不到 {@code pass}
+     * 才返回 null（调用方据此停留 REVIEW / 记录不可解析）。
      */
     public SubTaskReviewService.ReviewVerdict parseVerdict(String rawOutput) {
         if (rawOutput == null || rawOutput.isBlank()) {
@@ -55,14 +58,56 @@ public class VerdictParser {
         try {
             SubTaskReviewService.ReviewVerdict verdict =
                     objectMapper.readValue(cleaned, SubTaskReviewService.ReviewVerdict.class);
-            if (verdict == null || verdict.getPass() == null) {
-                return null;
+            if (verdict != null && verdict.getPass() != null) {
+                return verdict;
             }
-            return verdict;
         } catch (Exception e) {
+            // 落到下面的宽松兜底（非静默丢弃：兜底仍取不到 pass 才判不可解析）
+        }
+        return looseVerdict(rawOutput);
+    }
+
+    /**
+     * 宽松兜底判定（2026-10-16 事故修）：严格 JSON 解析失败时，仍从原文提取<b>明确可见</b>的
+     * {@code pass}（必需）/ {@code score} / {@code issues}。
+     *
+     * <p><b>为什么需要</b>：审查模型已经写出 {@code "pass": false, "score": 2}，却因 JSON 存在格式
+     * 瑕疵（未转义字符 / 尾段被截 / 收尾轮追加内容）而整条判定被判「不可解析」——报告审查侧
+     * 对不可解析的处置是 {@code convergeToDone}（直接放过），等价于<b>把明确的驳回静默改成通过</b>
+     * （实测事故：task 2110984337513603074 报告正文全缺、审查 {@code pass=false} 却被丢弃）。
+     * 判定解析的职责是「读懂判定」，不是「要求模型输出完美 JSON」。</p>
+     *
+     * <p><b>边界</b>：只在严格解析不可用时启用；{@code pass} 取不到即返回 null（不猜）。</p>
+     */
+    private static SubTaskReviewService.ReviewVerdict looseVerdict(String raw) {
+        Matcher passMatcher = PASS_PATTERN.matcher(raw);
+        if (!passMatcher.find()) {
             return null;
         }
+        SubTaskReviewService.ReviewVerdict verdict = new SubTaskReviewService.ReviewVerdict();
+        verdict.setPass(Boolean.parseBoolean(passMatcher.group(1)));
+        Matcher scoreMatcher = SCORE_PATTERN.matcher(raw);
+        if (scoreMatcher.find()) {
+            try {
+                verdict.setScore(Integer.parseInt(scoreMatcher.group(1)));
+            } catch (NumberFormatException ignored) {
+                // 超范围数字：放弃 score，不放弃判定
+            }
+        }
+        Matcher issuesMatcher = ISSUES_PATTERN.matcher(raw);
+        if (issuesMatcher.find()) {
+            verdict.setIssues(issuesMatcher.group(1).trim());
+        }
+        return verdict;
     }
+
+    /** 宽松兜底：{@code "pass": true|false}（判定必需项）。 */
+    private static final Pattern PASS_PATTERN =
+            Pattern.compile("\"pass\"\\s*:\\s*(true|false)", Pattern.CASE_INSENSITIVE);
+    /** 宽松兜底：{@code "score": 0-999}（可选）。 */
+    private static final Pattern SCORE_PATTERN = Pattern.compile("\"score\"\\s*:\\s*(\\d{1,3})");
+    /** 宽松兜底：{@code "issues": "…"} 首个引号前的内容（可选；含转义引号时提前截断，可接受）。 */
+    private static final Pattern ISSUES_PATTERN = Pattern.compile("\"issues\"\\s*:\\s*\"([^\"]{0,2000})");
 
     /** 剥离 markdown 代码块围栏，并兜底截取首尾花括号之间的 JSON 对象。 */
     private static String stripToJsonObject(String raw) {

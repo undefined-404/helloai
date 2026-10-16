@@ -221,6 +221,42 @@ class TaskFinalReportServiceTest {
     }
 
     @Test
+    @DisplayName("交付物净化：报告末尾自检围栏段被剥离后再写回（前端/归档不展示 VERIFICATION）")
+    void shouldStripTrailingFenceBeforePersist() {
+        when(taskService.getById(TASK_ID)).thenReturn(doneTask());
+        when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
+        when(subTaskQueryChain.list()).thenReturn(List.of(
+                doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
+        // 收尾轮（FinalReportFenceHook）会把自检围栏追加到产出末尾
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "# 整合报告\n\n全局结论\n\nVERIFICATION:\n- 已核对\nSTATUS: DONE\nNEXT_STEPS: 无",
+                        "stop", "llm", 10));
+
+        service.generate(TASK_ID);
+
+        // 写回的报告正文不含围栏段（围栏是行为契约，不是交付物内容）
+        verify(finalReportPersistService).persistAndRequestReview(
+                eq(TASK_ID), eq("# 整合报告\n\n全局结论"), eq(9L), any(), eq(1), eq(1), eq(true));
+    }
+
+    @Test
+    @DisplayName("结构性 fail-close：报告只剩自检围栏、正文为空 → 抛 BizException（脏报告不得以 DONE 交付）")
+    void shouldFailCloseWhenReportHasOnlyFence() {
+        when(taskService.getById(TASK_ID)).thenReturn(doneTask());
+        when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
+        when(subTaskQueryChain.list()).thenReturn(List.of(
+                doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "VERIFICATION:\n- 对照要求核实…\nSTATUS: DONE\nNEXT_STEPS: 无", "stop", "llm", 10));
+
+        assertThatThrownBy(() -> service.generate(TASK_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("缺失正文");
+    }
+
+    @Test
     @DisplayName("任务不存在抛 BizException(404)")
     void shouldThrowWhenTaskMissing() {
         when(taskService.getById(TASK_ID)).thenReturn(null);

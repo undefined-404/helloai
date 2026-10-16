@@ -100,6 +100,13 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
     /** 审查证据注入的子任务数量上限（防上下文爆炸；超出仅注入前 N 个，其余以清单为准）。 */
     private static final int MAX_EVIDENCE_SUB_TASKS = 10;
     /**
+     * 审查结论不可解析时，落 {@code task_final_report_review_unparseable} 事件所保留的原始输出长度上限。
+     * <p>宽松兜底（{@link VerdictParser#parseVerdict} 的正则回退）已显著收窄不可解析面，残留的少数
+     * 不可解析样本是后续改进解析器的唯一线索，故此处<b>留全原始输出</b>（非截断为 300 字符的摘要），
+     * 仅在超过上限时截断以防单条事件体积失控。</p>
+     */
+    private static final int UNPARSEABLE_RAW_EVIDENCE_LIMIT = 4000;
+    /**
      * 防双审互斥锁键前缀 + 租期：统一收敛到 {@link FinalReportReviewLock}——L1/L2 审查体与
      * L3 孤儿巡检（{@code FinalReportReviewOrphanTask}）共用同一把锁，杜绝两处各写一份导致漂移。
      */
@@ -303,11 +310,15 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         if (verdict == null) {
             taskTimelineService.recordEvent(event.getTaskId(), null,
                     TimelineEventCode.TASK_FINAL_REPORT_REVIEW_UNPARSEABLE.code(), AgentRole.REVIEWER, reviewer.id(),
-                    Map.of("rawOutput", VerdictParser.summarize(result.getOutput(), 300),
+                    // 证据留全（4000 字符；2026-10-16 事故教训）：原先只留 300 字符，
+                    // 事后无法判断到底是「真读不懂」还是「JSON 有格式瑕疵」——事件成了不可诊断的。
+                    Map.of("rawOutput", VerdictParser.summarize(result.getOutput(), UNPARSEABLE_RAW_EVIDENCE_LIMIT),
                             "attempt", event.getAttempt()));
             log.warn("最终报告审查输出不可解析: taskId={}, raw={}", event.getTaskId(),
                     VerdictParser.summarize(result.getOutput(), 300));
-            // §12.2 REVIEWING 收敛：审查无法判定仅记事件，报告照常交付
+            // §12.2 REVIEWING 收敛：宽松兜底（VerdictParser#parseVerdict 正则回退）已把「明文写了
+            // pass 却因 JSON 瑕疵被判不可解析」这一类收敛掉；走到这里的只剩「确实读不懂」的残留
+            // （无任何 pass 字段）——仍仅记事件 + 报告照常交付（不收敛则 REVIEWING 永远卡住无恢复口）。
             convergeToDone(event);
             return;
         }

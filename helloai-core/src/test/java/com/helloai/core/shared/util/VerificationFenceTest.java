@@ -10,6 +10,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 class VerificationFenceTest {
 
     @Test
+    @DisplayName("bodyWithoutFence：剥掉尾段围栏得正文；只含围栏 → 正文为空（整合报告 fail-close 判据）")
+    void bodyWithoutFence() {
+        assertThat(VerificationFence.bodyWithoutFence(null)).isEmpty();
+        // 正常交付物：正文 + 尾段围栏 ⇒ 正文完整保留
+        assertThat(VerificationFence.bodyWithoutFence(
+                "# 报告\n\n## 执行摘要\n正文\nVERIFICATION:\n- 已核对\nSTATUS: DONE\nNEXT_STEPS: 无"))
+                .contains("## 执行摘要");
+        // 事故形态（2026-10-16）：首字符即围栏 ⇒ 正文为空 ⇒ 调用方 fail-close
+        assertThat(VerificationFence.bodyWithoutFence(
+                "VERIFICATION:\n- 对照六大目标核实…\nSTATUS: DONE\nNEXT_STEPS: 无").isBlank()).isTrue();
+        // 无围栏 ⇒ 原样返回（判据不误伤普通产出）
+        assertThat(VerificationFence.bodyWithoutFence("只有正文，无围栏")).isEqualTo("只有正文，无围栏");
+    }
+
+    @Test
     @DisplayName("containsMarker：null/空 → false；含 VERIFICATION: → true；不含 → false")
     void containsMarker() {
         assertThat(VerificationFence.containsMarker(null)).isFalse();
@@ -74,5 +89,27 @@ class VerificationFenceTest {
         assertThat(VerificationFence.parse("   - **STATUS: BLOCKED**\n").status()).isEqualTo("BLOCKED"); // 缩进 + 无序 + 粗体
         assertThat(VerificationFence.parse("> **STATUS: PARTIAL**\n").status()).isEqualTo("PARTIAL");   // 引用 + 粗体
         assertThat(VerificationFence.parse("5. STATUS：完成\n").status()).isEqualTo("完成");            // 有序 + 中文值
+    }
+
+    @Test
+    @DisplayName("stripTrailingFence：五态 —— 无围栏原样／合格尾围栏剥离／正文含 VERIFICATION: 字样不误截／纯围栏原样／空值原样")
+    void stripTrailingFence() {
+        // ① 无围栏 ⇒ 原样返回（不误伤普通产出）
+        assertThat(VerificationFence.stripTrailingFence("只有正文，无围栏"))
+                .isEqualTo("只有正文，无围栏");
+        // ② 合格尾围栏（VERIFICATION + STATUS） ⇒ 剥掉整段，保留正文
+        assertThat(VerificationFence.stripTrailingFence(
+                "# 报告\n正文段落\n\nVERIFICATION:\n- 已核对\nSTATUS: DONE\nNEXT_STEPS: 无"))
+                .isEqualTo("# 报告\n正文段落");
+        // ③ 正文里出现 VERIFICATION: 字样但尾段非合格围栏 ⇒ 原样返回（章节讲解围栏协议不误截）
+        assertThat(VerificationFence.stripTrailingFence(
+                "## 围栏协议\n本节讲 VERIFICATION: 的写法，并举例"))
+                .isEqualTo("## 围栏协议\n本节讲 VERIFICATION: 的写法，并举例");
+        // ④ 纯围栏（无正文） ⇒ 原样返回，交完整性判据 fail-close（本方法不吞掉证据）
+        String fenceOnly = "VERIFICATION:\n- 核实\nSTATUS: DONE";
+        assertThat(VerificationFence.stripTrailingFence(fenceOnly)).isEqualTo(fenceOnly);
+        // ⑤ null / 空白 ⇒ 原样返回
+        assertThat(VerificationFence.stripTrailingFence(null)).isNull();
+        assertThat(VerificationFence.stripTrailingFence("   ")).isEqualTo("   ");
     }
 }

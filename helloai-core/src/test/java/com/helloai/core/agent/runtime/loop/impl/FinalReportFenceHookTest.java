@@ -126,6 +126,33 @@ class FinalReportFenceHookTest {
     }
 
     @Test
+    @DisplayName("★ 收尾轮只回围栏、丢弃草稿正文 ⇒ 回退「草稿 + 围栏段」，交付物不被顶替（2026-10-16 实测事故）")
+    void finalizeDropsDraftBody_keepsDraftAndFence() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("# 手册 - 最终整合报告\n\n## 执行摘要\n主线论点若干…"))       // 草稿：真报告，无围栏
+                .enqueue(text("VERIFICATION:\n- 已核对\nSTATUS: DONE\nNEXT_STEPS: 无"));  // 收尾轮只回围栏
+
+        AgentLoopResult result = loop.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.text()).contains("## 执行摘要");                          // 交付物正文保住
+        assertThat(VerificationFence.parse(result.text()).adequate()).isTrue();    // 围栏同时具备
+        assertThat(result.iterations()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("收尾轮原样保留草稿正文（仅换行差异）⇒ 直接采用收尾产物，不重复追加")
+    void finalizePreservesDraftBody_adoptedAsIs() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿：正文A"))
+                .enqueue(text(withFence("\n无围栏草稿：正文A\n")));
+
+        AgentLoopResult result = loop.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(result.text()).isEqualTo(withFence("\n无围栏草稿：正文A\n"));    // 未被二次拼接
+    }
+
+    @Test
     @DisplayName("③ 收尾轮 prompt 含系统提示 + 原任务要求（哨兵守卫，堵「断言命中常量」假绿）")
     void finalizePromptIncludesTaskRequirement() {
         StubChatModel model = new StubChatModel()
