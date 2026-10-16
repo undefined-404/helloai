@@ -6,7 +6,7 @@
 > **用户裁定**：`D-2026-10-09-4`（见《差距表》§0「当前生效的取舍决策」）——四项能力优先级、备份/恢复与 RAG 入目标架构、沙箱生产形态、语义位与不可关闭清单同批。
 > **性质**：本计划只收**可执行结论**（借鉴落点 → 动作 → 验收 → 验证集 → 回填），不含调研过程（在 `research/`）与稳定设计（在 `design/`）。
 > **完成迁移**：执行完成后迁入 `doc/archive/implemented/` 并标 `Done`。
-> **最后更新：2026-10-14**（版本条目仍为 **`v18`**，2026-10-12 —— 后续变更遵《治理规则》§3.2「版本变更史冻结新增」，**不新增版本条目**）
+> **最后更新：2026-10-16**（版本条目仍为 **`v18`**，2026-10-12 —— 后续变更遵《治理规则》§3.2「版本变更史冻结新增」，**不新增版本条目**；2026-10-16 变更 = §10.8 新增（`REF-8.6`~`8.9` 立项）+ §10.9 新增（`REF-8.5` 落地形态）+ **§10.10 新增（`REF-8.6` 落地形态）** + **§10.11 / §10.12 新增（`REF-8.7` / `REF-8.8` 落地形态）** + §10.2 / §10.6 状态回填）
 > **v18 = 新增 `REF-8`「内部 LLM 能力面」**（`D-2026-10-12-1`，差距锚点 **`G-021`**）：
 > 用户确认「内部 agent 内核收敛思路」按审阅建议调整 ⇒ 立 `REF-8`，收纳 `D1` 工具面解封 / `D2` 手脚·工作区（含 `systemPrompt` 非空 + `maxIterations` 分档）/ `D3` 技能全量目录 + 惰性加载 / `D4` 拦截链（Spring AI Advisors）/ `E1` 循环覆盖面收敛；
 > **内核轴 = 「可见面收敛」**（唯一输出契约 = 模型的可见集，三层）；**会话单源化降为支撑项**（提升已有 `agent_event`，**不新建表**）；`LOG-20261011-007` 的 A 能力闸 + B 收敛熔断**挂 `REF-8.4` 拦截链**之下。见 §10。
@@ -625,7 +625,11 @@ L3 可见上下文    system prompt（非空）+ 工作区 / 附件读手脚    
 | **REF-8.2.3** | **上下文压缩**（**2026-10-12 立项并实施**，对齐 DSH `compaction-basic` + `compaction-tool-result-pruner`）：两道 = ①**确定性工具结果剪枝**（纯文本 + 标记，可审计）②**仍超预算才 LLM 摘要**（替换而非追加）；两条触发 = 每轮模型调用前的**压力检查**（窗口 × thresholdRatio）+ 提供方报错后的**溢出恢复**（压缩后重试本轮，有界） | **✅ M2.3 已实施（2026-10-12）**：新增 `ToolResultPruner`（阈值 8192 / 头 4096 / 尾 1024、标记文案与 DSH 逐字一致、**按 Unicode 码点**计长）与 `ContextCompactor`（Spring bean；复用同一 ChatModel+options 做摘要，输入＝system＋首条 user＋被压区间＋压缩指令；**逐字保留最近 retainRatio=0.16 尾部**；**绝不拆 assistant(tool_calls)+tool_result 对**）；`ChatModelToolLoop` 加**每轮调用前挂点**（DSH `agent/pre-step` 等价物）与**溢出重试**（DSH `agent/request-error` 等价物，成功响应重置）；`AgentEventType` 加 `CONTEXT_COMPACTED` 审计事件；配置 8 项入 `helloai.execution.*`（默认与 DSH 对齐：窗口 64000、0.8/0.16、8192/4096/1024） | **与标杆的一处微调（已登记）**：剪枝后已回到预算内则**不再调摘要**（省一次 LLM 调用，语义不变）。单测 12 例新增（`ToolResultPrunerTest` 5 / `ContextCompactorTest` 7：开关短路 · 剪枝足够不摘要 · 摘要替换且首尾逐字保留 · 摘要失败不阻断 · 溢出强制路径 · no-op 实例）；既有 `ChatModelToolLoopTest` 18/18 不受影响（无压缩器构造 ⇒ 行为与改造前逐字一致） |
 | **REF-8.3** | **技能改「全量目录 + 惰性加载」**：注入目录段（非速览），新增惰性加载工具，`AgentSkillSpecService` 加 `get(name)` | **✅ M3 已交付（2026-10-12）**：`AgentSkillSpecService` 加 `getPackage(name)`/`loadBody(name)`；`InternalLlmExecutorTools` 加 `internal_list_skills`/`internal_load_skill`；`INTERNAL_LLM_TOOLS` 加 2 工具；`buildSystemPrompt` 增技能发现指引；**保留 `requiredTools`** 能力级声明 | 目录含全部技能；正文按需加载。单测 2 个新增；全量 1980 绿 |
 | **REF-8.4** | **拦截链** —— **循环自有 `LoopHook` 三档**（`beforeRequest` / `onRequestError` / `beforeTerminate`），**不套 Spring AI `Advisors`**（三处硬约束见 §10.7.3）；挂点抽象 = 所有链上策略的唯一落点 | `ChatModelToolLoop` 三档挂点（**不动循环本体**，§10.5 红线） | **✅ 已交付（2026-10-13）**：① 三档挂点骨架 `09ecd747` · ② 收尾轮 `873bb559` · ③ `VerificationFence` / ④ 出口分类 `3b5224a6`；全量 2031 例绿（记录 `LOG-20261013-010`/`-011`/`-012`）。**下游归属已于 2026-10-15 订正**（`D-2026-10-15-6`）：**B 收敛熔断（阈值 `N=3`）挂本行；A 能力闸出列、落 `ResilientDispatcher`** —— 原「A+B 唯一挂点」表述作废；`C` 单独评估 |
-| **REF-8.5** | **循环覆盖面收敛**：逐面判「该不该进循环」（子任务评审、终报告生成理论上都该带工具） | `RuntimeTurnExecutor:130`（**1 处**）vs `executeSync/executeStream`（**15 处 / 9 类**） | 覆盖面显式收窄并登记边界 |
+| **REF-8.5** | **循环覆盖面收敛**：逐面判「该不该进循环」（子任务评审、终报告生成理论上都该带工具） | `RuntimeTurnExecutor:130`（**1 处**）vs `executeSync/executeStream`（**15 处 / 9 类**） | **✅ 已落地（2026-10-16，`LOG-20261016-005`；形态见 §10.9）**：覆盖面收窄为 **#2~#5 四项**（边界即 §10.6，连同基线 #1 共 5 处在循环）；新增业务面循环入口 `BusinessSurfaceLoopRunner` + **单咽喉插点**（`PlatformAgentExecutionServiceImpl.execute`）+ 独立开关 `helloai.execution.business-loop-enabled` 与 scene 白名单；循环异常 / `finishReason=ERROR` 自动回落单次。**单测 11 例新增 + 执行链回归全绿**；**★E2E 观测点**＝循环日志行的 `iterations` / `toolCalls` / `finishReason` |
+| **REF-8.6** | **运行时合同 · 取消 / 超时树**（对齐 DSH 一等公民能力）：`AgentLoopInput` 传入可取消上下文，全链支持取消；单工具调用加超时（`TOOL_TIMEOUT` 等价物） | `AgentLoopInput` 紧凑构造器（**唯一咽喉装配取消装饰器**）+ `CancellableChatModel` / `CancellableToolExecutor`（**加取消 / 超时，不改循环逻辑**） | **✅ 已落地（2026-10-16，`LOG-20261016-006`；形态见 §10.10）**：协作式取消（`CancellationToken` 三供给源；检查点 = 模型调用前 / 后 + 工具调用前）+ 单工具超时（`Future.get` + `cancel(true)`，超时**返回失败 observation 交模型决策、不整链失败**）；装配点收敛为 `AgentLoopInput` 紧凑构造器 ⇒ 调用方**无法绕过**；「不限」路径与改造前**逐字一致**（零包装）。**反证用例**：工具中途取消 ⇒ 循环不再发起下一轮模型调用。**依据**：重判报告 §三 第 1 位（DSH `agent.ts:46,50` + 16 处 `signal.throwIfAborted()` + `tests/cancel.spec.ts`；HelloAI 侧缺） |
+| **REF-8.7** | **运行时合同 · `max-tokens` 终态**（对齐 DSH）：截断**不得静默当成功** —— 引入独立终态 + **sticky 语义**（任一步触顶，后续正常步骤不得下调 turn 结果） | `ChatModelToolLoop` 出口分类（**在 `beforeTerminate` 挂点之前定性**，见 §10.11） | **✅ 已落地（2026-10-16，`LOG-20261016-007`；形态见 §10.11）**：新增终态 `MAX_TOKENS`（`success=false`、保留部分正文）；`truncated` 置位（只置不撤）⇒ **全部出口**（`STOP` / `MAX_ITERATIONS`）在进入挂点前即定为截断草稿 ⇒ 现有 `FinalReportFenceHook`（只对 `success && STOP` 触发）自然跳过，sticky **不依赖挂点自觉**。结束原因取值容错（`LENGTH` / `max_tokens` 等；**未知取值不判截断** = fail-open）。**依据**：重判报告 §三 第 2 位（DSH `agent.ts:547` + `:338-343` 注释明写 sticky；HelloAI 只看 `hasToolCalls()` 静默放行） |
+| **REF-8.8** | **运行时合同 · 观测面**（对齐 DSH）：`usage` 由**单一 `totalTokens`** 拆为**互斥分量**（输入 / 输出 / 缓存读 / 缓存写 / 推理）+ 补 latency | `AgentLoopResult` 增第 9 分量 `AgentUsage` + `ChatModelToolLoop` 用量采集（**只扩字段，不改控制流**） | **✅ 已落地（2026-10-16，`LOG-20261016-008`；形态见 §10.12）**：新增 `AgentUsage`（互斥五分量 + 耗时）；`AgentLoopResult` 增 `usage` 分量 + `withUsage`（**既有 8 参 factory 全保留**，31 处调用点零改动）；用量在**挂点改写之后**统一装配（正交）；落 `AGENT_COMPLETED` payload 扩字段（**不新增事件类型**）。provider 缺字段**降级为 null、不报错**（缓存 / 推理属私有，仅当 `nativeUsage` 是 Map 时 best-effort 读）。**依据**：重判报告 §三 第 3 位（DSH `types.ts:175-188` 注释「**Counts are DISJOINT**」） |
+| **REF-8.9** | **运行时合同 · 独立预算闸**（**非对齐项 / 自研增强** —— DSH 与 HelloAI **双方皆无**）：按成本 / token 预算设闸，超限终止并落事件 | 待定（**前置**：需先建「每步可查询用量状态」载体，见重判报告 §八 附录 C 第 2 项） | **暂不启动**（`DEFERRED`）：重判报告已判其**非对齐项**（DSH 全库 grep `costBudget` / `budgetUsd` / `maxCost` / `haltBudget` **0 命中**）；仅在有成本治理需求时重启，**不得以「对齐 DSH」名义立项**。**依据**：重判报告 §三 第 4 位 / §二.2 |
 
 ## 10.3 执行次序（按「是否直接产出能力」）
 
@@ -648,6 +652,8 @@ REF-8.4 拦截链（**已交付 2026-10-13**）─────────┘─
 >
 > **2026-10-12 追加（二，§1.6 复核后）**：新增 `REF-8.1.2`（persona 两槽位，**已实施**）；**已登记并实施**：`REF-8.2.3`（上下文压缩，见上表行）；**未登记候选**（`§1.6.4`，待裁定）：技能侧 `role` 属性（按**声明命中**的技能给身份，多命中按 priority 裁决、并列回退平台默认）、技能正文长度纪律（与压缩修剪阈值耦合，随 `REF-8.2.3` 一并定）、`REF-8.4` 挂点细化（拦截链 = `pre-step`/`request` 两挂点）。
 
+> **2026-10-16 追加（三）**：新增 **`REF-8.6`~`REF-8.9`（运行时合同对齐，见 §10.8）** —— 与 `8.1`~`8.5` 的**可见面收敛轴并列**（定级依据为「以 DSH 源码为基准的重判」，非外部文章）。**本组不改变**上述次序：组内无相互依赖，`REF-8.6`（取消 / 超时树）优先序最高，且可与 `REF-8.5`（覆盖面）**并行**。
+
 ## 10.4 收敛完成判据（较「组完成」更严）
 
 1. **不依赖 MCP 会话**可独立构造 / 测试（`AgentLoopInput → AgentLoopResult` 自洽）；
@@ -662,32 +668,36 @@ REF-8.4 拦截链（**已交付 2026-10-13**）─────────┘─
 - **不引入 LangGraph4j**——仅在「显式图 / 断点续跑 / HITL」触发信号出现时再评估（与《自建 java-harness 可行性分析》方案 C 一致）；
 - 新增**对外**工具须走既有 `McpMcpServer` 守卫且**默认关闭**（`REF-6.13`）。**★射程 = 「对外暴露的新工具」**（`D-2026-10-12-5`）——`REF-8.1` 的**内部进程内通道**（`API_KEY_LLM` 无 MCP 会话，走会话守卫必 401＝L3 P1-1）为该红线**显式例外**：以「**执行链绑定闸门**」（`ToolInvocationContext`）替代会话守卫，且**不得**进入对外 MCP `tools/list`（`internal_*` 经非 `ToolCallbackProvider` 的 `InternalToolCallbacks` 承载）。判据：「**绕过外部守卫**」合理 ≠ 「**暴露到外部面**」合理。详见 `log/2026-10.md` `LOG-20261012-006`。
 
-## 10.6 覆盖面清单（`REF-8.5`，16 项，**待用户勾选**）
+## 10.6 覆盖面清单（`REF-8.5`，16 项，**✅ 已裁定 2026-10-16**）
 
 **实测口径（2026-10-12）**：全仓生产代码 `agentLoop.run()` 调用点 **1 处**（已在循环）；业务 LLM 面走 `executeSync/executeStream` 单次聊天共 **15 处 / 9 类**。`PlatformAgentExecutionServiceImpl:90`（`:80-92` `executeStream` 内部派发）是**派发点非业务面**，不计入。合计 **1 + 15 = 16 项**。
 
 **判据**：某面若「产出需查阅 / 校验外部证据（附件原文 / 库内容 / 多步推理）」⇒ **该进循环**（带工具）；若「纯文本改写 / 结构化抽取 / 单轮判定」⇒ **留单次**即可（进循环只增成本与不确定性）。
 
-| # | 类 | 位置 | `scene` | 用途 | 建议 |
-|---|---|---|---|---|---|
-| 1 | `RuntimeTurnExecutor` | `helloai-core/…/core/agent/runtime/RuntimeTurnExecutor.java:130` | — | **唯一在循环的面**（工具调用循环） | ✅ 已循环（基线） |
-| 2 | `PlannerDecomposeAsyncServiceImpl` | `helloai-core/…/core/planner/service/impl/PlannerDecomposeAsyncServiceImpl.java:144` | `planner_decompose` | 任务拆解 | ⭐ 进循环（可查技能 / 依赖 / 历史） |
-| 3 | `ReviewExecutionEngine` | `helloai-core/…/core/review/support/ReviewExecutionEngine.java:87` | `subtask_review` | 子任务核验 | ⭐ 进循环（核验需读原始证据） |
-| 4 | `TaskFinalReportServiceImpl` | `helloai-core/…/core/task/service/impl/TaskFinalReportServiceImpl.java:252` | `task_final_report` | 终报告正文整合 | ⭐ 进循环（需读子任务产出） |
-| 5 | `FinalReportReviewServiceImpl` | `helloai-core/…/core/review/service/impl/FinalReportReviewServiceImpl.java:393` | `task_final_report_review` | 终报告审查 | ⭐ 进循环 |
-| 6 | `TaskFinalReportServiceImpl` | `…/TaskFinalReportServiceImpl.java:389` | `task_final_report_outline` | 终报告出纲 | 🟡 可留单次（纯结构化出纲） |
-| 7 | `RequirementClarifyServiceImpl` | `helloai-core/…/core/planner/service/impl/RequirementClarifyServiceImpl.java:433` | `requirement_chat` | 澄清流式主回复 | 🟡 可留单次（对话） |
-| 8 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:471` | `requirement_clarify` | 澄清流式主回复 | 🟡 可留单次 |
-| 9 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:888` | `requirement_finalize` | 需求终稿 | 🟡 可留单次 |
-| 10 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:959` | (retry) | 终稿重试 | ⬜ 留单次 |
-| 11 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:1038` | `DECISION_SCENE` | 澄清决策判定 | ⬜ 留单次（单轮判定） |
-| 12 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:1303` | `requirement_clarify`/`requirement_chat` | 同步澄清 / 聊天 | ⬜ 留单次 |
-| 13 | `SearchQueryPlannerServiceImpl` | `helloai-core/…/core/planner/service/impl/SearchQueryPlannerServiceImpl.java:195` | `REWRITE_SCENE` | 检索查询改写 | ⬜ 留单次（纯改写） |
-| 14 | `SearchGapAssessor` | `helloai-core/…/core/planner/clarify/SearchGapAssessor.java:91` | `GAP_SCENE` | 搜索缺口评估 | 🟡 可选（需查库判缺口则应进） |
-| 15 | `PromptEnhancerServiceImpl` | `helloai-core/…/core/planner/prompt/impl/PromptEnhancerServiceImpl.java:59` | `prompt_enhance` | 提示词增强 | ⬜ 留单次 |
-| 16 | `AgentExecutionPreviewServiceImpl` | `helloai-core/…/core/agent/service/impl/AgentExecutionPreviewServiceImpl.java:53` | — | 执行预览 | ⬜ 留单次 |
+**★裁定结果（2026-10-16，用户拍板「需要做」⇒ 逐项按上述判据核定）**：**进循环 4 项**（#2~#5）· **留单次 12 项**（#1 为已在循环的基线，其余 11 项为业务面）。🟡5 项（#6/#7/#8/#9/#14）的裁定**均以代码实测取证**（见「裁定依据」列），非沿用清单作者的初判。
 
-> **勾选方式**：你只需对 `⭐`（其建议进循环）与 `🟡`（待定）表态——「进循环 / 留单次」；`⬜` 若无异议默认留单次。确认后 `REF-8.5` 立项，**把「进循环面清单」写死为验收边界**（明确「哪些面**不**进」，避免「内核收敛 = 全面进化」的误读）。
+| # | 类 | 位置 | `scene` | 用途 | 裁定 | 裁定依据（🟡/变更项填） |
+|---|---|---|---|---|---|---|
+| 1 | `RuntimeTurnExecutor` | `helloai-core/…/core/agent/runtime/RuntimeTurnExecutor.java:130` | — | **唯一在循环的面**（工具调用循环） | ✅ 已在循环（基线） | 全仓 `agentLoop.run()` 唯一生产调用点 |
+| 2 | `PlannerDecomposeAsyncServiceImpl` | `helloai-core/…/core/planner/service/impl/PlannerDecomposeAsyncServiceImpl.java:144` | `planner_decompose` | 任务拆解 | ✅ **进循环** | 拆解需查技能目录 / 依赖 / 历史，产出依赖外部证据 |
+| 3 | `ReviewExecutionEngine` | `helloai-core/…/core/review/support/ReviewExecutionEngine.java:87` | `subtask_review` | 子任务核验 | ✅ **进循环** | 核验须读原始证据（附件 / 产物） |
+| 4 | `TaskFinalReportServiceImpl` | `helloai-core/…/core/task/service/impl/TaskFinalReportServiceImpl.java:252` | `task_final_report` | 终报告正文整合 | ✅ **进循环** | 整合须读各子任务产出 |
+| 5 | `FinalReportReviewServiceImpl` | `helloai-core/…/core/review/service/impl/FinalReportReviewServiceImpl.java:393` | `task_final_report_review` | 终报告审查 | ✅ **进循环** | 审查须读终稿与上游证据 |
+| 6 | `TaskFinalReportServiceImpl` | `…/TaskFinalReportServiceImpl.java:389` | `task_final_report_outline` | 终报告出纲 | ⬜ **留单次** | 实测 `systemPrompt` 明写「严格只输出一个 JSON 对象」，素材经 `renderOutlinePrompt(task, sections)` **已在入参** ⇒ 纯结构化抽取 |
+| 7 | `RequirementClarifyServiceImpl` | `helloai-core/…/core/planner/service/impl/RequirementClarifyServiceImpl.java:433` | `requirement_chat` | 澄清流式主回复 | ⬜ **留单次** | 实测走 `executeStream` + token 逐个转发前端（打字机）⇒ 流式链路，进循环须先改造流式承载 |
+| 8 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:471` | `requirement_clarify` | 澄清流式主回复 | ⬜ **留单次** | 同上（`runClarifyStream` 同为 `executeStream`） |
+| 9 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:888` | `requirement_finalize` | 需求终稿 | ⬜ **留单次** | 实测 `executeSync`，素材（会话 + `webSearchContext`）已在 prompt 入参 ⇒ 汇总改写 |
+| 10 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:959` | (retry) | 终稿重试 | ⬜ 留单次 | 同 #9 |
+| 11 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:1038` | `DECISION_SCENE` | 澄清决策判定 | ⬜ 留单次 | 单轮判定 |
+| 12 | `RequirementClarifyServiceImpl` | `…/RequirementClarifyServiceImpl.java:1303` | `requirement_clarify`/`requirement_chat` | 同步澄清 / 聊天 | ⬜ 留单次 | 对话 |
+| 13 | `SearchQueryPlannerServiceImpl` | `helloai-core/…/core/planner/service/impl/SearchQueryPlannerServiceImpl.java:195` | `REWRITE_SCENE` | 检索查询改写 | ⬜ 留单次 | 纯改写 |
+| 14 | `SearchGapAssessor` | `helloai-core/…/core/planner/clarify/SearchGapAssessor.java:91` | `GAP_SCENE` | 搜索缺口评估 | ⬜ **留单次** | 实测首轮检索结果**已在入参**（`firstRound`，经 `renderResults` 进 prompt）⇒ **不需要主动查库**；且现行「失败即返回 `null`（不补搜）」的降级语义在循环下须重定义 |
+| 15 | `PromptEnhancerServiceImpl` | `helloai-core/…/core/planner/prompt/impl/PromptEnhancerServiceImpl.java:59` | `prompt_enhance` | 提示词增强 | ⬜ 留单次 | 纯改写 |
+| 16 | `AgentExecutionPreviewServiceImpl` | `helloai-core/…/core/agent/service/impl/AgentExecutionPreviewServiceImpl.java:53` | — | 执行预览 | ⬜ 留单次 | 预览 |
+
+> **★本表即 `REF-8.5` 的验收边界**：**「进循环面」= #2~#5 四项**（连既有基线 #1 共 5 处），**其余 12 项明确不进** —— 目的在于防止「内核收敛 = 全面进化」的误读。**变更边界须走新裁定并登记决策**（新增面须按同判据重新取证，不得以「顺便」为由扩面）。
+>
+> **★已落地（2026-10-16）**：边界内四项的实现形态见 **§10.9**（`LOG-20261016-005`）——白名单写在配置 `helloai.execution.business-loop-enabled` / `business-loop-scenes`，**默认即本表四项**；若要临时回退到单次链路，置开关为 `false` 即可（**边界本身不变**）。
 
 ## 10.7 `REF-8.4` 本轮范围与红线②实操判定（**已裁定**，2026-10-13；5 项结论 = `D-2026-10-13-6~10`，记录 `LOG-20261013-011`）
 
@@ -718,6 +728,8 @@ REF-8.4 拦截链（**已交付 2026-10-13**）─────────┘─
 ### 10.7.2 A 的「否决」层级：**留派发层**
 
 **建议裁定**：A 挂 `ResilientDispatcher`，复用 V27.1 先例模板（`isExecutionDenseMismatch:174-195`：timeline 事件 + `markManualIntervention` + 抛 `AgentUnavailableException` 走 fallback）；A 的落地形态 = 给 `SubTaskQueryPort` 加一个「需读原始附件」信号（与 `isExecutionDense:108` 并列、**同风格**），在 `ResilientDispatcher` 加 `isAttachmentReadMismatch`，与既有判定**共用同一 timeline 事件与同一 `markManualIntervention`**。
+
+> **★前提订正（2026-10-16 实测，记录 `LOG-20261016-001`）**：`LOG-20261011-007` 原文写「内部 LLM 工具面**无**读附件能力 ⇒ 只能拿依赖的文本摘要」——**该前提已过期**。实测：`INTERNAL_LLM_TOOLS` 含 **`internal_read_attachment`**（`AgentMcpServerServiceImpl`，`REF-8.1` 交付），实现为 `new String(content, UTF_8)`（`InternalLlmExecutorTools`）。⇒ **缺口从「没有读通道」变为「通道只做 UTF-8 解码，读不出二进制结构化文件（xlsx / docx / pdf）的列」**。这不改变 A 的落点与形态（要拦的还是「无本机能力 Agent 接结构化附件核对活」），但**改变了判据的表述**：不是「Agent 没有读附件工具」，而是「Agent 不具备结构化解析能力」（= `AgentCapability.hasStructuredAttachmentReadCapability`，当前与 `hasLocalExecutionCapability` 同判据）。
 
 红线②的**实操判定**（不是口号，逐条可机械核对）：
 
@@ -785,6 +797,158 @@ REF-8.4 拦截链（**已交付 2026-10-13**）─────────┘─
 按此核对：`AgentLoopInput` 13 字段含 **6 个平台概念**（`runId/taskId/subTaskId/turn/agentId/eventRecorder`）；`ChatModelToolLoop` 直接写 `AgentEventType.*`；`ToolInvocationContext` 为 `static`。⇒ **现状不符**，`REF-8.4` 的挂点抽象为**必要不充分**。
 
 ⚠️ **与既有红线的张力（已裁定，`D-2026-10-13-7`）**：§10.5 红线写着「**不动 `ChatModelToolLoop` 循环本体**」。可移植化必然要动它的**输入契约与事件出口**（可「不动循环逻辑、只动入参/出口」，二者不必然冲突）。**已裁定（2026-10-13）**：可移植性**登记为独立待办**，不列入 `REF-8.4` 本轮范围（记录 `LOG-20261013-011`）。
+
+## 10.8 `REF-8.6`~`REF-8.9` 运行时合同对齐（`G1~G4`，**2026-10-16 立项，`D-2026-10-16-4`**）
+
+> **依据**：`review/内部 LLM 执行链运行时合同核对·以 DSH 为基准的重判（2026-10-16）.md` §三（缺口重排）。**本项目内部 LLM 执行逻辑参照 DeepSeek Harness（DSH）**，故基准取 **DSH 源码实测**而非外部通用文章 —— 这一决定本身改变了四项缺口的定级（详见重判报告 §二）。
+>
+> **本组与 `REF-8.1`~`REF-8.5` 的分工**：`REF-8.1`~`REF-8.5` 治「**内部 LLM 不是 agent**」（可见面收敛：工具 / 手脚 / 技能 / 拦截链 / 覆盖面）；**本组治「循环的运行时语义不完整」** —— **不改可见面、不扩覆盖面**，只补运行时的**终止 / 取消 / 观测**语义。两轴并存，差距锚点分别为 `G-021` 与 `G-023`。
+
+**优先序（严格按重判报告，不得重排）**：
+
+| 序 | 编号 | 缺口 | 原始定级 | DSH 基准下的判定 | 依据（DSH 侧） |
+|---|---|---|---|---|---|
+| 1 | **`REF-8.6`** | **取消 / 超时树缺失** | 缺（第 3 位） | **真缺口（最高）** —— DSH 为**一等公民**，HelloAI 完全没有 | `agent.ts:46,50` `AbortController` + **16 处** `signal.throwIfAborted()` + 专测 `tests/cancel.spec.ts` |
+| 2 | **`REF-8.7`** | **`max-tokens` 截断被静默当成功** | 缺（第 1 位，与 refusal 并列） | **真缺口（限缩到半条）** —— DSH 有独立终态 + **sticky 语义** | `agent.ts:547` + `:338-343`（注释明写「max-tokens is sticky」） |
+| — | （不立项） | `refusal` 当成功 | 缺（并列最高） | **双方皆无** ⇒ 非对齐项 | `types.ts:156-162` 无 `refusal`；`packages/llm/` 全库 0 命中 |
+| 3 | **`REF-8.8`** | **观测面：usage 只有单一 `totalTokens`** | 部分（第 4 位） | **真缺口** —— DSH 的 usage 是**互斥分量** | `types.ts:175-188`，注释明确「**Counts are DISJOINT**」 |
+| 4 | **`REF-8.9`** | **独立预算闸缺失** | 缺（第 2 位） | **非对齐项（自研增强）** —— DSH 同样没有 | DSH 全库 `costBudget` / `budgetUsd` / `maxCost` / `haltBudget` **0 命中**；`guard/` 仅两包 |
+
+> **★两项「不作为对齐项」的明确记录**（防止后人按其表面严重度反过来排期）：**`refusal` 半条**与 **`G2` 独立预算闸**在 DSH 基准下**都不是缺口** —— 前者参照实现同样不处理，后者参照实现完全不做。⇒ **不得以「对齐 DSH」名义立项**；`REF-8.9` 之所以仍占编号，是为了让「已评估」可追溯（`D-2026-10-16-4` ⑤）。
+
+**红线（沿用 §10.5 并补三条）**：
+
+- 沿用：**不动 `ChatModelToolLoop` 循环本体**（「不动循环**逻辑**、只动入参 / 出口」，同 §10.7.6 的裁定口径）。
+- 沿用：**不新建 append-only 表**（用量 / 取消信号落既有 `agent_event`）。
+- **新增**：**`REF-8.9` 前置未成立前不得开写** —— 预算闸需要「每步可查询用量状态」的载体，而该载体**现不存在**（重判报告 §八 附录 C 第 2 项）；先建载体，再谈闸门。
+- **新增**：**provider 能力差异一律降级、不报错** —— 用量分量与取消支持在不同 provider 上并不齐备（`REF-8.8` 尤为明显），缺字段 / 不支持取消时**降级回改造前语义**并留痕，**不得让「对齐」变成「新增拒绝面」**。
+- **新增**：**判据必须可反证** —— 每项须给出「改造前必失败」的用例（取消信号的专门测试、先触顶后正常的 sticky 混合序列等），**禁止只有正向断言**。
+
+**验收边界**：本组完成后，`G-023` 四缺口中 **3 项**（`REF-8.6`/`8.7`/`8.8`）应转 `DONE` 或 `PARTIAL`；**`REF-8.9` 保持 `DEFERRED`**（其转正须另有成本治理需求作为触发，**不随本组自动达成**）。
+
+---
+
+## 10.9 `REF-8.5` 落地形态（**✅ 已落地 2026-10-16**，记录 `LOG-20261016-005`）
+
+> **与 §10.6 的关系**：§10.6 定的是**边界**（哪些面进 / 不进，已裁定）；本节记的是**边界内的实现形态**（怎么进、进哪一层、不做什么）。**本节不改变 §10.6 的任何裁定。**
+
+**落点（5 个生产文件 + 1 个测试类）**：
+
+| # | 落点 | 变更 |
+|---|---|---|
+| 1 | `core/agent/service/impl/PlatformAgentExecutionServiceImpl` | **唯一插点**：`execute(Agent, AgentTask)` 在技能注入 + 心跳之后判定白名单，命中则交循环入口；返回 `null` 即回落单次。<b>不散改 4 个调用点</b>——4 个已裁定面全经此咽喉 |
+| 2 | `core/agent/runtime/BusinessSurfaceLoopRunner`（**新增**） | 业务面循环入口：白名单判定 + 装配 `AgentLoopInput` + 执行 + 结果映射 |
+| 3 | `core/agent/tool/impl/VisibleToolCallbacks`（**新增**） | 模型可见回调选择的**单口径实现**（自 `RuntimeTurnExecutor` 抽出） |
+| 4 | `core/agent/tool/EnabledToolNames`（**新增**） | 启用工具并集的**单口径实现**（原三处副本合一） |
+| 5 | `common/config/AgentExecutionProperties` | 新增 `businessLoopEnabled`（默认 `true`）+ `businessLoopScenes`（默认 = §10.6 四项） |
+| 6 | `core/review/support/ReviewExecutionEngine` | `AgentTask.context` 补 `taskId`（本面 Task 级信息在手；与另三个面同形） |
+
+**三条实现裁定**（后两条属「会被反复追问」的类型，故落此留存）：
+
+1. **业务面循环入口不复用 `RuntimeTurnExecutor`，与它并列复用 `AgentLoop`**。理由是该类绑定的是**子任务执行链契约**，业务面套用会三处冲突：① 入参守卫要求 `subTaskId` 非空（4 面中 3 面为任务级、无子任务）；② 出口分类（空产出护栏 + `VERIFICATION` 围栏 fail-close）是「**子任务交付物必须自证**」的契约，业务面输出是 JSON 草案 / 判定 / 报告，会被**误杀为 FAILED**；③ 其事件骨架向 `agent_event` 写 `AGENT_STARTED` / `AGENT_COMPLETED` 等**子任务级语义**事件。⇒ 取「并列复用同一批组件」而非「给执行链类加条件分支」——**执行链零改动**是本次的首要工程目标。
+2. **业务面刻意不写 `agent_event`**（`eventRecorder` / `loopCheckpointListener` 传 `null`）。两个理由：① **防对账误报**——`EventReconciliationServiceImpl` 的判据是「`sub_task_id` 的**末条事件** vs 业务状态」（`REVIEW` 状态期望末条 ∈ {`AGENT_COMPLETED`, `REVIEW_STARTED`}），而子任务核验正在 `REVIEW` 状态下执行 ⇒ 若循环写 `AGENT_STARTED`，**健康的子任务会被判为对账不一致**；② 业务面今日（单次链路）本就**不产** `agent_event`，其可观测面在 `conversation_message` + `task_timeline` ⇒ **不新增第二条事实通道**（§10.4 判据 4）。循环过程事实（轮数 / 工具次数 / 结束原因 / token / 耗时）以 **INFO 日志**呈现。
+3. **开关默认开启（`business-loop-enabled = true`）**，而非默认关闭。理由：§10.6 的「进循环 4 项」**已是用户裁定**，默认关闭等于裁定不生效；且 mock 模式下 `MockChatModel` 不产工具调用 ⇒ 循环一轮即终态、与单次行为等价，默认开启的可观测风险可控。**回退通道保留**：置 `false` 即全部业务面回到裸单次（无需改代码）。
+
+**两条单口径抽出（防口径漂移，非重构洁癖）**：`VisibleToolCallbacks` 与 `EnabledToolNames` 都是「**同一判据被第二个消费方需要**」时才抽的——前者防「模型可见工具」出现第二处过滤（§10.4 判据 2 明文禁止），后者原先已有 **3 处副本**（装配器 / 执行链 / 新入口）。抽出的同时**未改变任何语义**（逐字平移 + 委派）。
+
+**回退矩阵**（任一路径都不使业务面比改造前更差）：
+
+| 情形 | 行为 |
+|---|---|
+| `scene` 不在白名单 / 开关关闭 / 接入类型非 `API_KEY_LLM` | `supports` 恒 false ⇒ 走原单次链路 |
+| 循环抛异常 | 记 WARN + 返回 `null` ⇒ 调用方回落单次 |
+| 循环 `finishReason = ERROR` | 同上 |
+| 循环 `MAX_ITERATIONS` | **判成功**并携末轮正文（`AgentLoopResult` 的契约：maxIterations 携带末轮正文），`finishReason` **原样透出**（真值不掩盖）——不静默丢弃已发生的轮次产出 |
+
+**已知语义边界（登记，不隐藏）**：① `AgentTask.temperature` 在循环路径下**不生效**（`AgentLoop` 只吃 `ChatModel`，无 options 通道；与执行链现状一致）——已裁定的 4 个面均未设置温度，无实际影响；② 任务级 3 面 `subTaskId` 为空 ⇒ 依赖子任务标识的内部工具（读详情 / 读依赖 / 登记产出 / 自报阻塞）在该 3 面**不可用**（调用会得到工具级失败），实际可用的是技能目录 / 惰性加载 / 读附件（按 `attachmentId`）。**这不是缺陷而是边界**：这 3 面的任务语境本就没有「子任务」这一层。
+
+**验收边界**：单测 11 例新增（白名单 5 例 + 装配与映射 6 例）+ 受影响执行链回归（`RuntimeTurnExecutorTest` 21 例等）全绿；`REF-8.5` 的 **E2E 观测点** = 循环日志行 `业务面循环完成: scene=… iterations=… toolCalls=… finishReason=… tokens=…`，以及业务面无新增 `agent_event`（对账零误报）。
+
+---
+
+## 10.10 `REF-8.6` 落地形态（**✅ 已落地 2026-10-16**，记录 `LOG-20261016-006`）
+
+> **与 §10.8 的关系**：§10.8 定的是**立项与优先序**（`G1~G4` 四项缺口的排序、红线与验收边界）；本节记的是其中 **`REF-8.6`（取消 / 超时树）这一项的实现形态**（怎么做、装在哪、不做什么、边界在哪）。
+
+**落点（5 个新增生产类 + 4 处修改 + 3 个测试类）**：
+
+| # | 落点 | 变更 |
+|---|---|---|
+| 1 | `core/agent/runtime/cancel/CancellationToken`（**新增**） | 取消信号接口：`NONE` 共享常量 + `throwIfCancelled()` + 三供给源（`none()` / `deadlineAfter(seconds)` / `mutable()`） |
+| 2 | `core/agent/runtime/cancel/AgentCancelledException`（**新增**） | 取消异常（`RuntimeException`，**不继承 `BizException`** —— 取消是运行时控制信号，非业务语义异常） |
+| 3 | `core/agent/runtime/cancel/CancellableChatModel`（**新增**） | `ChatModel` 装饰器：模型调用**前 / 后**双检查（前 = 不发起注定被取消的请求；后 = 在途结果不采用）；`stream` 帧级检查 |
+| 4 | `core/agent/runtime/cancel/CancellableToolExecutor`（**新增**） | `ToolExecutor` 装饰器：**取消**（整链终止）+ **单工具超时**（返回失败 observation）两机制；专用守护线程池 |
+| 5 | `core/agent/runtime/cancel/LoopCancellation`（**新增**） | 可取消上下文值对象（`token` + `toolTimeoutMillis`）+ 共享 `NONE`；`active()` 决定是否装配 |
+| 6 | `core/agent/runtime/loop/AgentLoopInput` | 增第 15 组件 `cancellation`；**紧凑构造器 = 唯一咽喉**（活跃时自动包装饰器）；三个兼容构造器缺省 `none()` |
+| 7 | `common/config/AgentExecutionProperties` | 新增 `turnDeadlineSeconds`（默认 1800）+ `toolCallTimeoutMillis`（默认 300000） |
+| 8 | `core/agent/runtime/RuntimeTurnExecutor` | 传 `resolveCancellation()`；catch `AgentCancelledException` ⇒ `FAILED` + `finishReason=CANCELLED` |
+| 9 | `core/agent/runtime/BusinessSurfaceLoopRunner` | 传 `LoopCancellation.of(配置)`；catch 同上，**不回落单次** |
+| 10 | 测试 3 个（`CancellationTokenTest` / `CancellableDecoratorsTest` / `LoopCancellationWiringTest`）+ 改 `BusinessSurfaceLoopRunnerTest` | 取消域新增单测 19 例；受影响用例断言由「原始身份」改为「装饰器实例」 |
+
+**三条实现裁定**（第二条属「会被反复追问」的类型，故落此留存）：
+
+1. **★装配点收敛为「唯一咽喉」= `AgentLoopInput` 的紧凑构造器**。`cancellation.active()` 时**自动**包 `CancellableChatModel` / `CancellableToolExecutor` ⇒ ① **循环本体（`ChatModelToolLoop`）一行不改**（§10.5 红线：不动循环逻辑、只动入参 / 出口）；② 任何调用方（现有两个 + **未来新增**）**都无法绕过**。判据：可取消性是**横切关注点**，若改成「各调用方自行包装」，就会重现已登记缺陷模式「**规则存在 ≠ 全路径强制**」（新增调用方漏包 ⇒ 取消静默失效）。
+2. **超时与取消是两套语义，刻意不合并**。**取消** = 整链终止（抛 `AgentCancelledException`，本轮不应继续）；**单工具超时** = 单个动作放弃等待、**返回失败 observation 交模型决策**（换工具 / 换参数 / 收尾），**不整链失败**。若把超时也做成抛异常，会把「工具偶发慢」升级成「整链失败」—— 即**新增拒绝面**（违 §10.8 红线③ 的精神）。
+3. **取消是独立终态（`finishReason = CANCELLED`）**，不是「模型 / 工具出错」。执行链（`RuntimeTurnExecutor`）判 `FAILED`；**业务面（`BusinessSurfaceLoopRunner`）不回落单次** —— 回落会立刻再跑一遍**注定超期**的工作（与 §10.9 回退矩阵的「异常即回落」相反，因为此处「回落」本身是错的）。
+
+**已知语义边界（登记，不隐藏）**：
+
+- **在途 HTTP 请求不打断**：本域是**协作式取消**——检查点落在「每次模型调用前 / 后」与「每次工具调用前」，只保证「**不再发起下一步**」与「**不采用在途结果**」；spring-ai 的 `ChatModel` 契约**无 signal 通道**（参照实现之所以能真打断，是因其 provider 客户端接受 signal）。
+- **不响应中断的工具**：超时后 `future.cancel(true)` 是**尽力中断**；若工具实现不响应，其底层动作可能仍在后台跑完（结果被丢弃）—— 这是「不给工具加超时」与「改接口签名（动循环）」之间**唯一的折中**。
+- **外部主动取消暂未接线**：`CancellationToken.mutable()` 已备好，但**无生产消费方**，供后续「任务取消 / 人工中止」接线用。**★接线红线**：信号源必须是**跨实例一致**的载体（Redisson / MQ），**不得**新增进程级 `static Map` 缓存运行中的 token（那是已清偿缺陷 `D-2` 的同类）。
+
+**验收边界**：取消域单测 **19 例**全绿（含 **★反证**：工具调用中途取消 ⇒ 循环**不再发起下一轮模型调用**）；「不限」路径**零包装**（模型 / 执行器身份不变，行为与改造前逐字一致）；受影响面联合回归 **73 例 0 失败**；全量 core **2287 例 0 失败 0 错误**。**E2E 观测点** = 取消时执行链落 `finishReason=CANCELLED`（业务面同）；`agent_event` 零新增。
+
+---
+
+## 10.11 `REF-8.7` 落地形态（**✅ 已落地 2026-10-16**，记录 `LOG-20261016-007`）
+
+> **与 §10.8 的关系**：§10.8 定的是立项与优先序；本节记 `REF-8.7`（`max-tokens` 终态 + sticky）的实现形态。
+
+**落点（1 个新增终态 + 1 处采集/分类 + 1 个测试类）**：
+
+| # | 落点 | 变更 |
+|---|---|---|
+| 1 | `core/agent/runtime/loop/AgentLoopResult` | 新增 `maxTokens(...)` 工厂：`success=false` + `finishReason="MAX_TOKENS"` + **保留已产出部分正文**；javadoc 补 sticky 语义 |
+| 2 | `core/agent/runtime/loop/impl/ChatModelToolLoop` | 每轮读 `generation.metadata.finishReason`；`truncated` 置位（**只置不撤**）；新增 `stopDraft(...)`（出口在 `STOP` / `MAX_TOKENS` 间选择）、`finishReasonOf(...)`、`isTruncated(...)` 与截断取值集 |
+| 3 | `src/test/…/loop/impl/MaxTokensTerminalTest`（**新增**） | 单测 7 例（截断终态 · Anthropic 风格 · sticky 跨步 · sticky 优先于轮数耗尽 · 未知取值 fail-open · 缺省降级 · `isTruncated` 表） |
+
+**两条实现裁定**：
+
+1. **★sticky 的落点 = 「出口定性」，不是「挂点自觉」**。`truncated` 置位后，**全部出口**（自然 `STOP` 与 `MAX_ITERATIONS`）都在**进入 `beforeTerminate` 挂点之前**就定性为 `MAX_TOKENS` 草稿 ⇒ 现有 `FinalReportFenceHook`（其守卫是「`success && STOP` 才触发收尾轮」）**自然跳过**，故「不得下调」不依赖任何挂点的自觉，也不会被未来新增挂点破坏。
+2. **★判据容错 + fail-open**。结束原因是 **provider 私有字符串**（实测：OpenAI / DeepSeek 适配器为枚举名 `LENGTH`；Anthropic 兼容面为协议原值 `max_tokens`）⇒ 判定前统一 `trim + toLowerCase`，命中集显式列出；**未知取值一律不判截断**（降级回改造前语义）—— 违 §10.8 红线③「不得让『对齐』变成『新增拒绝面』」。
+
+**平台侧映射（不新增分支）**：执行链 `success=false` ⇒ 既有 `ExecutionStatus.FAILED` 分支（**截断不静默当成功**）；业务面沿用其「非 `ERROR` 终态 ⇒ 判成功但 `finishReason` 原样透出」的既有惯例（与 `MAX_ITERATIONS` 同形，零新分支）。
+
+**已知语义边界**：未知结束原因（provider 用了不在集合里的 token）**不会被判截断** —— 这是「不新增拒绝面」与「不漏判」之间的折中，选择前者（漏判只损失观测，误判会新增失败）。
+
+**验收边界**：新增单测 7 例（★含反证：改造前该情形返回 `STOP` 成功，现为 `MAX_TOKENS` 失败）；既有 `ChatModelToolLoopTest` 19 例不受影响；`FinalReportFenceHookTest` 9 例 / `RuntimeTurnExecutorTest` 21 例全绿。
+
+---
+
+## 10.12 `REF-8.8` 落地形态（**✅ 已落地 2026-10-16**，记录 `LOG-20261016-008`）
+
+> **与 §10.8 的关系**：§10.8 定的是立项与优先序；本节记 `REF-8.8`（用量互斥拆分 + latency）的实现形态。
+
+**落点（1 个新增值对象 + 3 处改动 + 1 个测试类）**：
+
+| # | 落点 | 变更 |
+|---|---|---|
+| 1 | `core/agent/runtime/loop/AgentUsage`（**新增**） | record：互斥五分量（输入 / 输出 / 缓存读 / 缓存写 / 推理）+ `totalTokens` + `latencyMillis`；`empty` / `plus`（null 安全）/ `withLatency` / `isEmpty` |
+| 2 | `core/agent/runtime/loop/AgentLoopResult` | 增第 9 分量 `usage` + `withUsage(...)`（**既有 8 参 factory 与全部调用点零改动**，缺省 null） |
+| 3 | `core/agent/runtime/loop/impl/ChatModelToolLoop` | `runningUsage` 逐轮累计（`accumulateUsage(ChatResponse, AgentUsage)` 重载）+ 墙钟耗时；**在挂点改写之后**统一装配 |
+| 4 | `core/agent/runtime/RuntimeTurnExecutor` | `AGENT_COMPLETED` payload 扩 6 键（`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens` / `latencyMs`），**保留 `tokens` 总数**；**不新增事件类型** |
+| 5 | `src/test/…/loop/impl/LoopUsageAccountingTest`（**新增**） | 单测 6 例（跨步累加与同源一致 · 缺省降级 · 私有分量留 null · `nativeUsage` 为 Map 时 best-effort · 非 Map 忽略 · `AgentUsage` 运算） |
+
+**三条实现裁定**：
+
+1. **★「只扩字段、不改控制流」的落法 = 加分量 + `withUsage`，不重载工厂**。直接给 record 加第 9 分量会波及全部调用点；改以 `withUsage(usage)` 在**末位装配** ⇒ 既有 8 参 factory 全部保留、31 处调用点与既有单测**零改动**（`tokenUsage` 亦保留，既有消费方零回归）。
+2. **★用量在「挂点改写之后」装配（正交）**。`beforeTerminate` 挂点可改写终态 / 正文（如收尾轮追加一次模型调用），若在此之前装配用量，挂点返回的新对象会把用量丢掉。故由循环在**挂点链跑完之后**统一 `withUsage(...)` —— 终态与用量彼此正交，且耗时（墙钟）**含挂点耗时**。
+3. **★降级边界（对齐 §10.8 红线③）**：**输入 / 输出**分量经 spring-ai 通用契约（`Usage#getPromptTokens/CompletionTokens`）稳定取到；**缓存读 / 缓存写 / 推理**属 provider 私有（只存在于 `nativeUsage`），**仅当它是 `Map` 时**按候选键 best-effort 读取，否则留 `null`（**不反射、不猜测、不报错**）。
+
+**为什么不动事件类型**：用量落既有 `AGENT_COMPLETED` 的 payload（JSON map，扩键向后兼容）⇒ **不触发**前端事件字典联动（事件码 parity 守卫覆盖的是 `TimelineEventCode` 展示码，非 `agent_event` payload 键）。
+
+**验收边界**：新增单测 6 例（★含 `tokenUsage ⇔ usage.totalTokens` 同源一致性断言）；全量 core 回归全绿；provider 未给 usage 时**全分量 null 且不抛异常**（降级断言）。
 
 ---
 
