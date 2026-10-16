@@ -2,10 +2,12 @@ package com.helloai.core.agent.event.impl;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.core.agent.entity.AgentEvent;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventQueryService;
 import com.helloai.core.agent.event.AgentEventTraceItem;
+import com.helloai.core.agent.event.RecoveryPoint;
 import com.helloai.core.agent.mapper.AgentEventMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,14 +17,18 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 /**
  * Agent 事件流读侧查询实现。
  *
  * <p>纯读服务：{@link #traceBySubTaskId} / {@link #traceByRunId} / {@link #traceByTaskId} /
  * {@link #pageAuditByTaskId} 将 {@code agent_event}（mapper 已按对应时序返回）
- * 投影为不可变 {@link AgentEventTraceItem}，不落库、不写状态。</p>
+ * 投影为不可变 {@link AgentEventTraceItem}；{@link #projectRecoveryPoint} 在同一轨迹上做
+ * 一次结构判定，投影出恢复点（Recovery 消费面）。四个方法均不落库、不写状态、不反向修正业务状态。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -83,6 +89,94 @@ public class AgentEventQueryServiceImpl implements AgentEventQueryService {
         Page<AgentEvent> page = new Page<>(pageNum, pageSize);
         IPage<AgentEvent> result = agentEventMapper.selectPageAuditByTaskId(page, taskId, eventType, parsedStart, parsedEnd);
         return result.convert(this::toItem);
+    }
+
+    @Override
+    public RecoveryPoint projectRecoveryPoint(Long subTaskId) {
+        if (subTaskId == null) {
+            return RecoveryPoint.none();
+        }
+        List<AgentEventTraceItem> trace = traceBySubTaskId(subTaskId);
+        if (trace.isEmpty()) {
+            return RecoveryPoint.none();
+        }
+
+        String agentStarted = AgentEventType.AGENT_STARTED.code();
+        String agentCompleted = AgentEventType.AGENT_COMPLETED.code();
+        String toolStarted = AgentEventType.TOOL_CALL_STARTED.code();
+        String toolCompleted = AgentEventType.TOOL_CALL_COMPLETED.code();
+
+        // 一遍扫描：AGENT_STARTED 置开、AGENT_COMPLETED 置闭 ⇒ 结束时仍开即「未闭合轮次」。
+        // 事件层无失败终态事件（ADR-001 §5.3）⇒ 「其后无 AGENT_COMPLETED」是唯一可用的未终结信号。
+        Integer openTurn = null;
+        boolean terminalEventSeen = false;
+        for (AgentEventTraceItem item : trace) {
+            String type = item.getEventType();
+            if (agentStarted.equals(type)) {
+                openTurn = item.getTurn();
+            } else if (agentCompleted.equals(type)) {
+                openTurn = null;
+                terminalEventSeen = true;
+            } else if (AgentEventType.RUN_COMPLETED.code().equals(type)) {
+                terminalEventSeen = true;
+            }
+        }
+
+        String danglingTool = null;
+        List<String> completedTools = List.of();
+        if (openTurn != null) {
+            // 只统计未闭合轮次内的工具事实（更早轮次的已完成工具不属于本次恢复范围）
+            LinkedHashMap<String, Boolean> toolsInOrder = new LinkedHashMap<>();
+            for (AgentEventTraceItem item : trace) {
+                if (!Objects.equals(item.getTurn(), openTurn)) {
+                    continue;
+                }
+                String type = item.getEventType();
+                if (!toolStarted.equals(type) && !toolCompleted.equals(type)) {
+                    continue;
+                }
+                String tool = toolName(item);
+                if (tool == null) {
+                    continue;
+                }
+                if (toolStarted.equals(type)) {
+                    toolsInOrder.putIfAbsent(tool, Boolean.FALSE);
+                } else {
+                    toolsInOrder.put(tool, Boolean.TRUE);
+                }
+            }
+            completedTools = toolsInOrder.entrySet().stream()
+                    .filter(e -> Boolean.TRUE.equals(e.getValue()))
+                    .map(Map.Entry::getKey)
+                    .toList();
+            danglingTool = toolsInOrder.entrySet().stream()
+                    .filter(e -> !Boolean.TRUE.equals(e.getValue()))
+                    .map(Map.Entry::getKey)
+                    .findFirst()
+                    .orElse(null);
+        }
+
+        AgentEventTraceItem last = trace.get(trace.size() - 1);
+        return RecoveryPoint.builder()
+                .unfinished(openTurn != null)
+                .unfinishedTurn(openTurn)
+                .danglingTool(danglingTool)
+                .completedTools(completedTools)
+                .lastEventType(last.getEventType())
+                .lastEventSequence(last.getId())
+                .lastEventAt(last.getCreateTime())
+                .terminalEventSeen(terminalEventSeen)
+                .build();
+    }
+
+    /** 取工具事件 payload 的工具名（埋点键 {@code tool}，见 ChatModelToolLoop）；缺失返回 null。 */
+    private String toolName(AgentEventTraceItem item) {
+        Map<String, Object> payload = item.getPayload();
+        if (payload == null) {
+            return null;
+        }
+        Object tool = payload.get("tool");
+        return tool instanceof String toolStr && !toolStr.isBlank() ? toolStr : null;
     }
 
     /**

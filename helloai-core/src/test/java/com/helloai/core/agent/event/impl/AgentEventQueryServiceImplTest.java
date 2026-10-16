@@ -2,8 +2,10 @@ package com.helloai.core.agent.event.impl;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.core.agent.entity.AgentEvent;
 import com.helloai.core.agent.event.AgentEventTraceItem;
+import com.helloai.core.agent.event.RecoveryPoint;
 import com.helloai.core.agent.mapper.AgentEventMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -32,6 +34,9 @@ import static org.mockito.Mockito.when;
  * {@link #traceByTaskId} / {@link #pageAuditByTaskId} 的投影口径（entity → VO 字段一一映射）与顺序透传；
  * 排序本身由 mapper 保证，不在此重复编排。{@code traceByTaskId} 额外验证 runId 规则
  * 收敛在 service 层（ADR-001 §3.1，G-006 消费面易用性增量）。</p>
+ *
+ * <p>另覆盖 Recovery 消费面 {@link AgentEventQueryServiceImpl#projectRecoveryPoint}：未闭合轮次判定 /
+ * 中断点（悬挂工具）/ 已完成工具保序 / 终态事件识别 / 多轮返工只取最后未闭合轮次。</p>
  */
 @ExtendWith(MockitoExtension.class)
 class AgentEventQueryServiceImplTest {
@@ -220,6 +225,151 @@ class AgentEventQueryServiceImplTest {
         queryService.pageAuditByTaskId(100L, null, "garbled", "also-garbled", 1, 10);
 
         verify(agentEventMapper).selectPageAuditByTaskId(any(), eq(100L), any(), eq((OffsetDateTime) null), eq((OffsetDateTime) null));
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    //  Recovery 消费面：projectRecoveryPoint（只读恢复点投影）
+    // ══════════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("Recovery：subTaskId 为空 → 空投影且不触达 mapper")
+    void shouldReturnNoneRecoveryWhenSubTaskIdNull() {
+        RecoveryPoint point = queryService.projectRecoveryPoint(null);
+
+        assertThat(point.isUnfinished()).isFalse();
+        assertThat(point.getCompletedTools()).isEmpty();
+        verifyNoInteractions(agentEventMapper);
+    }
+
+    @Test
+    @DisplayName("Recovery：无任何事件 → 空投影（unfinished=false，各字段为空）")
+    void shouldReturnNoneRecoveryWhenNoEvents() {
+        when(agentEventMapper.selectBySubTaskIdOrdered(10L)).thenReturn(List.of());
+
+        RecoveryPoint point = queryService.projectRecoveryPoint(10L);
+
+        assertThat(point.isUnfinished()).isFalse();
+        assertThat(point.getUnfinishedTurn()).isNull();
+        assertThat(point.getDanglingTool()).isNull();
+        assertThat(point.getLastEventType()).isNull();
+        assertThat(point.isTerminalEventSeen()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Recovery：工具已开始未完成 → unfinished=true 且 danglingTool=该工具（中断点）")
+    void shouldDetectDanglingToolAsInterruptPoint() {
+        when(agentEventMapper.selectBySubTaskIdOrdered(10L)).thenReturn(List.of(
+                plainEvent(1L, AgentEventType.AGENT_STARTED.code(), 1, 2),
+                toolEvent(2L, AgentEventType.TOOL_CALL_STARTED.code(), 1, "internal_read_attachment")));
+
+        RecoveryPoint point = queryService.projectRecoveryPoint(10L);
+
+        assertThat(point.isUnfinished()).isTrue();
+        assertThat(point.getUnfinishedTurn()).isEqualTo(1);
+        assertThat(point.getDanglingTool()).isEqualTo("internal_read_attachment");
+        assertThat(point.getCompletedTools()).isEmpty();
+        assertThat(point.isTerminalEventSeen()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Recovery：已完成工具保序去重，且仅最后未配对者算中断点")
+    void shouldCollectCompletedToolsInOrderAndDetectDangling() {
+        when(agentEventMapper.selectBySubTaskIdOrdered(10L)).thenReturn(List.of(
+                plainEvent(1L, AgentEventType.AGENT_STARTED.code(), 1, 2),
+                toolEvent(2L, AgentEventType.TOOL_CALL_STARTED.code(), 1, "tool_a"),
+                toolEvent(3L, AgentEventType.TOOL_CALL_COMPLETED.code(), 1, "tool_a"),
+                toolEvent(4L, AgentEventType.TOOL_CALL_STARTED.code(), 1, "tool_b"),
+                toolEvent(5L, AgentEventType.TOOL_CALL_COMPLETED.code(), 1, "tool_b"),
+                toolEvent(6L, AgentEventType.TOOL_CALL_STARTED.code(), 1, "tool_c")));
+
+        RecoveryPoint point = queryService.projectRecoveryPoint(10L);
+
+        assertThat(point.getCompletedTools()).containsExactly("tool_a", "tool_b");
+        assertThat(point.getDanglingTool()).isEqualTo("tool_c");
+        assertThat(point.getLastEventType()).isEqualTo(AgentEventType.TOOL_CALL_STARTED.code());
+        assertThat(point.getLastEventSequence()).isEqualTo(6L);
+    }
+
+    @Test
+    @DisplayName("Recovery：出现 AGENT_COMPLETED → 该轮闭合，unfinished=false 且零恢复点")
+    void shouldMarkClosedWhenAgentCompletedPresent() {
+        when(agentEventMapper.selectBySubTaskIdOrdered(10L)).thenReturn(List.of(
+                plainEvent(1L, AgentEventType.AGENT_STARTED.code(), 1, 2),
+                toolEvent(2L, AgentEventType.TOOL_CALL_STARTED.code(), 1, "tool_a"),
+                toolEvent(3L, AgentEventType.TOOL_CALL_COMPLETED.code(), 1, "tool_a"),
+                plainEvent(4L, AgentEventType.AGENT_COMPLETED.code(), 1, 0)));
+
+        RecoveryPoint point = queryService.projectRecoveryPoint(10L);
+
+        assertThat(point.isUnfinished()).isFalse();
+        assertThat(point.getUnfinishedTurn()).isNull();
+        assertThat(point.getDanglingTool()).isNull();
+        assertThat(point.getCompletedTools()).isEmpty();
+        assertThat(point.isTerminalEventSeen()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Recovery：返工多轮 → 仅最后未闭合轮次计恢复点，上一轮工具事实不计入")
+    void shouldOnlyCountLatestUnfinishedTurn() {
+        when(agentEventMapper.selectBySubTaskIdOrdered(10L)).thenReturn(List.of(
+                plainEvent(1L, AgentEventType.AGENT_STARTED.code(), 1, 2),
+                toolEvent(2L, AgentEventType.TOOL_CALL_STARTED.code(), 1, "tool_old"),
+                toolEvent(3L, AgentEventType.TOOL_CALL_COMPLETED.code(), 1, "tool_old"),
+                plainEvent(4L, AgentEventType.AGENT_COMPLETED.code(), 1, 0),
+                plainEvent(5L, AgentEventType.AGENT_STARTED.code(), 2, 2),
+                toolEvent(6L, AgentEventType.TOOL_CALL_STARTED.code(), 2, "tool_new")));
+
+        RecoveryPoint point = queryService.projectRecoveryPoint(10L);
+
+        assertThat(point.isUnfinished()).isTrue();
+        assertThat(point.getUnfinishedTurn()).isEqualTo(2);
+        assertThat(point.getDanglingTool()).isEqualTo("tool_new");
+        // 第 1 轮已完成工具不属本次恢复范围
+        assertThat(point.getCompletedTools()).isEmpty();
+        // 终态事件出现过（第 1 轮闭合）——不等于「整体已终结」，故 unfinished 仍为 true
+        assertThat(point.isTerminalEventSeen()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Recovery：RUN_COMPLETED 计入终态事件")
+    void shouldTreatRunCompletedAsTerminal() {
+        when(agentEventMapper.selectBySubTaskIdOrdered(10L)).thenReturn(List.of(
+                plainEvent(1L, AgentEventType.AGENT_STARTED.code(), 1, 2),
+                plainEvent(2L, AgentEventType.AGENT_COMPLETED.code(), 1, 0),
+                plainEvent(3L, AgentEventType.RUN_COMPLETED.code(), 1, 0)));
+
+        RecoveryPoint point = queryService.projectRecoveryPoint(10L);
+
+        assertThat(point.isTerminalEventSeen()).isTrue();
+        assertThat(point.isUnfinished()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Recovery：工具事件缺 tool 名 → 忽略该事件（不产生假中断点）")
+    void shouldIgnoreToolEventWithoutToolName() {
+        when(agentEventMapper.selectBySubTaskIdOrdered(10L)).thenReturn(List.of(
+                plainEvent(1L, AgentEventType.AGENT_STARTED.code(), 1, 2),
+                plainEvent(2L, AgentEventType.TOOL_CALL_STARTED.code(), 1, 3)));
+
+        RecoveryPoint point = queryService.projectRecoveryPoint(10L);
+
+        assertThat(point.isUnfinished()).isTrue();
+        assertThat(point.getDanglingTool()).isNull();
+        assertThat(point.getCompletedTools()).isEmpty();
+    }
+
+    /** 非工具事件（payload 无 tool 键）。 */
+    private AgentEvent plainEvent(Long id, String eventType, int turn, int step) {
+        AgentEvent e = entity(id, "evt-" + id, "run-100-1", turn, step, eventType, OffsetDateTime.now());
+        e.setPayload(Map.of("k", "v"));
+        return e;
+    }
+
+    /** 工具事件（payload 带 tool 键，埋点键见 ChatModelToolLoop）。 */
+    private AgentEvent toolEvent(Long id, String eventType, int turn, String tool) {
+        AgentEvent e = entity(id, "evt-" + id, "run-100-1", turn, 3, eventType, OffsetDateTime.now());
+        e.setPayload(Map.of("tool", tool));
+        return e;
     }
 
     /** 前端 el-date-picker / 数据库写入的本地时间形态（与服务端 parseAuditTime 的兜底格式一致）。 */

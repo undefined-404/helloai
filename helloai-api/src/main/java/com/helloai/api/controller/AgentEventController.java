@@ -3,9 +3,11 @@ package com.helloai.api.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.event.AgentEventItem;
+import com.helloai.api.dto.event.RecoveryPointItem;
 import com.helloai.common.base.R;
 import com.helloai.core.agent.event.AgentEventQueryService;
 import com.helloai.core.agent.event.AgentEventTraceItem;
+import com.helloai.core.agent.event.RecoveryPoint;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,6 +30,7 @@ import java.util.List;
  *   <li>GET /api/agent-events/traceByTaskId/{taskId}</li>
  *   <li>GET /api/agent-events/traceBySubTaskId/{subTaskId}</li>
  *   <li>GET /api/agent-events/pageAuditByTaskId/{taskId}</li>
+ *   <li>GET /api/agent-events/recoveryPointBySubTaskId/{subTaskId}</li>
  * </ul>
  * </p>
  */
@@ -102,6 +105,35 @@ public class AgentEventController {
         IPage<AgentEventTraceItem> result =
                 agentEventQueryService.pageAuditByTaskId(taskId, eventType, timeStart, timeEnd, safePage, safePageSize);
         return R.ok(PageResult.of(result, this::toItem));
+    }
+
+    /**
+     * Recovery：按子任务读取执行恢复点（第四个事件流消费面，只读）。
+     *
+     * <p>从 append-only 的 {@code agent_event} 推定「上一次执行尝试停在哪」（未闭合轮次 +
+     * 中断点工具 + 该轮已完成工具）。与 Replay 的区别：Replay 重建<b>发生了什么</b>，
+     * 本端点回答<b>从哪里继续</b>。仅读，不产生副作用、不改业务状态。</p>
+     *
+     * <p>无事件 / 事件流已闭合时返回 {@code unfinished=false} 的空投影（非报错），
+     * 供前端直接渲染「无需恢复」。</p>
+     */
+    @GetMapping("/recoveryPointBySubTaskId/{subTaskId}")
+    public R<RecoveryPointItem> recoveryPointBySubTaskId(@PathVariable("subTaskId") Long subTaskId) {
+        return R.ok(toRecoveryPointItem(agentEventQueryService.projectRecoveryPoint(subTaskId)));
+    }
+
+    /** core 恢复点投影 → API 响应 DTO。 */
+    private RecoveryPointItem toRecoveryPointItem(RecoveryPoint p) {
+        RecoveryPointItem it = new RecoveryPointItem();
+        it.setUnfinished(p.isUnfinished());
+        it.setUnfinishedTurn(p.getUnfinishedTurn());
+        it.setDanglingTool(p.getDanglingTool());
+        it.setCompletedTools(p.getCompletedTools());
+        it.setLastEventType(p.getLastEventType());
+        it.setLastEventSequence(p.getLastEventSequence());
+        it.setLastEventAt(p.getLastEventAt());
+        it.setTerminalEventSeen(p.isTerminalEventSeen());
+        return it;
     }
 
     /** core 读侧投影 → API 响应 DTO。 */

@@ -14,6 +14,7 @@ import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventQueryService;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.event.AgentEventTraceItem;
+import com.helloai.core.agent.event.RecoveryPoint;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
@@ -146,9 +147,9 @@ public class AgentRuntimeContextAssembler {
         String historySection = renderHistorySectionSafely(agent);
         promptSection = mergeSpecSections(promptSection, historySection);
         DependencySectionResult dependencySection = buildDependencySection(subTask);
-        AgentSessionService.InterruptedSession recovery = findRecoverySafely(subTaskId);
+        RecoveryContext recovery = resolveRecoveryContext(subTaskId);
         // B3 Resume：仅重派接续场景（recovery 命中）才查事件流，无中断时不产生额外查询
-        List<AgentEventTraceItem> completedTrace = recovery != null
+        List<AgentEventTraceItem> completedTrace = recovery.injected()
                 ? findTraceSafely(subTaskId, recovery.turn()) : List.of();
         String userPrompt = buildUserPrompt(subTask, promptSection, dependencySection.section, recovery,
                 completedTrace);
@@ -187,7 +188,10 @@ public class AgentRuntimeContextAssembler {
                         "degraded", dependencySection.degraded,
                         "pluginSpec", resolved.section() != null && !resolved.section().isBlank(),
                         "historySummary", historySection != null && !historySection.isBlank(),
-                        "recoveryInjected", recovery != null));
+                        // recoveryInjected 语义不变（是否注入了恢复上下文）；
+                        // recoverySource 为 REF 消费面新增：区分来源 session（会话表）/ event（事件流兜底）
+                        "recoveryInjected", recovery.injected(),
+                        "recoverySource", recovery.source()));
         taskTimelinePort.recordEvent(subTask.taskId(), subTaskId, TimelineEventCode.SUB_TASK_LLM_CALL_START.code(),
                 AgentRole.EXECUTOR, agent.getId(),
                 Map.of("agentId", agent.getId(), "agentName", agent.getName()));
@@ -288,6 +292,93 @@ public class AgentRuntimeContextAssembler {
     }
 
     /**
+     * 解析恢复上下文：{@code agent_session} 中断记录<b>优先</b>，缺失时以<b>事件流恢复点兜底</b>。
+     *
+     * <p><b>兜底的必要性（实测）</b>：会话表是可变表，且查询口径为「只看最新一行，
+     * ACTIVE / COMPLETED 一律零注入」（{@code AgentSessionServiceImpl#findLatestInterrupted}）。
+     * 进程执行中途被中断（优雅停机 / kill / OOM）时该行可能停在 ACTIVE，或根本没有行
+     * ⇒ 续跑上下文<b>静默零注入</b>，接续者不知道上次已经做过什么，可能重复副作用。
+     * 此时事件流里「{@code AGENT_STARTED} 之后没有 {@code AGENT_COMPLETED}」以及
+     * 「{@code TOOL_CALL_STARTED} 之后没有 {@code TOOL_CALL_COMPLETED}」是 append-only
+     * 的中断点证据，不会被任何后续写入覆盖。</p>
+     *
+     * <p><b>纪律</b>：纯读、零写入 —— 不修正会话表、不修正业务状态；事件流只作事实来源，
+     * 不作第二业务状态源（{@code design/Agent_Event_Stream.md} 原则 2）。</p>
+     */
+    private RecoveryContext resolveRecoveryContext(Long subTaskId) {
+        AgentSessionService.InterruptedSession session = findRecoverySafely(subTaskId);
+        if (session != null) {
+            return new RecoveryContext(session, null);
+        }
+        RecoveryPoint point = projectRecoveryPointSafely(subTaskId);
+        if (point == null || !point.isUnfinished()) {
+            return RecoveryContext.none();
+        }
+        return new RecoveryContext(null, point);
+    }
+
+    /** 事件流恢复点安全查询：查询异常一律降级为 null（零注入零阻断）。 */
+    private RecoveryPoint projectRecoveryPointSafely(Long subTaskId) {
+        try {
+            return agentEventQueryService.projectRecoveryPoint(subTaskId);
+        } catch (Exception e) {
+            log.debug("事件流恢复点查询失败（best-effort 降级，零注入）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** 恢复上下文注入来源：{@code agent_session} 表（租约回收写入的中断点）。 */
+    private static final String RECOVERY_SOURCE_SESSION = "session";
+
+    /** 恢复上下文注入来源：事件流恢复点兜底（会话表无可用中断记录）。 */
+    private static final String RECOVERY_SOURCE_EVENT = "event";
+
+    /**
+     * 恢复上下文（B3 Resume 与 Recovery 消费面的统一载体）。
+     *
+     * <p>两个来源<b>互斥且会话表优先</b>：{@code session} 非空时不用 {@code eventPoint}
+     * （会话表带 snapshot，信息更全）；二者皆空 = 本次为首次执行或上次已闭合 ⇒ 零注入。</p>
+     *
+     * @param session    会话表中断记录；无则 {@code null}
+     * @param eventPoint 事件流恢复点（兜底）；无则 {@code null}
+     */
+    private record RecoveryContext(AgentSessionService.InterruptedSession session, RecoveryPoint eventPoint) {
+
+        /** 零注入（首次执行 / 上次已正常闭合）。 */
+        private static RecoveryContext none() {
+            return new RecoveryContext(null, null);
+        }
+
+        /** 是否命中恢复上下文（命中才查事件流轨迹，无中断时不产生额外查询）。 */
+        boolean injected() {
+            return session != null || eventPoint != null;
+        }
+
+        /** 注入来源（可观测字段 {@code recoverySource}）；未注入时为 {@code null}。 */
+        String source() {
+            if (session != null) {
+                return RECOVERY_SOURCE_SESSION;
+            }
+            return eventPoint != null ? RECOVERY_SOURCE_EVENT : null;
+        }
+
+        /**
+         * 续跑参考的轮次序号：会话来源取 {@code turn}，事件来源取未闭合轮次。
+         *
+         * @return 轮次序号；两种来源都取不到时返回 0（{@code findTraceSafely} 对 0 无匹配
+         *         ⇒ 退回全量轨迹，与既有降级口径一致）
+         */
+        int turn() {
+            if (session != null) {
+                return session.turn();
+            }
+            return eventPoint != null && eventPoint.getUnfinishedTurn() != null
+                    ? eventPoint.getUnfinishedTurn() : 0;
+        }
+    }
+
+    /**
      * 事件流轨迹安全查询（B3 Resume）：优先取中断 Turn 的轨迹；该 Turn 无事件时退回全量轨迹
      * （兼容事件埋点降级/旧路径）；查询异常一律降级为空列表（零注入零阻断）。
      */
@@ -314,7 +405,7 @@ public class AgentRuntimeContextAssembler {
      * 返工修正指引 + 回填要求。
      */
     private String buildUserPrompt(SubTaskSnapshot subTask, String runningSpecSection, String dependencySection,
-                                   AgentSessionService.InterruptedSession recovery,
+                                   RecoveryContext recovery,
                                    List<AgentEventTraceItem> completedTrace) {
         StringBuilder sb = new StringBuilder();
 
@@ -434,14 +525,28 @@ public class AgentRuntimeContextAssembler {
      *
      * @param completedTrace 中断 Turn 的事件流轨迹（B3 Resume 事实来源）；空/null 时零注入
      */
-    private void appendRecoveryContext(StringBuilder sb, AgentSessionService.InterruptedSession recovery,
+    private void appendRecoveryContext(StringBuilder sb, RecoveryContext recovery,
                                        List<AgentEventTraceItem> completedTrace) {
-        if (recovery == null) {
+        if (recovery == null || !recovery.injected()) {
             return;
         }
         sb.append("\n---\n\n");
         sb.append("## 执行恢复上下文（接续执行）\n");
         sb.append("本任务之前的一次执行尝试被中断，本次为接续执行。上次尝试中断情况：\n");
+        if (recovery.session() != null) {
+            appendSessionInterruptFacts(sb, recovery.session());
+        } else {
+            appendEventInterruptFacts(sb, recovery.eventPoint());
+        }
+        // B3 Resume：事件流已完成事实（Step 槽位 + 已成功工具调用及结果摘要），无事件零注入
+        appendCompletedStepFacts(sb, completedTrace);
+        sb.append("请以接续者身份结合上述上下文重新完成本任务，输出交付物并按协议回填，不要复述以上中断事实。\n");
+    }
+
+    /**
+     * 会话来源中断事实块：来自 {@code agent_session}（租约回收写入的中断点，含上下文快照）。
+     */
+    private void appendSessionInterruptFacts(StringBuilder sb, AgentSessionService.InterruptedSession recovery) {
         sb.append("- 会话 ID：").append(recovery.sessionId()).append("\n");
         sb.append("- 中断点：").append(stepLabel(recovery.step())).append("\n");
         sb.append("- 中断状态：").append(statusLabel(recovery.status())).append("\n");
@@ -500,9 +605,40 @@ public class AgentRuntimeContextAssembler {
                 }
             }
         }
-        // B3 Resume：事件流已完成事实（Step 槽位 + 已成功工具调用及结果摘要），无事件零注入
-        appendCompletedStepFacts(sb, completedTrace);
-        sb.append("请以接续者身份结合上述上下文重新完成本任务，输出交付物并按协议回填，不要复述以上中断事实。\n");
+    }
+
+    /**
+     * 事件来源中断事实块（Recovery 消费面兜底）。
+     *
+     * <p>会话表无可用中断记录时启用：全部事实由 {@code agent_event} 投影得到，
+     * <b>不编造</b>会话 ID / 中断状态等会话侧字段（不注入无来源的信息）。</p>
+     *
+     * <p>渲染口径：{@code danglingTool} 是中断点本身（{@code TOOL_CALL_STARTED} 未配对），
+     * {@code completedTools} 是接续者「无需重复」的已完成工具；两者互补，
+     * 恰好回答续跑最关心的两个问题 ——「断在哪」与「做到哪」。</p>
+     */
+    private void appendEventInterruptFacts(StringBuilder sb, RecoveryPoint point) {
+        if (point == null) {
+            return;
+        }
+        sb.append("- 事实来源：执行事件流（append-only），会话表无可用中断记录\n");
+        if (point.getUnfinishedTurn() != null) {
+            sb.append("- 未闭合轮次：第 ").append(point.getUnfinishedTurn()).append(" 轮\n");
+        }
+        if (point.getDanglingTool() != null) {
+            sb.append("- 中断点：工具「").append(point.getDanglingTool())
+                    .append("」已开始、未见完成\n");
+        }
+        if (point.getCompletedTools() != null && !point.getCompletedTools().isEmpty()) {
+            sb.append("- 该轮已完成工具：").append(String.join("、", point.getCompletedTools())).append("\n");
+        }
+        if (point.getLastEventType() != null) {
+            sb.append("- 事件流最后事件：").append(point.getLastEventType());
+            if (point.getLastEventAt() != null) {
+                sb.append("（").append(point.getLastEventAt()).append("）");
+            }
+            sb.append("\n");
+        }
     }
 
     /**

@@ -12,6 +12,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.event.AgentEventQueryService;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.event.AgentEventTraceItem;
+import com.helloai.core.agent.event.RecoveryPoint;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
@@ -37,6 +38,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.model.ChatModel;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -49,6 +51,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -620,6 +623,91 @@ class AgentRuntimeContextAssemblerTest {
             assertThat(prompt)
                     .contains("## 执行恢复上下文（接续执行）")
                     .doesNotContain("### 已完成的事实");
+        }
+    }
+
+    @Nested
+    @DisplayName("Recovery 消费面：会话表无中断记录时以事件流恢复点兜底")
+    class RecoveryEventFallback {
+
+        @Test
+        @DisplayName("会话表无记录 + 事件流未闭合 → 注入事件来源恢复上下文（recoverySource=event）")
+        void shouldFallbackToEventStreamWhenSessionHasNoInterrupt() {
+            SubTaskFixture subTask = subTask();
+            // 会话表无可用中断记录（场景：进程执行中途被中断，该行停在 ACTIVE 或根本不存在）
+            when(agentSessionService.findLatestInterrupted(22L)).thenReturn(null);
+            when(agentEventQueryService.projectRecoveryPoint(22L)).thenReturn(RecoveryPoint.builder()
+                    .unfinished(true)
+                    .unfinishedTurn(2)
+                    .danglingTool("internal_read_attachment")
+                    .completedTools(List.of("pullTasks", "submitResult"))
+                    .lastEventType("tool_call_started")
+                    .lastEventSequence(7L)
+                    .lastEventAt(OffsetDateTime.now())
+                    .terminalEventSeen(false)
+                    .build());
+
+            String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
+
+            assertThat(prompt)
+                    .contains("## 执行恢复上下文（接续执行）")
+                    .contains("事实来源：执行事件流（append-only），会话表无可用中断记录")
+                    .contains("未闭合轮次：第 2 轮")
+                    .contains("中断点：工具「internal_read_attachment」已开始、未见完成")
+                    .contains("该轮已完成工具：pullTasks、submitResult")
+                    .contains("事件流最后事件：tool_call_started")
+                    // 不编造会话侧字段（无来源的信息不注入）
+                    .doesNotContain("会话 ID：")
+                    .doesNotContain("中断状态：");
+            Map<String, Object> payload = captureTimelinePayload("sub_task_spec_context_loaded");
+            assertThat(payload)
+                    .containsEntry("recoveryInjected", true)
+                    .containsEntry("recoverySource", "event");
+        }
+
+        @Test
+        @DisplayName("会话表有中断记录 → 事件流投影不被查询（会话表优先，不产生额外查询）")
+        void shouldNotQueryEventStreamWhenSessionInterruptPresent() {
+            SubTaskFixture subTask = subTask();
+            when(agentSessionService.findLatestInterrupted(22L)).thenReturn(new AgentSessionService.InterruptedSession(
+                    100L, 11L, 1, 4, "FAILED", "boom", Map.of()));
+
+            invokeAssemble(subTask, agent(), List.of(), List.of());
+
+            verify(agentEventQueryService, never()).projectRecoveryPoint(anyLong());
+            Map<String, Object> payload = captureTimelinePayload("sub_task_spec_context_loaded");
+            assertThat(payload).containsEntry("recoverySource", "session");
+        }
+
+        @Test
+        @DisplayName("会话表无记录 + 事件流已闭合 → 零注入（unfinished=false 不产生恢复上下文）")
+        void shouldNotInjectWhenEventStreamClosed() {
+            SubTaskFixture subTask = subTask();
+            when(agentSessionService.findLatestInterrupted(22L)).thenReturn(null);
+            when(agentEventQueryService.projectRecoveryPoint(22L)).thenReturn(RecoveryPoint.none());
+
+            String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
+
+            assertThat(prompt).doesNotContain("## 执行恢复上下文");
+            Map<String, Object> payload = captureTimelinePayload("sub_task_spec_context_loaded");
+            assertThat(payload)
+                    .containsEntry("recoveryInjected", false)
+                    .containsEntry("recoverySource", null);
+        }
+
+        @Test
+        @DisplayName("事件流投影查询异常 → 零注入零阻断（best-effort 降级）")
+        void shouldDegradeWhenEventProjectionThrows() {
+            SubTaskFixture subTask = subTask();
+            when(agentSessionService.findLatestInterrupted(22L)).thenReturn(null);
+            when(agentEventQueryService.projectRecoveryPoint(anyLong()))
+                    .thenThrow(new RuntimeException("db down"));
+
+            String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
+
+            assertThat(prompt).doesNotContain("## 执行恢复上下文");
+            Map<String, Object> payload = captureTimelinePayload("sub_task_spec_context_loaded");
+            assertThat(payload).containsEntry("recoveryInjected", false);
         }
     }
 

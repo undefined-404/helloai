@@ -71,4 +71,20 @@ public interface AgentEventQueryService {
      */
     IPage<AgentEventTraceItem> pageAuditByTaskId(Long taskId, String eventType, String timeStart, String timeEnd,
                                                  long pageNum, long pageSize);
+
+    /**
+     * Recovery 读侧：按子任务推定「上一次执行尝试停在哪」（只读，第四个事件流消费面）。
+     *
+     * <p>与 {@code AgentSessionService#findLatestInterrupted} 的分工：后者读<b>可变</b>的
+     * {@code agent_session} 表且只看最新一行（ACTIVE / COMPLETED 即零注入）；本方法读
+     * <b>append-only</b> 的事件流，把所有「未闭合的执行」都投影出来 ⇒ 会话表无中断记录时
+     * 仍可给出恢复点（进程被中断留下的悬挂 {@code TOOL_CALL_STARTED} 不会被任何后续写入覆盖）。</p>
+     *
+     * <p><b>纪律</b>：本方法只读、不落库、<b>不反向修正业务状态</b>；调用方不得据其返回值直接改写
+     * 业务表（事件 write-only 纪律的读侧对偶，同 {@link EventReconciliationService} 的约束）。</p>
+     *
+     * @param subTaskId 子任务 ID；为空或该子任务无任何事件时返回 {@link RecoveryPoint#none()}
+     * @return 恢复点投影，永不为 {@code null}
+     */
+    RecoveryPoint projectRecoveryPoint(Long subTaskId);
 }
