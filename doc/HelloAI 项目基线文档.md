@@ -235,7 +235,7 @@ Event
 Timeline / Review 的事实输入
 ```
 
-读侧已具备 `AgentEventQueryService` 多消费面：`traceBySubTaskId`（按 subTaskId 以 `createTime + id` 有序投影，Timeline 消费面，A6 已并轨 `/timeline`；增量 D 起亦经 REST 暴露）、`traceByRunId`（按 runId 重建 Run 级轨迹，Replay 读侧，A7）、`traceByTaskId`（任务维度轨迹，免传 runId 由 service 内部推导，增量 D）、`pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，Audit 读侧，A7）——Timeline / Replay / Audit 已从 Event Stream 获取事实，并经 REST API（`/api/agent-events` 四端点）+ UI 事件流工作台（`/event-stream`，增量 C1/C2/D）全链暴露；**Fork 仅快照服务**（`AgentEventForkService`，可复制 Run 事件到新 run_id，但**零生产调用方**；触发入口 / 原 Run 冻结 / 驱动新 Run 执行已于 2026-10-09 裁定 **WONTFIX**，见 `D-2026-10-09-5`），**Recovery 消费面后续建设**。`task_timeline` 保持独立载体不迁移（ADR-001 §4）。
+读侧已具备 `AgentEventQueryService` 多消费面：`traceBySubTaskId`（按 subTaskId 以 `createTime + id` 有序投影，Timeline 消费面，A6 已并轨 `/timeline`；增量 D 起亦经 REST 暴露）、`traceByRunId`（按 runId 重建 Run 级轨迹，Replay 读侧，A7）、`traceByTaskId`（任务维度轨迹，免传 runId 由 service 内部推导，增量 D）、`pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，Audit 读侧，A7）——Timeline / Replay / Audit 已从 Event Stream 获取事实，并经 REST API（`/api/agent-events` 四端点）+ UI 事件流工作台（`/event-stream`，增量 C1/C2/D）全链暴露；**Fork 仅快照服务**（`AgentEventForkService`，可复制 Run 事件到新 run_id，但**零生产调用方**；触发入口 / 原 Run 冻结 / 驱动新 Run 执行已于 2026-10-09 裁定 **WONTFIX**，见 `D-2026-10-09-5`），**Recovery 消费面已于 2026-10-16 建成**——只读恢复点投影 `AgentEventQueryService#projectRecoveryPoint`（未闭合轮次 / 中断点工具 / 该轮已完成工具，零阈值结构量判定）+ 只读端点 `GET /api/agent-events/recoveryPointBySubTaskId/{subTaskId}`；同时 `AgentRuntimeContextAssembler` 的续跑上下文改为「`agent_session` 优先、**事件流恢复点兜底**」（原会话表无记录即静默零注入 ⇒ 现可兜底）。`task_timeline` 保持独立载体不迁移（ADR-001 §4）。
 
 原则：
 

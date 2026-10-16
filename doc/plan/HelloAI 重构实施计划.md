@@ -87,7 +87,7 @@ A6 收口（2026-09-07 已落地）：`/timeline` 读侧并轨 `agent_event`—�
 
 A7（2026-09-07 已落地）：Replay / Audit 最小读取——`AgentEventQueryService` 新增 `traceByRunId`（按 runId 以 `createTime ASC, id ASC` 重建 Run 级轨迹，Replay 读侧，G-001 验收「一个 Run 可以按 sequence 重建轨迹」成立）与 `pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，按写入时序正序）；`AgentEventMapper` 对应新增 `selectByRunIdOrdered` / `selectPageAuditByTaskId`（`idx_agent_event_run` 索引支撑）；纯后端读侧，未接 API/UI（与 A6 路线 B 同形态）；单测 8 用例 + dev 库连库探针 PASS。
 
-**当前动作**：P0-A 完整闭环（A1~A7 已落地）——G-001 Event Stream 验收全量成立；消费面已在 P1 补齐至全链暴露（G-006 增量 C1/C2/D，2026-09-08~10，见 §7）。剩余：**Recovery 消费面**（Fork 已于 2026-10-09 裁定 WONTFIX，见 `D-2026-10-09-5`）。
+**当前动作**：P0-A 完整闭环（A1~A7 已落地）——G-001 Event Stream 验收全量成立；消费面已在 P1 补齐至全链暴露（G-006 增量 C1/C2/D，2026-09-08~10，见 §7）。**本组四项消费面（Timeline / Replay / Audit / Recovery）已全部落地** —— 末项 **`Recovery` 消费面于 2026-10-16 建成**（只读恢复点投影 + 续跑兜底注入 + 只读端点；方向裁定与边界见 `D-2026-10-16-11`，记录 `LOG-20261016-011`）。Fork 已于 2026-10-09 裁定 WONTFIX（见 `D-2026-10-09-5`）⇒ **Event 消费面无剩余在办项**。
 
 # 3. P0-B：Executor 双轨迁移
 
