@@ -378,6 +378,19 @@ const form = reactive({
   modelType: '',
   skills: [] as string[]
 })
+// V53: 内部 LLM 选模型自动命名 inner-{modelName}-{role}；后缀随角色（planner/executor/reviewer）。
+// 记录上次自动名，仅当名称为空或仍等于上次自动名时才自动覆盖（手动改名后不再被覆盖）
+const lastAutoName = ref('')
+const ROLE_SUFFIX: Record<string, string> = {
+  PLANNER: '-planner',
+  EXECUTOR: '-executor',
+  REVIEWER: '-reviewer'
+}
+function autoNameFromModel(mt: string, role: string): string {
+  if (!mt) return ''
+  const modelName = mt.includes(':') ? mt.split(':').slice(1).join(':') : mt
+  return `inner-${modelName}${ROLE_SUFFIX[role] || '-executor'}`
+}
 const rules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }]
 }
@@ -402,10 +415,17 @@ async function loadAvailableModels() {
 watch(registerDialog, (open) => {
   if (open) {
     loadAvailableModels()
+  } else {
+    lastAutoName.value = ''
   }
 })
 
 function onRoleChange() {
+  // V53: 名称仍为自动生成时，同步重生成以匹配新角色后缀（planner/executor/reviewer）
+  if (form.accessType === 'API_KEY_LLM' && form.modelType && form.name === lastAutoName.value) {
+    lastAutoName.value = autoNameFromModel(form.modelType, form.role)
+    form.name = lastAutoName.value
+  }
   // 接入类型选项已对全角色开放，无需在切角色时强制回退默认项（CLI 仅置灰，不再回退）
 }
 
@@ -444,6 +464,15 @@ async function loadSkillOptions(modelType: string) {
 }
 
 watch(() => form.modelType, (mt) => {
+  // V53: 内部 LLM 选模型自动命名——选中模型时按 inner-{modelName}-executor 自动填入，
+  // 切换模型时移除旧自动名并重新生成；仅当名称为空或仍等于上次自动名时才覆盖（手动改名不覆盖）
+  if (form.accessType === 'API_KEY_LLM') {
+    const untouched = !form.name || form.name === lastAutoName.value
+    if (mt && untouched) {
+      lastAutoName.value = autoNameFromModel(mt, form.role)
+      form.name = lastAutoName.value
+    }
+  }
   // 切模型/清空：先移除旧能力锁定项，避免残留不可用技能
   for (const s of skillCap.value) {
     const idx = form.skills.indexOf(s)
@@ -504,6 +533,7 @@ async function handleRegister() {
     form.accessType = 'WEB_BROWSER'
     form.modelType = ''
     form.skills = []
+    lastAutoName.value = ''
     load()
   } finally { registering.value = false }
 }
