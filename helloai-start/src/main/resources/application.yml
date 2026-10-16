@@ -306,16 +306,19 @@ helloai:
       base-url: ${MOONSHOT_BASE_URL:https://api.moonshot.cn}
       # moonshot-v1 系列已于 2026-08-31 官方下线（404），默认值切 kimi-k3（V61 迁移同步）
       default-model: ${MOONSHOT_CHAT_MODEL:kimi-k3}
+      read-timeout-ms: ${MOONSHOT_READ_TIMEOUT_MS:180000}
     minimax:
       api-key: ${MINIMAX_API_KEY:}
       base-url: ${MINIMAX_BASE_URL:https://api.minimaxi.com/anthropic}
       # MiniMax-M2.5 / M2.7 全系列即将下线，默认值切现役 MiniMax-M3（V108 迁移同步）
       default-model: ${MINIMAX_CHAT_MODEL:MiniMax-M3}
+      read-timeout-ms: ${MINIMAX_READ_TIMEOUT_MS:180000}
     dashscope:
       api-key: ${DASHSCOPE_API_KEY:}
       # OpenAI 兼容模式，实际端点为 {base-url}/v1/chat/completions
       base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
       default-model: ${DASHSCOPE_CHAT_MODEL:qwen3.7-plus}
+      read-timeout-ms: ${DASHSCOPE_READ_TIMEOUT_MS:180000}
   security:
     credential:
       # 凭据加密密钥（credential_vault / 系统设置页 API Key 落库加密）：

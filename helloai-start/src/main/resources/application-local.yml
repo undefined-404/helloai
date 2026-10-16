@@ -29,6 +29,19 @@ helloai:
   agent:
     # 本地开发专用注册 token（非机密；生产必须由 HELLOAI_AGENT_REGISTRATION_TOKEN 注入）
     registration-token: ${HELLOAI_AGENT_REGISTRATION_TOKEN:helloai-local-dev-registration-token}
+  providers:
+    # 本机开发放宽「模型读超时」到 10 分钟（基线 application.yml 统一 3 分钟）。
+    # 起因（2026-10-16）：本机核验 kimi-k3 对 28KB 章节交付物，3 分钟读超时 ⇒ 子任务
+    # 反复卡 REVIEW。本机常跑「大附件 + 推理型模型」，故本 profile 统一放宽。
+    # 仅 local 生效，不影响 dev/prod（同 §41「仅本机放宽」口径）；环境变量优先级最高。
+    deepseek:
+      read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:600000}
+    moonshot:
+      read-timeout-ms: ${MOONSHOT_READ_TIMEOUT_MS:600000}
+    minimax:
+      read-timeout-ms: ${MINIMAX_READ_TIMEOUT_MS:600000}
+    dashscope:
+      read-timeout-ms: ${DASHSCOPE_READ_TIMEOUT_MS:600000}
   security:
     credential:
       # 本地专用随机 AES 密钥（非机密）：仅用于加密本机 credential_vault 数据；
