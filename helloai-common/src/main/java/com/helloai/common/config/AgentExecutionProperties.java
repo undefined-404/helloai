@@ -4,6 +4,9 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * 平台内 Agent 执行链配置。
  *
@@ -101,6 +104,65 @@ public class AgentExecutionProperties {
      * 部署给默认，单个 Agent 可遮蔽。</p>
      */
     private String personaPrefix = "";
+
+    // ────────────────────────────────────────────────────────────
+    //  REF-8.6 运行时合同 · 取消 / 超时树（对齐 DSH 一等公民能力）
+    // ────────────────────────────────────────────────────────────
+
+    /**
+     * 单次 Agent Turn（一次子任务执行尝试 / 一次业务面调用）的**取消截止时间**（秒）。
+     *
+     * <p><b>为什么需要</b>：REF-8.6 前，循环内任何一轮模型调用或工具调用卡住，都没有任何
+     * 主动中断机制（只能事后靠外部超时回收）。本项是**自驱动的取消源**——到期后循环在下一个
+     * 动作边界停止（不再发起新的模型 / 工具调用），并在结果上带 {@code finishReason=CANCELLED}。</p>
+     *
+     * <p><b>默认 1800（30 分钟）</b>：单 Turn 至多 {@code internalMaxIterations}（默认 10）轮模型
+     * 调用，30 分钟是「正常绝不会触发、异常必被拦住」的量级。{@code <= 0} = 不限（回到改造前行为）。</p>
+     */
+    private long turnDeadlineSeconds = 1800L;
+
+    /**
+     * **单次工具调用**超时（毫秒）。超时**不整链失败** —— 以失败 observation 回喂模型，
+     * 交模型决策（换工具 / 换参数 / 收尾）；见 {@code CancellableToolExecutor}。
+     *
+     * <p><b>默认 300000（5 分钟）</b>：外部检索类工具的合理上限；{@code <= 0} = 不限。</p>
+     */
+    private long toolCallTimeoutMillis = 300000L;
+
+    // ────────────────────────────────────────────────────────────
+    //  REF-8.5 业务面循环覆盖面（覆盖面收敛轴，判据见 plan §10.6）
+    // ────────────────────────────────────────────────────────────
+    /**
+     * 业务 LLM 面是否走工具循环（REF-8.5 覆盖面收敛）。
+     *
+     * <p><b>背景</b>：REF-8.5 实测确认——内部 LLM 的工具循环此前<b>只</b>存在于子任务执行链
+     * （{@code RuntimeTurnExecutor}），业务面（拆解 / 子任务核验 / 终报告整合 / 终报告审查）
+     * 全部走 {@code executeSync} 的<b>裸单次</b> {@code ChatModel} 调用（无工具 / 无循环 / 无 hook）。
+     * 本开关把那 4 个已裁定面接进同一份 {@code AgentLoop}。</p>
+     *
+     * <p><b>回退语义</b>：置 {@code false} ⇒ 全部业务面立即回到裸单次（无需改代码 / 重启热配置）。
+     * 循环本身异常（抛异常 / {@code finishReason=ERROR}）时，业务面亦自动回退单次，不阻断业务。</p>
+     *
+     * <p><b>默认 true</b>：覆盖面清单（plan §10.6）已由用户逐项裁定「需要做」——
+     * 默认关闭等于裁定不生效；且 mock 模式下 {@code MockChatModel} 不产工具调用 ⇒
+     * 循环一轮即终态，与单次行为等价，故默认开启的观测风险可控。</p>
+     */
+    private boolean businessLoopEnabled = true;
+
+    /**
+     * 进循环的 {@code scene} 白名单（REF-8.5 覆盖面收敛）。
+     *
+     * <p>取值 = {@code AgentTask.context} 的 {@code scene} 键。默认 = plan §10.6 已裁定的
+     * <b>4 个进循环面</b>（其余 12 项明确不进，见该表尾注「★本表即 REF-8.5 的验收边界」）。</p>
+     *
+     * <p><b>变更边界须走新裁定并登记决策</b>：新增 scene 须按同判据（产出是否需查阅 / 校验外部证据）
+     * 重新取证，不得以「顺便」为由扩面。</p>
+     */
+    private List<String> businessLoopScenes = new ArrayList<>(List.of(
+            "planner_decompose",
+            "subtask_review",
+            "task_final_report",
+            "task_final_report_review"));
 
     // ────────────────────────────────────────────────────────────
     //  REF-8.2.3 上下文压缩（对齐 DSH `compaction-basic` + `compaction-tool-result-pruner`）

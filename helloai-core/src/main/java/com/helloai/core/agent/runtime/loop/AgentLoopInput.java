@@ -2,6 +2,9 @@ package com.helloai.core.agent.runtime.loop;
 
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.event.AgentEventRecorder;
+import com.helloai.core.agent.runtime.cancel.CancellableChatModel;
+import com.helloai.core.agent.runtime.cancel.CancellableToolExecutor;
+import com.helloai.core.agent.runtime.cancel.LoopCancellation;
 import com.helloai.core.agent.tool.ToolExecutor;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
@@ -14,6 +17,18 @@ import java.util.List;
  * <p>一次 Agent Turn 循环的完整输入：模型 + 提示词 + 允许调用的工具回调（调用方已按
  * 启用工具名过滤，模型可见其 schema）+ 工具执行回路 + 事件定位与记录器。
  * provider 无关——只依赖 spring-ai {@link ChatModel} 契约。</p>
+ *
+ * <p><b>★可取消性装配点（REF-8.6）</b>：{@code cancellation} 非「不限」时，本记录的
+ * <b>紧凑构造器</b>会把 {@code chatModel} / {@code toolExecutor} 包上取消装饰器
+ * （{@link CancellableChatModel} / {@link CancellableToolExecutor}）。
+ * 这里是全平台把可取消性装进循环的<b>唯一咽喉</b>——任何调用方（现有两个 + 未来新增）
+ * <b>都无法绕过</b>；若改为「各调用方自行包装饰器」，就会重现已登记缺陷模式
+ * 「<b>规则存在 ≠ 全路径强制</b>」（新增调用方漏包 ⇒ 取消静默失效）。
+ * 循环本体（{@code ChatModelToolLoop}）因此一行不改（§10.8 红线：不动循环逻辑、只动入参 / 出口）。</p>
+ *
+ * <p><b>边界</b>：协作式取消——检查点＝每次模型调用前后 + 每次工具调用前（覆盖循环内全部动作
+ * 类型）；在途 HTTP 请求本身不打断（{@code ChatModel} 契约无 signal 通道）。详见
+ * {@link com.helloai.core.agent.runtime.cancel.CancellationToken}。</p>
  *
  * @param chatModel            底层模型（spring-ai 契约，不可空）
  * @param systemPrompt         系统提示词（可空，按空串处理）
@@ -29,6 +44,7 @@ import java.util.List;
  * @param eventRecorder        事件记录器（可空：不记录 TOOL_CALL 事件）
  * @param loopCheckpointListener 循环进度回调（可空：不落循环检查点）
  * @param accessType           接入类型（REF-8.4 ② 收尾轮 internal-only 门控；null = 非内部）
+ * @param cancellation         可取消上下文（REF-8.6；null = {@link LoopCancellation#none()} 不限）
  */
 public record AgentLoopInput(
         ChatModel chatModel,
@@ -44,7 +60,8 @@ public record AgentLoopInput(
         Long agentId,
         AgentEventRecorder eventRecorder,
         LoopCheckpointListener loopCheckpointListener,
-        AgentAccessType accessType) {
+        AgentAccessType accessType,
+        LoopCancellation cancellation) {
 
     /** 默认最大循环轮数（LLM 调用次数硬上限，防死循环）。 */
     public static final int DEFAULT_MAX_ITERATIONS = 5;
@@ -66,6 +83,34 @@ public record AgentLoopInput(
         if (enabledToolCallbacks == null) {
             enabledToolCallbacks = List.of();
         }
+        if (cancellation == null) {
+            cancellation = LoopCancellation.none();
+        }
+        // REF-8.6：唯一咽喉装配取消装饰器（详见类 javadoc）；不限时零包装（行为与改造前逐字一致）
+        if (cancellation.active()) {
+            if (chatModel != null) {
+                chatModel = new CancellableChatModel(chatModel, cancellation.token());
+            }
+            if (toolExecutor != null) {
+                toolExecutor = new CancellableToolExecutor(
+                        toolExecutor, cancellation.token(), cancellation.toolTimeoutMillis());
+            }
+        }
+    }
+
+    /**
+     * 兼容构造器（旧 14 参签名，可取消上下文缺省「不限」）：现有调用点零改动
+     * ——REF-8.6 接入前只有执行链与业务面入口两处生产调用点，均在本批显式传
+     * {@link LoopCancellation}；本构造器保留供单测 / 历史接点使用（行为与改造前逐字一致）。
+     */
+    public AgentLoopInput(ChatModel chatModel, String systemPrompt, String userPrompt,
+                          ToolExecutor toolExecutor, List<ToolCallback> enabledToolCallbacks,
+                          Integer maxIterations, String runId, Long taskId, Long subTaskId,
+                          int turn, Long agentId, AgentEventRecorder eventRecorder,
+                          LoopCheckpointListener loopCheckpointListener, AgentAccessType accessType) {
+        this(chatModel, systemPrompt, userPrompt, toolExecutor, enabledToolCallbacks, maxIterations,
+                runId, taskId, subTaskId, turn, agentId, eventRecorder, loopCheckpointListener,
+                accessType, LoopCancellation.none());
     }
 
     /**
@@ -78,7 +123,8 @@ public record AgentLoopInput(
                           int turn, Long agentId, AgentEventRecorder eventRecorder,
                           LoopCheckpointListener loopCheckpointListener) {
         this(chatModel, systemPrompt, userPrompt, toolExecutor, enabledToolCallbacks, maxIterations,
-                runId, taskId, subTaskId, turn, agentId, eventRecorder, loopCheckpointListener, null);
+                runId, taskId, subTaskId, turn, agentId, eventRecorder, loopCheckpointListener,
+                null, LoopCancellation.none());
     }
 
     /**
@@ -89,6 +135,7 @@ public record AgentLoopInput(
                           Integer maxIterations, String runId, Long taskId, Long subTaskId,
                           int turn, Long agentId, AgentEventRecorder eventRecorder) {
         this(chatModel, systemPrompt, userPrompt, toolExecutor, enabledToolCallbacks, maxIterations,
-                runId, taskId, subTaskId, turn, agentId, eventRecorder, null, null);
+                runId, taskId, subTaskId, turn, agentId, eventRecorder, null, null,
+                LoopCancellation.none());
     }
 }

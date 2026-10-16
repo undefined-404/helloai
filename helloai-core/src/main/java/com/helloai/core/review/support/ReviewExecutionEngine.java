@@ -79,7 +79,10 @@ public class ReviewExecutionEngine {
                     .subTaskId(subTaskId)
                     .systemPrompt("")
                     .userPrompt(prompt)
-                    .context(Map.of("subTaskId", subTaskId, "scene", "subtask_review"))
+                    // REF-8.5：context 补 taskId —— 业务面循环入口据此构造 Run 标识与工具解析上下文
+                    // （本面 Task 级信息在手，无需额外查询；亦与其余三个进循环面（均带 taskId）同形）
+                    .context(Map.of("subTaskId", subTaskId, "taskId", subTask.taskId(),
+                            "scene", "subtask_review"))
                     .requiredCapabilities(Map.of())
                     // G-016 契约层技能注入：核验与执行同一技能清单（mergeSkills 恒非 null）
                     .skills(subTaskService.mergeSkills(subTask.id()))

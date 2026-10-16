@@ -13,6 +13,11 @@ import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.executor.AgentExecutorRouter;
 import com.helloai.core.agent.executor.ApiKeyAgentExecutor;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.runtime.BusinessSurfaceLoopRunner;
+import com.helloai.core.agent.runtime.loop.AgentLoop;
+import com.helloai.core.agent.service.AgentMcpServerService;
+import com.helloai.core.agent.tool.ToolExecutor;
+import com.helloai.core.agent.tool.ToolRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,6 +26,7 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
@@ -59,6 +65,21 @@ class PlatformAgentExecutionServiceTest {
     @Mock
     private AgentSkillSpecService agentSkillSpecService;
 
+    @Mock
+    private AgentMcpServerService agentMcpServerService;
+
+    @Mock
+    private ToolRegistry toolRegistry;
+
+    @Mock
+    private ToolExecutor toolExecutor;
+
+    @Mock
+    private AgentLoop agentLoop;
+
+    @Mock
+    private ToolCallbackProvider toolCallbackProvider;
+
     private PlatformAgentExecutionService platformAgentExecutionService;
 
     @BeforeEach
@@ -79,8 +100,14 @@ class PlatformAgentExecutionServiceTest {
         ApiKeyAgentExecutor apiKeyAgentExecutor =
                 new ApiKeyAgentExecutor(chatClientService, agentLlmCredentialResolver, properties);
         AgentExecutorRouter router = new AgentExecutorRouter(List.of(apiKeyAgentExecutor));
+        // REF-8.5：真实循环入口（本组用例的任务均不带 scene ⇒ supports() 恒 false ⇒ 单次链路，
+        // 顺带以真实判定证明「非白名单面零行为变化」）
+        BusinessSurfaceLoopRunner loopRunner = new BusinessSurfaceLoopRunner(
+                chatClientService, agentLlmCredentialResolver, agentMcpServerService,
+                agentSkillSpecService, properties, toolRegistry, toolExecutor, agentLoop,
+                toolCallbackProvider);
         platformAgentExecutionService = new PlatformAgentExecutionServiceImpl(
-                agentService, router, heartbeatService, properties, agentSkillSpecService);
+                agentService, router, heartbeatService, properties, agentSkillSpecService, loopRunner);
     }
 
     /** 最小 API_KEY_LLM Agent（mock 链路可路由到 ApiKeyAgentExecutor）。 */

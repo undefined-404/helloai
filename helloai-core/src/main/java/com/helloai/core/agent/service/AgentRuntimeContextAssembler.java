@@ -31,6 +31,7 @@ import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskRunningSpecPort;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.port.UncertaintySnapshot;
+import com.helloai.core.agent.tool.EnabledToolNames;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -40,7 +41,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -918,15 +918,7 @@ public class AgentRuntimeContextAssembler {
 
     /** 启用工具并集（G-004 增量 A）：命令 tools ∪ 命中技能 requiredTools（去重保序，纯函数式）。 */
     private static List<String> mergeTools(List<String> tools, List<String> skillRequiredTools) {
-        if (skillRequiredTools == null || skillRequiredTools.isEmpty()) {
-            return tools != null ? tools : List.of();
-        }
-        LinkedHashSet<String> merged = new LinkedHashSet<>();
-        if (tools != null) {
-            merged.addAll(tools);
-        }
-        merged.addAll(skillRequiredTools);
-        return List.copyOf(merged);
+        return EnabledToolNames.union(tools, skillRequiredTools);
     }
 
     /** 依赖产出段装配结果：渲染文本 + 可观测统计。 */

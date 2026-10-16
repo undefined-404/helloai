@@ -7,6 +7,7 @@ import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.runtime.loop.AgentLoop;
 import com.helloai.core.agent.runtime.loop.AgentLoopInput;
 import com.helloai.core.agent.runtime.loop.AgentLoopResult;
+import com.helloai.core.agent.runtime.loop.AgentUsage;
 import com.helloai.core.agent.runtime.loop.LoopCheckpoint;
 import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.tool.ToolExecutionResult;
@@ -30,6 +31,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -54,6 +56,13 @@ import java.util.Set;
  * <p>Token 用量采集（B3 tokenUsage）：每轮 LLM 调用后读取 {@code response.metadata.usage.totalTokens}
  * 并累加，经 {@link AgentLoopResult#tokenUsage()} 透出；provider 未返回 usage 时忽略
  * （best-effort，不阻断循环，全程无 usage 则恒 null）。</p>
+ *
+ * <p><b>★截断终态（REF-8.7）</b>：每轮读响应声明的结束原因（{@code generation.metadata.finishReason}），
+ * 命中 token 上限 token 集即置 **sticky** 标志 —— 该 turn 的**全部出口**（`STOP` 与
+ * `MAX_ITERATIONS`）都改以 {@link AgentLoopResult#maxTokens} 返回，避免「截断被静默当成功」。
+ * sticky 由「**出口前**把草稿定为 MAX_TOKENS」实现 ⇒ {@code beforeTerminate} 挂点收到的是
+ * **非成功**草稿（现有挂点据此跳过改写），故不会被下调。**未知结束原因一律不判截断**（fail-open：
+ * 不因本判据新增拒绝面，违 §10.8 红线③）。</p>
  */
 @Slf4j
 @Component
@@ -61,6 +70,29 @@ public class ChatModelToolLoop implements AgentLoop {
 
     /** 事件 payload 中工具输出截断长度（防大输出刷爆事件表）。 */
     private static final int OUTPUT_TRUNCATE_CHARS = 500;
+
+    /**
+     * 表示「输出被 token 上限截断」的结束原因取值集（REF-8.7）。
+     *
+     * <p>取值随 provider 而异 —— 实测：OpenAI / DeepSeek 适配器为枚举名 {@code LENGTH}
+     * （`OpenAiApi$ChatCompletionFinishReason` / `DeepSeekApi$ChatCompletionFinishReason`）；
+     * Anthropic 兼容面直接用协议原值 {@code max_tokens}。比较前统一 {@code trim + toLowerCase}，
+     * 故大小写差异不影响判定。**未知取值不判截断**（降级回改造前语义）。</p>
+     */
+    private static final Set<String> TRUNCATION_FINISH_REASONS = Set.of(
+            "length", "max_tokens", "max_tokens_reached", "max_output_tokens", "max_completion_tokens");
+
+    /** 缓存读分量在 provider 私有 usage 中的候选键（REF-8.8；取不到即 null，降级不报错）。 */
+    private static final String[] CACHE_READ_KEYS =
+            {"cached_tokens", "cache_read_tokens", "cache_read_input_tokens"};
+
+    /** 缓存写分量候选键（同上）。 */
+    private static final String[] CACHE_WRITE_KEYS =
+            {"cache_write_tokens", "cache_creation_input_tokens"};
+
+    /** 推理分量候选键（同上）。 */
+    private static final String[] REASONING_KEYS =
+            {"reasoning_tokens"};
 
     /** 上下文压缩器（REF-8.2.3）；no-op 时行为与改造前逐字一致。 */
     private final ContextCompactor compactor;
@@ -104,6 +136,8 @@ public class ChatModelToolLoop implements AgentLoop {
         if (input.chatModel() == null || input.toolExecutor() == null) {
             return AgentLoopResult.error("agent loop requires chatModel and toolExecutor", 0, 0);
         }
+        // REF-8.8：墙钟起点（耗时含轮内全部动作 + 终止挂点如收尾轮）
+        long startedNanos = System.nanoTime();
         List<Message> messages = new ArrayList<>();
         // 空 system 消息不发送：部分 provider（moonshot / kimi）对 `role=system` 的空内容
         // 直接返回 400 "the message at position 0 with role 'system' must not be empty"，
@@ -120,6 +154,10 @@ public class ChatModelToolLoop implements AgentLoop {
         Integer totalTokens = null;
         String lastText = "";
         Set<String> executedToolNames = new LinkedHashSet<>();
+        // REF-8.7 sticky：任一步命中 token 上限即置位，此后本 turn 终态不得下调为 STOP（DSH 同口径）
+        boolean truncated = false;
+        // REF-8.8 用量累计（互斥分量）：provider 未给的分量保持 null（降级不报错，不新增拒绝面）
+        AgentUsage runningUsage = AgentUsage.empty();
 
         int overflowRetries = 0;
         int summarizeBudget = compactor.maxSummarizationsPerRun();
@@ -161,6 +199,12 @@ public class ChatModelToolLoop implements AgentLoop {
                         totalTokens);
             }
             totalTokens = accumulateUsage(response, totalTokens);
+            // REF-8.8：累计互斥分量（输入 / 输出 / 缓存读 / 缓存写 / 推理），与总数并行不互替
+            runningUsage = accumulateUsage(response, runningUsage);
+            // REF-8.7：读本轮声明的结束原因，命中截断 token 集即置 sticky 标志（只置不撤）
+            if (isTruncated(finishReasonOf(response))) {
+                truncated = true;
+            }
             ChatResponseContentExtractor.ExtractedContent extracted =
                     ChatResponseContentExtractor.extract(response);
             lastText = extracted.text();
@@ -169,9 +213,9 @@ public class ChatModelToolLoop implements AgentLoop {
                 messages.add(assistant);
             }
             if (assistant == null || !assistant.hasToolCalls()) {
-                return terminate(input, messages, AgentLoopResult.stop(lastText,
+                return terminate(input, messages, stopDraft(truncated, lastText,
                         extracted.thinking().isBlank() ? null : extracted.thinking(),
-                        iterations, toolCallCount, totalTokens));
+                        iterations, toolCallCount, totalTokens), runningUsage, startedNanos);
             }
             List<ToolResponseMessage.ToolResponse> toolResponses = new ArrayList<>();
             for (AssistantMessage.ToolCall toolCall : assistant.getToolCalls()) {
@@ -187,9 +231,9 @@ public class ChatModelToolLoop implements AgentLoop {
             }
             if (toolResponses.isEmpty()) {
                 // 模型发了空工具调用列表（异常响应）：防死循环，按终态返回
-                return terminate(input, messages, AgentLoopResult.stop(lastText,
+                return terminate(input, messages, stopDraft(truncated, lastText,
                         extracted.thinking().isBlank() ? null : extracted.thinking(),
-                        iterations, toolCallCount, totalTokens));
+                        iterations, toolCallCount, totalTokens), runningUsage, startedNanos);
             }
             messages.add(ToolResponseMessage.builder().responses(toolResponses).build());
             // 循环进度检查点（P0-C checkpoint）：本轮 LLM + 工具均已完成、下一轮未开始；
@@ -197,8 +241,46 @@ public class ChatModelToolLoop implements AgentLoop {
             fireCheckpoint(input, new LoopCheckpoint(
                     i + 1, toolCallCount, messages.size(), new ArrayList<>(executedToolNames)));
         }
-        return terminate(input, messages, AgentLoopResult.maxIterations(lastText, iterations, toolCallCount,
-                totalTokens));
+        // REF-8.7：截断优先于轮数耗尽（sticky）——二者皆为「未完成」，截断是更具体的终态；
+        // 置位后本出口亦不得回落为 MAX_ITERATIONS。
+        AgentLoopResult draft = truncated
+                ? AgentLoopResult.maxTokens(lastText, null, iterations, toolCallCount, totalTokens)
+                : AgentLoopResult.maxIterations(lastText, iterations, toolCallCount, totalTokens);
+        return terminate(input, messages, draft, runningUsage, startedNanos);
+    }
+
+    /**
+     * 终态草稿（REF-8.7）：自然终止出口按 sticky 标志在 {@code STOP} 与 {@code MAX_TOKENS} 间选择。
+     *
+     * <p>把选择放在<b>出口</b>（进入 {@code beforeTerminate} 挂点<b>之前</b>）而非挂点之后 ——
+     * 使挂点收到的是<b>非成功</b>草稿（现有 {@code FinalReportFenceHook} 据此跳过收尾轮改写），
+     * 从而「sticky」不依赖挂点自觉，也不会被挂点下调。</p>
+     */
+    private static AgentLoopResult stopDraft(boolean truncated, String text, String thinking,
+                                             int iterations, int toolCallCount, Integer totalTokens) {
+        return truncated
+                ? AgentLoopResult.maxTokens(text, thinking, iterations, toolCallCount, totalTokens)
+                : AgentLoopResult.stop(text, thinking, iterations, toolCallCount, totalTokens);
+    }
+
+    /** 读本轮响应声明的结束原因（result / metadata 缺失或 provider 未给 ⇒ null）。 */
+    private static String finishReasonOf(ChatResponse response) {
+        if (response == null || response.getResult() == null) {
+            return null;
+        }
+        var metadata = response.getResult().getMetadata();
+        return metadata != null ? metadata.getFinishReason() : null;
+    }
+
+    /**
+     * 该结束原因是否表示「输出被 token 上限截断」（REF-8.7）。取值集与容错口径见
+     * {@link #TRUNCATION_FINISH_REASONS}；<b>未知取值一律不判截断</b>（降级回改造前语义）。
+     */
+    static boolean isTruncated(String finishReason) {
+        if (finishReason == null) {
+            return false;
+        }
+        return TRUNCATION_FINISH_REASONS.contains(finishReason.trim().toLowerCase(Locale.ROOT));
     }
 
     /** beforeRequest 挂点链分发：恒返回最后一个非 null 结果（默认 CompactionHook 唯一）。 */
@@ -228,7 +310,8 @@ public class ChatModelToolLoop implements AgentLoop {
     }
 
     /** 终止前挂点链分发（REF-8.4）：携带消息历史 + 草稿结果，挂点可改写结果（write-only）。 */
-    private AgentLoopResult terminate(AgentLoopInput input, List<Message> messages, AgentLoopResult result) {
+    private AgentLoopResult terminate(AgentLoopInput input, List<Message> messages, AgentLoopResult result,
+                                      AgentUsage usage, long startedNanos) {
         AgentLoopResult current = result;
         boolean internalLlm = input.accessType() == AgentAccessType.API_KEY_LLM;
         for (LoopHook hook : hooks) {
@@ -243,7 +326,11 @@ public class ChatModelToolLoop implements AgentLoop {
                 log.warn("AgentLoop: beforeTerminate 挂点失败（write-only 不阻断）: err={}", e.getMessage());
             }
         }
-        return current;
+        // REF-8.8：用量在挂点改写「之后」统一装配 —— 挂点可改终态 / 正文（如收尾轮），
+        // 但不会把用量丢掉（正交装配）。耗时按墙钟算，含挂点（收尾轮）耗时。
+        long latencyMillis = Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
+        AgentUsage effective = usage != null ? usage : AgentUsage.empty();
+        return current.withUsage(effective.withLatency(latencyMillis));
     }
 
     /**
@@ -257,6 +344,43 @@ public class ChatModelToolLoop implements AgentLoop {
             return accumulated;
         }
         return (accumulated != null ? accumulated : 0) + usage.getTotalTokens();
+    }
+
+    /**
+     * 累加当轮用量的**互斥分量**（REF-8.8）：输入 / 输出由 spring-ai 通用契约稳定提供；
+     * 缓存读 / 缓存写 / 推理属 provider 私有（见 {@link #nativeToken}），取不到即为 null。
+     * provider 未给 usage ⇒ 原样返回（best-effort，不阻断循环，不新增拒绝面）。
+     */
+    static AgentUsage accumulateUsage(ChatResponse response, AgentUsage accumulated) {
+        AgentUsage base = accumulated != null ? accumulated : AgentUsage.empty();
+        Usage usage = response != null && response.getMetadata() != null
+                ? response.getMetadata().getUsage() : null;
+        if (usage == null) {
+            return base;
+        }
+        return base.plus(usage.getPromptTokens(), usage.getCompletionTokens(), usage.getTotalTokens(),
+                nativeToken(usage, CACHE_READ_KEYS), nativeToken(usage, CACHE_WRITE_KEYS),
+                nativeToken(usage, REASONING_KEYS));
+    }
+
+    /**
+     * 从 provider 私有 {@code nativeUsage} 中按候选键取整型分量（best-effort）。
+     *
+     * <p>{@code nativeUsage} 的实际类型随 provider 而异（多为 provider 自有类型而非 Map）⇒
+     * <b>只有</b>当它是 {@code Map} 时才读取；否则返回 null（降级，不报错、不猜测）。</p>
+     */
+    private static Integer nativeToken(Usage usage, String... candidateKeys) {
+        Object nativeUsage = usage.getNativeUsage();
+        if (!(nativeUsage instanceof Map<?, ?> map)) {
+            return null;
+        }
+        for (String key : candidateKeys) {
+            Object value = map.get(key);
+            if (value instanceof Number number) {
+                return number.intValue();
+            }
+        }
+        return null;
     }
 
     /**

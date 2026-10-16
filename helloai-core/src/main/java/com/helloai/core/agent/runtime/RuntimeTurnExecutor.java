@@ -5,21 +5,25 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.event.AgentEventRecorder;
+import com.helloai.core.agent.runtime.cancel.AgentCancelledException;
+import com.helloai.core.agent.runtime.cancel.LoopCancellation;
 import com.helloai.core.agent.runtime.loop.AgentLoop;
 import com.helloai.core.agent.runtime.loop.AgentLoopInput;
 import com.helloai.core.agent.runtime.loop.AgentLoopResult;
+import com.helloai.core.agent.runtime.loop.AgentUsage;
 import com.helloai.core.agent.runtime.sandbox.Sandbox;
 import com.helloai.core.agent.runtime.sandbox.SandboxContext;
 import com.helloai.core.agent.runtime.sandbox.SandboxProvider;
 import com.helloai.core.shared.util.VerificationFence;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.tool.EnabledToolNames;
 import com.helloai.core.agent.tool.InternalToolCallbacks;
 import com.helloai.core.agent.tool.ToolContext;
 import com.helloai.core.agent.tool.ToolDefinition;
 import com.helloai.core.agent.tool.ToolExecutor;
 import com.helloai.core.agent.tool.ToolInvocationContext;
 import com.helloai.core.agent.tool.ToolRegistry;
-import com.helloai.core.agent.tool.impl.DescribedToolCallback;
+import com.helloai.core.agent.tool.impl.VisibleToolCallbacks;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.ToolCallback;
@@ -28,10 +32,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -167,17 +169,37 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                     ctx.getRunId(), ctx.getTaskId(), ctx.getSubTaskId(), ctx.getTurn(), ctx.getAgentId(),
                     ctx.getEventRecorder(),
                     ctx.getLoopCheckpointListener(),
-                    ctx.getAccessType()));
+                    ctx.getAccessType(),
+                    resolveCancellation()));
+        } catch (AgentCancelledException e) {
+            // REF-8.6：取消是独立终态（不是「模型/工具出错」）——明确落 finishReason=CANCELLED，
+            // 让消费侧能按取消来源决定后续动作（而非当成普通失败退避重派）。
+            log.warn("RuntimeTurnExecutor: 本轮执行被取消: agentId={}, subTaskId={}, reason={}",
+                    ctx.getAgentId(), ctx.getSubTaskId(), e.getMessage());
+            return AgentExecutionResult.builder()
+                    .status(ExecutionStatus.FAILED)
+                    .output("agent_runtime_cancelled: " + e.getMessage())
+                    .finishReason("CANCELLED")
+                    .build();
         } finally {
             ToolInvocationContext.unbind();
         }
 
         // 8. AGENT_COMPLETED（step=0，Turn 端点）；失败终态以结果表达，不发失败事件（ADR §5.3）
+        // REF-8.8：用量以互斥分量 + 耗时落同一事件（provider 未给的分量为 null——降级不报错，
+        // `tokens` 保留为总数，既有消费方零改动）。
+        AgentUsage usage = loopResult.usage();
         record(ctx, 0, AgentEventType.AGENT_COMPLETED,
                 safeMap("iterations", loopResult.iterations(),
                         "toolCalls", loopResult.toolCallCount(),
                         "tokens", loopResult.tokenUsage(),
-                        "finishReason", loopResult.finishReason()));
+                        "finishReason", loopResult.finishReason(),
+                        "inputTokens", usage != null ? usage.inputTokens() : null,
+                        "outputTokens", usage != null ? usage.outputTokens() : null,
+                        "cacheReadTokens", usage != null ? usage.cacheReadTokens() : null,
+                        "cacheWriteTokens", usage != null ? usage.cacheWriteTokens() : null,
+                        "reasoningTokens", usage != null ? usage.reasoningTokens() : null,
+                        "latencyMs", usage != null ? usage.latencyMillis() : null));
         if (loopResult.success()) {
             // A（2026-10-05 空产出护栏）：成功终态下若「最终正文为空白（StringUtils.isBlank 口径：
             // null / "" / 纯空白字符均算空）」且「工具调用数 == 0」，判为**可重试失败**而非 SUCCESS。
@@ -238,52 +260,16 @@ public class RuntimeTurnExecutor implements AgentRuntime {
      * 按 registry 的「生效形态」装配模型可见 ToolCallback（REF-1.3 生效面；
      * AgentLoop 可见 schema 与可调工具一致；best-effort：解析失败返回已装配部分 / 空列表）。
      *
-     * <p>与改造前（{@code resolveEnabledCallbacks(names)}）的差别：过滤依据由「入参名字集合」
-     * 改为「{@code resolve} 结果」——前者不含条件可用语义，只做名字匹配；后者是摘除 + 描述重写
-     * 之后的生效形态。描述被改写的工具以 {@link DescribedToolCallback} 委托包装，
-     * 使<b>模型读到的 schema 与生效描述一致</b>。</p>
-     *
-     * <p>顺序 = provider 注册顺序（与改造前一致 ⇒ schema 顺序零变化）；描述相同或生效描述为空白
-     * ⇒ 原回调直接透传（零包装、零开销）。</p>
-     *
-     * <p>注意空列表的语义变化：{@code resolvedTools} 为空<b>不再等价于</b> {@code enabledTools}
-     * 为空——「全部被条件可用摘除」是合法情形，此时提前返回既正确又省掉一次 provider 遍历。</p>
+     * <p><b>REF-8.5 起</b>：过滤本体已抽到 {@link VisibleToolCallbacks}（业务面循环入口共用
+     * 同一实现，防「第二处二次过滤」）。语义细节见该类 javadoc；本方法只负责
+     * 「取目录（对外 MCP 面 ∪ 内部执行链专用面）+ 委派选择」。</p>
      */
     private List<ToolCallback> resolveVisibleCallbacks(List<ToolDefinition> resolvedTools) {
-        if (resolvedTools == null || resolvedTools.isEmpty()) {
-            return List.of();
-        }
-        Map<String, String> effective = new LinkedHashMap<>();
-        for (ToolDefinition definition : resolvedTools) {
-            effective.put(definition.name(), definition.description());
-        }
-        List<ToolCallback> callbacks = new ArrayList<>();
-        try {
-            // REF-8.1 B：可见回调源 = 对外 MCP 面 ∪ 内部执行链专用面（internal_ 前缀在后）
-            ToolCallback[] all = InternalToolCallbacks.union(
-                    toolCallbackProvider.getToolCallbacks(), internalToolCallbacks);
-            if (all != null) {
-                for (ToolCallback callback : all) {
-                    if (callback == null || callback.getToolDefinition() == null) {
-                        continue;
-                    }
-                    String name = callback.getToolDefinition().name();
-                    if (!effective.containsKey(name)) {
-                        continue; // 未启用 / 被条件可用摘除 ⇒ 模型不可见
-                    }
-                    String description = effective.get(name);
-                    if (description == null || description.isBlank()
-                            || description.equals(callback.getToolDefinition().description())) {
-                        callbacks.add(callback); // 无生效描述 / 描述未变 ⇒ 原样透传
-                    } else {
-                        callbacks.add(new DescribedToolCallback(callback, description));
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.warn("RuntimeTurnExecutor: 工具回调解析失败（循环内无工具）: err={}", e.getMessage());
-        }
-        return callbacks;
+        // REF-8.5：过滤逻辑抽到 VisibleToolCallbacks（业务面循环入口共用同一实现，
+        // 保证「模型可见工具 = ToolRegistry.resolve 结果」这一单口径不在两处各写一份）。
+        // 可见回调源 = 对外 MCP 面 ∪ 内部执行链专用面（REF-8.1 B，internal_ 前缀在后）。
+        return VisibleToolCallbacks.select(resolvedTools,
+                InternalToolCallbacks.union(toolCallbackProvider.getToolCallbacks(), internalToolCallbacks));
     }
 
     /**
@@ -307,20 +293,26 @@ public class RuntimeTurnExecutor implements AgentRuntime {
     }
 
     /**
-     * 启用工具并集（G-004 增量 A）：上下文 tools（agent 侧可用工具）∪ 命中技能
-     * requiredTools（技能声明工具）。LinkedHashSet 去重保序——上下文工具在前、技能声明
-     * 工具按 resolve 返回序追加；纯函数式，不查询任何域。技能未声明工具时原样返回。
+     * 可取消上下文（REF-8.6）：截止时间 + 单工具超时按配置装配。
+     *
+     * <p>配置 Bean 缺失（单测显式构造）⇒ {@link LoopCancellation#none()}，行为与改造前逐字一致。</p>
+     */
+    private LoopCancellation resolveCancellation() {
+        AgentExecutionProperties props = executionProperties;
+        if (props == null) {
+            return LoopCancellation.none();
+        }
+        return LoopCancellation.of(props.getTurnDeadlineSeconds(), props.getToolCallTimeoutMillis());
+    }
+
+    /**
+     * 启用工具并集（G-004 增量 A）：上下文 tools（agent 侧可用工具）∪ 命中技能 requiredTools。
+     *
+     * <p><b>REF-8.5 起</b>：实现抽到 {@link EnabledToolNames#union}（三处副本合一，
+     * 防「并集口径」漂移）；本方法保留为语义命名点。</p>
      */
     private static List<String> mergeTools(List<String> tools, List<String> skillRequiredTools) {
-        if (skillRequiredTools == null || skillRequiredTools.isEmpty()) {
-            return tools != null ? tools : List.of();
-        }
-        LinkedHashSet<String> merged = new LinkedHashSet<>();
-        if (tools != null) {
-            merged.addAll(tools);
-        }
-        merged.addAll(skillRequiredTools);
-        return List.copyOf(merged);
+        return EnabledToolNames.union(tools, skillRequiredTools);
     }
 
     /** 沙箱策略观测（best-effort 日志，不参与业务决策）。 */
