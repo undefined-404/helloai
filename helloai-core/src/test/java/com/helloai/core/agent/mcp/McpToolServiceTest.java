@@ -25,6 +25,9 @@ import com.helloai.core.agent.port.UncertaintySnapshot;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.McpToolService;
+import com.helloai.core.agent.service.impl.McpAgentReportService;
+import com.helloai.core.agent.service.impl.McpReadModelService;
+import com.helloai.core.agent.service.impl.McpTaskClaimService;
 import com.helloai.core.agent.service.impl.McpToolServiceImpl;
 import com.helloai.core.agent.skill.SkillPackageCatalog;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
@@ -101,12 +104,21 @@ class McpToolServiceTest {
 
     @BeforeEach
     void setUp() {
-        mcpToolService = new McpToolServiceImpl(
-                agentService, agentInboxService, agentMcpServerService,
-                subTaskQueryPort, subTaskCommandPort, heartbeatService,
-                attachmentPort, agentExecutionRecordService, executionResultHandler, agentEventRecorder,
-                agentDutyLeaseService, taskRunningSpecPort, taskTimelinePort,
+        // RM9-a（2026-10-16）：门面 + 三职责类。手工装配包内 @Service 图，保持「被测对象
+        // 仍可经接口调用」的既有口径（所有断言都走 McpToolService 接口）。
+        McpReadModelService readModelService = new McpReadModelService(
+                subTaskQueryPort, taskRunningSpecPort, attachmentPort, agentExecutionRecordService);
+        McpAgentReportService agentReportService = new McpAgentReportService(
+                agentService, heartbeatService, agentDutyLeaseService, attachmentPort,
+                executionResultHandler, subTaskQueryPort, subTaskCommandPort,
                 skillPackageCatalog, llmProviderModelQueryService);
+        McpTaskClaimService taskClaimService = new McpTaskClaimService(
+                agentService, agentInboxService, agentMcpServerService, subTaskQueryPort,
+                subTaskCommandPort, heartbeatService, agentEventRecorder, taskTimelinePort,
+                readModelService);
+        mcpToolService = new McpToolServiceImpl(
+                agentService, agentMcpServerService, heartbeatService, agentDutyLeaseService,
+                taskClaimService, agentReportService, readModelService);
 
         Agent agent = new Agent();
         agent.setId(AGENT_ID);
