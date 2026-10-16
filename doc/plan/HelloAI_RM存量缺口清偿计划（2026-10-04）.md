@@ -103,6 +103,7 @@
 >
 > **★行数复测（2026-10-16）**：`McpToolServiceImpl` **1229 → 1334**（+105，本轮唯一变化）；`SubTaskServiceImpl` **1559** 与 `RequirementClarifyServiceImpl` **1557** 均**不变**。
 > **★连带影响（开工前必读）**：§4.3 的**方法行号锚点是 2026-10-12 快照**。实测 `McpToolServiceImpl` 的 24 个锚点**已全部漂移且非均匀** —— 前段（`pullTasks`~`checkIn`）**+17**、`mergeReportedSkills` **+36**、后段（`checkOut`~`parseInboxId`）**+105**。⇒ **开工前必须按当前文件重取该表全部行号**（勿按旧锚点定位）。另两类行数未变 ⇒ 推定锚点未漂移，同批复核即可。
+> **★RM9-a 已执行（2026-10-16）**：上述「开工前须重取锚点」已**按当前 1334 行文件执行完毕**（重取结果见 §4.3.1 的「★锚点重取」块），并按切分线完成 `McpToolServiceImpl` 拆分 —— 原类 **1334 → 409 行**（薄门面）+ 三个包内职责类：`McpTaskClaimService` **411** / `McpAgentReportService` **489** / `McpReadModelService` **327**。`SubTaskServiceImpl` / `RequirementClarifyServiceImpl` **本笔未动**（行数仍 1559 / 1557）。执行结果与验证见 §7.5。
 
 | 类 | 行数(10-12) | 方法数 | 主要职责（§9.1 判据：两个以上即应拆） |
 |---|---|---|---|
@@ -121,7 +122,9 @@
 
 > 取证口径：`grep -nE "public |private |protected "` 取方法清单 + 字段依赖表；职责簇按**调用链内聚度**归并（同一入参族 / 同一状态机阶段 / 同一外部副作用面）。
 
-#### 4.3.1 `McpToolServiceImpl`（1229 行 = 2026-10-12 取证快照；**★10-16 复测 1334 行，本表锚点须重取**）→ 门面 + 3 职责类
+#### 4.3.1 `McpToolServiceImpl`（1229 行 = 2026-10-12 取证快照；**★已执行 2026-10-16（RM9-a）** —— 拆分前实测 **1334** 行、锚点已按当时文件重取，见本小节「★锚点重取」块）→ 门面 + 3 职责类
+
+> **表内行号 = 2026-10-12 快照（历史原文，不重写）**；RM9-a 实施所用的重取锚点在表后「★锚点重取」块。
 
 | 目标类 | 承接方法（行号） | 内聚依据 |
 |---|---|---|
@@ -130,7 +133,22 @@
 | `McpAgentReportService` | `heartbeat:496` · `uploadArtifact:547` · `submitResult:576` · `reportBlocked:662` · `checkIn:712,718` · `checkOut:805` · `getAgentStatus:841` + `mergeReportedSkills:760` | 「Agent 上报自身状态与结果」——共享 `heartbeatService` / `agentDutyLeaseService` / `agentInboxService` |
 | `McpReadModelService` | `getDepsSummary:880` · `getSubTaskDetail:1046` + `loadUpstreamContent:995` · `buildSubTaskDetail:1073` · `buildContributors:1103` · `buildAttachmentItems:1132` | **纯只读组装**（零状态变更），共享 `taskRunningSpecPort` / `attachmentPort` |
 
-> 判据：门面**只做委托 + 守卫**，不含业务分支；三职责类之间**互不调用**（无 helper 环）。
+> 判据：门面**只做委托 + 守卫**，不含业务分支；三职责类之间**互不调用**（无 helper 环）。**★RM9-a 实测具体化**：三类间存在的唯一引用 = `McpTaskClaimService → McpReadModelService.buildSubTaskDetail`（认领成功路径复用餐详情组装），**单向无环** ⇒ 判据的实质 = 「**无环**」而非「零引用」（原「互不调用」表述据此收窄，见下表微调②）。
+
+> **★锚点重取（2026-10-16，RM9-a 开工前必做项的执行结果；口径 = 拆分前的 1334 行文件）**
+>
+> | 目标类 | 重取锚点（1334 行快照） |
+> |---|---|
+> | `McpToolServiceImpl`（**保留，薄门面**） | 全部 13 个 `@Tool` 入口**逐方法委托**；保留私有守卫 `assertAgentActive:1266` / `assertToolEnabled:1276` / `refreshDutyLease:1298,1308` |
+> | `McpTaskClaimService` | `pullTasks:131,143` · `ack:215` · `claimSubTask:245` · `startSubTask:392` + `recordClaimStarted:461` · `recordClaimRejected:486` + `parseInboxId:1322`（见微调①） |
+> | `McpAgentReportService` | `heartbeat:513` · `uploadArtifact:564` · `submitResult:593` · `reportBlocked:679` · `checkIn:729,735` · `checkOut:910` · `getAgentStatus:946` + `mergeReportedSkills:796` · `filterReportedSkillsByCapability:835` · `findPackage:879` |
+> | `McpReadModelService` | `getDepsSummary:985` · `getSubTaskDetail:1151` + `loadUpstreamContent:1100` · `buildSubTaskDetail:1178` · `buildContributors:1208` · `buildAttachmentItems:1237` |
+>
+> **★与旧表的两处实现层微调（已执行，登记供回读；不改职责切分与对外契约）**：
+> ① **`parseInboxId` 随 `ack` 迁移**：旧表把它列在门面「保留私有守卫」行（因它与守卫同处 `// helpers` 段），但实测其**唯一调用方是 `ack`**（非横切守卫）⇒ 迁入 `McpTaskClaimService`（私有），门面不再持有。
+> ② **`buildSubTaskDetail` 形成单向类间依赖**：旧表已把它归 `McpReadModelService`，而 `claimSubTask` 认领成功路径要复用 ⇒ 抽取后必然产生 `McpTaskClaimService → McpReadModelService`（单向、无环）；这是**按定稿切分线执行的必然结果**，非新增设计。
+>
+> **★守卫为何留在门面（对 2026-08-23「不继续拆分」声明的正面回应）**：该声明的顾虑之一是「拆分后守卫逻辑被迫复制或跨类回调」。本笔让**门面成为守卫的唯一装配点**（13 个入口各自 `assert* + refreshDutyLease*` 后逐方法委托，职责类零守卫），使守卫既**未复制**、也**无需跨类回调**；顾虑之二「按工具分组拆分只会平移行数」⇒ 本笔**不按工具分组**，改按 `§9.1 业务职责` 切分（认领链 / 上报面 / 只读组装），故不适用。
 
 #### 4.3.2 `SubTaskServiceImpl`（1559 行）→ 门面 + 4 职责类
 
@@ -156,7 +174,7 @@
 ### 4.4 迁移顺序与批次（一类一笔）
 
 ```text
-RM9-a  McpToolServiceImpl     → 门面 + 3 类（最小、协议面单一，先做以验证手感）
+RM9-a  McpToolServiceImpl     → 门面 + 3 类（最小、协议面单一，先做以验证手感）  ✅ 已完成（2026-10-16，见 §7.5）
 RM9-b  SubTaskServiceImpl     → 门面 + 4 类（含状态机单点收敛，风险最高）
 RM9-c  RequirementClarifyServiceImpl → 门面 + 5 类（最大，纯编排无跨域副作用）
 ```
@@ -204,7 +222,7 @@ RM9-c  RequirementClarifyServiceImpl → 门面 + 5 类（最大，纯编排无�
 | 批 3 | RM5：agent→system 11 行 | ✅ **已完成（2026-10-04）** |
 | 批 4 | RM5：review→task 13 行 | ✅ **已完成（2026-10-04）** |
 | 批 5 | RM5：planner→task 9 行 + task→agent 余 3 行 | ✅ **已完成（2026-10-04）**：5b（`task→agent.entity` 3→0）+ **5a**（`planner→task.entity` 9→0）⇒ **RM5 前向实体泄漏六项全部归零（61→0）** |
-| 专项 | RM9：McpToolServiceImpl → SubTaskServiceImpl → RequirementClarifyServiceImpl | ⬜ 待办 |
+| 专项 | RM9：McpToolServiceImpl → SubTaskServiceImpl → RequirementClarifyServiceImpl | 🟡 **进行中（1/3 笔）**：**RM9-a `McpToolServiceImpl` ✅ 已完成（2026-10-16）**；`SubTaskServiceImpl` / `RequirementClarifyServiceImpl` ⬜ 待办 |
 
 ### 7.1 批 1 执行结果（2026-10-04）
 
@@ -309,6 +327,36 @@ RM9-c  RequirementClarifyServiceImpl → 门面 + 5 类（最大，纯编排无�
 | 定向 | `TaskServiceImplTest`+`TaskServiceTest`+`TeamServiceImplTest`+`TeamPolicyExpanderTest` = **36 例 0 失败** |
 | 全量 | **7 模块 BUILD SUCCESS**；`<testcase>` **1916** 例 0 failure/error |
 | 守卫 | **EXIT=0**：`task→agent.entity` **3→0**、`task→agent` **54→53**；已 `--update-baseline` |
+| PS1 / E2E | **NOT RUN** |
+
+### 7.5 RM9-a 执行结果（2026-10-16）：`McpToolServiceImpl` → 薄门面 + 3 职责类
+
+**切分（按 §4.3.1 定稿，锚点按当前 1334 行文件重取）**
+
+| 类 | 行数 | 承接 |
+|---|---|---|
+| `McpToolServiceImpl`（**保留原类名，薄门面**） | **409**（原 1334） | 13 个 `@Tool` 入口逐方法委托 + 横切守卫（`assertAgentActive` / `assertToolEnabled` / `refreshDutyLease`×2）；**唯一守卫装配点** |
+| `McpTaskClaimService`（新增） | **411** | `pullTasks` / `ack` / `claimSubTask` / `startSubTask` + `recordClaimStarted` / `recordClaimRejected` / `parseInboxId` |
+| `McpAgentReportService`（新增） | **489** | `heartbeat` / `uploadArtifact` / `submitResult` / `reportBlocked` / `checkIn` / `checkOut` / `getAgentStatus` + `mergeReportedSkills` / `filterReportedSkillsByCapability` / `findPackage` |
+| `McpReadModelService`（新增） | **327** | `getDepsSummary` / `getSubTaskDetail` + `loadUpstreamContent` / `buildSubTaskDetail` / `buildContributors` / `buildAttachmentItems`（纯只读组装） |
+
+**★外部调用方零改动**：`McpToolService` 接口与 `McpToolServiceImpl` 类名均不变（`api/McpController` · `core/mcp/McpMcpServer` · `runtime/tool/InternalLlmExecutorTools` 注入点均为**接口**），故 `git revert` 单笔即回原状。
+
+**★事务边界不变**：原 9 个 `@Transactional(rollbackFor = Exception.class)` 方法（`ack` / `claimSubTask` / `startSubTask` / `uploadArtifact` / `submitResult` / `reportBlocked` / `checkIn`×2 / `checkOut`）的事务注解**留在门面** ⇒ 守卫与业务仍在**同一事务**内（职责类不加 `@Transactional`，随调用方事务传播）。
+
+**★顺序契约（`heartbeat`）**：原实现「`seen()` → `refreshDutyLease(agentId, true)` → 读租约构响应」，响应中的 `remainingTtlSeconds` 语义 = 「**续租后**剩余 TTL」。抽取后门面在**委托前**调 `refreshDutyLease(agentId, true)`，职责类再读租约 ⇒ 该语义**逐字保留**（`seen` 与 `adaptiveRenew` 实测互不依赖：`adaptiveRenew` 只读 ACTIVE 租约 TTL 与在跑子任务，不读 `last_seen_time`）。
+
+**验证（RM9-a）**
+
+| 层级 | 结果 |
+|---|---|
+| 编译 | ✅ `mvn -o -B -pl helloai-core -am test-compile`（**不 clean**）**BUILD SUCCESS** |
+| 定向 | ✅ `McpToolServiceTest`（**54**）+ `InternalLlmExecutorToolsTest`（**14**）= **68 例 0 失败 0 错误** |
+| 全量 | ✅ **7 模块 BUILD SUCCESS**；`<testcase>` **2569** 例 / **0 失败 0 错误**（246 个 surefire 报告） |
+| ★用例数不变性 | ✅ 本笔**未新增/未删除任何用例**：全仓 `@Test`/`@ParameterizedTest` 计数 **2570 = 2570**（工作树 vs `HEAD`）；唯一改动的测试文件 `McpToolServiceTest` 用例数 **54 = 54**（仅重写 `setUp` 的手工装配）⇒ `<testcase>` 口径**结构性不变** |
+| 守卫 | ✅ `scripts/ci/check-arch-freeze.sh` **EXIT=0**；**组 1（反向依赖）/ 组 2（跨域 Mapper）全 0**，组 1/2 基线**未动**（拆分未新增任何跨域前向 import；组 3 三条 warn 为提交前既有漂移，与本笔无关） |
+| 行为等价 | ✅ 68 例既有断言**全部通过且断言未改**（含 `claimSubTask` 幂等 / 准入拒绝 / 开工状态白名单 / `getDepsSummary` 降级 / `getSubTaskDetail` 授权 / `checkIn` 技能能力校验等契约型路径） |
+| 回滚 | ✅ 单笔 `git revert`（门面保留原类名 ⇒ 外部零改动） |
 | PS1 / E2E | **NOT RUN** |
 
 ---
