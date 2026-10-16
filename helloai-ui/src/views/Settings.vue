@@ -1610,6 +1610,25 @@ onMounted(() => {
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
+  /* 默认展示 3 个模型项；超过 3 个时自动出现纵向滚动条，避免 .model-section 被无限拉长 */
+  max-height: 112px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ha-border-light) transparent;
+}
+.model-checkbox-group::-webkit-scrollbar {
+  width: 6px;
+}
+.model-checkbox-group::-webkit-scrollbar-thumb {
+  background: var(--ha-border-light);
+  border-radius: 3px;
+}
+.model-checkbox-group::-webkit-scrollbar-thumb:hover {
+  background: var(--ha-primary-muted);
+}
+.model-checkbox-group::-webkit-scrollbar-track {
+  background: transparent;
 }
 .model-checkbox {
   width: 100%;
