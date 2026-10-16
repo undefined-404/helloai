@@ -281,6 +281,53 @@ public class AgentExecutionProperties {
      */
     private boolean pendingOrphanEnabled = true;
 
+    // ────────────────────────────────────────────────────────────
+    //  BLOCKED 自动重派巡检（plan §10.7.6 方案 b：巡检接线）
+    // ────────────────────────────────────────────────────────────
+
+    /**
+     * BLOCKED 子任务自动重派巡检是否启用。默认 true。
+     *
+     * <p><b>补的是哪条缺口</b>：{@code dispatchBlockedSubTask} 此前<b>只有人工入口</b>
+     * （`reassignById` / `redispatchInProgress`），而 BLOCKED 恰恰是「重启撞上在途任务」
+     * 与「执行者自报无能力」两条路径的落点 ⇒ 无人干预时下游依赖恒 PENDING，流水线永久停摆。
+     * 本开关打开后由 {@code SubTaskBlockedAutoRedispatchTask} 周期扫描并自动重派。</p>
+     *
+     * <p><b>不变量</b>：只<b>触发</b>既有重派链，不改状态机；重派仍受既有闸门约束
+     * （退避窗口 + 熔断，达 {@link AgentDispatchProperties#maxReassignAttempts} 转 DEAD_LETTER）。</p>
+     */
+    private boolean blockedRedispatchEnabled = true;
+
+    /**
+     * BLOCKED 自动重派巡检周期（毫秒）。默认 60000ms=1 分钟。
+     */
+    private long blockedRedispatchScanIntervalMs = 60000L;
+
+    /**
+     * BLOCKED 自动重派阈值（分钟）：{@code update_time} 距今超过本阈值才纳入重派。
+     *
+     * <p>与 PENDING 孤儿阈值同理由——刚 BLOCKED 的子任务可能正处于人工处置窗口内，
+     * 留一个观察窗口避免与人工操作抢跑。默认 5。</p>
+     */
+    private int blockedRedispatchThresholdMinutes = 5;
+
+    /**
+     * BLOCKED 自动重派单批上限。默认 50 条，防止调度线程被批量重派阻塞。
+     */
+    private int blockedRedispatchBatchSize = 50;
+
+    /**
+     * 是否把「执行者自报阻塞」（{@code manualIntervention.reason} =
+     * {@link com.helloai.common.constant.ManualInterventionReasons#EXECUTOR_REPORTED_BLOCKED}）
+     * 也纳入自动重派。默认 true。
+     *
+     * <p><b>为什么这类要单独开关</b>：其余 {@code manualIntervention} 原因码都表示
+     * 「等人工拍板」，自动链一律不碰（与 PENDING 孤儿巡检 / N11 回退同口径）；
+     * 只有自报阻塞表示「当前执行者做不到」，而平台对此有确定处置动作 = 换执行者
+     * （plan §10.7.6「发现放内、处置放外」）。置 {@code false} ⇒ 回到「自报阻塞一律等人工」。</p>
+     */
+    private boolean blockedRedispatchSelfReportedEnabled = true;
+
     /**
      * 消费载体模式。默认 POLLER，使 DB Poller 成为执行命令主消费路径。
      *

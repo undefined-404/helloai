@@ -174,6 +174,35 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
      */
     List<Long> selectPendingUnassignedWithoutActiveExecutionRecord(@Param("limit") int limit);
 
+    /**
+     * 查询「已 BLOCKED 且停滞超过阈值」的子任务 ID 列表（按 update_time 升序，limit 上限）。
+     *
+     * <p>供 {@code SubTaskBlockedAutoRedispatchTask} 巡检自动重派使用（plan §10.7.6 方案 b）。
+     * BLOCKED 此前只有人工重派入口，无人干预时下游依赖恒 PENDING、流水线永久停摆。</p>
+     *
+     * <p>扫描条件：
+     * <ul>
+     *   <li>{@code status='BLOCKED'}</li>
+     *   <li>{@code update_time < cutoff}（阈值由配置 {@code blocked-redispatch-threshold-minutes} 决定，
+     *       避免与人工处置抢跑）</li>
+     *   <li>{@code deleted=0}</li>
+     * </ul>
+     * </p>
+     *
+     * <p><b>为什么用 {@code update_time} 而非 {@code context.blockedAt}</b>：{@code blockedAt} 是
+     * {@code block()} 写进 JSONB 的自由文本，无法建索引；BLOCKED 行最后一次写入即 {@code block()}，
+     * 二者等价（同 {@link #selectTimedOutAssigned} 的口径）。</p>
+     *
+     * <p>只返回 id 列表（减少传输），调用方拿 id 后从 Service 补读最新状态与 context 再判定，
+     * 避免 TOCTOU。</p>
+     *
+     * @param cutoff BLOCKED 阈值截止时间（update_time &lt; cutoff 视为停滞）
+     * @param limit  单次返回最多条数
+     * @return 停滞 BLOCKED 子任务 ID 列表（按 update_time ASC）
+     */
+    List<Long> selectStaleBlockedSubTaskIds(@Param("cutoff") OffsetDateTime cutoff,
+                                            @Param("limit") int limit);
+
     /** 物理删除某任务下全部子任务（含 DEAD_LETTER 死信行，仅供任务级联删除使用）。 */
     @Delete("DELETE FROM sub_task WHERE task_id = #{taskId}")
     int physicalDeleteByTaskId(@Param("taskId") Long taskId);

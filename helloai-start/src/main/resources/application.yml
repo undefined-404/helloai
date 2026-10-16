@@ -246,6 +246,17 @@ helloai:
     pending-orphan-threshold-minutes: 5
     pending-orphan-scan-interval-ms: 60000
     pending-orphan-batch-size: 50
+    # BLOCKED 自动重派巡检（plan §10.7.6 唯一缺口：dispatchBlockedSubTask 原仅人工入口）：
+    # 两类 BLOCKED 落点——① 重启撞上在途任务（REF-8.6 取消树 ⇒ agent_runtime_cancelled）；
+    # ② 执行者自报无能力（REF-8.1.1 internal_report_blocked）。均不消耗重派预算、
+    # 也不被 PENDING 孤儿巡检覆盖 ⇒ 无本巡检则永久 BLOCKED、下游恒 PENDING。
+    # 阈值留出人工处置窗口；重派本身仍受退避 + max-reassign-attempts 熔断约束（不会无限循环）。
+    # self-reported-enabled=false 即回到"BLOCKED 一律等人工"的旧行为。
+    blocked-redispatch-enabled: true
+    blocked-redispatch-scan-interval-ms: 60000
+    blocked-redispatch-threshold-minutes: 5
+    blocked-redispatch-batch-size: 50
+    blocked-redispatch-self-reported-enabled: true
     # T5 起重塑语义：consumer-mode 仅描述"主消费路径由谁承担"，Poller 自身已统一降级为孤儿兜底；
     # 三种模式都对应 Poller 仅扫孤儿 PENDING（listOrphanPending），不再调用 listAllPending。
     # 主消费路径：

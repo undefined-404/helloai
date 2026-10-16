@@ -51,6 +51,38 @@ public interface SubTaskDispatchService {
     RedispatchResult dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId);
 
     /**
+     * 对 BLOCKED 子任务执行**自动**重派（plan §10.7.6 方案 b：巡检接线）。
+     *
+     * <p><b>存在理由</b>：{@link #dispatchBlockedSubTask} 此前只有人工入口
+     * （{@code SubTaskController#reassignById} 需 {@code subtask:reassign}、{@link #redispatchInProgress}），
+     * 而 BLOCKED 恰是「重启撞上在途任务」与「执行者自报无能力」两条路径的落点
+     * ⇒ 无人干预时下游依赖恒 PENDING、流水线永久停摆。本方法补上**自动触发**这一环，
+     * <b>不改状态机</b>（BLOCKED → PENDING 早已在 {@code SubTaskStateMachine} 中允许）。</p>
+     *
+     * <p><b>与人工入口的分工</b>：人工入口由用户指定目标 Agent；自动入口先按角色选人
+     * （角色取自原执行者 {@code assignedAgentId}，取不到回退 {@code EXECUTOR}），
+     * 选出候选后才进入同一条 {@link #dispatchBlockedSubTask} 链 ⇒ 闸门（退避 / 熔断）、
+     * 预算累加、时间线全部复用，无旁路。</p>
+     *
+     * <p><b>「无候选」是可自愈等待态</b>：选不出人时<b>不改动子任务状态、不消耗重派预算</b>，
+     * 返回 {@code applied=false, reason=no_candidate}，由下一轮巡检在候选恢复后重试
+     * （与 {@code dispatchPendingSubTaskAuto} 的 P1-1 口径一致）。</p>
+     *
+     * <p><b>人工介入标记的处理</b>：默认<b>跳过</b>带 {@code context.manualIntervention} 的子任务
+     * （与 PENDING 孤儿巡检 / N11 回退同口径——标记 = 等人工）；唯一的例外是
+     * {@code reason} 为 {@link com.helloai.common.constant.ManualInterventionReasons#EXECUTOR_REPORTED_BLOCKED}
+     * 且 {@code selfReportedBlockedEligible=true} 时——该原因码表示「当前执行者做不到」，
+     * 平台对此有确定处置（换执行者），故纳入自动重派；重派成功时同批清除该标记，
+     * 避免前端仍显示「等待人工介入」。</p>
+     *
+     * @param subTaskId                  待重派的 BLOCKED 子任务 ID
+     * @param selfReportedBlockedEligible 是否把「执行者自报阻塞」也纳入自动重派
+     * @return 重派结果；跳过时 {@code applied=false} 且 {@code reason ∈ {no_candidate, manual_intervention, backoff, circuit_open}}
+     * @throws BizException 子任务不存在或状态不是 BLOCKED 时抛出
+     */
+    RedispatchResult dispatchBlockedSubTaskAuto(Long subTaskId, boolean selfReportedBlockedEligible);
+
+    /**
      * 对离线 Agent 遗留子任务执行重新调度。
      *
      * <p>这里故意把离线 Agent 作为首选目标交给 {@link TaskDispatchPort}，

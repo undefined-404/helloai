@@ -6,6 +6,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.constant.ManualInterventionReasons;
 import com.helloai.common.constant.RetryPolicy;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TimelineEventCode;
@@ -92,6 +93,80 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         taskDispatchPort.assignNext(preferredAgentId, subTaskId, resolveConstraints(subTask));
         log.info("阻塞子任务重新进入调度: subTaskId={}, preferredAgentId={}", subTaskId, preferredAgentId);
         return RedispatchResult.ofApplied();
+    }
+
+    @Override
+    public RedispatchResult dispatchBlockedSubTaskAuto(Long subTaskId, boolean selfReportedBlockedEligible) {
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null) {
+            throw new BizException("子任务不存在: " + subTaskId);
+        }
+        if (subTask.getStatus() != SubTaskStatus.BLOCKED) {
+            throw new BizException("只有 BLOCKED 状态的子任务才能自动重派: subTaskId=" + subTaskId
+                    + ", status=" + subTask.getStatus());
+        }
+        // 人工介入标记 = 「等人工拍板」，自动链一律不碰；唯一例外 = 执行者自报阻塞
+        //（该原因码表示「当前执行者做不到」，平台有确定处置 = 换执行者，plan §10.7.6）
+        boolean selfReported = isSelfReportedBlocked(subTask);
+        if (SubTaskDispatchService.isManualInterventionMarked(subTask)
+                && !(selfReported && selfReportedBlockedEligible)) {
+            log.debug("BLOCKED 自动重派跳过：已标记人工介入（等人工拍板）: subTaskId={}", subTaskId);
+            return RedispatchResult.ofSkipped("manual_intervention", null);
+        }
+
+        // 先选人、后改状态：选不出人时保持 BLOCKED、不消耗重派预算（P1-1 口径）
+        AgentRole role = resolveAgentRole(subTask.getAssignedAgentId());
+        DispatchConstraints constraints = resolveConstraints(subTask);
+        var preferred = agentSelector.pickPreferred(role, toSelectorConstraints(constraints));
+        if (preferred == null) {
+            log.info("BLOCKED 自动重派暂无可用候选（可自愈等待态，保持 BLOCKED）: subTaskId={}, role={}",
+                    subTaskId, role);
+            return RedispatchResult.ofSkipped("no_candidate", null);
+        }
+
+        RedispatchResult result = dispatchBlockedSubTask(subTaskId, preferred.getId());
+        if (result.applied() && selfReported) {
+            // 平台已接管「自报阻塞」的处置 ⇒ 清除人工介入标记，避免前端仍显示「等待人工介入」
+            // 却与自动重派自相矛盾（同款语义见 redispatchDeadLetter 的人工拍板清理）
+            subTaskService.clearManualIntervention(subTaskId);
+        }
+        log.info("BLOCKED 自动重派: subTaskId={}, preferredAgentId={}, applied={}, selfReported={}",
+                subTaskId, preferred.getId(), result.applied(), selfReported);
+        return result;
+    }
+
+    /** 是否「执行者自报阻塞」（{@code manualIntervention.reason = executor_reported_blocked}）。 */
+    private static boolean isSelfReportedBlocked(SubTask subTask) {
+        Map<String, Object> ctx = subTask.getContext();
+        if (ctx == null) {
+            return false;
+        }
+        Object mark = ctx.get("manualIntervention");
+        if (!(mark instanceof Map<?, ?> markMap)) {
+            return false;
+        }
+        return ManualInterventionReasons.EXECUTOR_REPORTED_BLOCKED.equals(markMap.get("reason"));
+    }
+
+    /**
+     * 解析原执行者角色；取不到回退 {@code EXECUTOR}。
+     *
+     * <p>子任务本身不存角色，BLOCKED 前必然指派过执行者，故以 {@code assignedAgentId} 的角色为准；
+     * 与 {@link #redispatchForFallback} 的角色推导同口径。查询失败降级不抛错（best-effort）。</p>
+     */
+    private AgentRole resolveAgentRole(Long agentId) {
+        if (agentId == null) {
+            return AgentRole.EXECUTOR;
+        }
+        try {
+            AgentProfileSnapshot agent = agentService.getProfileById(agentId);
+            if (agent != null && agent.role() != null) {
+                return agent.role();
+            }
+        } catch (Exception e) {
+            log.debug("解析原执行者角色失败，回退 EXECUTOR: agentId={}, err={}", agentId, e.getMessage());
+        }
+        return AgentRole.EXECUTOR;
     }
 
     @Override

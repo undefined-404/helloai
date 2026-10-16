@@ -325,4 +325,29 @@
         LIMIT #{limit}
     </select>
 
+    <!--
+        停滞 BLOCKED 子任务 ID 列表（plan §10.7.6 方案 b：BLOCKED 自动重派巡检）。
+
+        命中条件：
+          1) status = 'BLOCKED'
+          2) update_time < cutoff（阈值由 blocked-redispatch-threshold-minutes 决定）
+
+        为什么查这一批：dispatchBlockedSubTask 此前只有人工入口，而 BLOCKED 是
+        「重启撞上在途任务（agent_runtime_cancelled）」与「执行者自报无能力」两条路径的落点
+        ⇒ 无人干预时下游依赖恒 PENDING、流水线永久停摆。
+
+        时钟取 update_time：BLOCKED 行最后一次写入即 block()（context.blockedAt 只是
+        JSONB 自由文本、无索引），与 selectTimedOutAssigned 同口径。
+
+        只返回 id，调用方补读最新状态与 context（人工介入标记判定）后再重派，避免 TOCTOU。
+    -->
+    <select id="selectStaleBlockedSubTaskIds" resultType="java.lang.Long">
+        SELECT st.id FROM sub_task st
+        WHERE st.status = 'BLOCKED'
+          AND st.update_time &lt; #{cutoff}
+          AND st.deleted = 0
+        ORDER BY st.update_time ASC
+        LIMIT #{limit}
+    </select>
+
 </mapper>

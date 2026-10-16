@@ -197,6 +197,18 @@ public interface SubTaskService extends IService<SubTask> {
     @Transactional(rollbackFor = Exception.class)
     void markManualIntervention(Long subTaskId, String reason, Map<String, Object> extra);
 
+    /**
+     * 清除人工介入标记（{@code context.manualIntervention}）。
+     *
+     * <p>与 {@link #markManualIntervention} 对称：平台在对该场景做出确定处置后调用，
+     * 避免「标记仍显示等待人工」与「平台已自动接管」自相矛盾
+     * （同款用法见 {@code SubTaskDispatchServiceImpl#redispatchDeadLetter} 的人工拍板语义）。
+     * 幂等（无标记时静默返回），best-effort 降级（失败仅告警，不影响主链路）。</p>
+     *
+     * @param subTaskId 子任务 ID
+     */
+    void clearManualIntervention(Long subTaskId);
+
     @Transactional(rollbackFor = Exception.class)
     void block(Long subTaskId);
 
@@ -519,6 +531,21 @@ public interface SubTaskService extends IService<SubTask> {
      * @return PENDING 孤儿子任务 ID 列表（可能为空，绝不返回 null）
      */
     List<Long> listStalePendingWithoutExecutionRecord(OffsetDateTime cutoff, int limit);
+
+    /**
+     * 查询「已 BLOCKED 且停滞超过阈值」的子任务 ID 列表
+     * （{@code status='BLOCKED' AND update_time < cutoff}，按 update_time ASC，limit 上限）。
+     *
+     * <p>承接 helloai-job {@code SubTaskBlockedAutoRedispatchTask} 直捅
+     * {@code SubTaskMapper.selectStaleBlockedSubTaskIds}；只返回 id 列表，
+     * 调用方拿 id 后从 Service 补读最新状态与 context（人工介入标记判定）后再重派，
+     * 避免 TOCTOU。</p>
+     *
+     * @param cutoff BLOCKED 阈值截止时间（update_time &lt; cutoff 视为停滞）
+     * @param limit  单次返回最多条数
+     * @return 停滞 BLOCKED 子任务 ID 列表（可能为空，绝不返回 null）
+     */
+    List<Long> listStaleBlockedSubTaskIds(OffsetDateTime cutoff, int limit);
 
     // ── 只读快照 / 不透明命令（RM5 批 4）：供 review 域消费，避免其 import task.entity ──
 

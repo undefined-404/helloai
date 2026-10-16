@@ -3,6 +3,7 @@ package com.helloai.core.task.service;
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.NoCandidateAgentException;
 import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.common.constant.ManualInterventionReasons;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
@@ -162,6 +163,128 @@ class SubTaskDispatchServiceTest {
         verify(taskTimelineService, never()).recordEvent(
                 anyLong(), anyLong(), eq("sub_task_offline_reassign"), any(), any(), any());
         verify(taskDispatchPort, never()).assignNext(anyLong(), anyLong(), any());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  BLOCKED 自动重派（plan §10.7.6 方案 b）：巡检接线入口
+    // ══════════════════════════════════════════════════════════════
+
+    private SubTask blockedSubTask(long id) {
+        SubTask subTask = new SubTask();
+        subTask.setId(id);
+        subTask.setStatus(SubTaskStatus.BLOCKED);
+        return subTask;
+    }
+
+    @Test
+    @DisplayName("自动重派：无人工介入标记 → 走既有调度链并 applied")
+    void shouldAutoRedispatchBlockedWhenNoManualIntervention() {
+        SubTask subTask = blockedSubTask(21L);
+        when(subTaskService.getById(21L)).thenReturn(subTask);
+        when(subTaskService.resetToPendingForDispatch(21L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
+        Agent preferred = new Agent();
+        preferred.setId(99L);
+        when(agentSelector.pickPreferred(AgentRole.EXECUTOR, null)).thenReturn(preferred);
+
+        var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(21L, true);
+
+        assertThat(result.applied()).isTrue();
+        verify(taskDispatchPort).assignNext(99L, 21L, null);
+        // 非自报阻塞 → 不清理人工介入标记
+        verify(subTaskService, never()).clearManualIntervention(anyLong());
+    }
+
+    @Test
+    @DisplayName("自动重派：已标记人工介入（非自报）→ skip manual_intervention，不选人不改状态")
+    void shouldSkipAutoRedispatchWhenManualInterventionMarked() {
+        SubTask subTask = blockedSubTask(22L);
+        subTask.setContext(Map.of("manualIntervention", Map.of("reason", "rework_budget_exceeded")));
+        when(subTaskService.getById(22L)).thenReturn(subTask);
+
+        var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(22L, true);
+
+        assertThat(result.applied()).isFalse();
+        assertThat(result.reason()).isEqualTo("manual_intervention");
+        verify(agentSelector, never()).pickPreferred(any(), any());
+        verify(subTaskService, never()).resetToPendingForDispatch(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("自动重派：自报阻塞 + 开关开启 → 放行，成功后清除人工介入标记")
+    void shouldAllowSelfReportedBlockedAndClearMark() {
+        SubTask subTask = blockedSubTask(23L);
+        subTask.setContext(Map.of("manualIntervention",
+                Map.of("reason", ManualInterventionReasons.EXECUTOR_REPORTED_BLOCKED)));
+        when(subTaskService.getById(23L)).thenReturn(subTask);
+        when(subTaskService.resetToPendingForDispatch(23L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
+        Agent preferred = new Agent();
+        preferred.setId(99L);
+        when(agentSelector.pickPreferred(AgentRole.EXECUTOR, null)).thenReturn(preferred);
+
+        var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(23L, true);
+
+        assertThat(result.applied()).isTrue();
+        verify(taskDispatchPort).assignNext(99L, 23L, null);
+        // 平台已接管自报阻塞的处置 → 清除标记，避免与前端「等待人工介入」自相矛盾
+        verify(subTaskService).clearManualIntervention(23L);
+    }
+
+    @Test
+    @DisplayName("自动重派：自报阻塞但开关关闭 → 仍按人工介入跳过")
+    void shouldSkipSelfReportedBlockedWhenEligibilityDisabled() {
+        SubTask subTask = blockedSubTask(24L);
+        subTask.setContext(Map.of("manualIntervention",
+                Map.of("reason", ManualInterventionReasons.EXECUTOR_REPORTED_BLOCKED)));
+        when(subTaskService.getById(24L)).thenReturn(subTask);
+
+        var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(24L, false);
+
+        assertThat(result.applied()).isFalse();
+        assertThat(result.reason()).isEqualTo("manual_intervention");
+        verify(agentSelector, never()).pickPreferred(any(), any());
+    }
+
+    @Test
+    @DisplayName("自动重派：无候选 → skip no_candidate，不消耗预算、不改状态")
+    void shouldSkipAutoRedispatchWhenNoCandidate() {
+        SubTask subTask = blockedSubTask(25L);
+        when(subTaskService.getById(25L)).thenReturn(subTask);
+        when(agentSelector.pickPreferred(AgentRole.EXECUTOR, null)).thenReturn(null);
+
+        var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(25L, true);
+
+        assertThat(result.applied()).isFalse();
+        assertThat(result.reason()).isEqualTo("no_candidate");
+        // 关键回归锁：无候选属可自愈等待态 ⇒ 保持 BLOCKED、不消耗重派预算、不派发
+        verify(subTaskService, never()).resetToPendingForDispatch(anyLong(), any());
+        verify(subTaskMapper, never()).incrementAttemptTotal(anyLong(), any(OffsetDateTime.class));
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("自动重派：非 BLOCKED 状态 → BizException（并发冲突，巡检按 skip 处理）")
+    void shouldThrowWhenAutoRedispatchNonBlocked() {
+        SubTask subTask = new SubTask();
+        subTask.setId(26L);
+        subTask.setStatus(SubTaskStatus.PENDING);
+        when(subTaskService.getById(26L)).thenReturn(subTask);
+
+        assertThatThrownBy(() -> subTaskDispatchService.dispatchBlockedSubTaskAuto(26L, true))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("BLOCKED");
+        verify(agentSelector, never()).pickPreferred(any(), any());
+    }
+
+    @Test
+    @DisplayName("自动重派：子任务不存在 → BizException")
+    void shouldThrowWhenAutoRedispatchSubTaskNotFound() {
+        when(subTaskService.getById(27L)).thenReturn(null);
+
+        assertThatThrownBy(() -> subTaskDispatchService.dispatchBlockedSubTaskAuto(27L, true))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("子任务不存在");
     }
 
     // ══════════════════════════════════════════════════════════════

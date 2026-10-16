@@ -997,6 +997,34 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         }
     }
 
+    /**
+     * 清除人工介入标记（与 {@link #markManualIntervention} 对称）。
+     *
+     * <p>best-effort 降级写（CODE_STYLE §7.1 单语句原子写豁免口径）：getById + updateById
+     * 对单实体的单次原子更新，无跨实体一致性诉求，故不加 {@code @Transactional}；
+     * 整段 try-catch 降级——失败仅告警、不影响主链路。无标记时静默返回（幂等，避免无谓写）。</p>
+     */
+    @Override
+    public void clearManualIntervention(Long subTaskId) {
+        try {
+            SubTask fresh = getById(subTaskId);
+            if (fresh == null) {
+                return;
+            }
+            Map<String, Object> ctx = fresh.getContext();
+            if (ctx == null || !ctx.containsKey("manualIntervention")) {
+                return;
+            }
+            Map<String, Object> copy = new HashMap<>(ctx);
+            copy.remove("manualIntervention");
+            fresh.setContext(copy);
+            updateById(fresh);
+            log.info("人工介入标记已清除: subTaskId={}", subTaskId);
+        } catch (Exception e) {
+            log.warn("人工介入标记清除失败（不影响主链路）: subTaskId={}, err={}", subTaskId, e.getMessage());
+        }
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void block(Long subTaskId) {
@@ -1374,6 +1402,11 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     @Override
     public List<Long> listStalePendingWithoutExecutionRecord(OffsetDateTime cutoff, int limit) {
         return baseMapper.selectStalePendingWithoutExecutionRecord(cutoff, limit);
+    }
+
+    @Override
+    public List<Long> listStaleBlockedSubTaskIds(OffsetDateTime cutoff, int limit) {
+        return baseMapper.selectStaleBlockedSubTaskIds(cutoff, limit);
     }
 
     /**

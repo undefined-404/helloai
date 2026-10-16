@@ -1,6 +1,7 @@
 package com.helloai.core.agent.runtime.tool;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.ManualInterventionReasons;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.service.McpToolService;
@@ -79,8 +80,14 @@ public class InternalLlmExecutorTools {
     private static final String TOOL_GET_SUB_TASK_DETAIL = "internal_get_sub_task_detail";
     /** 阻塞原因最短长度（防敷衍式「做不到」）。 */
     private static final int MIN_BLOCKED_REASON_CHARS = 10;
-    /** 人工介入原因码（写入 {@code context.manualIntervention}，供兜底任务识别）。 */
-    private static final String BLOCKED_REASON_CODE = "executor_reported_blocked";
+    /**
+     * 人工介入原因码（写入 {@code context.manualIntervention}）。
+     *
+     * <p>取值收敛到 {@link ManualInterventionReasons#EXECUTOR_REPORTED_BLOCKED}（叶子域唯一事实源）：
+     * 该码同时被 task 域 BLOCKED 自动重派巡检消费（据此区分「能力不足」与「等人工」），
+     * 两处若各写字面量，任一处漂移都会让判定静默失效。</p>
+     */
+    private static final String BLOCKED_REASON_CODE = ManualInterventionReasons.EXECUTOR_REPORTED_BLOCKED;
 
     /**
      * 查询当前子任务详情（执行内容 / 交付物 / 验收标准 / 执行约束 / 不确定性申报 / 前置附件）。
