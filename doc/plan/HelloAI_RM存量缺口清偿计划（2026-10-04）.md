@@ -103,7 +103,11 @@
 >
 > **★行数复测（2026-10-16）**：`McpToolServiceImpl` **1229 → 1334**（+105，本轮唯一变化）；`SubTaskServiceImpl` **1559** 与 `RequirementClarifyServiceImpl` **1557** 均**不变**。
 > **★连带影响（开工前必读）**：§4.3 的**方法行号锚点是 2026-10-12 快照**。实测 `McpToolServiceImpl` 的 24 个锚点**已全部漂移且非均匀** —— 前段（`pullTasks`~`checkIn`）**+17**、`mergeReportedSkills` **+36**、后段（`checkOut`~`parseInboxId`）**+105**。⇒ **开工前必须按当前文件重取该表全部行号**（勿按旧锚点定位）。另两类行数未变 ⇒ 推定锚点未漂移，同批复核即可。
-> **★RM9-a 已执行（2026-10-16）**：上述「开工前须重取锚点」已**按当前 1334 行文件执行完毕**（重取结果见 §4.3.1 的「★锚点重取」块），并按切分线完成 `McpToolServiceImpl` 拆分 —— 原类 **1334 → 409 行**（薄门面）+ 三个包内职责类：`McpTaskClaimService` **411** / `McpAgentReportService` **489** / `McpReadModelService` **327**。`SubTaskServiceImpl` / `RequirementClarifyServiceImpl` **本笔未动**（行数仍 1559 / 1557）。执行结果与验证见 §7.5。
+> **★RM9-a 已执行（2026-10-16）**：上述「开工前须重取锚点」已**按当前 1334 行文件执行完毕**（重取结果见 §4.3.1 的「★锚点重取」块），并按切分线完成 `McpToolServiceImpl` 拆分 —— 原类 **1334 → 409 行**（薄门面）+ 三个包内职责类：`McpTaskClaimService` **411** / `McpAgentReportService` **489** / `McpReadModelService` **327**。`SubTaskServiceImpl` / `RequirementClarifyServiceImpl` **本笔未动**。执行结果与验证见 §7.5。
+>
+> **★★行数复测（2026-10-16 二次，RM9-b 开工前）—— 订正上一条的「不变」结论**：上条记「`SubTaskServiceImpl` **1559** 不变」**已过期**。实测 **1592**（+33）—— 增长来自**本日 `RM9-a` 之前的 `BLOCKED` 自动重派笔**（新增 `listStaleBlockedSubTaskIds` / `clearManualIntervention` 两个方法），即**同一批工作日内**的变化，故上条取证时点早于该笔。`RequirementClarifyServiceImpl` 仍 **1557**（未变）。
+> **★连带影响（RM9-b 开工前必读）**：`§4.3.2` 的锚点同样是 **2026-10-12 快照**，「行数未变 ⇒ 推定锚点未漂移」的推定对 `SubTaskServiceImpl` **已不成立**。实测其锚点**非均匀漂移**：前段（`requiredSkillsOf`~`changeStatus`、`claim`~`complete`）**+0**（`changeStatus:331` / `claim:392` / `submit:404` / `complete:410` 均**未漂移**）；自 `pause` 之后逐步漂移（`block:1036` vs 旧 1008、`cancel:1072` vs 1044、`assignNext:1083` vs 1055、`resetToPendingForDispatch:1108` vs 1080、`reassign:1221` vs 1193、`listReviewOrphans:1254` vs 1226、`claimAtomic:1332` vs 1304、`listPausedBefore:1380` vs 1352、`listTimedOutAssigned:1388` vs 1360、`incrementExternalFallbackCount:1393` vs 1365、`mergeSkills(subTaskId):1450` vs 1417、`claimConstraint:1468` vs 1435、`saveDrafts:1514` vs 1481、`updateDeadline:1530` vs 1497、`listDraftsInInsertOrder:1567` vs 1534、`listViewsByIds:1589` vs 1556）。⇒ **RM9-b 仍须按当前文件全部重取**（重取结果见 §4.3.2 的「★锚点重取」块）。
+> **★沉淀**：「**行数未变 ⇒ 推定锚点未漂移**」这条推定**在同一工作日内的多笔也适用失败** —— 任何一笔新增方法都会同时破坏「行数不变」与其派生推定；故**锚点重取只能以「开工那一刻的文件」为准**，不得继承任何历史结论。
 
 | 类 | 行数(10-12) | 方法数 | 主要职责（§9.1 判据：两个以上即应拆） |
 |---|---|---|---|
@@ -150,7 +154,9 @@
 >
 > **★守卫为何留在门面（对 2026-08-23「不继续拆分」声明的正面回应）**：该声明的顾虑之一是「拆分后守卫逻辑被迫复制或跨类回调」。本笔让**门面成为守卫的唯一装配点**（13 个入口各自 `assert* + refreshDutyLease*` 后逐方法委托，职责类零守卫），使守卫既**未复制**、也**无需跨类回调**；顾虑之二「按工具分组拆分只会平移行数」⇒ 本笔**不按工具分组**，改按 `§9.1 业务职责` 切分（认领链 / 上报面 / 只读组装），故不适用。
 
-#### 4.3.2 `SubTaskServiceImpl`（1559 行）→ 门面 + 4 职责类
+#### 4.3.2 `SubTaskServiceImpl`（1559 = 2026-10-12 取证快照；**★RM9-b 开工前实测 1592 行、锚点已非均匀漂移，见下方「★锚点重取」**）→ 门面 + 4 职责类
+
+> **表内行号 = 2026-10-12 快照（历史原文，不重写）**；RM9-b 实施须以「★锚点重取」块为准。
 
 | 目标类 | 承接方法（行号） | 内聚依据 |
 |---|---|---|
@@ -159,6 +165,21 @@
 | `SubTaskNotificationService` | `sendReworkInboxNotification:492` · `buildReworkSummary:513` · `formatMissingEvidence:554` · `sendApprovedInboxNotification:581` · `buildApprovedSummary:600` · `clip:620` · `sendInboxNotification:630` · `buildUncertaintyLines:731` · `notifyAgentHandover:762` · `publishAssignmentEvent:782` | **出站副作用面**（inbox 投递 + 摘要渲染 + 领域事件），零状态机依赖 |
 | `SubTaskLeaseService` | `renewCurrentNodeLeases:1100` · `reclaimExpiredLeases:1126` · `claimAtomic:1304` · `incrementExternalFallbackCount:1365` · `listPausedBefore:1352` · `listTimedOutAssigned:1360` · `listReviewOrphans:1226` + `listReviewOrphanViews:1456` | **租约 / 回收 / 巡检**（调度侧只读候选 + 原子认领），共享 `watchdogProperties` / `concurrencyQuotaService` |
 | `SubTaskQueryService` | `list:209` · `listAvailable:231` · `filterReady:246` · `listMine:271` · `getByIdForUpdate:288` · `isReady:296` · `getView:1395` · `listViewsByTaskId:1449` · `listViewsByTaskIdAndStatus:1491` · `listViewsByIds:1556` · `listDraftsInInsertOrder:1534` · `saveDrafts:1481` · `countByStatusForAgent:1257` 等全部 `count*` / `listViews*` / `listInFlight*` | **只读查询与视图投影**（无状态变更），是三类中最大且最安全的一簇 |
+
+> **★锚点重取（2026-10-16，RM9-b 开工前的预检结果；口径 = 当前 1592 行文件）**
+>
+> | 目标类 | 重取锚点（1592 行快照） |
+> |---|---|
+> | `SubTaskServiceImpl`（**保留，薄门面**） | `extends ServiceImpl<SubTaskMapper, SubTask>` 保留；`requiredSkillsOf:123` · `mergeSkills(SubTask):141` · `updateDraft:162` · `create:198` · `updateDependsOn:313` · `createBatch:1228` · `updateContext:1440` · `mergeSkills(id):1450` · `claimConstraint:1468` · `updateDeadline:1530` + `toSnapshot:1421` · `toView:1494` · `toEntity:1540` |
+> | `SubTaskStateMachineService` | `changeStatus:331,337` · `claim:392` · `start:398` · `submit:404` · `complete:410` · `pause:477` · `resume:483` · `rework:792` · `reworkFresh:873` · `markManualIntervention:973` · `clearManualIntervention:1008` · `block:1030,1036` · `cancel:1072` · `assignNext:1083` · `resetToPendingForDispatch:1108` · `reassign:1221` + `consumeReworkBudget:838` · `recordReworkStartedSafely:925` · `invalidateAttachmentsOnRework:950` |
+> | `SubTaskNotificationService` | `sendReworkInboxNotification:492` · `buildReworkSummary:513` · `formatMissingEvidence:554` · `sendApprovedInboxNotification:581` · `buildApprovedSummary:600` · `clip:620` · `sendInboxNotification:630` · `buildUncertaintyLines:731` · `notifyAgentHandover:762` · `publishAssignmentEvent:782` |
+> | `SubTaskLeaseService` | `renewCurrentNodeLeases:1128` · `reclaimExpiredLeases:1154` · `listReviewOrphans:1254` · `claimAtomic:1332` · `listPausedBefore:1380` · `listTimedOutAssigned:1388` · `incrementExternalFallbackCount:1393` + `listReviewOrphanViews:1489` |
+> | `SubTaskQueryService` | `list:209` · `listAvailable:231` · `filterReady:246` · `listMine:271` · `getByIdForUpdate:288` · `isReady:296` · `countByStatusForAgent:1285` · `countByAssignedAgent:1309` · `countReviewByReviewerAgent:1315` · `selectInFlightByAgent:1338` · `countInFlightByAgent:1343` · `countInFlightAll:1348` · `existsInFlightAssignedOrInProgress:1364` · `listInFlightAssignedOrInProgress:1372` · `getView:1428` · `listViewsByTaskId:1482` · `listViewsByTaskIdAndStatus:1524` · `listDraftsInInsertOrder:1567` · `listViewsByIds:1589` · `countByTaskIdExcludingStatus:1577` · `countByTaskIdAndStatus:1583` · `saveDrafts:1514` |
+>
+> **★旧表未列、需在 RM9-b 归位的「后增方法」（自 2026-10-12 快照后新增，共 3 类）**：
+> ① **`RM5/RM9-a` 之前的存量补充**：`create:198` · `updateDependsOn:313` · `listRecentlyChanged:1270` · `unlinkByAssignedAgent:1323` · `physicalDeleteByTaskId:1354` · `listPendingUnassignedWithoutActiveExecutionRecord:1398` · `listStalePendingWithoutExecutionRecord:1403` · `countByTaskIdExcludingStatus:1577` · `countByTaskIdAndStatus:1583` —— 按职责归位（`create`/`updateDependsOn` 属门面配置面或状态机；`list*`/`count*` 属 `SubTaskQueryService`；`unlinkByAssignedAgent`/`physicalDeleteByTaskId` 属删除/解绑面）。
+> ② **本日 `BLOCKED` 自动重派笔新增 2 个**：`clearManualIntervention:1008`（归状态机，与 `markManualIntervention` 对称）· `listStaleBlockedSubTaskIds:1408`（归 `SubTaskQueryService`，只读巡检候选）。
+> ③ **★RM9-b 的验收口径在 `§4.5` 基础上再加两条**：**(i) 状态机类不得反向依赖查询类**（否则成环，`§4.5` 风险提示已点名）；**(ii) 「状态迁移唯一入口」的语义不得被稀释** —— 拆分后所有状态写入仍须经 `SubTaskStateMachineService`，不得因拆分出现第二条写状态路径。
 
 #### 4.3.3 `RequirementClarifyServiceImpl`（1557 行）→ 门面 + 5 职责类
 

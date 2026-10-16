@@ -204,3 +204,4 @@ D4 拦截链（并行）─────────────┴──► LOG-
 - `doc/文档体系分类与治理规则.md` §3.2（记录性段落定则 + 2026-10-12 归档批次）
 - 实测（2026-10-12）：`helloai-core/src/main/resources/skills/plugins/` = **4 个 `eng-*.md`**；三类行数 `McpToolServiceImpl` **1229** / `SubTaskServiceImpl` **1559** / `RequirementClarifyServiceImpl` **1557**；`doc/archive/implemented/HelloAI 基础架构调整实施计划.md`（`Done`）
 - 实测（**2026-10-16 复测**）：三类行数 `McpToolServiceImpl` **1334**（+105）/ `SubTaskServiceImpl` **1559**（不变）/ `RequirementClarifyServiceImpl` **1557**（不变）⇒ `RM计划 §4.3.1` 的 24 个方法行号锚点整体漂移（**+17 / +36 / +105** 三段非均匀），**开工前须重取**（登记 `LOG-20261016-003`）
+- 实测（**2026-10-16 二次复测，RM9-a 交付后 / RM9-b 开工前**）：`McpToolServiceImpl` **1334 → 409**（RM9-a 拆分后，见 `RM计划 §7.5`）；★**`SubTaskServiceImpl` 由 1559 → 1592**（+33，来自本日 `BLOCKED` 自动重派笔新增的 2 个方法，故上文「不变」**已过期**）⇒ `§4.3.2` 锚点**同样非均匀漂移**，RM9-b 须重取（重取结果已落 `RM计划 §4.3.2`「★锚点重取」块）；`RequirementClarifyServiceImpl` 仍 **1557**（未变）
