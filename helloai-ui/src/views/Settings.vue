@@ -4,7 +4,7 @@
          顶部 Hero 区：品牌锚点 + 标题/副标题
          ============================================================ -->
     <header class="page-hero">
-      <div
+<!--      <div
         class="page-hero-icon"
         aria-hidden="true"
       >
@@ -14,7 +14,7 @@
       </div>
       <p class="page-hero-subtitle">
         配置系统基础参数、模型供应商与通知方式
-      </p>
+      </p>-->
     </header>
 
     <!-- ============================================================
@@ -30,7 +30,7 @@
             系统设置
           </h1>
           <p class="sheet-subtitle">
-            以下配置修改后点击底部「保存设置」按钮生效
+            配置系统基础参数、模型供应商与通知方式
           </p>
         </div>
         <el-button
@@ -62,7 +62,7 @@
                   基础配置
                 </h2>
               </div>
-              <el-button
+<!--              <el-button
                 size="small"
                 plain
                 :disabled="!isDirty"
@@ -70,7 +70,7 @@
               >
                 <el-icon><RefreshLeft /></el-icon>
                 <span>重置</span>
-              </el-button>
+              </el-button>-->
             </div>
             <el-form-item label="外部访问地址">
               <el-input
@@ -1436,7 +1436,7 @@ onMounted(() => {
   border-radius: var(--ha-radius-md);
   padding: 8px;
   background: var(--ha-surface-hover);
-  max-height: 420px;
+  max-height: 640px;
   overflow-y: auto;
 }
 .provider-item {
@@ -1672,7 +1672,7 @@ onMounted(() => {
   gap: 10px;
   padding: 16px 24px;
   border-top: 1px solid var(--ha-border-light);
-  background: var(--ha-surface-hover);
+  background: var(--ha-surface-elevated);
 }
 .sheet-footer-actions {
   display: inline-flex;
