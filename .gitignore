@@ -107,7 +107,7 @@ helmet-research-*.png
 
 # --- WorkBuddy 本地工作区（含 memory / 本地缓存，不入仓 2026-09-29）---
 .workbuddy/
-
+.archify
 # --- 本地一次性工具脚本（本地测试/调试工具，不入仓 2026-09-29）---
 # tools/ 下为本地运行的一次性 Python 工具（如 ai-video-search），非项目交付物
 tools/
