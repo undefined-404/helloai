@@ -108,6 +108,8 @@
 > **★★行数复测（2026-10-16 二次，RM9-b 开工前）—— 订正上一条的「不变」结论**：上条记「`SubTaskServiceImpl` **1559** 不变」**已过期**。实测 **1592**（+33）—— 增长来自**本日 `RM9-a` 之前的 `BLOCKED` 自动重派笔**（新增 `listStaleBlockedSubTaskIds` / `clearManualIntervention` 两个方法），即**同一批工作日内**的变化，故上条取证时点早于该笔。`RequirementClarifyServiceImpl` 仍 **1557**（未变）。
 > **★连带影响（RM9-b 开工前必读）**：`§4.3.2` 的锚点同样是 **2026-10-12 快照**，「行数未变 ⇒ 推定锚点未漂移」的推定对 `SubTaskServiceImpl` **已不成立**。实测其锚点**非均匀漂移**：前段（`requiredSkillsOf`~`changeStatus`、`claim`~`complete`）**+0**（`changeStatus:331` / `claim:392` / `submit:404` / `complete:410` 均**未漂移**）；自 `pause` 之后逐步漂移（`block:1036` vs 旧 1008、`cancel:1072` vs 1044、`assignNext:1083` vs 1055、`resetToPendingForDispatch:1108` vs 1080、`reassign:1221` vs 1193、`listReviewOrphans:1254` vs 1226、`claimAtomic:1332` vs 1304、`listPausedBefore:1380` vs 1352、`listTimedOutAssigned:1388` vs 1360、`incrementExternalFallbackCount:1393` vs 1365、`mergeSkills(subTaskId):1450` vs 1417、`claimConstraint:1468` vs 1435、`saveDrafts:1514` vs 1481、`updateDeadline:1530` vs 1497、`listDraftsInInsertOrder:1567` vs 1534、`listViewsByIds:1589` vs 1556）。⇒ **RM9-b 仍须按当前文件全部重取**（重取结果见 §4.3.2 的「★锚点重取」块）。
 > **★沉淀**：「**行数未变 ⇒ 推定锚点未漂移**」这条推定**在同一工作日内的多笔也适用失败** —— 任何一笔新增方法都会同时破坏「行数不变」与其派生推定；故**锚点重取只能以「开工那一刻的文件」为准**，不得继承任何历史结论。
+>
+> **★行数复测（2026-10-16 三次，RM9-b 交付后）**：`SubTaskServiceImpl` **1592 → 551**（薄门面），业务实现迁入 **4** 个包内 `@Service`（`SubTaskStateMachineService` **655** / `SubTaskQueryService` **380** / `SubTaskNotificationService` **357** / `SubTaskLeaseService` **195**）+ 1 个包内映射器（`SubTaskProjectionMapper` **78**）= **2216** 行。`McpToolServiceImpl` **409**（RM9-a 后未变）、`RequirementClarifyServiceImpl` **1557**（仍未变）。执行结果与验证见 §7.6。
 
 | 类 | 行数(10-12) | 方法数 | 主要职责（§9.1 判据：两个以上即应拆） |
 |---|---|---|---|
@@ -154,9 +156,9 @@
 >
 > **★守卫为何留在门面（对 2026-08-23「不继续拆分」声明的正面回应）**：该声明的顾虑之一是「拆分后守卫逻辑被迫复制或跨类回调」。本笔让**门面成为守卫的唯一装配点**（13 个入口各自 `assert* + refreshDutyLease*` 后逐方法委托，职责类零守卫），使守卫既**未复制**、也**无需跨类回调**；顾虑之二「按工具分组拆分只会平移行数」⇒ 本笔**不按工具分组**，改按 `§9.1 业务职责` 切分（认领链 / 上报面 / 只读组装），故不适用。
 
-#### 4.3.2 `SubTaskServiceImpl`（1559 = 2026-10-12 取证快照；**★RM9-b 开工前实测 1592 行、锚点已非均匀漂移，见下方「★锚点重取」**）→ 门面 + 4 职责类
+#### 4.3.2 `SubTaskServiceImpl`（1559 = 2026-10-12 取证快照；**★已执行 2026-10-16（RM9-b）** —— 拆分前实测 **1592** 行、锚点已按当时文件重取，见本小节「★锚点重取」块）→ 门面 + 4 职责类
 
-> **表内行号 = 2026-10-12 快照（历史原文，不重写）**；RM9-b 实施须以「★锚点重取」块为准。
+> **表内行号 = 2026-10-12 快照（历史原文，不重写）**；RM9-b 实施以「★锚点重取」块为准（该块为开工前重取结果，实施时按其定位）。
 
 | 目标类 | 承接方法（行号） | 内聚依据 |
 |---|---|---|
@@ -180,6 +182,14 @@
 > ① **`RM5/RM9-a` 之前的存量补充**：`create:198` · `updateDependsOn:313` · `listRecentlyChanged:1270` · `unlinkByAssignedAgent:1323` · `physicalDeleteByTaskId:1354` · `listPendingUnassignedWithoutActiveExecutionRecord:1398` · `listStalePendingWithoutExecutionRecord:1403` · `countByTaskIdExcludingStatus:1577` · `countByTaskIdAndStatus:1583` —— 按职责归位（`create`/`updateDependsOn` 属门面配置面或状态机；`list*`/`count*` 属 `SubTaskQueryService`；`unlinkByAssignedAgent`/`physicalDeleteByTaskId` 属删除/解绑面）。
 > ② **本日 `BLOCKED` 自动重派笔新增 2 个**：`clearManualIntervention:1008`（归状态机，与 `markManualIntervention` 对称）· `listStaleBlockedSubTaskIds:1408`（归 `SubTaskQueryService`，只读巡检候选）。
 > ③ **★RM9-b 的验收口径在 `§4.5` 基础上再加两条**：**(i) 状态机类不得反向依赖查询类**（否则成环，`§4.5` 风险提示已点名）；**(ii) 「状态迁移唯一入口」的语义不得被稀释** —— 拆分后所有状态写入仍须经 `SubTaskStateMachineService`，不得因拆分出现第二条写状态路径。
+>
+> **★与旧表的四处实现层微调（已执行，登记供回读；不改职责切分与对外契约）**
+> ① **映射助手随调用方外置**：原两个 `private static`（`toView` / `toEntity`）无法被新建职责类复用（**Java 静态成员不可跨类继承**），故外置为同包映射器 `SubTaskProjectionMapper`（与既有 `SubTaskSnapshotMapper` 同款「映射集中一处」模式），三处调用方（查询簇 / 租约巡检 / 门面 `saveDrafts`）共用一份口径。`toSnapshot` 一并改由状态机类内私有包装 `SubTaskSnapshotMapper.toSnapshot`。
+> ② **`requiredSkillsOf` / `mergeSkills` / `claimConstraint` 归 `SubTaskQueryService`**（旧表列在门面行）：三者均为**纯只读派生**（读 Task 级 `required_skills` ∪ 子任务级、读 `agent_policy` 白名单），按 §9.1「只读查询」归位本簇；且 `SubTaskNotificationService` 构造 `assigned` 摘要需 `mergeSkills`，若留门面会形成**「门面 ⇄ 通知」构造器环**，故该归位是**保证无环的必要项**而非偏好。
+> ③ **`saveDrafts` 留门面**（旧表列在查询簇）：它是**批量插入（写）**，与查询簇「只读查询与视图投影」的定位自相矛盾，且依赖 MyBatis-Plus 基类能力 `saveBatch`（`§4.3.2` 门面行本就保留 `extends ServiceImpl` 供 CRUD）⇒ 按「写归门面、读归查询」归位。
+> ④ **「状态迁移唯一入口」加固（口径 ii 的落地）**：`claimAtomic`（SQL 级 `PENDING → ASSIGNED`）与 `reclaimExpiredLeases` 的**状态写入半段**（`IN_PROGRESS → PENDING` + 清 owner/lease）从租约簇移入 `SubTaskStateMachineService`（后者以新增的 `reclaimToPending(SubTask)` 承接，租约类只保留「挑候选 + 回收副作用编排」）⇒ 拆分后 `sub_task.status` 的**全部**写入仍集中在状态机类内（含跨类调用与 SQL 级原子写），无第二条写状态路径。
+>
+> **★依赖方向（无环，口径 i 的落地）**：`门面 → 状态机 → 通知 → 查询`（单向链）+ `门面 → 查询` + `门面 → 租约 → 状态机`；**状态机类不依赖查询类**（行读取一律经同域 `SubTaskMapper` 直读，以保住「读现状 + 紧接写入」的同事务 / 同 `@Version` CAS 语义）。
 
 #### 4.3.3 `RequirementClarifyServiceImpl`（1557 行）→ 门面 + 5 职责类
 
@@ -196,8 +206,8 @@
 
 ```text
 RM9-a  McpToolServiceImpl     → 门面 + 3 类（最小、协议面单一，先做以验证手感）  ✅ 已完成（2026-10-16，见 §7.5）
-RM9-b  SubTaskServiceImpl     → 门面 + 4 类（含状态机单点收敛，风险最高）
-RM9-c  RequirementClarifyServiceImpl → 门面 + 5 类（最大，纯编排无跨域副作用）
+RM9-b  SubTaskServiceImpl     → 门面 + 4 类（含状态机单点收敛，风险最高）        ✅ 已完成（2026-10-16，见 §7.6）
+RM9-c  RequirementClarifyServiceImpl → 门面 + 5 类（最大，纯编排无跨域副作用）  ⬜ 待办
 ```
 
 **每笔内部子序**：① 先抽**只读簇**（`McpReadModelService` / `SubTaskQueryService` / `ClarifyPromptRenderer`、`ClarifyCommandSearchService`）⇒ 零行为变更、易验证；② 再抽**副作用簇**（通知 / 流式 / 租约）；③ 最后抽**状态机 / 编排簇**（风险最高）。
@@ -243,7 +253,7 @@ RM9-c  RequirementClarifyServiceImpl → 门面 + 5 类（最大，纯编排无�
 | 批 3 | RM5：agent→system 11 行 | ✅ **已完成（2026-10-04）** |
 | 批 4 | RM5：review→task 13 行 | ✅ **已完成（2026-10-04）** |
 | 批 5 | RM5：planner→task 9 行 + task→agent 余 3 行 | ✅ **已完成（2026-10-04）**：5b（`task→agent.entity` 3→0）+ **5a**（`planner→task.entity` 9→0）⇒ **RM5 前向实体泄漏六项全部归零（61→0）** |
-| 专项 | RM9：McpToolServiceImpl → SubTaskServiceImpl → RequirementClarifyServiceImpl | 🟡 **进行中（1/3 笔）**：**RM9-a `McpToolServiceImpl` ✅ 已完成（2026-10-16）**；`SubTaskServiceImpl` / `RequirementClarifyServiceImpl` ⬜ 待办 |
+| 专项 | RM9：McpToolServiceImpl → SubTaskServiceImpl → RequirementClarifyServiceImpl | 🟡 **进行中（2/3 笔）**：**RM9-a `McpToolServiceImpl` ✅ 已完成（2026-10-16，§7.5）**；**RM9-b `SubTaskServiceImpl` ✅ 已完成（2026-10-16，§7.6）**；`RequirementClarifyServiceImpl` ⬜ 待办（开工前须重取 `§4.3.3` 锚点） |
 
 ### 7.1 批 1 执行结果（2026-10-04）
 
@@ -377,6 +387,47 @@ RM9-c  RequirementClarifyServiceImpl → 门面 + 5 类（最大，纯编排无�
 | ★用例数不变性 | ✅ 本笔**未新增/未删除任何用例**：全仓 `@Test`/`@ParameterizedTest` 计数 **2570 = 2570**（工作树 vs `HEAD`）；唯一改动的测试文件 `McpToolServiceTest` 用例数 **54 = 54**（仅重写 `setUp` 的手工装配）⇒ `<testcase>` 口径**结构性不变** |
 | 守卫 | ✅ `scripts/ci/check-arch-freeze.sh` **EXIT=0**；**组 1（反向依赖）/ 组 2（跨域 Mapper）全 0**，组 1/2 基线**未动**（拆分未新增任何跨域前向 import；组 3 三条 warn 为提交前既有漂移，与本笔无关） |
 | 行为等价 | ✅ 68 例既有断言**全部通过且断言未改**（含 `claimSubTask` 幂等 / 准入拒绝 / 开工状态白名单 / `getDepsSummary` 降级 / `getSubTaskDetail` 授权 / `checkIn` 技能能力校验等契约型路径） |
+| 回滚 | ✅ 单笔 `git revert`（门面保留原类名 ⇒ 外部零改动） |
+| PS1 / E2E | **NOT RUN** |
+
+### 7.6 RM9-b 执行结果（2026-10-16）：`SubTaskServiceImpl` → 薄门面 + 4 职责类（风险最高的一笔）
+
+**切分（按 §4.3.2 定稿，锚点按当前 1592 行文件重取）**
+
+| 类 | 行数 | 承接 |
+|---|---|---|
+| `SubTaskServiceImpl`（**保留原类名，薄门面**） | **551**（原 1592） | 领域写入原语（`updateDraft` / `create` / `createBatch` / `updateDependsOn` / `updateContext` / `updateDeadline` / `saveDrafts` / `unlinkByAssignedAgent` / `physicalDeleteByTaskId`，**均不改 status**）+ 对 4 职责类的**逐方法委托**；`extends ServiceImpl<SubTaskMapper, SubTask>` 保留 |
+| `SubTaskStateMachineService`（新增） | **655** | **状态迁移唯一入口**：`changeStatus`×2 / `claim` / `start` / `submit` / `complete` / `pause` / `resume` / `cancel` / `block`×2 / `rework` / `reworkFresh` / `assignNext` / `resetToPendingForDispatch` / `reassign` / `claimAtomic` / `reclaimToPending` / `markManualIntervention` / `clearManualIntervention` + 私有 `consumeReworkBudget` / `recordReworkStartedSafely` / `invalidateAttachmentsOnRework` / `toSnapshot` |
+| `SubTaskQueryService`（新增） | **380** | 只读查询与视图投影：`list` / `listAvailable` / `filterReady` / `listMine` / `listRecentlyChanged` / `getByIdForUpdate` / `isReady` / 全部 `count*` / `selectInFlight*` / `listInFlight*` / `listPending*` / `listStale*` / `getView` / `listViews*` / `listDraftsInInsertOrder` + `requiredSkillsOf` / `mergeSkills`×2 / `claimConstraint`（纯只读派生） |
+| `SubTaskNotificationService`（新增） | **357** | 出站副作用面：`sendInboxNotification` / `notifyAgentHandover` / `publishAssignmentEvent` / `sendReworkInboxNotification` / `buildReworkSummary` / `formatMissingEvidence` / `sendApprovedInboxNotification` / `buildApprovedSummary` / `clip` / `buildUncertaintyLines` |
+| `SubTaskLeaseService`（新增） | **195** | 租约 / 回收 / 巡检：`renewCurrentNodeLeases` / `reclaimExpiredLeases` / `listReviewOrphans` / `listReviewOrphanViews` / `listPausedBefore` / `listTimedOutAssigned` / `incrementExternalFallbackCount` |
+| `SubTaskProjectionMapper`（新增，包内映射器） | **78** | `toView(SubTask)` / `toEntity(SubTaskDraft)`（原门面两个 `private static`；**Java 静态成员不可跨类继承**，故外置；同包三处调用方共用一份口径） |
+
+**★外部调用方零改动**：`SubTaskService` 接口与 `SubTaskServiceImpl` 类名均不变（`SubTaskService extends IService<SubTask>`，故 `getById` / `updateById` / `list` 等基类能力仍由门面提供），全部外部注入点（`SubTaskDispatchServiceImpl` / `AgentServiceImpl` / `HeartbeatServiceImpl` / `InFlightDbQuotaService` / `ReviewPortAdapter` / `AttachmentServiceImpl` / job 侧定时任务等）**无感** ⇒ `git revert` 单笔即回原状。
+
+**★「状态迁移唯一入口」未被稀释（§4.3.2 验收口径 ii）**：`sub_task.status` 的全部写入仍集中在 `SubTaskStateMachineService` 内 —— 含**跨类调用**（租约簇的过期回收经 `reclaimToPending`）与 **SQL 级原子写**（`claimAtomic`）。门面自己的写操作**无一改 status**（唯一例外 `create` 在**插入新行**时落初始态 `PENDING`，属插入非迁移）。
+
+**★无环（§4.3.2 验收口径 i）**：`门面 → 状态机 → 通知 → 查询`（单向链）+ `门面 → 查询` + `门面 → 租约 → 状态机`；**状态机类不依赖查询类**（行读取一律经同域 `SubTaskMapper` 直读，保住「读现状 + 紧接写入」的同事务 / 同 `@Version` CAS 语义）。
+
+**★对 2026-08-23「§7.8 选项二不继续拆分」声明的正面回应（声明原文在门面 javadoc 中保留，未删史）**
+
+| 声明的顾虑 | 本笔的处置 |
+|---|---|
+| ①「状态流转各入口共享同一状态机与事件发布链，拆分会造成**事件序与事务边界在类间漂移**」 | **整条状态流转链原样整体搬迁**入 `SubTaskStateMachineService`：`changeStatus` 的「读现状 → `validate` → 写上下文/租约 → 落库 → outbox → 收件箱 → 交接通知 → 领域事件 → 心跳」**顺序与事务边界一字未改**，仍在同一个类内 ⇒ 漂移风险**未被引入**；门面只在外部入口保留 `@Transactional` 以维持原事务开启位置 |
+| ②「已外置的均为无状态工具或独立引擎，剩余部分**无独立可测职责**可继续剥离」 | **该判断据实测不再成立**：被剥离的三簇**各自早已有独立单测**（`SubTaskServiceIsReadyTest` / `...MergeSkillsTest` / `...LeaseReclaimTest` / `...QuotaTest` / `...ReworkBudgetTest` / `...HandoverTest`）⇒ 它们本就具备「独立可测职责」，只是此前与状态机同处一文件 |
+| ③（隐含）「按行数机械拆」 | 本笔**不按方法数量**拆，按 §9.1 业务职责切分（只读查询 / 出站副作用 / 租约调度 / 状态迁移）；4 类**互不转发**、方向无环 ⇒ 不落 §9.2 所禁的 `FooHelper`/`FooManager` 形态 |
+
+**验证（RM9-b）**
+
+| 层级 | 结果 |
+|---|---|
+| 编译 | ✅ `mvn -o -B -pl helloai-core -am test-compile`（**不 clean**）**BUILD SUCCESS** |
+| 定向 | ✅ 7 个定向类 **47 例 0 失败 0 错误**：`SubTaskServiceHandoverTest` 16 · `SubTaskServiceMergeSkillsTest` 11 · `SubTaskServiceIsReadyTest` 8 · `SubTaskServiceQuotaTest` 4 · `SubTaskServiceReworkBudgetTest` 4 · `SubTaskServiceLeaseReclaimTest` 2 · `SubTaskServiceUpdateContextTest` 2 |
+| 全量 | ✅ **7 模块 BUILD SUCCESS**；`<testcase>` **2569** 例 / **0 失败 0 错误**（246 个 surefire 报告）—— 与 `RM9-a` 本笔前基线**逐数一致** |
+| ★用例数不变性 | ✅ 本笔**未新增/未删除任何用例**：`src/test/java` 内 `@Test`/`@ParameterizedTest` 计数 **2598 = 2598**（工作树 vs `HEAD`）；7 个定向类逐文件**用例数全等**（16/11/8/4/4/2/2）⇒ `<testcase>` 口径**结构性不变** |
+| 守卫 | ✅ `scripts/ci/check-arch-freeze.sh` **EXIT=0**；**组 1（反向依赖）/ 组 2（跨域 Mapper）全 0**、组 1/2 基线**未动**。组 3 四条 warn 中 **`task->agent` 57→60（+3）为本笔唯一归因**（拆分把 11 条 agent import 从门面重新分布到 3 个职责类共 14 条，净 +3，**均为 §6 合法前向**）；另三条 `planner->agent` 33→34、`api->core.entity` 49→52、`job->core.entity` 14→15 经 `git grep … HEAD` 实测**提交前既有漂移**，与本笔无关 |
+| 行为等价 | ✅ 既有 47 例**断言语义逐条保留**且全通过（覆盖依赖门禁 / 技能并集去重保序 / 草案 fail-close 编辑门禁 / 共享重试预算熔断与死信 / 并发额度原子防线 / 租约回收中断点 / 换人撤销通知 / 审查通过与驳回摘要渲染等契约型路径）。**装配口径随实现下沉**：原「spy 门面拦 `getById`/`updateById`/`lambdaQuery()`」改为「直接对同域 `SubTaskMapper` 设桩，或以 spy 职责类记录类内自调用」 |
+| 文档守卫 | ✅ `scripts/shell/verify-doc-gap-table.sh` **4/4**（tripwire 仍 **23**：本批**未新增矩阵行**，只在 §0 加决策） |
 | 回滚 | ✅ 单笔 `git revert`（门面保留原类名 ⇒ 外部零改动） |
 | PS1 / E2E | **NOT RUN** |
 
