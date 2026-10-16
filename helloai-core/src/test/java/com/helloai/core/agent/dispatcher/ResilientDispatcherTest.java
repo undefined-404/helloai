@@ -132,6 +132,17 @@ class ResilientDispatcherTest {
                 .build();
     }
 
+    /** `LOG-20261011-007` 事故原型的「需读原始附件」子任务（源侧「源字段」+ 动作侧「逐项标注」）。 */
+    private SubTaskSnapshot attachmentReadSubTask(Long id) {
+        return SubTaskSnapshot.builder()
+                .id(id)
+                .taskId(id + 1000L)
+                .content("盘点数据文件字段：对实际数据文件逐项标注存在/缺失/命名不一致")
+                .acceptance("全部源字段逐项核对完毕（验收标准 1）")
+                .deliverable("字段盘点表")
+                .build();
+    }
+
     /**
      * 通过反射调用 private assignNextFallback，验证降级逻辑。
      * <p>注：@{@link io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker}
@@ -420,6 +431,118 @@ class ResilientDispatcherTest {
             when(agentDispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
             when(subTaskQueryPort.findById(100L)).thenReturn(executionDenseSubTask(100L));
             when(subTaskQueryPort.isExecutionDense(100L)).thenReturn(true);
+            when(agentService.getById(1L)).thenReturn(null);
+
+            Agent alternative = apiKeyLlmAgent(2L, true);
+            when(agentSelector.pickAlternative(eq(1L), eq(null), any()))
+                    .thenReturn(alternative);
+
+            invokeFallback(1L, 100L, new BizException("Agent 不存在: 1"));
+
+            verify(subTaskCommandPort).assignNext(eq(2L), eq(100L));
+        }
+    }
+
+    @Nested
+    @DisplayName("A 能力闸·需读原始附件预检（LOG-20261011-007）")
+    class AttachmentReadPrecheck {
+
+        private static final String REASON = "attachment_read_no_structured_capability";
+
+        @Test
+        @DisplayName("需读原始附件 + 无结构化解析能力 Agent → 拒绝分配 + 标记人工介入 + 事件带 reason")
+        void shouldRejectAttachmentReadToAgentWithoutCapability() {
+            when(agentDispatchProperties.isAttachmentReadSkipEnabled()).thenReturn(true);
+            Agent noCap = apiKeyLlmAgent(1L, false);
+            when(agentService.getById(1L)).thenReturn(noCap);
+            when(subTaskQueryPort.findById(100L)).thenReturn(attachmentReadSubTask(100L));
+            when(subTaskQueryPort.requiresOriginalAttachment(100L)).thenReturn(true);
+
+            assertThatThrownBy(() -> resilientDispatcher.assignNext(1L, 100L))
+                    .isInstanceOf(AgentUnavailableException.class)
+                    .hasMessageContaining("需读原始附件任务不匹配无结构化解析能力 Agent");
+
+            // 红线②判据①：提交点（assignNext）之前拦下 ⇒ 从未提交
+            verify(subTaskCommandPort, never()).assignNext(anyLong(), anyLong());
+            // 判据④：复用既有事件码与人工介入标记，仅以 payload.reason 区分
+            verify(subTaskCommandPort).markManualIntervention(
+                    eq(100L), eq("dispatch_skip_execution_dense"),
+                    argThat(p -> REASON.equals(p.get("reason"))));
+            verify(taskTimelinePort).recordEvent(
+                    eq(1100L), eq(100L), eq("sub_task_dispatch_skip_no_capability"),
+                    eq(AgentRole.SYSTEM), eq(1L),
+                    argThat(p -> REASON.equals(p.get("reason"))));
+        }
+
+        @Test
+        @DisplayName("需读原始附件 + supportsMCP=true 的 API_KEY_LLM → 正常分配")
+        void shouldAllowAttachmentReadToAgentWithStructuredCapability() {
+            when(agentDispatchProperties.isAttachmentReadSkipEnabled()).thenReturn(true);
+            Agent withCap = apiKeyLlmAgent(1L, true);
+            when(agentService.getById(1L)).thenReturn(withCap);
+            when(subTaskQueryPort.findById(100L)).thenReturn(attachmentReadSubTask(100L));
+            when(subTaskQueryPort.requiresOriginalAttachment(100L)).thenReturn(true);
+
+            resilientDispatcher.assignNext(1L, 100L);
+
+            verify(subTaskCommandPort).assignNext(eq(1L), eq(100L));
+            verify(subTaskCommandPort, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+        }
+
+        @Test
+        @DisplayName("独立开关关闭 → 需读原始附件任务仍正常分配（可与执行密集闸门分别关停）")
+        void shouldAllowWhenAttachmentReadSwitchDisabled() {
+            // isAttachmentReadSkipEnabled 默认 false（mock 缺省）
+            Agent noCap = apiKeyLlmAgent(1L, false);
+            when(agentService.getById(1L)).thenReturn(noCap);
+
+            resilientDispatcher.assignNext(1L, 100L);
+
+            verify(subTaskCommandPort).assignNext(eq(1L), eq(100L));
+            verify(subTaskCommandPort, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+        }
+
+        @Test
+        @DisplayName("信号不命中（非「需读原始附件」任务）→ 不拦，正常分配")
+        void shouldAllowWhenSignalNotMatched() {
+            when(agentDispatchProperties.isAttachmentReadSkipEnabled()).thenReturn(true);
+            Agent noCap = apiKeyLlmAgent(1L, false);
+            when(agentService.getById(1L)).thenReturn(noCap);
+            when(subTaskQueryPort.findById(100L)).thenReturn(
+                    SubTaskSnapshot.builder().id(100L).taskId(1100L).content("撰写接口清单摘要").build());
+            when(subTaskQueryPort.requiresOriginalAttachment(100L)).thenReturn(false);
+
+            resilientDispatcher.assignNext(1L, 100L);
+
+            verify(subTaskCommandPort).assignNext(eq(1L), eq(100L));
+        }
+
+        @Test
+        @DisplayName("fallback 替代 Agent 无结构化解析能力 → 放弃分配 + 标记人工介入")
+        void shouldSkipAlternativeWithoutStructuredCapabilityInFallback() {
+            when(agentDispatchProperties.isAttachmentReadSkipEnabled()).thenReturn(true);
+            when(subTaskQueryPort.findById(100L)).thenReturn(attachmentReadSubTask(100L));
+            when(subTaskQueryPort.requiresOriginalAttachment(100L)).thenReturn(true);
+            when(agentService.getById(1L)).thenReturn(null);
+
+            Agent alternative = apiKeyLlmAgent(2L, false);
+            when(agentSelector.pickAlternative(eq(1L), eq(null), any()))
+                    .thenReturn(alternative);
+
+            invokeFallback(1L, 100L, new BizException("Agent 不存在: 1"));
+
+            verify(subTaskCommandPort, never()).assignNext(anyLong(), anyLong());
+            verify(subTaskCommandPort).markManualIntervention(
+                    eq(100L), eq("dispatch_skip_execution_dense"),
+                    argThat(p -> REASON.equals(p.get("reason"))));
+        }
+
+        @Test
+        @DisplayName("fallback 替代 Agent 有结构化解析能力 → 正常分配")
+        void shouldAssignToStructuredCapableAlternativeInFallback() {
+            when(agentDispatchProperties.isAttachmentReadSkipEnabled()).thenReturn(true);
+            when(subTaskQueryPort.findById(100L)).thenReturn(attachmentReadSubTask(100L));
+            when(subTaskQueryPort.requiresOriginalAttachment(100L)).thenReturn(true);
             when(agentService.getById(1L)).thenReturn(null);
 
             Agent alternative = apiKeyLlmAgent(2L, true);

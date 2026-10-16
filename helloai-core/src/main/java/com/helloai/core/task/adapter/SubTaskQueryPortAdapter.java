@@ -97,6 +97,20 @@ public class SubTaskQueryPortAdapter implements SubTaskQueryPort {
     /**
      * {@inheritDoc}
      *
+     * <p>整体不透明：「需读原始附件」两侧信号词表与匹配逻辑由
+     * {@link SubTaskDispatchService#isAttachmentReadDense} 单源持有，
+     * 本适配器只把「ID → 实体」这一步补上，判定口径零复制。子任务不存在时返回 {@code false}
+     * （与「无信号」同义，避免消费方再判空）。</p>
+     */
+    @Override
+    public boolean requiresOriginalAttachment(Long subTaskId) {
+        SubTask subTask = subTaskService.getById(subTaskId);
+        return subTask != null && SubTaskDispatchService.isAttachmentReadDense(subTask);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
      * <p>整体不透明：白名单口径（{@code agent_policy.executorAgentIds}）与技能口径
      * （子任务级 ∪ 任务级）由 {@link SubTaskService#claimConstraint} 单源持有，与派发链同源；
      * 本适配器不做任何规则复制，仅薄委托。</p>

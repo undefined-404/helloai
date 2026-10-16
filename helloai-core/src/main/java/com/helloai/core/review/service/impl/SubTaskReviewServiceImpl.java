@@ -24,6 +24,7 @@ import com.helloai.core.review.support.ReviewExecutionEngine;
 import com.helloai.core.agent.quality.gate.GateDecision;
 import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
+import com.helloai.core.shared.util.VerificationFence;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.policy.TaskAgentPolicy;
@@ -46,6 +47,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -665,6 +667,14 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                 current.put("executorDoneIssues", List.of());  // 留待执行回填 hook（不在本轮范围）
                 // P2-4：驳回携带结构化缺失证据清单（LLM 未产出/形态非法 → 空清单，零影响）
                 current.put("missingEvidence", VerdictParser.normalizeMissingEvidence(verdict.getMissingEvidence()));
+                // `LOG-20261011-007` B 收敛熔断：记本轮执行者轮报的 VERIFICATION/STATUS 值，
+                // 供 RepeatedFailureGate 判「自报未完成连续 N 轮」（跨轮比较只能在本层做：
+                // 循环内一次执行只有一份轮报，无「上一份」可比）。
+                // 解析不到（外部执行者无围栏 / 输出为空）⇒ 不写该键，判据自行判「不适用」。
+                String executorStatus = parseExecutorStatus(fresh);
+                if (executorStatus != null) {
+                    current.put("executorStatus", executorStatus);
+                }
                 history.add(current);
 
                 ctx.put("reviewHistory", history);
@@ -683,6 +693,9 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         // 重派只是空转（tku-e2e-01 空转 4 轮烧 346K tokens 后仍进死信）。判定在 reviewHistory
         // 落库后、返工之前：评分连续未严格提升（主判据）或文本高度相似（兜底）→ 不触发
         // 返工重派，直接 DEAD_LETTER 待人工。
+        // 2026-10-16（`LOG-20261011-007` B）：闸门内新增**先判**的「执行者自报未完成连续 N 轮」
+        // （信号 = 各轮 executorStatus，句法级、零阈值）——早于 autoReviewMaxRework 转人工，
+        // 并随证据下发 annotation 归因。
         if (dispatchProperties.isAutoReviewRepeatFailureShortCircuit()
                 && shortCircuitRepeatedFailure(subTask, reviewerAgentId, historySnapshot, verdict)) {
             return;
@@ -751,8 +764,16 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      * <p>处置（复用 §6.52 熔断范式，与 {@link #doReview} 的 rework_limit 熔断对称）：
      * 跳过事件 → 显式入死信事件 → 判决落 review_record → {@code changeStatus(DEAD_LETTER)}
      * → 人工介入标记；返回 true 表示已短路（调用方不再走返工重派）。事件 / 死信 / 人工
-     * 介入 payload 均携带 {@code basis}（score_stall_and_text_repeat / text_repeat）与 {@code scoreTrend}
-     * 证据，DLQ 泳道可机读归因。</p>
+     * 介入 payload 均携带 {@code basis}（{@code score_stall_and_text_repeat} / {@code text_repeat} /
+     * {@code self_reported_stall}）与 {@code scoreTrend} 证据，DLQ 泳道可机读归因。</p>
+     *
+     * <p><b>2026-10-16 增补（`LOG-20261011-007` B 收敛熔断）</b>：闸门新增先判的
+     * {@code basis=self_reported_stall}（执行者自报未完成连续 N 轮，见
+     * {@link RepeatedFailureGate}）。该 basis 随证据额外交付 {@code annotation}
+     * = {@code executor_incapable_or_input_missing} ⇒ 本方法把它一并写入三处 payload
+     * 与对话流，并附一段人可读的归因提示（「能力不足 / 输入缺失，继续返工只会空转」），
+     * 让「转人工」带上可读原因。其余 basis 不带 annotation ⇒ 三处 payload 与对话流
+     * <b>逐字不变</b>。</p>
      */
     private boolean shortCircuitRepeatedFailure(SubTaskView subTask, Long reviewerAgentId,
                                                 List<Map<String, Object>> history, ReviewVerdict verdict) {
@@ -767,41 +788,70 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         double similarity = asDouble(decision.evidence("similarity"));
         double threshold = asDouble(decision.evidence("threshold"));
         String currIssues = String.valueOf(decision.evidence("issues"));
+        // `LOG-20261011-007` B：命中「同一驳回原因连续 N 轮」时闸门下发归因标注
+        // （疑似执行者无能力满足 / 输入缺失）。其余判据不携带 ⇒ 该键不出现在 payload 中。
+        String annotation = decision.evidence("annotation") instanceof String s && !s.isBlank() ? s : null;
 
         Long subTaskId = subTask.id();
         int round = decision.evidence("round") instanceof Number n ? n.intValue() : history.size();
         int reworkCount = subTask.reworkCount() != null ? subTask.reworkCount() : 0;
-        log.warn("自动核验重复失败短路：判结构性失败转死信, subTaskId={}, basis={}, round={}, score={}, similarity={}, threshold={}",
-                subTaskId, basis, round, scoreTrend, String.format("%.3f", similarity), threshold);
+        log.warn("自动核验重复失败短路：判结构性失败转死信, subTaskId={}, basis={}, round={}, score={}, similarity={}, threshold={}, annotation={}",
+                subTaskId, basis, round, scoreTrend, String.format("%.3f", similarity), threshold, annotation);
+        // 三处 payload 用 LinkedHashMap（而非 Map.of）：annotation 仅在 B 判据命中时存在，
+        // 需「缺省即不出现该键」的语义 —— Map.of 不接受 null 值。
+        Map<String, Object> skipPayload = new LinkedHashMap<>();
+        skipPayload.put("reason", "repeated_failure_signature");
+        skipPayload.put("basis", basis);
+        skipPayload.put("round", round);
+        skipPayload.put("scoreTrend", scoreTrend);
+        skipPayload.put("similarity", similarity);
+        skipPayload.put("threshold", threshold);
+        skipPayload.put("issues", VerdictParser.summarize(currIssues, 200));
+        if (annotation != null) {
+            skipPayload.put("annotation", annotation);
+        }
         taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
                 TimelineEventCode.SUB_TASK_AUTO_REVIEW_SKIP_REPEATED_FAILURE.code(), AgentRole.REVIEWER, reviewerAgentId,
-                Map.of("reason", "repeated_failure_signature",
-                        "basis", basis,
-                        "round", round,
-                        "scoreTrend", scoreTrend,
-                        "similarity", similarity,
-                        "threshold", threshold,
-                        "issues", VerdictParser.summarize(currIssues, 200)));
+                skipPayload);
         // 与调度/返工上限熔断对称：显式入死信事件，DLQ 泳道"短路 → 人工打捞"可见
+        Map<String, Object> deadLetterPayload = new LinkedHashMap<>();
+        deadLetterPayload.put("reason", "repeated_failure_signature");
+        deadLetterPayload.put("basis", basis);
+        deadLetterPayload.put("round", round);
+        deadLetterPayload.put("scoreTrend", scoreTrend);
+        deadLetterPayload.put("similarity", similarity);
+        deadLetterPayload.put("reworkCount", reworkCount);
+        if (annotation != null) {
+            deadLetterPayload.put("annotation", annotation);
+        }
         taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
                 TimelineEventCode.SUB_TASK_REVIEW_DEAD_LETTER.code(), AgentRole.SYSTEM, null,
-                Map.of("reason", "repeated_failure_signature",
-                        "basis", basis,
-                        "round", round,
-                        "scoreTrend", scoreTrend,
-                        "similarity", similarity,
-                        "reworkCount", reworkCount));
+                deadLetterPayload);
         // 判决照常落 review_record（REJECTED），保留完整留痕供人工复核
         recordAutoReviewQuietly(subTaskId, reviewerAgentId, ReviewResult.REJECTED, verdict);
         subTaskService.changeStatus(subTaskId, SubTaskStatus.DEAD_LETTER, null);
-        subTaskService.markManualIntervention(subTaskId, "repeated_failure_signature",
-                Map.of("basis", basis, "round", round, "scoreTrend", scoreTrend,
-                        "similarity", similarity, "threshold", threshold));
+        Map<String, Object> interventionPayload = new LinkedHashMap<>();
+        interventionPayload.put("basis", basis);
+        interventionPayload.put("round", round);
+        interventionPayload.put("scoreTrend", scoreTrend);
+        interventionPayload.put("similarity", similarity);
+        interventionPayload.put("threshold", threshold);
+        if (annotation != null) {
+            interventionPayload.put("annotation", annotation);
+        }
+        subTaskService.markManualIntervention(subTaskId, "repeated_failure_signature", interventionPayload);
         recordReviewSkipConversation(subTaskId, reviewerAgentId,
                 "自动核验跳过：重复失败熔断（reason=repeated_failure_signature，basis=" + basis
                         + "，round=" + round + "，scoreTrend=" + scoreTrend
                         + "，similarity=" + String.format("%.3f", similarity)
-                        + "，threshold=" + threshold + "）；子任务已转入死信池，等待人工处置。",
+                        + "，threshold=" + threshold
+                        + (annotation == null ? "" : "，annotation=" + annotation)
+                        + "）；子任务已转入死信池，等待人工处置。"
+                        + (annotation == null ? ""
+                                : "归因提示：连续多轮同一驳回原因且评分无提升，高概率为"
+                                        + "「执行者能力上满足不了 / 输入缺失」，而非质量不达标——"
+                                        + "继续返工只会空转；建议人工判定是改派有能力的执行者，"
+                                        + "还是补齐缺失输入后重派。"),
                 TimelineEventCode.SUBTASK_REVIEW_SKIP_REPEATED_FAILURE.code());
         return true;
     }
@@ -809,6 +859,33 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     /** 证据值转 double（非 Number 时取 0）。 */
     private static double asDouble(Object value) {
         return value instanceof Number n ? n.doubleValue() : 0d;
+    }
+
+    /**
+     * 解析执行者轮报的 {@code VERIFICATION:}/{@code STATUS:} 值（`LOG-20261011-007` B 收敛熔断信号源）。
+     *
+     * <p>数据源 = {@code subTask.context().lastExecution.output}（本轮执行者产出原文，
+     * 经 {@link ReviewEvidenceAssembler#extractRawOutput} 不截断取出）；解析器复用
+     * {@link VerificationFence}（与执行侧 `REF-8.4` 出口分类<b>同一匹配器</b>，
+     * 防「两份围栏判定」漂移）。</p>
+     *
+     * <p>取不到（无输出 / 无围栏 / 无 STATUS 段）返回 {@code null} —— 调用方据此<b>不写该字段</b>，
+     * 闸门按「判据不适用」放行，从而不误伤不产出围栏的外部执行者（{@code CLI_CLIENT}）。</p>
+     *
+     * <p><b>write-only 纪律</b>：解析与写库异常一律吞掉（仅 debug 日志），绝不阻断核验主链路
+     * ——与 {@link #recordReviewSkipConversation} 同口径。</p>
+     */
+    private String parseExecutorStatus(SubTaskView subTask) {
+        try {
+            String raw = reviewEvidenceAssembler.extractRawOutput(subTask);
+            VerificationFence.Parsed parsed = VerificationFence.parse(raw);
+            String status = parsed.status();
+            return status == null || status.isBlank() ? null : status;
+        } catch (Exception e) {
+            log.debug("解析执行者轮报 STATUS 失败（不影响核验主链路）: subTaskId={}, err={}",
+                    subTask.id(), e.getMessage());
+            return null;
+        }
     }
 
     /**

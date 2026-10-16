@@ -237,6 +237,68 @@ public interface SubTaskDispatchService {
         return EXECUTION_DENSE_PATTERN.matcher(text).find();
     }
 
+    // ══════════════════════════════════════════════════════════════
+    //  LOG-20261011-007 **A 能力闸**信号词表（2026-10-16 新增）：
+    //  「需读原始附件」判定。与 §6.52 执行密集判定**并列同风格**——
+    //  单源在本接口，消费方（agent 域 `ResilientDispatcher`）不得复现。
+    //  ⚠️ 两类信号语义不同、不可互相替代：
+    //    §6.52 执行密集 = 「需要在本机跑东西」（脚本 / 容器 / 服务）
+    //    A 需读原始附件 = 「需要打开用户给的结构化文件本体」（xlsx / docx / pdf）
+    //  二者都指向「无本机能力的 API_KEY_LLM 内部执行者做不到」，
+    //  但触发条件不同（后者只解码 UTF-8 ⇒ 二进制结构化文件读不出列）。
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * A 能力闸信号词表【源侧】：指向「用户提供的原始文件本体 / 原始字段」，
+     * 而非平台预内联的依赖文本摘要。
+     */
+    Pattern ATTACHMENT_SOURCE_PATTERN = Pattern.compile(
+            "(?i)(原始文件|源文件|原始附件|导出文件|原始数据|原始表|原始列|原始字段|源字段)");
+
+    /**
+     * A 能力闸信号词表【动作侧】：要求对文件本体<b>逐项</b>核对 / 标注 ——
+     * 只有拿到原始内容才可能完成，靠上游摘要完不成。
+     */
+    Pattern ATTACHMENT_VERIFY_PATTERN = Pattern.compile(
+            "(?i)(逐项核对|逐项标注|逐项比对|逐项校验|逐行核对|逐列核对|按列核对|表头核对)");
+
+    /**
+     * LOG-20261011-007 A 能力闸判定：子任务是否「<b>需读原始附件</b>」。
+     *
+     * <p><b>为什么用「两侧信号共现」而不是单侧</b>：单侧命中太松——
+     * 「导出文件」单独出现可能只是产出物命名，「逐项核对」单独出现可能核对的是上游文本。
+     * 只有「源侧（原始文件 / 原始字段）」<b>且</b>「动作侧（逐项核对类）」同时出现，
+     * 才构成「必须打开文件本体逐项比对」这一不可绕过的能力要求。</p>
+     *
+     * <p><b>词表刻意从窄</b>（宁可漏判、不可误拦）：本判定命中后的动作是
+     * 「不把该子任务派给无本机能力的 Agent」（走 fallback；无替代则停留 PENDING + 人工介入），
+     * 误拦会造成合法任务停摆，代价高于漏判 ⇒ 只收窄到高置信措辞。
+     * 扩展词表时按同源单点修改（勿在消费方另写一份）。</p>
+     *
+     * <p>命中样例（`LOG-20261011-007` 事故原文）：
+     * 「盘点数据文件字段：对实际数据文件逐项标注存在/缺失/命名不一致，全部<b>源字段</b>为 PENDING」
+     * —— 源侧「源字段」+ 动作侧「逐项标注」共现 ⇒ 命中。</p>
+     *
+     * @param subTask 子任务实体；null 返回 {@code false}
+     * @return 需读原始附件返回 {@code true}
+     */
+    static boolean isAttachmentReadDense(SubTask subTask) {
+        return subTask != null
+                && attachmentReadMatch(subTask.getContent(), subTask.getAcceptance(), subTask.getDeliverable());
+    }
+
+    /** RM5 批 4：review 域持有的只读快照版本（同判定口径，消费方零实体依赖）。 */
+    static boolean isAttachmentReadDense(SubTaskView subTask) {
+        return subTask != null
+                && attachmentReadMatch(subTask.content(), subTask.acceptance(), subTask.deliverable());
+    }
+
+    private static boolean attachmentReadMatch(String content, String acceptance, String deliverable) {
+        String text = String.join("\n", nvl(content), nvl(acceptance), nvl(deliverable));
+        return ATTACHMENT_SOURCE_PATTERN.matcher(text).find()
+                && ATTACHMENT_VERIFY_PATTERN.matcher(text).find();
+    }
+
     /** §6.52 是否已有人工介入标记（防定时兜底反复触发回退）。 */
     static boolean isManualInterventionMarked(SubTask subTask) {
         return subTask.getContext() != null && subTask.getContext().containsKey("manualIntervention");

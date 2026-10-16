@@ -119,6 +119,28 @@ public interface SubTaskQueryPort {
     boolean isExecutionDense(Long subTaskId);
 
     /**
+     * 判定子任务是否「<b>需读原始附件</b>」（`LOG-20261011-007` A 能力闸信号）。
+     *
+     * <p><b>语义</b>：子任务的内容 / 验收 / 交付物两侧信号共现——「原始文件 / 原始字段」类
+     * 源侧措辞 <b>且</b>「逐项核对 / 逐项标注」类动作侧措辞 ⇒ 该任务必须打开用户提供的
+     * 结构化文件本体（xlsx / docx / pdf）逐项比对，仅凭平台预内联的依赖文本摘要完不成。</p>
+     *
+     * <p><b>为什么形参是 ID 而不是快照</b>：与 {@link #isExecutionDense(Long)} 同理——
+     * 判定口径**单源在提供方**（{@code SubTaskDispatchService.isAttachmentReadDense} 的信号词表），
+     * 消费方不得自行复现；否则重演「各入口各自实现导致判定不一致」的历史教训。
+     * 故消费方只问结论，提供方自读文本判定（两侧词表与匹配逻辑都不外泄）。
+     * 代价是提供方多一次主键读（仅走「需读原始附件预检」分支时发生）。</p>
+     *
+     * <p><b>与 {@link #isExecutionDense(Long)} 的关系</b>：两者是<b>不同</b>的信号类，不可互相替代
+     * ——执行密集治「需在本机跑东西」（脚本 / 容器 / 服务），本判定治「需打开结构化文件本体」
+     * （只解码 UTF-8 的内部读附件工具读不出二进制列）。同一子任务可能两者都命中。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @return 命中「需读原始附件」信号返回 {@code true}；子任务不存在返回 {@code false}
+     */
+    boolean requiresOriginalAttachment(Long subTaskId);
+
+    /**
      * 取「认领准入」所需的白名单 + 必需技能约束（MCP 认领闸门 P1 修复）。
      *
      * <p><b>整体不透明</b>：白名单口径（任务 {@code agent_policy.executorAgentIds}）与

@@ -154,6 +154,48 @@ public class AgentDispatchProperties {
     private double autoReviewRepeatFailureSimilarity = 0.85;
 
     /**
+     * `LOG-20261011-007` B 收敛熔断开关：「<b>执行者自报未完成连续 N 轮</b>」提前熔断
+     * （2026-10-16 新增，`D-2026-10-12-3` 的落地形态；判据口径 = `LOG-20261012-008` 决策 3）。
+     *
+     * <p><b>补的是现判据的盲区</b>：{@link #autoReviewRepeatFailureShortCircuit} 的双条件
+     * 「评分未提升 <b>且</b> issues 全文相似度 ≥ {@link #autoReviewRepeatFailureSimilarity}」
+     * 对<b>真停滞</b>形态（评分恒定 + 驳回意见整篇重写）恰好不成立——该形态全文相似度仅
+     * 0.18~0.25，低于 0.85 阈值 ⇒ 不被短路，只能靠 {@link #autoReviewMaxRework} 封顶
+     * （tku-e2e-01 空转 4 轮烧 346K tokens）。</p>
+     *
+     * <p><b>为什么不再走「文本相似度」这条路（重要，勿重蹈）</b>：
+     * `doc/review/HelloAI 架构V2进度与质量审计报告（2026-09-30）.md` §15.3 已用<b>真实语料</b>
+     * （tku-e2e-01 sub3 三轮 {@code review_record.issues}）实测：</p>
+     * <ul>
+     *   <li>全文字符 bigram Jaccard：r1↔r2 = <b>0.2537</b>、r2↔r3 = <b>0.1927</b>；</li>
+     *   <li>首条 {@code [defect]} 标签 Jaccard：<b>0.1203 / 0.1620，比全文更低</b>；</li>
+     *   <li>根因：三轮用<b>三套不同编号</b>指代同一批缺失项，字符级 bigram 捕捉不到「语义相同」。</li>
+     * </ul>
+     * <p>⇒ 「换比较对象为 {@code [defect]} 标签」这类改良<b>也已被证伪</b>，故本判据改用
+     * <b>句法级、零阈值标定</b>的信号：执行者自己的结构化轮报状态。</p>
+     *
+     * <p><b>判据信号</b>：执行者轮报 {@code VERIFICATION:} 围栏里的 {@code STATUS} 值
+     * （`REF-8.2.2` 输出契约已强制内部 LLM 携带）——连续 N 轮均属「自认未完成」
+     * （{@code BLOCKED} / {@code PARTIAL}）且评分未严格提升 ⇒ 判「结构性做不到」，
+     * 早于 {@link #autoReviewMaxRework} 转人工，并标注「执行者无能力满足 / 输入缺失」。</p>
+     *
+     * <p>轮数见 {@link #autoReviewSelfStallRounds}。默认 true。</p>
+     */
+    private boolean autoReviewSelfStallEnabled = true;
+
+    /**
+     * 「执行者自报未完成连续 N 轮」的 N（`LOG-20261011-007` B / `D-2026-10-12-3`）。
+     *
+     * <p>默认 <b>3</b>——对齐事故现场「内部 LLM 连续 3 次返回同一结论、审方 3 次以同一原因打回」。
+     * 取 1 或 0 视为禁用本判据（至少需两轮才谈得上「连续」）。</p>
+     *
+     * <p><b>为什么以「自报状态」为 N 轮的计数依据而不是「驳回原因」</b>：这是产生方
+     * （执行者）对自身完成度的<b>显式声明</b>，属句法级信号，不需任何相似度阈值标定；
+     * 而「驳回原因」只能靠模糊文本比较识别，已在上项 javadoc 所述真实语料上失效。</p>
+     */
+    private int autoReviewSelfStallRounds = 3;
+
+    /**
      * §6.52：N11 外部回退时是否跳过"执行密集"任务的自动降级。
      *
      * <p>执行密集任务（需本机 shell/文件/服务操作）回退给无本机能力的 API_KEY_LLM
@@ -161,6 +203,27 @@ public class AgentDispatchProperties {
      * 停留原状态并标记人工介入（用户在前端自主选择 agent 改派）。默认 true。</p>
      */
     private boolean fallbackSkipExecutionDense = true;
+
+    /**
+     * `LOG-20261011-007` A 能力闸：是否启用「需读原始附件」任务的无能力派发拦截。
+     *
+     * <p><b>与 {@link #fallbackSkipExecutionDense} 同族但独立可关</b>：两者都是
+     * 「无本机能力 Agent 不派发」的能力闸，但信号类不同——前者治「需在本机跑东西」
+     * （脚本 / 容器 / 服务），本项治「需打开用户给的结构化文件本体逐项核对」
+     * （用户导出的 xlsx / docx / pdf；内部 `internal_read_attachment` 只做 UTF-8 解码，
+     * 二进制结构化文件读不出列）。</p>
+     *
+     * <p><b>为什么要独立开关</b>：本项依赖关键词表共现判定（信号词表
+     * {@code SubTaskDispatchService.ATTACHMENT_SOURCE_PATTERN} × {@code ATTACHMENT_VERIFY_PATTERN}），
+     * 上线初期误拦风险高于已被真机验证的「执行密集」闸门；独立开关让本项可在不改动
+     * 执行密集闸门的前提下单独关停。默认 true。</p>
+     *
+     * <p>命中后的动作与执行密集闸门<b>完全一致</b>（共用同一 timeline 事件
+     * {@code sub_task_dispatch_skip_no_capability} 与同一人工介入标记
+     * {@code dispatch_skip_execution_dense}）：fast-fail 走 fallback 选同角色替代者；
+     * 无替代时停留 PENDING + 人工介入，等待前端人工改派。</p>
+     */
+    private boolean attachmentReadSkipEnabled = true;
 
     /**
      * 兜底：REVIEW 孤儿扫描阈值（秒）。

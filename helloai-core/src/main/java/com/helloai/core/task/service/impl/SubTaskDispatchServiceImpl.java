@@ -378,6 +378,35 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             }
         }
 
+        // `LOG-20261011-007` A 能力闸：需读原始附件的任务同 §6.52 处理——不自动回退给
+        // 无结构化附件解析能力的 API_KEY_LLM（其 internal_read_attachment 只做 UTF-8 解码，
+        // 二进制 xlsx/docx/pdf 读不出结构化列 ⇒ 注定返工至死信）。与上一条同族、同处置。
+        if (agentDispatchProperties.isAttachmentReadSkipEnabled()
+                && SubTaskDispatchService.isAttachmentReadDense(subTask)) {
+            if (SubTaskDispatchService.isManualInterventionMarked(subTask)) {
+                log.debug("人工介入标记已存在，跳过重复回退: subTaskId={}", subTaskId);
+                return null;
+            }
+            // 快照未单列「结构化附件解析能力」字段：其取值口径与 localExecutionCapable 同为
+            // AgentCapability.hasLocalExecutionCapability（见 AgentProfileSnapshot 类 javadoc
+            // 「字段范围刻意最小」纪律）⇒ 在此复用该派生布尔，避免两个永不相异的字段。
+            // 判据单源仍是 AgentCapability.hasStructuredAttachmentReadCapability。
+            if (!fallbackAgent.localExecutionCapable()) {
+                taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
+                        TimelineEventCode.SUB_TASK_FALLBACK_SKIP_NEED_HUMAN.code(), AgentRole.SYSTEM, fallbackAgent.id(),
+                        Map.of("reason", "attachment_read_no_structured_capability",
+                                "fallbackAgentId", fallbackAgent.id(),
+                                "previousAgentId", failedAgentId));
+                subTaskService.markManualIntervention(subTaskId, TimelineEventCode.FALLBACK_SKIP_EXECUTION_DENSE.code(),
+                        Map.of("failedAgentId", failedAgentId == null ? "" : failedAgentId,
+                                "fallbackAgentId", fallbackAgent.id(),
+                                "reason", "attachment_read_no_structured_capability"));
+                log.warn("N11 回退跳过：需读原始附件任务不可回退给无结构化解析能力 Agent, subTaskId={}, fallbackAgentId={}",
+                        subTaskId, fallbackAgent.id());
+                return null;
+            }
+        }
+
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),

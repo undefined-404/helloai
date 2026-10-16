@@ -45,6 +45,11 @@ import java.util.Map;
  *   <li>分配前执行密集能力预检——执行密集任务（需本机 shell/文件/服务操作）
  *       不分配给无本机执行能力的 Agent，避免"无能力执行 → 幻觉交付 → 审核放行"，
  *       覆盖初始分配 / 离线重分配 / ASSIGNED 超时 / 熔断降级等所有入口</li>
+ *   <li>分配前「需读原始附件」能力预检（`LOG-20261011-007` A 能力闸，2026-10-16 新增）
+ *       ——验收要求「逐项核对导出文件原始列 / 原始字段」的任务不分配给
+ *       无结构化附件解析能力的 Agent（内部 LLM 的 `internal_read_attachment`
+ *       只做 UTF-8 解码，二进制 xlsx/docx/pdf 读不出结构化列）。
+ *       与上一条**同族、同处置**（共用 timeline 事件与人工介入标记），仅信号源不同</li>
  * </ul>
  *
  * <p>熔断参数（application.yml）：
@@ -160,6 +165,15 @@ public class ResilientDispatcher implements TaskDispatchPort {
                 throw new AgentUnavailableException(
                         "执行密集任务不匹配无本机能力 Agent: agentId=" + agentId + ", subTaskId=" + subTaskId, agentId);
             }
+            // LOG-20261011-007 A 能力闸：需读原始附件预检（与上一条并列同风格、同处置）。
+            // 治「接错活」——验收要求「逐项核对导出文件原始列」的子任务被派给
+            // API_KEY_LLM 内部执行者（其 internal_read_attachment 只做 UTF-8 解码，
+            // 二进制 xlsx 读不出结构化列）⇒ 注定返工至死信。
+            if (isAttachmentReadMismatch(agentId, subTaskId, agent)) {
+                throw new AgentUnavailableException(
+                        "需读原始附件任务不匹配无结构化解析能力 Agent: agentId=" + agentId
+                                + ", subTaskId=" + subTaskId, agentId);
+            }
 
             log.info("弹性调度分配: agentId={}, subTaskId={}, onlineStatus={}",
                     agentId, subTaskId, onlineStatus);
@@ -190,6 +204,55 @@ public class ResilientDispatcher implements TaskDispatchPort {
         subTaskCommandPort.markManualIntervention(subTaskId, TimelineEventCode.DISPATCH_SKIP_EXECUTION_DENSE.code(),
                 Map.of("agentId", agentId));
         log.warn("V27.1 分配跳过：执行密集任务不可分配给无本机能力 Agent, subTaskId={}, agentId={}",
+                subTaskId, agentId);
+        return true;
+    }
+
+    /**
+     * `LOG-20261011-007` A 能力闸预检：需读原始附件的任务分配给无结构化解析能力 Agent 时，
+     * 记 timeline + 幂等标记人工介入，返回 true 表示不匹配（应拒绝分配）。
+     *
+     * <p><b>为什么落在派发层而不是循环内</b>（§10.7.2 红线②四条机械判据）：</p>
+     * <ol>
+     *   <li><b>提交点</b>——本判定在 {@link SubTaskCommandPort#assignNext}（= 提交点）<b>之前</b>执行，
+     *       reject 时目标实体尚未越过提交点；</li>
+     *   <li><b>回退量</b>——reject 只是「不提交」，无需撤销任何已提交的状态迁移，回退量 = 0；</li>
+     *   <li><b>已付成本</b>——reject 时刻不可回收成本 = 0 次 LLM 调用（循环内判定则已付 N 次）；</li>
+     *   <li><b>归属</b>——复用既有 timeline 事件与人工介入语义，不新造平行通道。</li>
+     * </ol>
+     * 一句口径：<b>「能否在 `assignNext` 之前拦下」——能，故留派发层。</b>
+     *
+     * <p><b>与 {@link #isExecutionDenseMismatch} 的差别只在「信号源」</b>：本方法问
+     * {@link SubTaskQueryPort#requiresOriginalAttachment}（需读原始附件），能力侧问
+     * {@link AgentCapability#hasStructuredAttachmentReadCapability}（能否解析结构化附件）；
+     * 事件码与人工介入标记<b>刻意共用同一套</b>（`sub_task_dispatch_skip_no_capability` +
+     * `dispatch_skip_execution_dense`），仅以 payload 的 {@code reason} 区分，避免下游
+     * （前端 / DLQ 泳道 / 守卫）为同一类处置维护第二套映射。</p>
+     *
+     * @param agentId   候选 Agent ID
+     * @param subTaskId 子任务 ID
+     * @param agent     候选 Agent 实体
+     * @return true = 不匹配（不可派发，调用方应抛 {@link AgentUnavailableException} 走 fallback）
+     */
+    private boolean isAttachmentReadMismatch(Long agentId, Long subTaskId, Agent agent) {
+        if (!agentDispatchProperties.isAttachmentReadSkipEnabled()) {
+            return false;
+        }
+        SubTaskSnapshot subTask = subTaskQueryPort.findById(subTaskId);
+        if (subTask == null || !subTaskQueryPort.requiresOriginalAttachment(subTaskId)) {
+            return false;
+        }
+        if (AgentCapability.hasStructuredAttachmentReadCapability(agent)) {
+            return false;
+        }
+        taskTimelinePort.recordEvent(subTask.taskId(), subTask.id(),
+                TimelineEventCode.SUB_TASK_DISPATCH_SKIP_NO_CAPABILITY.code(), AgentRole.SYSTEM, agentId,
+                Map.of("reason", "attachment_read_no_structured_capability",
+                        "agentId", agentId,
+                        "subTaskId", subTaskId));
+        subTaskCommandPort.markManualIntervention(subTaskId, TimelineEventCode.DISPATCH_SKIP_EXECUTION_DENSE.code(),
+                Map.of("agentId", agentId, "reason", "attachment_read_no_structured_capability"));
+        log.warn("A 能力闸分配跳过：需读原始附件任务不可分配给无结构化解析能力 Agent, subTaskId={}, agentId={}",
                 subTaskId, agentId);
         return true;
     }
@@ -276,6 +339,12 @@ public class ResilientDispatcher implements TaskDispatchPort {
         // 不匹配时已标记人工介入，任务保持 PENDING 由人工处置，不再抛异常冒泡。
         if (isExecutionDenseMismatch(alternative.getId(), subTaskId, alternative)) {
             log.warn("熔断降级替代 Agent 也无本机执行能力，放弃分配: subTaskId={}, alternativeAgentId={}",
+                    subTaskId, alternative.getId());
+            return;
+        }
+        // LOG-20261011-007 A 能力闸：替代 Agent 同样必须通过「需读原始附件」预检（与首选侧同款）。
+        if (isAttachmentReadMismatch(alternative.getId(), subTaskId, alternative)) {
+            log.warn("熔断降级替代 Agent 也无结构化附件解析能力，放弃分配: subTaskId={}, alternativeAgentId={}",
                     subTaskId, alternative.getId());
             return;
         }

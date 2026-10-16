@@ -123,4 +123,35 @@ public final class AgentCapability {
                 ? agent.getCapabilities().get("supportsMCP") : null;
         return Boolean.TRUE.equals(supportsMcp);
     }
+
+    /**
+     * `LOG-20261011-007` A 能力闸：判断 Agent 是否具备「<b>读取并解析原始附件</b>」的能力。
+     *
+     * <p><b>为什么需要独立命名（而不直接在调用点复用 {@link #hasLocalExecutionCapability}）</b>：
+     * 两者当前判据相同，但<b>问题域不同</b>——前者问「能不能在本机跑东西」，本方法问
+     * 「能不能打开用户给的结构化文件本体」。独立命名让语义在调用点自解释，
+     * 且未来若出现「只能读结构化附件、但不能跑 shell」的新接入类型（或反之），
+     * 只需在本方法内扩展，<b>调用方零改动</b>。</p>
+     *
+     * <p><b>当前判据 = 本机执行能力</b>（委托 {@link #hasLocalExecutionCapability}，判据单源防漂移）：</p>
+     * <ul>
+     *   <li>{@code CLI_CLIENT} / {@code WEB_BROWSER} ⇒ {@code true}（自己有文件系统 / 浏览器，能真打开文件）；</li>
+     *   <li>{@code API_KEY_LLM} ⇒ 仅当 {@code capabilities.supportsMCP == Boolean.TRUE}（可挂结构化解析类 MCP 工具）。</li>
+     * </ul>
+     *
+     * <p><b>为什么 API_KEY_LLM 默认判「无能力」</b>：内部执行者虽有
+     * {@code internal_read_attachment}（`REF-8.1` 交付），但其实现是
+     * {@code new String(content, UTF_8)}（{@code InternalLlmExecutorTools}）——
+     * 对 xlsx / docx / pdf 等<b>二进制</b>结构化附件只能得到乱码，拿不到结构化列。
+     * ⇒ 缺口不在「有没有读通道」，而在「通道不支持结构化解析」。详见
+     * `doc/log/2026-10.md` `LOG-20261011-007` 及 2026-10-16 前提订正条目。</p>
+     *
+     * @param agent Agent；null 视为具备（与 {@link #hasLocalExecutionCapability} 同口径，
+     *              保证「缺失提交者不误拦」的既有语义）
+     * @return true-具备读取并解析原始附件的能力
+     */
+    public static boolean hasStructuredAttachmentReadCapability(Agent agent) {
+        // 判据单源：当前与「本机执行能力」同判据；差异只在语义与未来扩展点。
+        return hasLocalExecutionCapability(agent);
+    }
 }
