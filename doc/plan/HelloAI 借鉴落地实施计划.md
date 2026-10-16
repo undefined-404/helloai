@@ -771,6 +771,8 @@ REF-8.4 拦截链（**已交付 2026-10-13**）─────────┘─
 ### 10.7.6 增补（2026-10-13 二）：能力鉴别的落点 —— 「发现放内、处置放外」
 
 > 依据：`research/DSH 与 HelloAI 执行流与状态机比对（2026-10-13）.md`。本节**不改变** 10.7.1~10.7.5 的结论，只补「能力鉴别在哪一层」的裁定与其唯一缺口。
+>
+> **✅ 唯一缺口已于 2026-10-16 关闭（按本节裁定的方案 (b) 落地；`D-2026-10-16-10`，记录 `LOG-20261016-010`）**：实现载体 = `helloai-job/…/task/SubTaskBlockedAutoRedispatchTask`（60s 巡检，ShedLock 实例互斥）+ `SubTaskDispatchService#dispatchBlockedSubTaskAuto`（判定收敛在 core Service），**复用既有 `dispatchBlockedSubTask` 全链、状态机零改动**。下方「唯一缺口」段与两条候选表**保留为裁定记录**（非在办项）。
 
 **裁定**：**发现放内部 LLM 内部流程；处置放平台派发层。** 既不走「评审驳回」（消耗返工轮次、把能力不足记成质量不合格），也不走「循环内换 apiKey / 换模型」（DSH 无此机制可抄；且污染成本画像与打分、造成会话流归属歧义）。
 
@@ -779,7 +781,7 @@ REF-8.4 拦截链（**已交付 2026-10-13**）─────────┘─
 1. **DSH 没有「LLM 内部换模型」可抄**：模型路由是 agent 创建时**声明**（`packages/core/agent-loop/src/agent.ts:598-599` 缺 `provider`/`model` 直接抛错），`packages/llm/llm-retry` 重试**同一条 route**；「换执行者」在 DSH 靠**委派 subagent**（`packages/subagent/README.zh.md`）。⇒ 「照抄标杆」这条原则本身否定「循环内换 key」。
 2. **HelloAI 的「换执行者」链已存在**（本轮新发现）：`SubTaskStateMachine:31` 已有 `BLOCKED → PENDING`；`SubTaskDispatchServiceImpl.dispatchBlockedSubTask:70-95` 已是完整链（闸门熔断 + 退避 → `accumulateReassignAttempt` → `resetToPendingForDispatch(BLOCKED)` → `assignNext` 选人/fallback）。⇒ **状态机零改动**（满足「任务状态机流转保持不变」）。
 
-**唯一缺口 = 自动触发接线**：`dispatchBlockedSubTask` 现存调用方**均为人工入口**（`SubTaskController.reassignById` 需 `subtask:reassign`；`redispatchInProgress`）。两条候选（**均不改状态机**）：
+**唯一缺口 = 自动触发接线**（**★已关闭，2026-10-16，见本节头注**）：`dispatchBlockedSubTask` 现存调用方**均为人工入口**（`SubTaskController.reassignById` 需 `subtask:reassign`；`redispatchInProgress`）。两条候选（**均不改状态机**）：
 
 | 候选 | 做法 | 评价 |
 |---|---|---|
