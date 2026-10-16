@@ -1,85 +1,82 @@
 package com.helloai.core.task.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.common.base.AgentUnavailableException;
 import com.helloai.common.base.BizException;
-import com.helloai.common.config.AgentDispatchProperties;
-import com.helloai.common.config.WatchdogProperties;
-import com.helloai.common.constant.AgentEventType;
-import com.helloai.common.constant.AgentRole;
-import com.helloai.common.constant.RetryPolicy;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.common.constant.TimelineEventCode;
-import com.helloai.common.util.HostNameUtils;
-import com.helloai.core.agent.port.AgentProfileSnapshot;
-import com.helloai.core.agent.event.AgentEventContextResolver;
-import com.helloai.core.agent.event.AgentEventRecorder;
-import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.SubTaskClaimConstraint;
-import com.helloai.core.agent.service.HeartbeatService;
-import com.helloai.core.agent.service.AgentInboxService;
-import com.helloai.core.agent.service.AgentOutboxService;
-import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.agent.service.ConcurrencyQuotaService;
-import com.helloai.core.agent.session.service.AgentSessionService;
-import com.helloai.core.shared.event.SubTaskAssignedEvent;
-import com.helloai.core.shared.event.SubTaskCompletedEvent;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.port.SubTaskView;
-import com.helloai.core.task.port.SubTaskDraft;
-import com.helloai.core.task.port.UncertaintyDraft;
-import com.helloai.core.task.port.UncertaintyView;
-import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.mapper.SubTaskMapper;
-import com.helloai.core.task.policy.TaskAgentPolicy;
-import com.helloai.core.task.port.ReviewFact;
-import com.helloai.core.task.port.ReviewPort;
-import com.helloai.core.task.port.ReviewSummary;
-import com.helloai.core.task.score.ImplicitScoreCalculator;
-import com.helloai.core.task.score.ImplicitScoreCalculator.ScoreResult;
-import com.helloai.core.agent.service.RewardService;
+import com.helloai.core.task.port.SubTaskDraft;
+import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskService;
-import com.helloai.core.task.service.TaskTimelineService;
-import com.helloai.core.task.statemachine.SubTaskStateMachine;
-import com.helloai.core.task.service.AttachmentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
- * 子任务领域服务实现。
+ * 子任务领域服务<b>薄门面</b>（RM9-b：原 1592 行上帝类 → 门面 + 4 职责类）。
  *
- * <p><b>§7.8 类规模拆分评审结论（2026-08-23）</b>：本类为子任务状态机与领域聚合的
- * 汇聚点，经多轮职责外置后仍超 500 行 / 8 依赖红线，按 §7.8 选项二书面声明不继续拆分：</p>
+ * <p><b>本类保留类名与 {@code implements SubTaskService} 不变</b> ⇒ 外部调用方与 Spring 注入点
+ * <b>零改动</b>，本笔可<b>单笔 revert</b>。类内只剩两类内容：</p>
+ * <ol>
+ *     <li><b>领域写入原语</b>（{@code updateDraft} / {@code create} / {@code updateDependsOn} /
+ *         {@code createBatch} / {@code updateContext} / {@code updateDeadline} / {@code saveDrafts}
+ *         / {@code unlinkByAssignedAgent} / {@code physicalDeleteByTaskId}）—— 均为
+ *         「单实体单次原子写 + 无状态迁移语义」，属 §4.3.2 门面行所定的「MyBatis-Plus 基类能力 +
+ *         草稿/技能等配置面（低频写）」；</li>
+ *     <li><b>逐方法委托</b>给 4 个职责类（零业务分支）。</li>
+ * </ol>
+ *
+ * <p><b>拆分后的类结构（4 职责类，方向为有向无环图）</b>：</p>
+ * <pre>
+ * SubTaskServiceImpl（门面：CRUD 原语 + 委托）
+ *   ├── SubTaskQueryService       只读查询与视图投影（叶子）
+ *   ├── SubTaskNotificationService 出站副作用（inbox / 摘要 / 领域事件） → Query
+ *   ├── SubTaskStateMachineService 状态迁移唯一入口（含 claimAtomic / 租约回收状态半段） → Notification
+ *   └── SubTaskLeaseService        租约 / 回收 / 巡检 → StateMachine（仅回收状态半段）
+ * </pre>
+ *
+ * <p><b>对 2026-08-23「§7.8 选项二：书面声明不继续拆分」的正面回应</b>（历史声明<b>保留</b>如下，
+ * 其顾虑已被逐条消解，而非被无视）：</p>
  * <ul>
- *     <li>已剥离：状态机校验（SubTaskStateMachine）、核验编排（SubTaskReviewServiceImpl）、
- *         执行编排（SubTaskExecutionServiceImpl）、评分计算（ImplicitScoreCalculator）、
- *         结果回写（ExecutionResultHandler）；</li>
- *     <li>剩余职责：子任务 CRUD / 依赖 / 状态流转（changeStatus 及 claim/start/submit/
- *         complete/pause/resume/block/rework 收敛入口）+ 事件发布（outbox / 收件箱 / 交接）+
- *         评分联动 + 心跳 / 并发配额 + 跨域统计与级联删除收口；</li>
- *     <li>不拆理由：状态流转各入口共享同一状态机与事件发布链，拆分会造成事件序与事务边界
- *         在类间漂移；已外置的均为无状态工具或独立引擎，剩余部分无独立可测职责可继续剥离。</li>
+ *     <li>已剥离：状态机校验（{@code SubTaskStateMachine}）、核验编排（{@code SubTaskReviewServiceImpl}）、
+ *         执行编排（{@code SubTaskExecutionServiceImpl}）、评分计算（{@code ImplicitScoreCalculator}）、
+ *         结果回写（{@code ExecutionResultHandler}）；</li>
+ *     <li>剩余职责：子任务 CRUD / 依赖 / 状态流转（{@code changeStatus} 及
+ *         claim/start/submit/complete/pause/resume/block/rework 收敛入口）+ 事件发布
+ *         （outbox / 收件箱 / 交接）+ 评分联动 + 心跳 / 并发配额 + 跨域统计与级联删除收口；</li>
+ *     <li>不拆理由：状态流转各入口共享同一状态机与事件发布链，拆分会造成事件序与事务边界在类间漂移；
+ *         已外置的均为无状态工具或独立引擎，剩余部分无独立可测职责可继续剥离。</li>
  * </ul>
+ * <p><b>顾虑①「事件序与事务边界在类间漂移」</b>：本笔把<b>整条状态流转链原样整体搬迁</b>到
+ * {@link SubTaskStateMachineService}（{@code changeStatus} 的
+ * 「读现状 → 校验 → 写上下文/租约 → 落库 → outbox → 收件箱 → 交接 → 领域事件 → 心跳」顺序与事务边界
+ * 一字未改）⇒ 事件序与事务边界<b>仍在同一个类内</b>，漂移风险未被引入；门面只在外部入口
+ * 保留 {@code @Transactional} 以维持原事务开启位置。</p>
+ * <p><b>顾虑②「剩余部分无独立可测职责」</b>：实测该判断不再成立 —— 被剥离的三簇<b>各自已有独立单测</b>
+ * （{@code SubTaskServiceIsReadyTest} / {@code SubTaskServiceMergeSkillsTest} /
+ * {@code SubTaskServiceLeaseReclaimTest} / {@code SubTaskServiceQuotaTest} /
+ * {@code SubTaskServiceReworkBudgetTest} / {@code SubTaskServiceHandoverTest}），
+ * 即它们本就具备「独立可测职责」，只是此前与状态机同处一文件。</p>
+ * <p><b>顾虑③「按行数机械拆」</b>：本笔<b>不按方法数量</b>拆，按 §9.1 业务职责切分（只读查询 /
+ * 出站副作用 / 租约调度 / 状态迁移），故不落 §9.2 所禁的
+ * {@code FooHelper/FooManager} 互相转发形态（4 类互不转发、方向无环）。</p>
+ *
+ * <p><b>写入纪律（拆分未放松）</b>：{@code sub_task.status} 的全部迁移仍只经
+ * {@link SubTaskStateMachineService}（§4.3.2 验收口径 ii）；本类自己的写操作<b>均不改 status</b>，
+ * 唯一例外是 {@link #create(SubTask, Long)} 在<b>插入新行</b>时落初始态 {@code PENDING}（插入非迁移）。</p>
  */
 @Slf4j
 @Service
@@ -87,75 +84,15 @@ import java.util.stream.Collectors;
 public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         implements SubTaskService {
 
-    private final AgentOutboxService agentOutboxService;
-    private final AgentInboxService agentInboxService;
-    // 懒解析打破循环：AgentServiceImpl 依赖 SubTaskService（阶段五级联清理收口），
-    // 直接注入 AgentService 会形成 agentServiceImpl ↔ subTaskServiceImpl 构造器环
-    private final ObjectProvider<AgentService> agentServiceProvider;
-    private final HeartbeatService heartbeatService;
-    private final ReviewPort reviewPort;
-    private final ImplicitScoreCalculator implicitScoreCalculator;
-    private final RewardService rewardService;
-    private final ApplicationEventPublisher applicationEventPublisher;
-    private final TaskTimelineService taskTimelineService;
-    private final AgentDispatchProperties agentDispatchProperties;
-    private final ConcurrencyQuotaService concurrencyQuotaService;
-    // 执行租约看门狗配置（TTL / 开关）
-    private final WatchdogProperties watchdogProperties;
-    /** 执行会话服务（租约回收时记录中断点 + ABORT，N-007 恢复载体）。 */
-    private final AgentSessionService agentSessionService;
-    // 懒解析打破循环：AttachmentServiceImpl 依赖 SubTaskService（register 归属校验）
-    private final ObjectProvider<AttachmentService> attachmentServiceProvider;
-    // 懒解析打破循环（LOG-20260904-009）：TaskServiceImpl 已注入
-    // SubTaskService（反链依赖），直接注入 TaskService 会形成构造器环；仅 requiredSkillsOf
-    // 在 task 域内查询 required_skills（装箱出口），不持有长生命周期跨域引用
-    private final ObjectProvider<TaskService> taskServiceProvider;
-    /** 事件记录器（REWORK_STARTED 埋点；事件 write-only，失败仅告警不阻断返工链）。 */
-    private final AgentEventRecorder agentEventRecorder;
-    /**
-     * 共享重试预算原子累加（attempt_total）。
-     * Schema 基类 ServiceImpl 的 baseMapper 在单元测试手动 new 场景为 null，
-     * 因此显式注入 mapper 以保证 rework/reworkFresh 的预算读写可测。
-     */
+    /** 同域 Mapper 直捅（CODE_STYLE §7.1：同域合规）；显式持有以便手动装配场景可测（见原类注释）。 */
     private final SubTaskMapper subTaskMapper;
+    private final SubTaskQueryService queryService;
+    private final SubTaskStateMachineService stateMachineService;
+    private final SubTaskLeaseService leaseService;
 
-    @Override
-    public List<String> requiredSkillsOf(Long taskId) {
-        // LOG-20260904-009：task 域查询出口，供跨域装箱。
-        // 全部异常路径（taskId null / 服务不可用 / 任务不存在 / 字段 null）统一返回空列表，
-        // 保证装箱调用方拿到恒非 null 值，消费端无需再判空。
-        if (taskId == null) {
-            return List.of();
-        }
-        TaskService taskService = taskServiceProvider.getIfAvailable();
-        if (taskService == null) {
-            log.warn("Task 服务不可用，返回空技能标签: taskId={}", taskId);
-            return List.of();
-        }
-        Task task = taskService.getById(taskId);
-        List<String> required = task == null ? null : task.getRequiredSkills();
-        return required == null ? List.of() : required;
-    }
-
-    @Override
-    public List<String> mergeSkills(SubTask subTask) {
-        // G-010 并集装箱：子任务级（拆解侧指派）在前，任务级声明在后；去重保序。
-        // 存量子任务 required_skills 为空数组时退化为纯任务级，行为零变化。
-        List<String> merged = new ArrayList<>();
-        if (subTask != null && subTask.getRequiredSkills() != null) {
-            for (String skill : subTask.getRequiredSkills()) {
-                if (skill != null && !skill.isBlank() && !merged.contains(skill)) {
-                    merged.add(skill);
-                }
-            }
-        }
-        for (String skill : requiredSkillsOf(subTask == null ? null : subTask.getTaskId())) {
-            if (!merged.contains(skill)) {
-                merged.add(skill);
-            }
-        }
-        return merged;
-    }
+    // ══════════════════════════════════════════════════════════════
+    //  门面自有：领域写入原语（单实体原子写，无状态迁移语义）
+    // ══════════════════════════════════════════════════════════════
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -200,1027 +137,10 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         subTask.setStatus(SubTaskStatus.PENDING);
         save(subTask);
         if (assignedAgentId != null) {
-            claim(subTask.getId(), assignedAgentId);
+            // 状态写入走唯一入口（PENDING → ASSIGNED），不在门面另开写路径
+            stateMachineService.claim(subTask.getId(), assignedAgentId);
         }
         return getById(subTask.getId());
-    }
-
-    @Override
-    public IPage<SubTask> list(Long taskId, SubTaskStatus status, Long assignedAgentId, Integer page, int pageSize) {
-        LambdaQueryWrapper<SubTask> wrapper = new LambdaQueryWrapper<SubTask>()
-                .eq(taskId != null, SubTask::getTaskId, taskId)
-                .eq(status != null, SubTask::getStatus, status)
-                .eq(assignedAgentId != null, SubTask::getAssignedAgentId, assignedAgentId)
-                .orderByDesc(SubTask::getCreateTime);
-
-        if (page == null || page <= 0) {
-            // 不分页：全量列表包装成 IPage，保持返回类型统一
-            List<SubTask> all = list(wrapper);
-            if (all == null) {
-                all = Collections.emptyList();
-            }
-            Page<SubTask> full = new Page<>(1, Math.max(all.size(), 1));
-            full.setRecords(all);
-            full.setTotal(all.size());
-            return full;
-        }
-        return page(new Page<>(page, pageSize), wrapper);
-    }
-
-    @Override
-    public List<SubTask> listAvailable() {
-        List<SubTask> pending = lambdaQuery()
-                .eq(SubTask::getStatus, SubTaskStatus.PENDING)
-                .orderByDesc(SubTask::getCreateTime)
-                .list();
-        return filterReady(pending);
-    }
-
-    /**
-     * 批量就绪过滤：依赖未全部 DONE 的候选不返回（与 {@link #isReady} 同源口径）。
-     *
-     * <p>P0-1 依赖门禁：可认领列表此前只按 status=PENDING 过滤，导致前置尚未产出的
-     * 子任务被当作可认领任务抛出，外部 Agent 可抢单并交出"无前置上下文"的脱节产出。
-     * 此处一次性取出候选集全部依赖 id 做批量判定，避免逐条 count 造成 N+1。</p>
-     */
-    private List<SubTask> filterReady(List<SubTask> candidates) {
-        if (candidates == null || candidates.isEmpty()) {
-            return Collections.emptyList();
-        }
-        Set<Long> depIds = new HashSet<>();
-        for (SubTask candidate : candidates) {
-            depIds.addAll(candidate.dependsOnIdList());
-        }
-        if (depIds.isEmpty()) {
-            return candidates;
-        }
-        Set<Long> doneIds = lambdaQuery()
-                .select(SubTask::getId)
-                .in(SubTask::getId, depIds)
-                .eq(SubTask::getStatus, SubTaskStatus.DONE)
-                .list()
-                .stream()
-                .map(SubTask::getId)
-                .collect(Collectors.toSet());
-        return candidates.stream()
-                .filter(candidate -> doneIds.containsAll(candidate.dependsOnIdList()))
-                .toList();
-    }
-
-    @Override
-    public List<SubTask> listMine(Long assignedAgentId) {
-        return lambdaQuery()
-                .eq(SubTask::getAssignedAgentId, assignedAgentId)
-                .orderByDesc(SubTask::getCreateTime)
-                .list();
-    }
-
-    /**
-     * 行锁读取：{@code SELECT ... FOR UPDATE} 锁定子任务行，用于"读现状 + 紧接写入"
-     * 原子化路径，避免同一子任务并发重复发命令。
-     *
-     * <p><b>必须在调用方事务内调用</b>：本方法只发行锁 SQL，不自行开启事务；
-     * 行锁随调用方事务存续而释放（方法返回即释放），自开事务会立刻释放锁，
-     * 失去互斥意义。唯一主代码调用方
-     * {@code ExecutionCommandServiceImpl.createAssignedCommand} 已满足该前提。</p>
-     */
-    @Override
-    public SubTask getByIdForUpdate(Long subTaskId) {
-        return lambdaQuery()
-                .eq(SubTask::getId, subTaskId)
-                .last("FOR UPDATE")
-                .one();
-    }
-
-    @Override
-    public boolean isReady(SubTask subTask) {
-        if (subTask == null) {
-            return false;
-        }
-        List<Long> deps = subTask.dependsOnIdList();
-        if (deps.isEmpty()) {
-            return true;
-        }
-        long doneCount = lambdaQuery()
-                .in(SubTask::getId, deps)
-                .eq(SubTask::getStatus, SubTaskStatus.DONE)
-                .count();
-        return doneCount >= deps.size();
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void updateDependsOn(Long subTaskId, List<Long> dependsOnIds) {
-        List<Long> ids = dependsOnIds != null ? dependsOnIds : Collections.emptyList();
-        StringBuilder json = new StringBuilder("[");
-        for (int i = 0; i < ids.size(); i++) {
-            if (i > 0) {
-                json.append(',');
-            }
-            json.append(ids.get(i));
-        }
-        json.append(']');
-        int updated = baseMapper.updateDependsOn(subTaskId, json.toString(), OffsetDateTime.now());
-        if (updated == 0) {
-            throw new BizException("子任务不存在或已删除，无法写入依赖: " + subTaskId);
-        }
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId) {
-        changeStatus(subTaskId, newStatus, agentId, null);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId, Map<String, Object> contextPatch) {
-        SubTask subTask = getById(subTaskId);
-        if (subTask == null) {
-            throw new BizException("子任务不存在: " + subTaskId);
-        }
-
-        SubTaskStatus oldStatus = subTask.getStatus();
-        // 变更前执行者快照——换人/回收时需告知旧执行者任务已转移
-        Long oldAgentId = subTask.getAssignedAgentId();
-        SubTaskStateMachine.validate(oldStatus, newStatus);
-
-        if (contextPatch != null && !contextPatch.isEmpty()) {
-            Map<String, Object> ctx = new HashMap<>(subTask.getContext() != null ? subTask.getContext() : Map.of());
-            ctx.putAll(contextPatch);
-            subTask.setContext(ctx);
-        }
-
-        subTask.setStatus(newStatus);
-        if (newStatus == SubTaskStatus.PENDING && agentId == null) {
-            subTask.setAssignedAgentId(null);
-        } else if (agentId != null) {
-            subTask.setAssignedAgentId(agentId);
-        }
-
-        // 进入 IN_PROGRESS 时写执行租约（owner + lease_until = now + TTL），
-        // 由 WatchdogLeaseRenewTask 周期续期、LeaseReconcilerTask 过期回收；
-        // 开关关闭时不再写入，完全回归存量行为。
-        if (newStatus == SubTaskStatus.IN_PROGRESS && watchdogProperties.isEnabled()) {
-            subTask.setOwner(HostNameUtils.getHostName());
-            subTask.setLeaseUntil(OffsetDateTime.now().plusSeconds(watchdogProperties.getTtlSeconds()));
-        }
-
-        boolean updated = updateById(subTask);
-        if (!updated) {
-            throw new BizException("并发修改，请重试");
-        }
-
-        agentOutboxService.createEvent(SubTaskSnapshotMapper.toSnapshot(subTask), newStatus);
-
-        // 投递收件箱通知
-        sendInboxNotification(subTask, newStatus, oldStatus);
-        // 执行者变更（换人/回收）时告知旧执行者，防止误以为任务仍在名下继续干活
-        notifyAgentHandover(subTask, oldAgentId);
-        publishAssignmentEvent(subTask, newStatus);
-        if (subTask.getAssignedAgentId() != null
-                && (newStatus == SubTaskStatus.IN_PROGRESS || newStatus == SubTaskStatus.REVIEW)) {
-            heartbeatService.active(subTask.getAssignedAgentId());
-        }
-
-        log.info("子任务状态变更: subTaskId={}, from={}, to={}, agentId={}",
-                subTaskId, oldStatus, newStatus, agentId);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void claim(Long subTaskId, Long agentId) {
-        changeStatus(subTaskId, SubTaskStatus.ASSIGNED, agentId);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void start(Long subTaskId) {
-        changeStatus(subTaskId, SubTaskStatus.IN_PROGRESS, null);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void submit(Long subTaskId) {
-        changeStatus(subTaskId, SubTaskStatus.REVIEW, null);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void complete(Long subTaskId) {
-        SubTask subTask = getById(subTaskId);
-        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
-
-        // 幂等性: 已是 DONE 状态直接返回，避免前端/重试重复调用报 DONE→DONE 错误
-        if (subTask.getStatus() == SubTaskStatus.DONE) {
-            log.info("complete() 幂等跳过: subTaskId={} 已是 DONE", subTaskId);
-            return;
-        }
-
-        SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.DONE);
-        subTask.setStatus(SubTaskStatus.DONE);
-        subTask.setCompleteTime(OffsetDateTime.now());
-
-        // 隐式评分集成
-        if (subTask.getAssignedAgentId() != null) {
-            try {
-                // §6.146：审查评分事实经 ReviewPort 收口，不直捅 review 域
-                List<ReviewFact> reviews = reviewPort.listReviewFactsBySubTaskId(subTaskId);
-                int blockCount = 0; // 可扩展: 从 activity_log 统计
-                int timeoutCount = subTask.getTimeoutCount() != null ? subTask.getTimeoutCount() : 0;
-
-                ScoreResult scoreResult = implicitScoreCalculator.calculate(subTask, reviews, blockCount, timeoutCount);
-
-                // 写回评分结果
-                Map<String, Object> factors = new HashMap<>();
-                factors.put("timeScore", scoreResult.getFactors().getTimeScore());
-                factors.put("qualityScore", scoreResult.getFactors().getQualityScore());
-                factors.put("coopScore", scoreResult.getFactors().getCoopScore());
-                factors.put("stabilityScore", scoreResult.getFactors().getStabilityScore());
-                factors.put("efficiencyScore", scoreResult.getFactors().getEfficiencyScore());
-                subTask.setScoreFactors(factors);
-                subTask.setCompositeScore(scoreResult.getCompositeScore());
-                subTask.setScoreGrade(scoreResult.getGrade());
-
-                // 隐式积分奖惩
-                if (scoreResult.getRewardDelta() != null && scoreResult.getRewardDelta() != 0) {
-                    rewardService.addReward(
-                            subTask.getAssignedAgentId(),
-                            "隐式评分(" + scoreResult.getGrade() + "级)",
-                            scoreResult.getRewardDelta(),
-                            subTaskId);
-                }
-
-                log.info("隐式评分完成: subTaskId={}, grade={}, composite={}, delta={}",
-                        subTaskId, scoreResult.getGrade(), scoreResult.getCompositeScore(),
-                        scoreResult.getRewardDelta());
-            } catch (Exception e) {
-                log.error("隐式评分计算失败: subTaskId={}", subTaskId, e);
-                // 评分失败不阻塞 DONE 状态转换
-            }
-        }
-
-        updateById(subTask);
-        agentOutboxService.createEvent(SubTaskSnapshotMapper.toSnapshot(subTask), SubTaskStatus.DONE);
-        // 审查通过补发收件箱通知（携带最新一轮 review 评分/评语），
-        // 外部 Agent 轮询 pullTasks 即可感知交付结果反馈
-        sendApprovedInboxNotification(subTask);
-
-        // 闭环收尾：事务提交后异步解锁下游依赖节点 + 尝试 Task 自动收尾
-        // （AFTER_COMMIT 监听在 SubTaskCompletionListener，避免与分发服务形成循环依赖）
-        applicationEventPublisher.publishEvent(new SubTaskCompletedEvent(subTaskId, subTask.getTaskId()));
-        log.info("子任务审查通过: subTaskId={}", subTaskId);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void pause(Long subTaskId) {
-        changeStatus(subTaskId, SubTaskStatus.PAUSED, null);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void resume(Long subTaskId) {
-        changeStatus(subTaskId, SubTaskStatus.IN_PROGRESS, null);
-    }
-
-    /**
-     * 驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工驳回 rework/reworkFresh 共用），
-     * 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因。
-     * 发送失败只 warn 不阻断（返工主链路优先）。
-     */
-    private void sendReworkInboxNotification(SubTask subTask) {
-        try {
-            Long agentId = subTask.getAssignedAgentId();
-            if (agentId == null) {
-                return;
-            }
-            String eventId = "subtask." + subTask.getId() + ".rejected." + System.currentTimeMillis();
-            agentInboxService.send(agentId, eventId, "sub_task.rejected",
-                    "任务需返工: " + subTask.getTitle(),
-                    buildReworkSummary(subTask),
-                    "sub_task", subTask.getId(), "HIGH");
-        } catch (Exception e) {
-            log.warn("驳回收件箱通知发送失败（不阻断返工）: subTaskId={}, err={}", subTask.getId(), e.getMessage());
-        }
-    }
-
-    /**
-     * 从 context.reviewHistory 最新一轮（格式 {round,ts,reviewerAgentId,issues,comment,score,...}）
-     * 提取驳回摘要；无历史（如人工直接驳回）时回退默认文案。
-     */
-    @SuppressWarnings("unchecked")
-    private String buildReworkSummary(SubTask subTask) {
-        Map<String, Object> ctx = subTask.getContext();
-        if (ctx != null && ctx.get("reviewHistory") instanceof List<?> history && !history.isEmpty()) {
-            Object last = history.get(history.size() - 1);
-            if (last instanceof Map<?, ?> m) {
-                StringBuilder sb = new StringBuilder("审查未通过");
-                Object score = m.get("score");
-                if (score instanceof Number n) {
-                    sb.append("，评分 ").append(n.intValue()).append("/5");
-                }
-                Object comment = m.get("comment");
-                if (comment instanceof String c && !c.isBlank()) {
-                    sb.append("；评语: ").append(clip(c, 150));
-                }
-                Object issues = m.get("issues");
-                if (issues instanceof List<?> issueList && !issueList.isEmpty()) {
-                    String joined = issueList.stream().map(Object::toString).collect(Collectors.joining("、"));
-                    sb.append("；问题: ").append(clip(joined, 150));
-                } else if (issues instanceof String issueStr && !issueStr.isBlank()) {
-                    sb.append("；问题: ").append(clip(issueStr, 150));
-                }
-                Object missingEvidence = m.get("missingEvidence");
-                if (missingEvidence instanceof List<?> evidenceList && !evidenceList.isEmpty()) {
-                    String joined = evidenceList.stream()
-                            .map(SubTaskServiceImpl::formatMissingEvidence)
-                            .filter(s -> !s.isBlank())
-                            .collect(Collectors.joining("；"));
-                    if (!joined.isBlank()) {
-                        sb.append("；缺失证据清单: ").append(clip(joined, 300));
-                    }
-                }
-                return sb.toString();
-            }
-        }
-        return "请查审查记录了解具体问题";
-    }
-
-    /**
-     * 渲染单条缺失证据（P2-4）：引用验收条目原文子串 + 缺什么证据 + 怎样补齐。
-     * 键缺失/非文本一律跳过（与 VerdictParser.normalizeMissingEvidence 同源的防御口径）。
-     */
-    private static String formatMissingEvidence(Object raw) {
-        if (!(raw instanceof Map<?, ?> m)) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        Object acceptanceRef = m.get("acceptanceRef");
-        if (acceptanceRef instanceof String ref && !ref.isBlank()) {
-            sb.append("「").append(ref).append("」");
-        }
-        Object missing = m.get("missing");
-        if (missing instanceof String missingStr && !missingStr.isBlank()) {
-            sb.append("缺: ").append(missingStr);
-        }
-        Object howTo = m.get("howTo");
-        if (howTo instanceof String howToStr && !howToStr.isBlank()) {
-            if (sb.length() > 0) {
-                sb.append("；");
-            }
-            sb.append("补齐: ").append(howToStr);
-        }
-        return sb.toString();
-    }
-
-    /**
-     * 审查通过补发收件箱通知（携带最新一轮 review 评分/评语），
-     * 外部 Agent 轮询 pullTasks 即可感知交付结果反馈。发送失败只 warn 不阻断。
-     */
-    private void sendApprovedInboxNotification(SubTask subTask) {
-        try {
-            Long agentId = subTask.getAssignedAgentId();
-            if (agentId == null) {
-                return;
-            }
-            String eventId = "subtask." + subTask.getId() + ".approved." + System.currentTimeMillis();
-            agentInboxService.send(agentId, eventId, "sub_task.approved",
-                    "任务审查通过: " + subTask.getTitle(),
-                    buildApprovedSummary(subTask),
-                    "sub_task", subTask.getId(), "NORMAL");
-        } catch (Exception e) {
-            log.warn("审查通过收件箱通知发送失败（不阻断完成）: subTaskId={}, err={}", subTask.getId(), e.getMessage());
-        }
-    }
-
-    /**
-     * 从 review_record 取最新一轮（round 最大）的评分/评语拼摘要；无记录时回退默认文案。
-     */
-    private String buildApprovedSummary(SubTask subTask) {
-        try {
-            // §6.146：最新一轮评分/评语经 ReviewPort 摘要收口，不直捅 review 域
-            ReviewSummary latest = reviewPort.latestReviewSummary(subTask.getId());
-            if (latest != null) {
-                StringBuilder sb = new StringBuilder("审查通过");
-                if (latest.score() != null) {
-                    sb.append("，评分 ").append(latest.score()).append("/5");
-                }
-                if (latest.comment() != null && !latest.comment().isBlank()) {
-                    sb.append("；评语: ").append(clip(latest.comment(), 150));
-                }
-                return sb.toString();
-            }
-        } catch (Exception e) {
-            log.debug("审查通过摘要读取失败，回退默认: subTaskId={}, err={}", subTask.getId(), e.getMessage());
-        }
-        return "审查通过，请查看详情";
-    }
-
-    private String clip(String s, int max) {
-        if (s == null || s.length() <= max) {
-            return s;
-        }
-        return s.substring(0, max) + "...";
-    }
-
-    /**
-     * 向相关 Agent 投递收件箱通知
-     */
-    private void sendInboxNotification(SubTask subTask, SubTaskStatus newStatus, SubTaskStatus oldStatus) {
-        String eventId = "subtask." + subTask.getId() + "." + System.currentTimeMillis();
-        Long agentId = subTask.getAssignedAgentId();
-        String title = subTask.getTitle();
-
-        try {
-            switch (newStatus) {
-                case ASSIGNED -> {
-                    if (agentId != null) {
-                        // G-010 下行通道：合并技能标签随通知摘要下发（文本形态，不动 inbox 契约面）；
-                        // 外部 agent 据此按需装配自身技能包，未升级的 agent 对该行无感
-                        List<String> mergedSkills = mergeSkills(subTask);
-                        String skillLine = mergedSkills.isEmpty() ? ""
-                                : "\n技能要求: " + String.join(", ", mergedSkills);
-                        // P0 验收标准下发：摘要不再只是「交付物」——审查侧按 acceptance 逐条核验
-                        // （subtask-review 轨道 A），执行者必须从收件箱即可看到验收标准与硬边界；
-                        // 纯文本形态与技能要求行同款，不动 inbox 契约面
-                        String acceptanceLine = "\n验收标准: "
-                                + (subTask.getAcceptance() != null && !subTask.getAcceptance().isBlank()
-                                        ? subTask.getAcceptance()
-                                        : "（未填写，开工前请调用 getSubTaskDetail 核对）");
-                        String constraintsLine = subTask.getConstraints() != null && !subTask.getConstraints().isBlank()
-                                ? "\n执行约束（不许改的事）: " + subTask.getConstraints() : "";
-                        // G-011 D6 升级：uncertainties 逐条下发正文（此前只给「待确认: N 项」计数，
-                        // 执行者不知道要验证什么）；空/全空白零注入
-                        String uncertaintyLine = buildUncertaintyLines(subTask.getUncertainties());
-                        agentInboxService.send(agentId, eventId, "sub_task.assigned",
-                                "新任务已分配: " + title,
-                                "交付物: " + (subTask.getDeliverable() != null ? subTask.getDeliverable() : "待确认")
-                                        + acceptanceLine + constraintsLine + skillLine + uncertaintyLine
-                                        + "\n完整执行内容与边界请调用 getSubTaskDetail 查看",
-                                "sub_task", subTask.getId(), "HIGH");
-                    }
-                }
-                case REWORK -> {
-                    if (agentId != null) {
-                        agentInboxService.send(agentId, eventId, "sub_task.rejected",
-                                "任务需返工: " + title,
-                                "请查审查记录了解具体问题",
-                                "sub_task", subTask.getId(), "HIGH");
-                    }
-                }
-                case BLOCKED -> {
-                    String reason = null;
-                    if (subTask.getContext() != null && subTask.getContext().get("blockedReason") instanceof String r) {
-                        reason = r;
-                    }
-                    String summary = reason != null && !reason.isBlank()
-                            ? ("阻塞原因: " + reason)
-                            : "需要 Planner 排障处理";
-                    AgentService agentService = agentServiceProvider.getIfAvailable();
-                    List<AgentProfileSnapshot> planners = agentService == null
-                            ? List.of() : agentService.listProfilesByRole(AgentRole.PLANNER);
-                    for (AgentProfileSnapshot planner : planners) {
-                        agentInboxService.send(planner.id(), eventId, "sub_task.blocked",
-                                "任务阻塞: " + title,
-                                summary,
-                                "sub_task", subTask.getId(), "URGENT");
-                    }
-                }
-                case PAUSED -> {
-                    if (agentId != null) {
-                        agentInboxService.send(agentId, eventId, "sub_task.paused",
-                                "任务已暂停: " + title,
-                                "请保存当前进度，等待恢复通知",
-                                "sub_task", subTask.getId(), "HIGH");
-                    }
-                }
-                case REVIEW -> {
-                    // 修复: EXECUTOR 提交后，通知所有 PLANNER/REVIEWER 来审查
-                    try {
-                        AgentService agentService = agentServiceProvider.getIfAvailable();
-                        List<AgentProfileSnapshot> planners = agentService == null
-                                ? List.of() : agentService.listProfilesByRole(AgentRole.PLANNER);
-                        for (AgentProfileSnapshot planner : planners) {
-                            agentInboxService.send(planner.id(), eventId, "sub_task.review",
-                                    "任务已提交审查: " + title,
-                                    "请 PLANNER/REVIEWER 评分并完成审查",
-                                    "sub_task", subTask.getId(), "HIGH");
-                        }
-                        log.info("REVIEW 通知发送: subtaskId={}, planners={}", subTask.getId(), planners.size());
-                    } catch (Exception e) {
-                        log.error("REVIEW 通知发送失败: subtaskId={}", subTask.getId(), e);
-                    }
-                }
-                default -> {}
-            }
-        } catch (Exception e) {
-            log.error("收件箱通知发送失败: subTaskId={}, status={}", subTask.getId(), newStatus, e);
-            // 通知失败不影响主流程
-        }
-    }
-
-    /**
-     * 不确定性申报下行渲染（P0 增量）：逐条「[kind] note + 分级后缀」正文，替代此前的
-     * 「待确认: N 项」计数——计数无法告诉执行者要验证什么。后缀语义与执行侧注入同源
-     * （SubTaskExecutionServiceImpl.buildUserPrompt）：ASSUMPTION 可自行验证 / 推翻；
-     * 其余（含人工编辑引入的非法值）一律按 UNCONFIRMED 的 fail-close 语义处理。
-     *
-     * @return 每条前缀换行；空列表 / 全空白返回空串（零注入，存量行为不变）
-     */
-    private String buildUncertaintyLines(List<Uncertainty> uncertainties) {
-        if (uncertainties == null || uncertainties.isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        for (Uncertainty uncertainty : uncertainties) {
-            if (uncertainty == null || uncertainty.getNote() == null || uncertainty.getNote().isBlank()) {
-                continue;
-            }
-            String suffix = Uncertainty.KIND_ASSUMPTION.equals(uncertainty.getKind())
-                    ? "（可自行验证，推翻即上报）"
-                    : "（须先验证再动手，无法验证则 reportBlocked 上报）";
-            sb.append("\n- [").append(uncertainty.getKind()).append("] ")
-              .append(uncertainty.getNote()).append(suffix);
-        }
-        return sb.toString();
-    }
-
-    /**
-     * 执行者变更撤销通知：旧执行者收不到"任务已转移"事件时，
-     * 会误以为任务仍在名下继续干活（trae 1925 冷启动白做）。
-     *
-     * <p>在换人（旧执行者 A → 新执行者 B）或回收（执行者被清空）时，向旧执行者
-     * 补发 {@code sub_task.reassigned} / {@code sub_task.unassigned} 收件箱通知：
-     * <ul>
-     *   <li>换人（newAgentId != null）：任务已改派给其他 Agent，立即停止执行；</li>
-     *   <li>回收（newAgentId == null）：任务已从名下回收（回 PENDING / 死信），停止执行。</li>
-     * </ul>
-     * 初始分配（oldAgentId == null）与原地保留（old == new）不通知。
-     * API_KEY_LLM 旧执行者由 {@link AgentInboxService#send} 内部守卫跳过（其消费链走 outbox→MQ）。</p>
-     */
-    private void notifyAgentHandover(SubTask subTask, Long oldAgentId) {
-        Long newAgentId = subTask.getAssignedAgentId();
-        if (oldAgentId == null || oldAgentId.equals(newAgentId)) {
-            return;
-        }
-        String eventId = "subtask." + subTask.getId() + ".handover." + System.currentTimeMillis();
-        String title = subTask.getTitle();
-        if (newAgentId != null) {
-            agentInboxService.send(oldAgentId, eventId, "sub_task.reassigned",
-                    "任务已改派: " + title,
-                    "该任务已改派给其他 Agent，请立即停止执行并等待新任务",
-                    "sub_task", subTask.getId(), "HIGH");
-        } else {
-            agentInboxService.send(oldAgentId, eventId, "sub_task.unassigned",
-                    "任务已回收: " + title,
-                    "该任务已从你名下回收，请立即停止执行并等待新任务",
-                    "sub_task", subTask.getId(), "HIGH");
-        }
-    }
-
-    private void publishAssignmentEvent(SubTask subTask, SubTaskStatus newStatus) {
-        if (newStatus != SubTaskStatus.ASSIGNED || subTask.getAssignedAgentId() == null) {
-            return;
-        }
-        applicationEventPublisher.publishEvent(
-                new SubTaskAssignedEvent(subTask.getId(), subTask.getAssignedAgentId()));
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public boolean rework(Long subTaskId, Long reworkAgentId) {
-        SubTask subTask = getById(subTaskId);
-        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
-        SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.REWORK);
-        // LOG-20260904-007：自动驳回返工 = 新一轮执行尝试，
-        // 计入共享预算 attempt_total（与调度重分配同源，判定语义统一收敛于
-        // RetryPolicy.exceedsMax）；预算耗尽不再打回重执行，直接 DEAD_LETTER 待人工，
-        // 杜绝「返工 3 次 × 重派 5 次 = 8 次实际执行」的叠加放大（坑点 3 单一权威）。
-        if (!consumeReworkBudget(subTask)) {
-            return false;
-        }
-        // 变更前执行者快照（自动驳回一般保持原执行者，防御性兼容换人）
-        Long oldAgentId = subTask.getAssignedAgentId();
-        subTask.setStatus(SubTaskStatus.REWORK);
-        subTask.setReworkCount(subTask.getReworkCount() != null ? subTask.getReworkCount() + 1 : 1);
-        if (reworkAgentId != null) {
-            subTask.setAssignedAgentId(reworkAgentId);
-        }
-        updateById(subTask);
-        // 执行者变更（换人/回收）时告知旧执行者
-        notifyAgentHandover(subTask, oldAgentId);
-        // 驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工 reworkById 共用本入口），
-        // 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因
-        sendReworkInboxNotification(subTask);
-        agentOutboxService.createEvent(SubTaskSnapshotMapper.toSnapshot(subTask), SubTaskStatus.REWORK);
-        // REWORK_STARTED（Run 级事件 turn=0/step=0；reworkCount 已递增）
-        recordReworkStartedSafely(subTask, reworkAgentId, false);
-        // §6.104 打回失效：旧提交附件全部置 INACTIVE，返工必须重新上传最新版
-        // （与核验/装载/打包的 listActive 可信视角闭环，旧证据不再进入下次核验）
-        invalidateAttachmentsOnRework(subTaskId);
-        log.info("子任务驳回返工: subTaskId={}, reworkCount={}", subTaskId, subTask.getReworkCount());
-        return true;
-    }
-
-    /**
-     * 返工共享预算消费（LOG-20260904-007）。
-     *
-     * <p>预算充足：原子累加 {@code attempt_total}（与调度重分配 incrementAttemptTotal 同款 SQL），
-     * 返回 true；预算耗尽（{@code attempt_total >= max-reassign-attempts}，判定语义
-     * {@code RetryPolicy.exceedsMax}）：REVIEW → DEAD_LETTER + timeline + 人工介入标记，
-     * 返回 false。与 {@code SubTaskDispatchServiceImpl.checkReassignCircuitBreaker}
-     * 共用同一预算与判定语义（坑点 3「单一权威」）。</p>
-     *
-     * @param subTask 已加载的子任务实体（attemptTotal 取自实体，避免二次查询）
-     * @return true = 预算充足已累加；false = 预算耗尽已转 DEAD_LETTER
-     */
-    private boolean consumeReworkBudget(SubTask subTask) {
-        int maxAttempts = agentDispatchProperties.getMaxReassignAttempts();
-        if (maxAttempts <= 0) {
-            // 熔断禁用（逃生口，与调度维度同口径，不推荐生产使用）
-            return true;
-        }
-        int currentCount = subTask.getAttemptTotal() != null ? subTask.getAttemptTotal() : 0;
-        if (RetryPolicy.exceedsMax(currentCount, maxAttempts)) {
-            log.warn("返工预算熔断触发: subTaskId={}, attemptTotal={}, maxReassignAttempts={}, 子任务转入 DEAD_LETTER 待人工兜底",
-                    subTask.getId(), currentCount, maxAttempts);
-            try {
-                changeStatus(subTask.getId(), SubTaskStatus.DEAD_LETTER, null,
-                        Map.of("dead_letter_reason", "rework_budget_exceeded",
-                                "attempt_total", String.valueOf(currentCount),
-                                "max_reassign_attempts", String.valueOf(maxAttempts)));
-                taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
-                        TimelineEventCode.SUB_TASK_DEAD_LETTER.code(), AgentRole.SYSTEM, null,
-                        Map.of("reason", "rework_budget_exceeded",
-                                "attempt_total", currentCount,
-                                "max_reassign_attempts", maxAttempts));
-                // §6.52 人工介入标记：与核验返工熔断（rework_limit）对称，前端据此展示人工兜底面板
-                markManualIntervention(subTask.getId(), "rework_budget",
-                        Map.of("attemptTotal", currentCount, "maxReassignAttempts", maxAttempts));
-            } catch (Exception e) {
-                log.error("返工预算熔断-转死信失败: subTaskId={}", subTask.getId(), e);
-            }
-            return false;
-        }
-        // 原子累加共享重试预算（与调度重分配同款 SQL：COALESCE(attempt_total,0)+1）
-        subTaskMapper.incrementAttemptTotal(subTask.getId(), OffsetDateTime.now());
-        return true;
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void reworkFresh(Long subTaskId, Long reworkAgentId) {
-        SubTask subTask = getById(subTaskId);
-        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
-        SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.REWORK);
-        // 变更前执行者快照——人工驳回改派时需告知旧执行者任务已转移
-        Long oldAgentId = subTask.getAssignedAgentId();
-        subTask.setStatus(SubTaskStatus.REWORK);
-        subTask.setReworkCount(0);
-        // 语义闭环（LOG-20260904-007）：人工驳回 = 用户拍板开启新一轮，
-        // 与死信重派（redispatchDeadLetter）对称重置共享预算 attempt_total ——
-        // 否则改派后的重执行仍消耗旧预算，一次自动驳回即再入死信，违背人工裁定意图
-        subTaskMapper.resetAttemptTotal(subTaskId, OffsetDateTime.now());
-        if (reworkAgentId != null) {
-            // 人工驳回改派语义 = 选执行者；与改派候选接口/死信重派同口径，防御 API 直调绕过
-            AgentService agentService = agentServiceProvider.getIfAvailable();
-            AgentProfileSnapshot target = agentService != null ? agentService.getProfileById(reworkAgentId) : null;
-            if (target == null) {
-                throw new BizException("改派目标 Agent 不存在: " + reworkAgentId);
-            }
-            if (target.role() != AgentRole.EXECUTOR) {
-                throw new BizException("驳回改派只支持执行者（EXECUTOR）Agent，实际角色: " + target.role());
-            }
-            subTask.setAssignedAgentId(reworkAgentId);
-        }
-        // 人工已拍板：清除人工介入标记，避免前端面板残留、PENDING 兜底巡检继续跳过
-        Map<String, Object> ctx = new HashMap<>(subTask.getContext() != null ? subTask.getContext() : Map.of());
-        if (ctx.remove("manualIntervention") != null) {
-            subTask.setContext(ctx);
-        }
-        updateById(subTask);
-        // 执行者变更（换人/回收）时告知旧执行者
-        notifyAgentHandover(subTask, oldAgentId);
-        // 人工驳回同样补发收件箱通知（携带 review 摘要，无历史时回退默认文案）
-        sendReworkInboxNotification(subTask);
-        agentOutboxService.createEvent(SubTaskSnapshotMapper.toSnapshot(subTask), SubTaskStatus.REWORK);
-        // REWORK_STARTED（Run 级事件 turn=0/step=0；reworkFresh 已重置 reworkCount）
-        recordReworkStartedSafely(subTask, reworkAgentId, true);
-        // 注意：Map.of 不接受 null 值，reworkAgentId 可能为 null（不换派原执行者重做），必须用 HashMap
-        Map<String, Object> extra = new HashMap<>();
-        extra.put("reworkCountReset", "true");
-        extra.put("reworkAgentId", reworkAgentId);
-        taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
-                TimelineEventCode.SUB_TASK_MANUAL_REWORK_RESET.code(), AgentRole.SYSTEM, reworkAgentId, extra);
-        // §6.104 打回失效：人工驳回同步让旧 ACTIVE 附件失效，新执行者重新产出后须 uploadArtifact 重建 ACTIVE
-        invalidateAttachmentsOnRework(subTaskId);
-        log.info("人工驳回重置返工计数: subTaskId={}, reworkCount=0, reworkAgentId={}", subTaskId, reworkAgentId);
-    }
-
-    /**
-     * REWORK_STARTED 事件记录（Run 级 turn=0/step=0，事件 write-only，失败仅告警）。
-     * rework / reworkFresh 共用（reworkCountReset 区分重置语义）。
-     */
-    private void recordReworkStartedSafely(SubTask subTask, Long reworkAgentId, boolean reworkCountReset) {
-        try {
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("reworkCount", subTask.getReworkCount());
-            payload.put("reworkAgentId", reworkAgentId);
-            payload.put("reworkCountReset", reworkCountReset);
-            agentEventRecorder.record(
-                    AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
-                    subTask.getTaskId(), subTask.getId(), 0, 0,
-                    AgentEventType.REWORK_STARTED, subTask.getAssignedAgentId(), payload);
-        } catch (Exception e) {
-            log.warn("Agent 事件记录失败（事件 write-only，降级不阻断主链路）: type={}, subTaskId={}, err={}",
-                    AgentEventType.REWORK_STARTED, subTask.getId(), e.getMessage());
-        }
-    }
-
-    /**
-     * 打回失效：将该子任务全部 ACTIVE 附件批量置 INACTIVE，
-     * 与 {@code AttachmentServiceImpl.register} 的同名去活互补。
-     *
-     * <p>通过 {@code ObjectProvider<AttachmentService>} 懒解析打破与 AttachmentServiceImpl
-     * 的构造器循环（后者依赖本服务的 register 归属校验）；解析失败/异常一律 warn
-     * 不阻断返工主链路（与 sendReworkInboxNotification 的 best-effort 哲学一致），
-     * 旧证据残留可在下次核验或人工打捞时识别（状态为 INACTIVE）。</p>
-     */
-    private void invalidateAttachmentsOnRework(Long subTaskId) {
-        try {
-            AttachmentService attachmentService = attachmentServiceProvider.getIfAvailable();
-            if (attachmentService == null) {
-                log.warn("附件服务不可用，跳过打回失效: subTaskId={}", subTaskId);
-                return;
-            }
-            attachmentService.invalidateBySubTask(subTaskId);
-        } catch (Exception e) {
-            log.warn("附件打回失效失败（不阻断返工主链路）: subTaskId={}, err={}",
-                    subTaskId, e.getMessage());
-        }
-    }
-
-    /**
-     * 人工介入标记：在子任务 context 写入 manualIntervention 标记并落 timeline。
-     *
-     * <p>best-effort 降级写（CODE_STYLE §7.1 单语句原子写豁免口径）：getById + updateById
-     * 对单实体的单次原子更新，无跨实体一致性诉求，故不加 {@code @Transactional}；
-     * 整段 try-catch 降级——失败仅告警、不影响主链路。若后续追加第二条写操作，
-     * 必须补事务注解。</p>
-     */
-    @Override
-    public void markManualIntervention(Long subTaskId, String reason, Map<String, Object> extra) {
-        try {
-            SubTask fresh = getById(subTaskId);
-            if (fresh == null) {
-                return;
-            }
-            Map<String, Object> ctx = new HashMap<>(fresh.getContext() != null ? fresh.getContext() : Map.of());
-            Map<String, Object> mark = new HashMap<>();
-            mark.put("reason", reason);
-            mark.put("ts", OffsetDateTime.now().toString());
-            if (extra != null) {
-                mark.putAll(extra);
-            }
-            ctx.put("manualIntervention", mark);
-            fresh.setContext(ctx);
-            updateById(fresh);
-            // 可观测：人工介入标记落 timeline（OPS 泳道），时序图可见"等待人工处置"节点；
-            // 不能复用 Map.of——mark 可能含 null 值（extra 传入时）
-            taskTimelineService.recordEvent(fresh.getTaskId(), subTaskId,
-                    TimelineEventCode.SUB_TASK_MANUAL_INTERVENTION_REQUIRED.code(), AgentRole.SYSTEM, null,
-                    new HashMap<>(mark));
-            log.info("人工介入标记已写入: subTaskId={}, reason={}", subTaskId, reason);
-        } catch (Exception e) {
-            log.warn("人工介入标记写入失败（不影响主链路）: subTaskId={}, err={}", subTaskId, e.getMessage());
-        }
-    }
-
-    /**
-     * 清除人工介入标记（与 {@link #markManualIntervention} 对称）。
-     *
-     * <p>best-effort 降级写（CODE_STYLE §7.1 单语句原子写豁免口径）：getById + updateById
-     * 对单实体的单次原子更新，无跨实体一致性诉求，故不加 {@code @Transactional}；
-     * 整段 try-catch 降级——失败仅告警、不影响主链路。无标记时静默返回（幂等，避免无谓写）。</p>
-     */
-    @Override
-    public void clearManualIntervention(Long subTaskId) {
-        try {
-            SubTask fresh = getById(subTaskId);
-            if (fresh == null) {
-                return;
-            }
-            Map<String, Object> ctx = fresh.getContext();
-            if (ctx == null || !ctx.containsKey("manualIntervention")) {
-                return;
-            }
-            Map<String, Object> copy = new HashMap<>(ctx);
-            copy.remove("manualIntervention");
-            fresh.setContext(copy);
-            updateById(fresh);
-            log.info("人工介入标记已清除: subTaskId={}", subTaskId);
-        } catch (Exception e) {
-            log.warn("人工介入标记清除失败（不影响主链路）: subTaskId={}, err={}", subTaskId, e.getMessage());
-        }
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void block(Long subTaskId) {
-        block(subTaskId, null, null);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void block(Long subTaskId, String reason, Long reporterAgentId) {
-        SubTask subTask = getById(subTaskId);
-        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
-        if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS
-                && subTask.getStatus() != SubTaskStatus.ASSIGNED
-                && subTask.getStatus() != SubTaskStatus.REWORK) {
-            throw new BizException("只能对 IN_PROGRESS/ASSIGNED/REWORK 状态的子任务标记 BLOCKED");
-        }
-
-        Map<String, Object> patch = new HashMap<>();
-        if (reason != null && !reason.isBlank()) {
-            patch.put("blockedReason", reason);
-        }
-        if (reporterAgentId != null) {
-            patch.put("blockedByAgentId", reporterAgentId);
-        }
-        patch.put("blockedAt", OffsetDateTime.now().toString());
-
-        changeStatus(subTaskId, SubTaskStatus.BLOCKED, null, patch);
-
-        SubTask updated = getById(subTaskId);
-        if (updated != null) {
-            taskTimelineService.recordEvent(
-                    updated.getTaskId(),
-                    updated.getId(),
-                    TimelineEventCode.SUB_TASK_REPORT_BLOCKED.code(),
-                    AgentRole.EXECUTOR,
-                    reporterAgentId,
-                    Map.of(
-                            "reason", reason != null ? reason : "",
-                            "source", "agent_report"));
-        }
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void cancel(Long subTaskId) {
-        SubTask subTask = getById(subTaskId);
-        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
-        if (subTask.getStatus() == SubTaskStatus.DONE || subTask.getStatus() == SubTaskStatus.CANCELLED) {
-            throw new BizException("已完成或已取消的子任务不能再次取消");
-        }
-        changeStatus(subTaskId, SubTaskStatus.CANCELLED, null);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void assignNext(Long agentId, Long subTaskId) {
-        SubTask subTask = getById(subTaskId);
-        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
-        if (subTask.getStatus() != SubTaskStatus.PENDING) {
-            throw new BizException("只有 PENDING 状态的子任务才能分配，当前状态: " + subTask.getStatus());
-        }
-        // E2：并发额度原子防线——FOR UPDATE 锁 agent 行，串行化同一 Agent 的并发派发；
-        // 锁内重新统计在飞数判定额度（选人通过 ≠ 落库安全，杜绝并发超发窗口）。
-        // 满额抛 AgentUnavailableException：不计入熔断统计，由 ResilientDispatcher
-        // 走 fallback 换人；并发窗口下 fallback 内仍满额则异常冒泡，任务保持 PENDING 由定时兜底重试。
-        AgentService agentService = agentServiceProvider.getIfAvailable();
-        if (agentService == null) {
-            throw new BizException("Agent 服务不可用");
-        }
-        agentService.lockByIdForUpdate(agentId);
-        if (agentDispatchProperties.isEnforceMaxConcurrent()
-                && !concurrencyQuotaService.canAccept(agentId)) {
-            throw new AgentUnavailableException(
-                    "Agent 并发额度已满: agentId=" + agentId + ", subTaskId=" + subTaskId, agentId);
-        }
-        changeStatus(subTaskId, SubTaskStatus.ASSIGNED, agentId);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public SubTask resetToPendingForDispatch(Long subTaskId, Set<SubTaskStatus> allowedStatuses) {
-        SubTask subTask = getById(subTaskId);
-        if (subTask == null) {
-            throw new BizException("子任务不存在: " + subTaskId);
-        }
-        if (!allowedStatuses.contains(subTask.getStatus())) {
-            throw new BizException("子任务状态不允许重新调度: subTaskId=" + subTaskId + ", status=" + subTask.getStatus());
-        }
-
-        subTask.setStatus(SubTaskStatus.PENDING);
-        subTask.setAssignedAgentId(null);
-        boolean updated = updateById(subTask);
-        if (!updated) {
-            throw new BizException("并发修改，请重试");
-        }
-        return getById(subTaskId);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public int renewCurrentNodeLeases(OffsetDateTime newLeaseUntil, int limit) {
-        String owner = HostNameUtils.getHostName();
-        List<SubTask> owned = lambdaQuery()
-                .eq(SubTask::getOwner, owner)
-                .eq(SubTask::getStatus, SubTaskStatus.IN_PROGRESS)
-                .orderByAsc(SubTask::getLeaseUntil)
-                .last("LIMIT " + limit)
-                .list();
-        int renewed = 0;
-        for (SubTask subTask : owned) {
-            subTask.setLeaseUntil(newLeaseUntil);
-            if (updateById(subTask)) {
-                renewed++;
-            } else {
-                // 与 Reconciler 并发竞争失败（状态离开 IN_PROGRESS / version 变更），赢者生效，跳过即可
-                log.warn("租约续期 CAS 冲突，跳过: subTaskId={}", subTask.getId());
-            }
-        }
-        if (renewed > 0) {
-            log.info("看门狗续期完成: owner={}, 续期条数={}", owner, renewed);
-        }
-        return renewed;
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public int reclaimExpiredLeases(int limit) {
-        OffsetDateTime now = OffsetDateTime.now();
-        // 存量数据 owner 为 NULL：不受本机制管理，继续走既有超时巡检路径
-        List<SubTask> expired = lambdaQuery()
-                .eq(SubTask::getStatus, SubTaskStatus.IN_PROGRESS)
-                .isNotNull(SubTask::getOwner)
-                .lt(SubTask::getLeaseUntil, now)
-                .orderByAsc(SubTask::getLeaseUntil)
-                .last("LIMIT " + limit)
-                .list();
-        int reclaimed = 0;
-        for (SubTask subTask : expired) {
-            Long subTaskId = subTask.getId();
-            try {
-                // 租约回收显式走状态机校验：IN_PROGRESS → PENDING（A2.5 补充的回收转换）
-                SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.PENDING);
-                String oldOwner = subTask.getOwner();
-                Long taskId = subTask.getTaskId();
-                subTask.setStatus(SubTaskStatus.PENDING);
-                subTask.setAssignedAgentId(null);
-                subTask.setOwner(null);
-                subTask.setLeaseUntil(null);
-                if (!updateById(subTask)) {
-                    // 与 Watchdog 续期并发竞争失败（version 已变更），赢者生效，跳过即可
-                    log.warn("租约回收 CAS 冲突，跳过: subTaskId={}", subTaskId);
-                    continue;
-                }
-                reclaimed++;
-                try {
-                    // 回收事件仅审计用途，写入失败不阻断回收主链路
-                    taskTimelineService.recordEvent(taskId, subTaskId,
-                            TimelineEventCode.SUB_TASK_LEASE_RECLAIMED.code(), AgentRole.SYSTEM, null,
-                            Map.of("owner", oldOwner, "reason", "lease_expired"));
-                } catch (Exception e) {
-                    log.warn("租约回收 timeline 事件写入失败，不影响回收: subTaskId={}", subTaskId, e);
-                }
-                // （N-007 恢复载体）：识别未完成执行 → 记录中断点
-                // （turn/step/agentId/恢复上下文快照）→ ABORT 幂等防重入；best-effort 不阻断回收
-                try {
-                    AgentSessionService.InterruptedSession interrupted =
-                            agentSessionService.interrupt(subTaskId);
-                    if (interrupted != null) {
-                        Map<String, Object> interruptPayload = new HashMap<>();
-                        interruptPayload.put("sessionId", interrupted.sessionId());
-                        interruptPayload.put("turn", interrupted.turn());
-                        interruptPayload.put("step", interrupted.step());
-                        interruptPayload.put("contextSummary",
-                                interrupted.snapshot() != null ? interrupted.snapshot() : Map.of());
-                        taskTimelineService.recordEvent(taskId, subTaskId,
-                                TimelineEventCode.SUB_TASK_SESSION_INTERRUPTED.code(), AgentRole.SYSTEM,
-                                interrupted.agentId(), interruptPayload);
-                    }
-                } catch (Exception e) {
-                    log.warn("执行会话中断点记录失败（best-effort，不影响回收）: subTaskId={}", subTaskId, e);
-                }
-            } catch (Exception e) {
-                log.warn("租约回收单条处理异常，跳过: subTaskId={}", subTaskId, e);
-            }
-        }
-        if (reclaimed > 0) {
-            log.info("租约过期回收完成: 回收条数={}", reclaimed);
-        }
-        return reclaimed;
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void reassign(Long subTaskId, Long newAgentId) {
-        resetToPendingForDispatch(subTaskId, Set.of(SubTaskStatus.BLOCKED));
-        changeStatus(subTaskId, SubTaskStatus.ASSIGNED, newAgentId);
     }
 
     @Override
@@ -1229,7 +149,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         if (items == null || items.isEmpty()) {
             return Collections.emptyList();
         }
-        List<SubTask> created = new java.util.ArrayList<>(items.size());
+        List<SubTask> created = new ArrayList<>(items.size());
         int failCount = 0;
         for (BatchCreateItem item : items) {
             if (item == null || item.getSubTask() == null) {
@@ -1251,182 +171,21 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     @Override
-    public List<SubTask> listReviewOrphans(int thresholdSeconds, int limit) {
-        OffsetDateTime threshold = OffsetDateTime.now().minusSeconds(thresholdSeconds);
-        List<SubTask> candidates = lambdaQuery()
-                .eq(SubTask::getStatus, SubTaskStatus.REVIEW)
-                .le(SubTask::getUpdateTime, threshold)
-                .orderByAsc(SubTask::getUpdateTime)
-                .last("LIMIT " + limit)
-                .list();
-        candidates.removeIf(st -> {
-            Map<String, Object> ctx = st.getContext();
-            return ctx != null && ctx.get("manualIntervention") != null;
-        });
-        return candidates;
-    }
-
-    @Override
-    public List<SubTask> listRecentlyChanged(OffsetDateTime since, int limit) {
-        // 事件对账候选源，按 update_time 倒序截断（update_time 由 MetaObjectHandler
-        // 自动填充，每次状态/字段变更都会推进；配合对账窗口扫描最近活跃子任务）
-        return lambdaQuery()
-                .ge(SubTask::getUpdateTime, since)
-                .orderByDesc(SubTask::getUpdateTime)
-                .last("LIMIT " + limit)
-                .list();
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  阶段五 agent→task.mapper 清零承接（统计 / 解绑 / 原子认领）
-    // ══════════════════════════════════════════════════════════════
-
-    @Override
-    public Map<String, Integer> countByStatusForAgent(Long agentId) {
-        Map<String, Integer> m = new LinkedHashMap<>();
-        m.put("assignedCount", 0);
-        m.put("inProgressCount", 0);
-        m.put("doneCount", 0);
-        m.put("blockedCount", 0);
-        m.put("reviewCount", 0);
-        if (agentId == null) return m;
-
-        List<SubTask> subs = lambdaQuery()
-                .select(SubTask::getStatus)
-                .eq(SubTask::getAssignedAgentId, agentId)
-                .list();
-        for (SubTask s : subs) {
-            if (s.getStatus() == SubTaskStatus.DONE) m.merge("doneCount", 1, Integer::sum);
-            else if (s.getStatus() == SubTaskStatus.IN_PROGRESS) m.merge("inProgressCount", 1, Integer::sum);
-            else if (s.getStatus() == SubTaskStatus.BLOCKED) m.merge("blockedCount", 1, Integer::sum);
-            else if (s.getStatus() == SubTaskStatus.REVIEW) m.merge("reviewCount", 1, Integer::sum);
-            else m.merge("assignedCount", 1, Integer::sum);
+    @Transactional(rollbackFor = Exception.class)
+    public void updateDependsOn(Long subTaskId, List<Long> dependsOnIds) {
+        List<Long> ids = dependsOnIds != null ? dependsOnIds : Collections.emptyList();
+        StringBuilder json = new StringBuilder("[");
+        for (int i = 0; i < ids.size(); i++) {
+            if (i > 0) {
+                json.append(',');
+            }
+            json.append(ids.get(i));
         }
-        return m;
-    }
-
-    @Override
-    public long countByAssignedAgent(Long agentId) {
-        if (agentId == null) return 0;
-        return lambdaQuery().eq(SubTask::getAssignedAgentId, agentId).count();
-    }
-
-    @Override
-    public long countReviewByReviewerAgent(Long agentId) {
-        if (agentId == null) return 0;
-        // §6.146：审查计数经 ReviewPort 收口，不直捅 review 域
-        return reviewPort.countByReviewerAgentId(agentId);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void unlinkByAssignedAgent(Long agentId) {
-        lambdaUpdate()
-                .eq(SubTask::getAssignedAgentId, agentId)
-                .set(SubTask::getAssignedAgentId, null)
-                .update();
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public boolean claimAtomic(Long subTaskId, Long agentId) {
-        // ServiceImpl<SubTaskMapper, SubTask>：baseMapper 即 SubTaskMapper
-        return baseMapper.claimAtomic(subTaskId, agentId) > 0;
-    }
-
-    @Override
-    public List<SubTask> selectInFlightByAgent(Long agentId, int limit) {
-        return baseMapper.selectInFlightByAgent(agentId, limit);
-    }
-
-    @Override
-    public int countInFlightByAgent(Long agentId) {
-        return baseMapper.countInFlightByAgent(agentId);
-    }
-
-    @Override
-    public int countInFlightAll() {
-        return baseMapper.countInFlightAll();
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public int physicalDeleteByTaskId(Long taskId) {
-        // ServiceImpl<SubTaskMapper, SubTask>：baseMapper 即 SubTaskMapper（同域直捅合规）
-        return baseMapper.physicalDeleteByTaskId(taskId);
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  §7.1 helloai-job 去 Mapper 直连收口（同域查询出口，SQL 口径不变）
-    // ══════════════════════════════════════════════════════════════
-
-    @Override
-    public boolean existsInFlightAssignedOrInProgress(Long agentId) {
-        Long count = baseMapper.selectCount(new LambdaQueryWrapper<SubTask>()
-                .eq(SubTask::getAssignedAgentId, agentId)
-                .in(SubTask::getStatus, SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS));
-        return count != null && count > 0;
-    }
-
-    @Override
-    public List<SubTask> listInFlightAssignedOrInProgress(Long agentId) {
-        // 无 limit、无排序——与重派范围同口径，加 limit 会截断重派范围
-        return baseMapper.selectList(new LambdaQueryWrapper<SubTask>()
-                .eq(SubTask::getAssignedAgentId, agentId)
-                .in(SubTask::getStatus, SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS));
-    }
-
-    @Override
-    public List<SubTask> listPausedBefore(Long agentId, OffsetDateTime expiredBefore) {
-        return baseMapper.selectList(new LambdaQueryWrapper<SubTask>()
-                .eq(SubTask::getAssignedAgentId, agentId)
-                .eq(SubTask::getStatus, SubTaskStatus.PAUSED)
-                .le(SubTask::getUpdateTime, expiredBefore));
-    }
-
-    @Override
-    public List<SubTask> listTimedOutAssigned(OffsetDateTime deadline, int limit) {
-        return baseMapper.selectTimedOutAssigned(deadline, limit);
-    }
-
-    @Override
-    public int incrementExternalFallbackCount(Long subTaskId, OffsetDateTime now) {
-        return baseMapper.incrementExternalFallbackCount(subTaskId, now);
-    }
-
-    @Override
-    public List<Long> listPendingUnassignedWithoutActiveExecutionRecord(int limit) {
-        return baseMapper.selectPendingUnassignedWithoutActiveExecutionRecord(limit);
-    }
-
-    @Override
-    public List<Long> listStalePendingWithoutExecutionRecord(OffsetDateTime cutoff, int limit) {
-        return baseMapper.selectStalePendingWithoutExecutionRecord(cutoff, limit);
-    }
-
-    @Override
-    public List<Long> listStaleBlockedSubTaskIds(OffsetDateTime cutoff, int limit) {
-        return baseMapper.selectStaleBlockedSubTaskIds(cutoff, limit);
-    }
-
-    /**
-     * 子任务实体 → agent 域只读快照（映射逻辑统一收敛到 {@link SubTaskSnapshotMapper}，
-     * 与只读查询端口 {@code SubTaskQueryPortAdapter} 共用一份口径，避免漂移）。
-     *
-     * <p><b>为什么要由提供方映射</b>：{@code AgentOutboxService} 属 agent 域，其
-     * {@code createEvent} 若以 {@code task.entity.SubTask} 为形参，会造成
-     * agent → task 的 §6 反向依赖。改由提供方（task）把实体映射为消费方（agent）定义的
-     * {@link SubTaskSnapshot} 后传入，依赖方向变为 {@code task → agent}，**顺向合法**。</p>
-     */
-    private SubTaskSnapshot toSnapshot(SubTask subTask) {
-        return SubTaskSnapshotMapper.toSnapshot(subTask);
-    }
-
-    // ── 只读快照 / 不透明命令（RM5 批 4）──
-
-    @Override
-    public SubTaskView getView(Long subTaskId) {
-        return toView(getById(subTaskId));
+        json.append(']');
+        int updated = subTaskMapper.updateDependsOn(subTaskId, json.toString(), OffsetDateTime.now());
+        if (updated == 0) {
+            throw new BizException("子任务不存在或已删除，无法写入依赖: " + subTaskId);
+        }
     }
 
     /**
@@ -1447,86 +206,6 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     @Override
-    public List<String> mergeSkills(Long subTaskId) {
-        return mergeSkills(subTaskId == null ? null : getById(subTaskId));
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * <p><b>复用既有口径，不新造规则</b>：白名单取任务 {@code agent_policy.executorAgentIds}
-     * （{@link TaskAgentPolicy#executorAgentIds}，与派发链同源）；技能取
-     * {@link #mergeSkills(Long)}（子任务级 ∪ 任务级，与 {@code SubTaskDispatchServiceImpl.resolveConstraints}
-     * 同源）。两者由 {@code SubTaskClaimConstraint.of} 合并，均空即返回 {@code null}（不约束）。</p>
-     *
-     * <p><b>只依赖 {@code agent.port} 契约</b>：本方法 import 的是
-     * {@code agent.port.SubTaskClaimConstraint}（顺向合法），<b>不</b> import
-     * {@code agent.entity.Agent}；匹配动作由消费方 agent 域用既有
-     * {@code AgentSelector.AgentSelectionConstraints.denialReason} 完成。</p>
-     */
-    @Override
-    public SubTaskClaimConstraint claimConstraint(Long subTaskId) {
-        SubTask subTask = subTaskId == null ? null : getById(subTaskId);
-        if (subTask == null) {
-            return null;
-        }
-        TaskService taskService = taskServiceProvider.getIfAvailable();
-        Task task = taskService == null ? null : taskService.getById(subTask.getTaskId());
-        List<Long> whitelist = task == null ? List.of()
-                : TaskAgentPolicy.executorAgentIds(task.getAgentPolicy());
-        List<String> skills = mergeSkills(subTask);
-        return SubTaskClaimConstraint.of(whitelist, skills);
-    }
-
-    @Override
-    public List<SubTaskView> listViewsByTaskId(Long taskId) {
-        return list(new LambdaQueryWrapper<SubTask>()
-                .eq(SubTask::getTaskId, taskId)
-                .orderByAsc(SubTask::getCreateTime)).stream().map(SubTaskServiceImpl::toView).toList();
-    }
-
-    @Override
-    public List<SubTaskView> listReviewOrphanViews(int thresholdSeconds, int limit) {
-        return listReviewOrphans(thresholdSeconds, limit).stream().map(SubTaskServiceImpl::toView).toList();
-    }
-
-    /** 实体 → 只读快照（提供方映射，消费方零映射）；{@code uncertainties} 逐项投影，null 元素跳过。 */
-    private static SubTaskView toView(SubTask st) {
-        if (st == null) {
-            return null;
-        }
-        List<UncertaintyView> uncertainties = st.getUncertainties() == null ? List.of()
-                : st.getUncertainties().stream()
-                        .filter(u -> u != null)
-                        .map(u -> new UncertaintyView(u.getKind(), u.getNote()))
-                        .toList();
-        return new SubTaskView(st.getId(), st.getTaskId(), st.getStatus(), st.getAssignedAgentId(),
-                st.getReworkCount(), st.getTitle(), st.getContent(), st.getDeliverable(),
-                st.getAcceptance(), st.getConstraints(), st.getContext(), uncertainties,
-                st.dependsOnIdList(), st.getDeadline(), st.getPriority(), st.getIsContract(),
-                st.getRequiredSkills(), st.getModuleId(), st.getScoreFactors(), st.getCompositeScore(),
-                st.getScoreGrade(), st.getTimeoutCount(), st.getCreateTime(), st.getUpdateTime());
-    }
-
-    // ── 写命令 / 视图变体（RM5 批 5a）──
-
-    @Override
-    public List<SubTaskView> saveDrafts(List<SubTaskDraft> drafts) {
-        if (drafts == null || drafts.isEmpty()) {
-            return List.of();
-        }
-        List<SubTask> entities = drafts.stream().map(SubTaskServiceImpl::toEntity).toList();
-        saveBatch(entities);
-        return entities.stream().map(SubTaskServiceImpl::toView).toList();
-    }
-
-    @Override
-    public List<SubTaskView> listViewsByTaskIdAndStatus(Long taskId, com.helloai.common.constant.SubTaskStatus status) {
-        return list(taskId, status, null, null, 0).getRecords().stream()
-                .map(SubTaskServiceImpl::toView).toList();
-    }
-
-    @Override
     public boolean updateDeadline(Long subTaskId, OffsetDateTime deadline) {
         SubTask subTask = getById(subTaskId);
         if (subTask == null) {
@@ -1536,57 +215,337 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         return updateById(subTask);
     }
 
-    /** 写入物料 → 实体（提供方内部映射，消费方零实体依赖）；uncertainties 逐项投影。 */
-    private static SubTask toEntity(SubTaskDraft d) {
-        SubTask st = new SubTask();
-        st.setTaskId(d.taskId());
-        st.setTitle(d.title());
-        st.setContent(d.content());
-        st.setDeliverable(d.deliverable());
-        st.setAcceptance(d.acceptance());
-        st.setPriority(d.priority());
-        st.setIsContract(d.isContract());
-        st.setRequiredSkills(d.requiredSkills());
-        st.setConstraints(d.constraints());
-        st.setStatus(d.status());
-        st.setContext(d.context());
-        st.setUncertainties(d.uncertainties() == null ? null : d.uncertainties().stream()
-                .filter(u -> u != null)
-                .map(u -> {
-                    Uncertainty entity = new Uncertainty();
-                    entity.setKind(u.kind());
-                    entity.setNote(u.note());
-                    return entity;
-                })
-                .toList());
-        return st;
+    /**
+     * {@inheritDoc}
+     *
+     * <p>RM9-b 归属说明：本方法含<b>批量插入</b>（{@code saveBatch}，MyBatis-Plus 基类能力），
+     * 属「写」而非「只读投影」，故留在门面（沿用 §4.3.2 门面行「保留 {@code extends ServiceImpl}
+     * 供 CRUD」的判据）；映射两半（{@code toEntity} / {@code toView}）统一在
+     * {@link SubTaskProjectionMapper}，避免与只读簇各持一份口径（RM9-b 微调①）。</p>
+     */
+    @Override
+    public List<SubTaskView> saveDrafts(List<SubTaskDraft> drafts) {
+        if (drafts == null || drafts.isEmpty()) {
+            return List.of();
+        }
+        List<SubTask> entities = drafts.stream().map(SubTaskProjectionMapper::toEntity).toList();
+        saveBatch(entities);
+        return entities.stream().map(SubTaskProjectionMapper::toView).toList();
     }
 
-    /** 待审草案的只读快照，按 <b>createTime asc + id asc</b>（与 saveBatch 插入序一致，供依赖序号回写）。 */
     @Override
-    public List<SubTaskView> listDraftsInInsertOrder(Long taskId, com.helloai.common.constant.SubTaskStatus status) {
-        return list(new LambdaQueryWrapper<SubTask>()
-                .eq(SubTask::getTaskId, taskId)
-                .eq(SubTask::getStatus, status)
-                .orderByAsc(SubTask::getCreateTime, SubTask::getId)).stream()
-                .map(SubTaskServiceImpl::toView).toList();
+    @Transactional(rollbackFor = Exception.class)
+    public void unlinkByAssignedAgent(Long agentId) {
+        subTaskMapper.update(null, new LambdaUpdateWrapper<SubTask>()
+                .eq(SubTask::getAssignedAgentId, agentId)
+                .set(SubTask::getAssignedAgentId, null));
     }
 
-    /** 按 taskId 统计排除指定状态的子任务数（planner 重复拆解前置校验用）。 */
     @Override
-    public long countByTaskIdExcludingStatus(Long taskId, com.helloai.common.constant.SubTaskStatus excluded) {
-        return lambdaQuery().eq(SubTask::getTaskId, taskId).ne(SubTask::getStatus, excluded).count();
+    @Transactional(rollbackFor = Exception.class)
+    public int physicalDeleteByTaskId(Long taskId) {
+        // 同域 Mapper 直捅（CODE_STYLE §7.1：同域合规）
+        return subTaskMapper.physicalDeleteByTaskId(taskId);
     }
 
-    /** 按 taskId + 状态统计子任务数（planner 拒绝前清理判定用）。 */
+    // ══════════════════════════════════════════════════════════════
+    //  委托：只读查询与视图投影 → SubTaskQueryService
+    // ══════════════════════════════════════════════════════════════
+
     @Override
-    public long countByTaskIdAndStatus(Long taskId, com.helloai.common.constant.SubTaskStatus status) {
-        return lambdaQuery().eq(SubTask::getTaskId, taskId).eq(SubTask::getStatus, status).count();
+    public List<String> requiredSkillsOf(Long taskId) {
+        return queryService.requiredSkillsOf(taskId);
     }
 
-    /** 按 id 集合查询只读快照（顺序与 {@link #listByIds} 一致）。 */
     @Override
-    public List<SubTaskView> listViewsByIds(java.util.Collection<Long> ids) {
-        return listByIds(ids).stream().map(SubTaskServiceImpl::toView).toList();
+    public List<String> mergeSkills(SubTask subTask) {
+        return queryService.mergeSkills(subTask);
+    }
+
+    @Override
+    public List<String> mergeSkills(Long subTaskId) {
+        return queryService.mergeSkills(subTaskId);
+    }
+
+    @Override
+    public SubTaskClaimConstraint claimConstraint(Long subTaskId) {
+        return queryService.claimConstraint(subTaskId);
+    }
+
+    @Override
+    public IPage<SubTask> list(Long taskId, SubTaskStatus status, Long assignedAgentId, Integer page, int pageSize) {
+        return queryService.list(taskId, status, assignedAgentId, page, pageSize);
+    }
+
+    @Override
+    public List<SubTask> listAvailable() {
+        return queryService.listAvailable();
+    }
+
+    @Override
+    public List<SubTask> listMine(Long assignedAgentId) {
+        return queryService.listMine(assignedAgentId);
+    }
+
+    @Override
+    public List<SubTask> listRecentlyChanged(OffsetDateTime since, int limit) {
+        return queryService.listRecentlyChanged(since, limit);
+    }
+
+    @Override
+    public SubTask getByIdForUpdate(Long subTaskId) {
+        return queryService.getByIdForUpdate(subTaskId);
+    }
+
+    @Override
+    public boolean isReady(SubTask subTask) {
+        return queryService.isReady(subTask);
+    }
+
+    @Override
+    public Map<String, Integer> countByStatusForAgent(Long agentId) {
+        return queryService.countByStatusForAgent(agentId);
+    }
+
+    @Override
+    public long countByAssignedAgent(Long agentId) {
+        return queryService.countByAssignedAgent(agentId);
+    }
+
+    @Override
+    public long countReviewByReviewerAgent(Long agentId) {
+        return queryService.countReviewByReviewerAgent(agentId);
+    }
+
+    @Override
+    public long countByTaskIdExcludingStatus(Long taskId, SubTaskStatus excluded) {
+        return queryService.countByTaskIdExcludingStatus(taskId, excluded);
+    }
+
+    @Override
+    public long countByTaskIdAndStatus(Long taskId, SubTaskStatus status) {
+        return queryService.countByTaskIdAndStatus(taskId, status);
+    }
+
+    @Override
+    public List<SubTask> selectInFlightByAgent(Long agentId, int limit) {
+        return queryService.selectInFlightByAgent(agentId, limit);
+    }
+
+    @Override
+    public int countInFlightByAgent(Long agentId) {
+        return queryService.countInFlightByAgent(agentId);
+    }
+
+    @Override
+    public int countInFlightAll() {
+        return queryService.countInFlightAll();
+    }
+
+    @Override
+    public boolean existsInFlightAssignedOrInProgress(Long agentId) {
+        return queryService.existsInFlightAssignedOrInProgress(agentId);
+    }
+
+    @Override
+    public List<SubTask> listInFlightAssignedOrInProgress(Long agentId) {
+        return queryService.listInFlightAssignedOrInProgress(agentId);
+    }
+
+    @Override
+    public List<Long> listPendingUnassignedWithoutActiveExecutionRecord(int limit) {
+        return queryService.listPendingUnassignedWithoutActiveExecutionRecord(limit);
+    }
+
+    @Override
+    public List<Long> listStalePendingWithoutExecutionRecord(OffsetDateTime cutoff, int limit) {
+        return queryService.listStalePendingWithoutExecutionRecord(cutoff, limit);
+    }
+
+    @Override
+    public List<Long> listStaleBlockedSubTaskIds(OffsetDateTime cutoff, int limit) {
+        return queryService.listStaleBlockedSubTaskIds(cutoff, limit);
+    }
+
+    @Override
+    public SubTaskView getView(Long subTaskId) {
+        return queryService.getView(subTaskId);
+    }
+
+    @Override
+    public List<SubTaskView> listViewsByTaskId(Long taskId) {
+        return queryService.listViewsByTaskId(taskId);
+    }
+
+    @Override
+    public List<SubTaskView> listViewsByTaskIdAndStatus(Long taskId, SubTaskStatus status) {
+        return queryService.listViewsByTaskIdAndStatus(taskId, status);
+    }
+
+    @Override
+    public List<SubTaskView> listDraftsInInsertOrder(Long taskId, SubTaskStatus status) {
+        return queryService.listDraftsInInsertOrder(taskId, status);
+    }
+
+    @Override
+    public List<SubTaskView> listViewsByIds(Collection<Long> ids) {
+        return queryService.listViewsByIds(ids);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  委托：状态迁移唯一入口 → SubTaskStateMachineService
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId) {
+        stateMachineService.changeStatus(subTaskId, newStatus, agentId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId, Map<String, Object> contextPatch) {
+        stateMachineService.changeStatus(subTaskId, newStatus, agentId, contextPatch);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void claim(Long subTaskId, Long agentId) {
+        stateMachineService.claim(subTaskId, agentId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void start(Long subTaskId) {
+        stateMachineService.start(subTaskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void submit(Long subTaskId) {
+        stateMachineService.submit(subTaskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void complete(Long subTaskId) {
+        stateMachineService.complete(subTaskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void pause(Long subTaskId) {
+        stateMachineService.pause(subTaskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void resume(Long subTaskId) {
+        stateMachineService.resume(subTaskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void cancel(Long subTaskId) {
+        stateMachineService.cancel(subTaskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void block(Long subTaskId) {
+        stateMachineService.block(subTaskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void block(Long subTaskId, String reason, Long reporterAgentId) {
+        stateMachineService.block(subTaskId, reason, reporterAgentId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean rework(Long subTaskId, Long reworkAgentId) {
+        return stateMachineService.rework(subTaskId, reworkAgentId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void reworkFresh(Long subTaskId, Long reworkAgentId) {
+        stateMachineService.reworkFresh(subTaskId, reworkAgentId);
+    }
+
+    @Override
+    public void markManualIntervention(Long subTaskId, String reason, Map<String, Object> extra) {
+        stateMachineService.markManualIntervention(subTaskId, reason, extra);
+    }
+
+    @Override
+    public void clearManualIntervention(Long subTaskId) {
+        stateMachineService.clearManualIntervention(subTaskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void assignNext(Long agentId, Long subTaskId) {
+        stateMachineService.assignNext(agentId, subTaskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public SubTask resetToPendingForDispatch(Long subTaskId, Set<SubTaskStatus> allowedStatuses) {
+        return stateMachineService.resetToPendingForDispatch(subTaskId, allowedStatuses);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void reassign(Long subTaskId, Long newAgentId) {
+        stateMachineService.reassign(subTaskId, newAgentId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean claimAtomic(Long subTaskId, Long agentId) {
+        return stateMachineService.claimAtomic(subTaskId, agentId);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  委托：租约 / 回收 / 巡检 → SubTaskLeaseService
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int renewCurrentNodeLeases(OffsetDateTime newLeaseUntil, int limit) {
+        return leaseService.renewCurrentNodeLeases(newLeaseUntil, limit);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int reclaimExpiredLeases(int limit) {
+        return leaseService.reclaimExpiredLeases(limit);
+    }
+
+    @Override
+    public List<SubTask> listReviewOrphans(int thresholdSeconds, int limit) {
+        return leaseService.listReviewOrphans(thresholdSeconds, limit);
+    }
+
+    @Override
+    public List<SubTaskView> listReviewOrphanViews(int thresholdSeconds, int limit) {
+        return leaseService.listReviewOrphanViews(thresholdSeconds, limit);
+    }
+
+    @Override
+    public List<SubTask> listPausedBefore(Long agentId, OffsetDateTime expiredBefore) {
+        return leaseService.listPausedBefore(agentId, expiredBefore);
+    }
+
+    @Override
+    public List<SubTask> listTimedOutAssigned(OffsetDateTime deadline, int limit) {
+        return leaseService.listTimedOutAssigned(deadline, limit);
+    }
+
+    @Override
+    public int incrementExternalFallbackCount(Long subTaskId, OffsetDateTime now) {
+        return leaseService.incrementExternalFallbackCount(subTaskId, now);
     }
 }

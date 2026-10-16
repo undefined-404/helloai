@@ -16,7 +16,11 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
+import com.helloai.core.task.service.impl.SubTaskLeaseService;
+import com.helloai.core.task.service.impl.SubTaskNotificationService;
+import com.helloai.core.task.service.impl.SubTaskQueryService;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
+import com.helloai.core.task.service.impl.SubTaskStateMachineService;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,7 +45,6 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -51,6 +54,15 @@ import static org.mockito.Mockito.when;
 /**
  * 共享重试预算（attempt_total）单元测试（坑点 3「单一权威」）：
  * 自动驳回返工计入共享预算 / 预算耗尽转 DEAD_LETTER / 人工驳回清零预算 / 熔断禁用逃生口。
+ *
+ * <p><b>RM9-b 装配口径变更（断言语义未改）</b>：返工链已迁入
+ * {@link SubTaskStateMachineService}，故：
+ * <ul>
+ *   <li>行读取/写入（{@code getById}/{@code updateById}）桩改设到同域 {@code SubTaskMapper}；</li>
+ *   <li>「是否走熔断分支」的断言由门面 {@code changeStatus}/{@code markManualIntervention}
+ *       改为状态机实例（spy 以记录同一类内的自调用），断言谓词与拆分前逐字一致。</li>
+ * </ul>
+ * </p>
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -79,18 +91,24 @@ class SubTaskServiceReworkBudgetTest {
 
     private AgentDispatchProperties dispatchProps;
     private SubTaskService subTaskService;
+    private SubTaskStateMachineService stateMachineService;
 
     @BeforeEach
     void setUp() {
         dispatchProps = new AgentDispatchProperties();
-        subTaskService = spy(new SubTaskServiceImpl(
-                agentOutboxService, agentInboxService, agentServiceProvider,
-                heartbeatService, reviewPort, implicitScoreCalculator,
-                rewardService, applicationEventPublisher, taskTimelineService,
-                dispatchProps, concurrencyQuotaService,
-                new WatchdogProperties(), agentSessionService, attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
-                subTaskMapper));
-        doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+        SubTaskQueryService queryService = new SubTaskQueryService(
+                subTaskMapper, taskServiceProvider, reviewPort);
+        SubTaskNotificationService notificationService = new SubTaskNotificationService(
+                agentInboxService, agentServiceProvider, applicationEventPublisher, reviewPort, queryService);
+        stateMachineService = spy(new SubTaskStateMachineService(
+                subTaskMapper, notificationService, agentOutboxService, heartbeatService,
+                concurrencyQuotaService, dispatchProps, new WatchdogProperties(), taskTimelineService,
+                agentServiceProvider, attachmentServiceProvider, agentEventRecorder,
+                implicitScoreCalculator, rewardService, reviewPort, applicationEventPublisher));
+        SubTaskLeaseService leaseService = mock(SubTaskLeaseService.class);
+        subTaskService = new SubTaskServiceImpl(
+                subTaskMapper, queryService, stateMachineService, leaseService);
+        when(subTaskMapper.updateById(any(SubTask.class))).thenReturn(1);
         // 懒解析 bean：附件失效 / 执行者通知路径触达时返回 mock，防 NPE
         when(attachmentServiceProvider.getIfAvailable()).thenReturn(mock(AttachmentService.class));
         when(agentServiceProvider.getIfAvailable()).thenReturn(mock(AgentService.class));
@@ -111,25 +129,25 @@ class SubTaskServiceReworkBudgetTest {
     @Test
     @DisplayName("预算充足：自动驳回打回成功，attempt_total 原子累加且 reworkCount+1")
     void shouldConsumeBudgetAndReworkWhenBudgetAvailable() {
-        doReturn(reviewSubTask(2, 2)).when(subTaskService).getById(SUB_TASK_ID);
+        when(subTaskMapper.selectById(SUB_TASK_ID)).thenReturn(reviewSubTask(2, 2));
 
         boolean result = subTaskService.rework(SUB_TASK_ID, null);
 
         assertThat(result).isTrue();
         verify(subTaskMapper).incrementAttemptTotal(eq(SUB_TASK_ID), any(OffsetDateTime.class));
         ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService).updateById(captor.capture());
+        verify(subTaskMapper).updateById(captor.capture());
         assertThat(captor.getValue().getStatus()).isEqualTo(SubTaskStatus.REWORK);
         assertThat(captor.getValue().getReworkCount()).isEqualTo(3);
         // 熔断副作用不触发
-        verify(subTaskService, never()).changeStatus(
+        verify(stateMachineService, never()).changeStatus(
                 eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull(), anyMap());
     }
 
     @Test
     @DisplayName("预算耗尽（attempt_total=5）：不再打回，转 DEAD_LETTER + timeline + 人工介入标记")
     void shouldTripCircuitBreakerWhenBudgetExhausted() {
-        doReturn(reviewSubTask(5, 0)).when(subTaskService).getById(SUB_TASK_ID);
+        when(subTaskMapper.selectById(SUB_TASK_ID)).thenReturn(reviewSubTask(5, 0));
 
         boolean result = subTaskService.rework(SUB_TASK_ID, null);
 
@@ -138,28 +156,28 @@ class SubTaskServiceReworkBudgetTest {
         verify(subTaskMapper, never()).incrementAttemptTotal(anyLong(), any(OffsetDateTime.class));
         // 不打回：熔断副作用（changeStatus/markManualIntervention 内部）产生的 updateById 均非 REWORK
         ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService, atLeastOnce()).updateById(captor.capture());
+        verify(subTaskMapper, atLeastOnce()).updateById(captor.capture());
         assertThat(captor.getAllValues())
                 .allSatisfy(s -> assertThat(s.getStatus()).isNotEqualTo(SubTaskStatus.REWORK));
         // 熔断副作用：REVIEW → DEAD_LETTER + timeline + 人工介入标记
-        verify(subTaskService).changeStatus(
+        verify(stateMachineService).changeStatus(
                 eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull(), anyMap());
         verify(taskTimelineService).recordEvent(
                 eq(9L), eq(SUB_TASK_ID), eq("sub_task_dead_letter"),
                 eq(AgentRole.SYSTEM), isNull(), anyMap());
-        verify(subTaskService).markManualIntervention(eq(SUB_TASK_ID), eq("rework_budget"), anyMap());
+        verify(stateMachineService).markManualIntervention(eq(SUB_TASK_ID), eq("rework_budget"), anyMap());
     }
 
     @Test
     @DisplayName("人工驳回（reworkFresh）：清零共享预算 attempt_total（用户拍板新一轮，与死信重派对称）")
     void shouldResetBudgetWhenReworkFresh() {
-        doReturn(reviewSubTask(4, 3)).when(subTaskService).getById(SUB_TASK_ID);
+        when(subTaskMapper.selectById(SUB_TASK_ID)).thenReturn(reviewSubTask(4, 3));
 
         subTaskService.reworkFresh(SUB_TASK_ID, null);
 
         verify(subTaskMapper).resetAttemptTotal(eq(SUB_TASK_ID), any(OffsetDateTime.class));
         ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService).updateById(captor.capture());
+        verify(subTaskMapper).updateById(captor.capture());
         assertThat(captor.getValue().getStatus()).isEqualTo(SubTaskStatus.REWORK);
         assertThat(captor.getValue().getReworkCount()).isZero();
     }
@@ -168,13 +186,13 @@ class SubTaskServiceReworkBudgetTest {
     @DisplayName("熔断禁用（max-reassign-attempts<=0 逃生口）：打回成功但不累加预算")
     void shouldAllowReworkWhenCircuitBreakerDisabled() {
         dispatchProps.setMaxReassignAttempts(0);
-        doReturn(reviewSubTask(99, 1)).when(subTaskService).getById(SUB_TASK_ID);
+        when(subTaskMapper.selectById(SUB_TASK_ID)).thenReturn(reviewSubTask(99, 1));
 
         boolean result = subTaskService.rework(SUB_TASK_ID, null);
 
         assertThat(result).isTrue();
         verify(subTaskMapper, never()).incrementAttemptTotal(anyLong(), any(OffsetDateTime.class));
-        verify(subTaskService, never()).changeStatus(
+        verify(stateMachineService, never()).changeStatus(
                 eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull(), anyMap());
     }
 }

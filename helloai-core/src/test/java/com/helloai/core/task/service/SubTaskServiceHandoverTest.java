@@ -20,7 +20,11 @@ import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.port.ReviewSummary;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
+import com.helloai.core.task.service.impl.SubTaskLeaseService;
+import com.helloai.core.task.service.impl.SubTaskNotificationService;
+import com.helloai.core.task.service.impl.SubTaskQueryService;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
+import com.helloai.core.task.service.impl.SubTaskStateMachineService;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.TaskService;
@@ -46,10 +50,8 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
@@ -57,6 +59,12 @@ import static org.mockito.Mockito.when;
 /**
  * 执行者变更撤销通知单元测试：
  * 换人改派补发 sub_task.reassigned / 回收补发 sub_task.unassigned / 初始分配与原地保留不通知。
+ *
+ * <p><b>RM9-b 装配口径变更（断言逐条未改）</b>：状态流转已整体迁入
+ * {@link SubTaskStateMachineService}，行读取经同域 {@code SubTaskMapper}，
+ * 故 {@code getById}/{@code updateById} 桩改设到 mapper 上；本类断言全部落在
+ * {@code agentInboxService} / {@code attachmentService} 等<b>出站副作用 mock</b>，
+ * 与拆分前逐字一致。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -93,16 +101,21 @@ class SubTaskServiceHandoverTest {
     void setUp() {
         AgentDispatchProperties dispatchProps = new AgentDispatchProperties();
         dispatchProps.setEnforceMaxConcurrent(true);
-        subTaskService = spy(new SubTaskServiceImpl(
-                agentOutboxService, agentInboxService, agentServiceProvider,
-                heartbeatService, reviewPort, implicitScoreCalculator,
-                rewardService, applicationEventPublisher, taskTimelineService,
-                dispatchProps, concurrencyQuotaService,
+        SubTaskQueryService queryService = new SubTaskQueryService(
+                subTaskMapper, taskServiceProvider, reviewPort);
+        SubTaskNotificationService notificationService = new SubTaskNotificationService(
+                agentInboxService, agentServiceProvider, applicationEventPublisher, reviewPort, queryService);
+        SubTaskStateMachineService stateMachineService = new SubTaskStateMachineService(
+                subTaskMapper, notificationService, agentOutboxService, heartbeatService,
+                concurrencyQuotaService, dispatchProps,
                 // 租约看门狗配置（changeStatus 进 IN_PROGRESS 时会读，默认值即可）
-                new WatchdogProperties(), agentSessionService, attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
-                // 共享预算 mapper（rework 预算消费 / reworkFresh 清零）
-                subTaskMapper));
-        doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+                new WatchdogProperties(), taskTimelineService, agentServiceProvider,
+                attachmentServiceProvider, agentEventRecorder, implicitScoreCalculator,
+                rewardService, reviewPort, applicationEventPublisher);
+        SubTaskLeaseService leaseService = mock(SubTaskLeaseService.class);
+        subTaskService = new SubTaskServiceImpl(
+                subTaskMapper, queryService, stateMachineService, leaseService);
+        when(subTaskMapper.updateById(any(SubTask.class))).thenReturn(1);
         // §6.104 打回失效：让 ObjectProvider 返回 mock，便于断言 invalidateBySubTask 被调
         //（类级 @MockitoSettings(strictness = Strictness.LENIENT) 已开启，无需 Mockito.lenient()）
         when(attachmentServiceProvider.getIfAvailable()).thenReturn(attachmentService);
@@ -126,6 +139,11 @@ class SubTaskServiceHandoverTest {
         return subTask;
     }
 
+    /** 桩：状态机行读取（拆分后经同域 mapper，非 MyBatis-Plus 基类方法）。 */
+    private void stubSubTask(SubTask subTask) {
+        when(subTaskMapper.selectById(SUB_TASK_ID)).thenReturn(subTask);
+    }
+
     private List<String> capturedEventTypes() {
         ArgumentCaptor<String> eventTypeCaptor = ArgumentCaptor.forClass(String.class);
         verify(agentInboxService, times(1)).send(
@@ -141,8 +159,7 @@ class SubTaskServiceHandoverTest {
     @Test
     @DisplayName("改派双通知：旧执行者收到 sub_task.unassigned，新执行者收到 sub_task.assigned")
     void shouldNotifyOldAgentWhenReassigned() {
-        doReturn(subTask(SubTaskStatus.ASSIGNED, OLD_AGENT))
-                .when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(subTask(SubTaskStatus.ASSIGNED, OLD_AGENT));
 
         // 真实改派链路：第一步回收（ASSIGNED → PENDING，清空执行者），第二步重新分配（PENDING → ASSIGNED）
         subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.PENDING, null);
@@ -157,8 +174,7 @@ class SubTaskServiceHandoverTest {
     @Test
     @DisplayName("执行者回收：旧执行者收到 sub_task.unassigned（回 PENDING 清空执行者）")
     void shouldNotifyOldAgentWhenUnassigned() {
-        doReturn(subTask(SubTaskStatus.ASSIGNED, OLD_AGENT))
-                .when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(subTask(SubTaskStatus.ASSIGNED, OLD_AGENT));
 
         subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.PENDING, null);
 
@@ -169,8 +185,7 @@ class SubTaskServiceHandoverTest {
     @Test
     @DisplayName("初始分配：无旧执行者，不发撤销通知（仅新执行者收到 assigned）")
     void shouldNotNotifyOnInitialAssign() {
-        doReturn(subTask(SubTaskStatus.PENDING, null))
-                .when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(subTask(SubTaskStatus.PENDING, null));
 
         subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.ASSIGNED, NEW_AGENT);
 
@@ -191,7 +206,7 @@ class SubTaskServiceHandoverTest {
         pending.setKind(Uncertainty.KIND_UNCONFIRMED);
         pending.setNote("归档分区待确认");
         subTask.setUncertainties(List.of(assumed, pending));
-        doReturn(subTask).when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(subTask);
 
         subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.ASSIGNED, NEW_AGENT);
 
@@ -215,7 +230,7 @@ class SubTaskServiceHandoverTest {
         assumed.setKind(Uncertainty.KIND_ASSUMPTION);
         assumed.setNote("历史数据可忽略");
         assumedOnly.setUncertainties(List.of(assumed));
-        doReturn(assumedOnly).when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(assumedOnly);
 
         subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.ASSIGNED, NEW_AGENT);
 
@@ -227,7 +242,7 @@ class SubTaskServiceHandoverTest {
 
         // 无申报：不注入任何不确定性行（零注入）
         SubTask noUncertainty = subTask(SubTaskStatus.PENDING, null);
-        doReturn(noUncertainty).when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(noUncertainty);
         subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.ASSIGNED, NEW_AGENT);
 
         ArgumentCaptor<String> summaryCaptor2 = ArgumentCaptor.forClass(String.class);
@@ -240,8 +255,7 @@ class SubTaskServiceHandoverTest {
     @Test
     @DisplayName("同一执行者原地保留：不发撤销通知")
     void shouldNotNotifyWhenSameAgentKept() {
-        doReturn(subTask(SubTaskStatus.REWORK, OLD_AGENT))
-                .when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(subTask(SubTaskStatus.REWORK, OLD_AGENT));
 
         // REWORK → IN_PROGRESS 为合法转换，执行者保持 OLD_AGENT 不变
         subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.IN_PROGRESS, OLD_AGENT);
@@ -259,8 +273,7 @@ class SubTaskServiceHandoverTest {
     @Test
     @DisplayName("人工驳回换派（reworkFresh）：旧执行者收到 sub_task.reassigned")
     void shouldNotifyOldAgentWhenReworkFreshSwitchesAgent() {
-        doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
-                .when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(subTask(SubTaskStatus.REVIEW, OLD_AGENT));
 
         subTaskService.reworkFresh(SUB_TASK_ID, NEW_AGENT);
 
@@ -273,8 +286,7 @@ class SubTaskServiceHandoverTest {
     @Test
     @DisplayName("人工驳回换派目标非 EXECUTOR（PLANNER）→ BizException（LOG-20260903-011 契约）")
     void shouldRejectNonExecutorWhenReworkFreshSwitchesAgent() {
-        doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
-                .when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(subTask(SubTaskStatus.REVIEW, OLD_AGENT));
         // 覆盖 setUp 的 EXECUTOR stub：本次改派目标为 PLANNER
         AgentService agentService = mock(AgentService.class);
         AgentProfileSnapshot planner = AgentProfileSnapshot.builder()
@@ -295,8 +307,7 @@ class SubTaskServiceHandoverTest {
     @Test
     @DisplayName("人工驳回不换派（reworkFresh 保持原执行者）：仅补发 sub_task.rejected 返工通知")
     void shouldNotifyReworkWhenReworkFreshKeepsAgent() {
-        doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
-                .when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(subTask(SubTaskStatus.REVIEW, OLD_AGENT));
 
         subTaskService.reworkFresh(SUB_TASK_ID, null);
 
@@ -313,8 +324,7 @@ class SubTaskServiceHandoverTest {
     @Test
     @DisplayName("人工驳回不换派：无 review 历史时摘要回退默认文案")
     void shouldFallbackSummaryWhenNoReviewHistory() {
-        doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
-                .when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(subTask(SubTaskStatus.REVIEW, OLD_AGENT));
 
         subTaskService.reworkFresh(SUB_TASK_ID, null);
 
@@ -332,7 +342,7 @@ class SubTaskServiceHandoverTest {
                 Map.of("round", 1, "score", 2, "comment", "实现不完整",
                         "issues", List.of("缺异常处理", "无单测"))
         )));
-        doReturn(reviewTask).when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(reviewTask);
 
         subTaskService.rework(SUB_TASK_ID, null);
 
@@ -358,7 +368,7 @@ class SubTaskServiceHandoverTest {
                                         "howTo", "补 curl 命令与输出"),
                                 Map.of("missing", "无单测")))
         )));
-        doReturn(reviewTask).when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(reviewTask);
 
         subTaskService.rework(SUB_TASK_ID, null);
 
@@ -379,7 +389,7 @@ class SubTaskServiceHandoverTest {
                 Map.of("round", 1, "score", 2, "comment", "实现不完整",
                         "issues", List.of("缺异常处理"), "missingEvidence", List.of())
         )));
-        doReturn(reviewTask).when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(reviewTask);
 
         subTaskService.rework(SUB_TASK_ID, null);
 
@@ -392,8 +402,7 @@ class SubTaskServiceHandoverTest {
     @Test
     @DisplayName("自动驳回换人（rework 防御性兼容）：旧执行者收到 sub_task.reassigned，新执行者收到 sub_task.rejected")
     void shouldNotifyOldAgentWhenReworkSwitchesAgent() {
-        doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
-                .when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(subTask(SubTaskStatus.REVIEW, OLD_AGENT));
 
         subTaskService.rework(SUB_TASK_ID, NEW_AGENT);
 
@@ -412,7 +421,7 @@ class SubTaskServiceHandoverTest {
     @DisplayName("审查通过（complete）：向执行者补发 sub_task.approved，摘要取 review_record 最新一轮评分/评语")
     void shouldNotifyApprovedOnComplete() {
         SubTask done = subTask(SubTaskStatus.REVIEW, OLD_AGENT);
-        doReturn(done).when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(done);
         stubImplicitScore();
         // §6.146：最新一轮摘要经 ReviewPort 收口（review 域组装，task 域不依赖实体）
         when(reviewPort.latestReviewSummary(anyLong())).thenReturn(
@@ -431,8 +440,7 @@ class SubTaskServiceHandoverTest {
     @Test
     @DisplayName("审查通过（complete）：无 review_record 时摘要回退默认文案")
     void shouldFallbackApprovedSummaryWhenNoReview() {
-        doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
-                .when(subTaskService).getById(SUB_TASK_ID);
+        stubSubTask(subTask(SubTaskStatus.REVIEW, OLD_AGENT));
         stubImplicitScore();
         when(reviewPort.latestReviewSummary(anyLong())).thenReturn(null);
 

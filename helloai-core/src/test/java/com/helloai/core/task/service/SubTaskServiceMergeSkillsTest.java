@@ -1,32 +1,23 @@
 package com.helloai.core.task.service;
 
-import com.helloai.core.agent.service.RewardService;
-import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
-import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.event.AgentEventRecorder;
-import com.helloai.core.agent.service.HeartbeatService;
-import com.helloai.core.agent.service.AgentInboxService;
-import com.helloai.core.agent.service.AgentOutboxService;
-import com.helloai.core.agent.service.ConcurrencyQuotaService;
-import com.helloai.core.agent.session.service.AgentSessionService;
-import com.helloai.common.config.AgentDispatchProperties;
-import com.helloai.common.config.WatchdogProperties;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
-import com.helloai.core.task.score.ImplicitScoreCalculator;
+import com.helloai.core.task.service.impl.SubTaskLeaseService;
+import com.helloai.core.task.service.impl.SubTaskQueryService;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
-import com.helloai.core.task.service.AttachmentService;
+import com.helloai.core.task.service.impl.SubTaskStateMachineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 
@@ -34,9 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 
@@ -44,40 +33,29 @@ import static org.mockito.Mockito.spy;
  * SubTaskService.mergeSkills / updateDraft 单元测试（G-010 能力感知传递链）：
  * 并集装箱去重保序 / 存量退化零变化 / 草案态 fail-close 编辑门禁。
  * G-011 扩展：uncertainties 归一化（空白丢弃 / 非法 kind 降级 / null 不改 / 空数组清空）。
+ *
+ * <p><b>RM9-b 装配口径变更（断言语义未改）</b>：{@code mergeSkills} 已随只读簇迁入
+ * {@link SubTaskQueryService}，故 {@code requiredSkillsOf} 的桩改设在查询职责类上（spy）；
+ * {@code updateDraft} 仍留门面，其 {@code getById}/{@code updateById} 桩位置不变。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskService.mergeSkills / updateDraft")
 class SubTaskServiceMergeSkillsTest {
 
-    private SubTaskService subTaskService;
+    @Mock private SubTaskMapper subTaskMapper;
+    @Mock private ObjectProvider<TaskService> taskServiceProvider;
+    @Mock private ReviewPort reviewPort;
 
-    @SuppressWarnings("unchecked")
-    private final LambdaQueryChainWrapper<SubTask> queryChain = mock(LambdaQueryChainWrapper.class);
+    private SubTaskQueryService queryService;
+    private SubTaskService subTaskService;
 
     @BeforeEach
     void setUp() {
-        SubTaskService real = new SubTaskServiceImpl(
-                mock(AgentOutboxService.class), mock(AgentInboxService.class),
-                mock(org.springframework.beans.factory.ObjectProvider.class), mock(HeartbeatService.class),
-                mock(ReviewPort.class), mock(ImplicitScoreCalculator.class),
-                mock(RewardService.class), mock(ApplicationEventPublisher.class),
-                mock(TaskTimelineService.class),
-                new AgentDispatchProperties(), mock(ConcurrencyQuotaService.class),
-                new WatchdogProperties(),
-                mock(AgentSessionService.class),
-                mock(org.springframework.beans.factory.ObjectProvider.class),
-                // requiredSkillsOf 懒解析 TaskService（mergeSkills 测试中经 spy stub，不触达真实逻辑）
-                mock(org.springframework.beans.factory.ObjectProvider.class),
-                mock(AgentEventRecorder.class),
-                mock(SubTaskMapper.class));
-        subTaskService = spy(real);
-        lenient().doReturn(queryChain).when(subTaskService).lambdaQuery();
-        lenient().when(queryChain.in(any(), any(List.class))).thenReturn(queryChain);
-        lenient().when(queryChain.eq(any(), any())).thenReturn(queryChain);
-        lenient().when(queryChain.le(any(), any())).thenReturn(queryChain);
-        lenient().when(queryChain.orderByAsc(any(SFunction.class))).thenReturn(queryChain);
-        lenient().when(queryChain.last(anyString())).thenReturn(queryChain);
-        lenient().when(queryChain.list()).thenReturn(List.of());
+        queryService = spy(new SubTaskQueryService(subTaskMapper, taskServiceProvider, reviewPort));
+        SubTaskStateMachineService stateMachineService = mock(SubTaskStateMachineService.class);
+        SubTaskLeaseService leaseService = mock(SubTaskLeaseService.class);
+        subTaskService = spy(new SubTaskServiceImpl(
+                subTaskMapper, queryService, stateMachineService, leaseService));
     }
 
     private SubTask draft(List<String> subTaskSkills) {
@@ -96,7 +74,7 @@ class SubTaskServiceMergeSkillsTest {
         @Test
         @DisplayName("子任务级在前、任务级追加在后、去重保序")
         void shouldMergeWithSubTaskLevelFirst() {
-            doReturn(List.of("eng-verification", "shell")).when(subTaskService).requiredSkillsOf(100L);
+            doReturn(List.of("eng-verification", "shell")).when(queryService).requiredSkillsOf(100L);
             SubTask subTask = draft(List.of("eng-doc-standard", "shell", "eng-doc-standard"));
 
             List<String> merged = subTaskService.mergeSkills(subTask);
@@ -107,7 +85,7 @@ class SubTaskServiceMergeSkillsTest {
         @Test
         @DisplayName("存量子任务 required_skills 为空时退化为纯任务级（行为零变化）")
         void shouldDegradeToTaskLevelWhenSubTaskSkillsEmpty() {
-            doReturn(List.of("eng-verification")).when(subTaskService).requiredSkillsOf(100L);
+            doReturn(List.of("eng-verification")).when(queryService).requiredSkillsOf(100L);
 
             assertThat(subTaskService.mergeSkills(draft(null))).containsExactly("eng-verification");
             assertThat(subTaskService.mergeSkills(draft(List.of()))).containsExactly("eng-verification");
@@ -116,14 +94,14 @@ class SubTaskServiceMergeSkillsTest {
         @Test
         @DisplayName("null 子任务安全：不 NPE，返回任务级或空列表")
         void shouldHandleNullSubTask() {
-            doReturn(List.of()).when(subTaskService).requiredSkillsOf(null);
+            doReturn(List.of()).when(queryService).requiredSkillsOf(null);
             assertThat(subTaskService.mergeSkills((SubTask) null)).isEmpty();
         }
 
         @Test
         @DisplayName("任务级 null / 子任务级空白标签均被过滤，结果恒非 null")
         void shouldFilterBlankAndNullSkills() {
-            doReturn(List.of()).when(subTaskService).requiredSkillsOf(100L);
+            doReturn(List.of()).when(queryService).requiredSkillsOf(100L);
             SubTask subTask = draft(java.util.Arrays.asList("shell", " ", null));
             assertThat(subTaskService.mergeSkills(subTask)).containsExactly("shell");
         }

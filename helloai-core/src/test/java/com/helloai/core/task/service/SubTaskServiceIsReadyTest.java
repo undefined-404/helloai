@@ -1,87 +1,60 @@
 package com.helloai.core.task.service;
 
-import com.helloai.core.agent.service.RewardService;
-import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
-import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
-import com.helloai.core.agent.event.AgentEventRecorder;
-import com.helloai.core.agent.service.HeartbeatService;
-import com.helloai.core.agent.service.AgentInboxService;
-import com.helloai.core.agent.service.AgentOutboxService;
-import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.agent.session.service.AgentSessionService;
-import com.helloai.common.config.AgentDispatchProperties;
-import com.helloai.common.config.WatchdogProperties;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
-import com.helloai.core.task.score.ImplicitScoreCalculator;
+import com.helloai.core.task.service.impl.SubTaskLeaseService;
+import com.helloai.core.task.service.impl.SubTaskQueryService;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
-import com.helloai.core.task.service.AttachmentService;
+import com.helloai.core.task.service.impl.SubTaskStateMachineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
  * SubTaskService.isReady 依赖判定单元测试（内循环依赖编排）：
  * 空依赖直接就绪 / 全部 DONE 就绪 / 部分未 DONE 阻塞 / null 防御。
+ *
+ * <p><b>RM9-b 装配口径变更（断言语义未改）</b>：{@code isReady} / {@code listReviewOrphans}
+ * 分别随只读簇与租约簇迁出，原先经门面 spy 拦截 MyBatis-Plus 链式 {@code lambdaQuery()}
+ * 的做法改为直接对同域 {@code SubTaskMapper} 设桩 —— 被断言的行为（依赖未就绪不发查询 /
+ * 人工介入标记剔除）与原先逐条一致。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskService.isReady")
 class SubTaskServiceIsReadyTest {
 
-    private SubTaskService subTaskService;
+    @Mock private SubTaskMapper subTaskMapper;
+    @Mock private ObjectProvider<TaskService> taskServiceProvider;
+    @Mock private ReviewPort reviewPort;
+    @Mock private TaskTimelineService taskTimelineService;
+    @Mock private AgentSessionService agentSessionService;
 
-    @SuppressWarnings("unchecked")
-    private final LambdaQueryChainWrapper<SubTask> queryChain = mock(LambdaQueryChainWrapper.class);
+    private SubTaskService subTaskService;
 
     @BeforeEach
     void setUp() {
-        SubTaskService real = new SubTaskServiceImpl(
-                mock(AgentOutboxService.class), mock(AgentInboxService.class),
-                mock(org.springframework.beans.factory.ObjectProvider.class), mock(HeartbeatService.class),
-                mock(ReviewPort.class), mock(ImplicitScoreCalculator.class),
-                mock(RewardService.class), mock(ApplicationEventPublisher.class),
-                mock(TaskTimelineService.class),
-                new AgentDispatchProperties(), mock(ConcurrencyQuotaService.class),
-                // 租约看门狗配置（默认值即可，isReady 不涉及租约）
-                new WatchdogProperties(),
-                // 执行会话服务 mock（isReady 不触达，仅防 NPE）
-                mock(AgentSessionService.class),
-                // §6.104 打回失效：ObjectProvider mock 不返任何 bean，getIfAvailable 返回 null 内部判空跳过
-                mock(org.springframework.beans.factory.ObjectProvider.class),
-                // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（isReady 不触达，仅防 NPE）
-                mock(org.springframework.beans.factory.ObjectProvider.class),
-                // 事件记录器 mock（rework/reworkFresh 埋点不验证，仅防 NPE）
-                mock(AgentEventRecorder.class),
-                // 共享预算 mapper mock（isReady 不触达，仅防 NPE）
-                mock(SubTaskMapper.class));
-        subTaskService = spy(real);
-        // lambdaQuery 链式 mock：绕开无 Spring 上下文时的 baseMapper 依赖
-        lenient().doReturn(queryChain).when(subTaskService).lambdaQuery();
-        lenient().when(queryChain.in(any(), any(List.class))).thenReturn(queryChain);
-        lenient().when(queryChain.eq(any(), any())).thenReturn(queryChain);
-        lenient().when(queryChain.le(any(), any())).thenReturn(queryChain);
-        // orderByAsc 在本版本为单 SFunction 参数：显式类型匹配
-        lenient().when(queryChain.orderByAsc(any(SFunction.class))).thenReturn(queryChain);
-        lenient().when(queryChain.last(anyString())).thenReturn(queryChain);
-        lenient().when(queryChain.list()).thenReturn(List.of());
+        SubTaskQueryService queryService = new SubTaskQueryService(subTaskMapper, taskServiceProvider, reviewPort);
+        SubTaskStateMachineService stateMachineService = mock(SubTaskStateMachineService.class);
+        SubTaskLeaseService leaseService = new SubTaskLeaseService(
+                subTaskMapper, taskTimelineService, agentSessionService, stateMachineService);
+        subTaskService = new SubTaskServiceImpl(
+                subTaskMapper, queryService, stateMachineService, leaseService);
     }
 
     private SubTask withDeps(List<Long> deps) {
@@ -102,20 +75,20 @@ class SubTaskServiceIsReadyTest {
     void shouldBeReadyWhenNoDependencies() {
         assertThat(subTaskService.isReady(withDeps(null))).isTrue();
         assertThat(subTaskService.isReady(withDeps(List.of()))).isTrue();
-        verify(subTaskService, never()).lambdaQuery();
+        verify(subTaskMapper, never()).selectCount(any());
     }
 
     @Test
     @DisplayName("依赖全部 DONE 时就绪")
     void shouldBeReadyWhenAllDependenciesDone() {
-        lenient().when(queryChain.count()).thenReturn(2L);
+        when(subTaskMapper.selectCount(any())).thenReturn(2L);
         assertThat(subTaskService.isReady(withDeps(List.of(1L, 2L)))).isTrue();
     }
 
     @Test
     @DisplayName("依赖部分未 DONE 时阻塞")
     void shouldNotBeReadyWhenSomeDependencyNotDone() {
-        lenient().when(queryChain.count()).thenReturn(1L);
+        when(subTaskMapper.selectCount(any())).thenReturn(1L);
         assertThat(subTaskService.isReady(withDeps(List.of(1L, 2L)))).isFalse();
     }
 
@@ -159,7 +132,7 @@ class SubTaskServiceIsReadyTest {
         // 已人工介入的任务：应被排除
         SubTask intervened = reviewTask(12L, Map.of("manualIntervention", Map.of("reason", "rework_limit")));
         // 可变列表：listReviewOrphans 内部会 removeIf
-        when(queryChain.list()).thenReturn(new java.util.ArrayList<>(List.of(stuck, intervened)));
+        when(subTaskMapper.selectList(any())).thenReturn(new java.util.ArrayList<>(List.of(stuck, intervened)));
 
         List<SubTask> orphans = subTaskService.listReviewOrphans(60, 10);
 
@@ -171,7 +144,7 @@ class SubTaskServiceIsReadyTest {
     void shouldKeepPlainOrphanReview() {
         SubTask plain = reviewTask(13L, null);
         // 可变列表：listReviewOrphans 内部会 removeIf
-        when(queryChain.list()).thenReturn(new java.util.ArrayList<>(List.of(plain)));
+        when(subTaskMapper.selectList(any())).thenReturn(new java.util.ArrayList<>(List.of(plain)));
 
         List<SubTask> orphans = subTaskService.listReviewOrphans(60, 10);
 

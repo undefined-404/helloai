@@ -17,7 +17,11 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
+import com.helloai.core.task.service.impl.SubTaskLeaseService;
+import com.helloai.core.task.service.impl.SubTaskNotificationService;
+import com.helloai.core.task.service.impl.SubTaskQueryService;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
+import com.helloai.core.task.service.impl.SubTaskStateMachineService;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,8 +37,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -50,6 +54,11 @@ import static org.mockito.Mockito.when;
  *   <li>enforceMaxConcurrent=false 时放行（E2 前行为）</li>
  * </ul>
  * </p>
+ *
+ * <p><b>RM9-b 装配口径变更（断言语义未改）</b>：{@code assignNext} 已迁入
+ * {@link SubTaskStateMachineService}，行读取/写入改设到同域 {@code SubTaskMapper}；
+ * 「不落库」的判定由门面 {@code changeStatus} 校验改为状态机类上的 {@code changeStatus}
+ * 校验（spy 以记录自调用），断言语义一一对应。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskService.assignNext 并发额度防护（E2）")
@@ -75,27 +84,33 @@ class SubTaskServiceQuotaTest {
     // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（quota 用例不触达，防 NPE）
     @Mock private org.springframework.beans.factory.ObjectProvider<TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
-    // 共享预算原子累加 mapper（构造注入，quota 用例不触达，仅防 NPE）
+    // 共享预算原子累加 mapper（状态机行读写谓词，quota 用例经状态机触达）
     @Mock private SubTaskMapper subTaskMapper;
     // 执行会话服务（quota 用例不触达，仅防 NPE）
     @Mock private AgentSessionService agentSessionService;
 
     private SubTaskService subTaskService;
+    private SubTaskStateMachineService stateMachineService;
     private AgentDispatchProperties dispatchProps;
 
     @BeforeEach
     void setUp() {
         dispatchProps = new AgentDispatchProperties();
         dispatchProps.setEnforceMaxConcurrent(true);
-        subTaskService = spy(new SubTaskServiceImpl(
-                agentOutboxService, agentInboxService, agentServiceProvider,
-                heartbeatService, reviewPort, implicitScoreCalculator,
-                rewardService, applicationEventPublisher, taskTimelineService,
-                dispatchProps, concurrencyQuotaService,
+        SubTaskQueryService queryService = new SubTaskQueryService(
+                subTaskMapper, taskServiceProvider, reviewPort);
+        SubTaskNotificationService notificationService = new SubTaskNotificationService(
+                agentInboxService, agentServiceProvider, applicationEventPublisher, reviewPort, queryService);
+        stateMachineService = spy(new SubTaskStateMachineService(
+                subTaskMapper, notificationService, agentOutboxService, heartbeatService,
+                concurrencyQuotaService, dispatchProps,
                 // 租约看门狗配置（assignNext 不涉及租约，默认值即可）
-                new WatchdogProperties(), agentSessionService, attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
-                // 共享预算 mapper（构造注入）
-                subTaskMapper));
+                new WatchdogProperties(), taskTimelineService, agentServiceProvider,
+                attachmentServiceProvider, agentEventRecorder, implicitScoreCalculator,
+                rewardService, reviewPort, applicationEventPublisher));
+        SubTaskLeaseService leaseService = mock(SubTaskLeaseService.class);
+        subTaskService = new SubTaskServiceImpl(
+                subTaskMapper, queryService, stateMachineService, leaseService);
         // §6.140 收口：行锁改走 AgentService.lockByIdForUpdate（ObjectProvider 懒解析）；
         // lenient：状态校验失败路径不触发行锁，避免 UnnecessaryStubbing
         lenient().when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
@@ -105,7 +120,7 @@ class SubTaskServiceQuotaTest {
         SubTask subTask = new SubTask();
         subTask.setId(SUB_TASK_ID);
         subTask.setStatus(SubTaskStatus.PENDING);
-        doReturn(subTask).when(subTaskService).getById(SUB_TASK_ID);
+        when(subTaskMapper.selectById(SUB_TASK_ID)).thenReturn(subTask);
     }
 
     @Test
@@ -119,21 +134,21 @@ class SubTaskServiceQuotaTest {
 
         verify(agentService).lockByIdForUpdate(AGENT_ID);
         verify(concurrencyQuotaService).canAccept(AGENT_ID);
-        verify(subTaskService, never()).changeStatus(anyLong(), any(SubTaskStatus.class), anyLong());
+        verify(stateMachineService, never()).changeStatus(anyLong(), any(SubTaskStatus.class), anyLong());
     }
 
     @Test
     @DisplayName("未满：锁后正常分配为 ASSIGNED 并落库")
     void shouldAssignWhenHasCapacity() {
         stubPendingSubTask();
-        doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+        when(subTaskMapper.updateById(any(SubTask.class))).thenReturn(1);
         when(concurrencyQuotaService.canAccept(AGENT_ID)).thenReturn(true);
 
         subTaskService.assignNext(AGENT_ID, SUB_TASK_ID);
 
         verify(agentService).lockByIdForUpdate(AGENT_ID);
         ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService).updateById(captor.capture());
+        verify(subTaskMapper).updateById(captor.capture());
         assertThat(captor.getValue().getStatus()).isEqualTo(SubTaskStatus.ASSIGNED);
         assertThat(captor.getValue().getAssignedAgentId()).isEqualTo(AGENT_ID);
     }
@@ -143,13 +158,13 @@ class SubTaskServiceQuotaTest {
     void shouldIgnoreQuotaWhenDisabled() {
         dispatchProps.setEnforceMaxConcurrent(false);
         stubPendingSubTask();
-        doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+        when(subTaskMapper.updateById(any(SubTask.class))).thenReturn(1);
         // canAccept 默认 false（Mockito boolean 默认值），关闭开关后不应被调用
         subTaskService.assignNext(AGENT_ID, SUB_TASK_ID);
 
         verify(agentService).lockByIdForUpdate(AGENT_ID);
         verify(concurrencyQuotaService, never()).canAccept(anyLong());
-        verify(subTaskService).updateById(any(SubTask.class));
+        verify(subTaskMapper).updateById(any(SubTask.class));
     }
 
     @Test
@@ -158,7 +173,7 @@ class SubTaskServiceQuotaTest {
         SubTask done = new SubTask();
         done.setId(SUB_TASK_ID);
         done.setStatus(SubTaskStatus.DONE);
-        doReturn(done).when(subTaskService).getById(SUB_TASK_ID);
+        when(subTaskMapper.selectById(SUB_TASK_ID)).thenReturn(done);
 
         assertThatThrownBy(() -> subTaskService.assignNext(AGENT_ID, SUB_TASK_ID))
                 .isInstanceOf(BizException.class);
