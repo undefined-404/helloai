@@ -109,4 +109,78 @@ class RelativeTimeNormalizerTest {
         String once = normalizer.normalize("今天上证指数 上周五数据", ANCHOR);
         assertThat(normalizer.normalize(once, ANCHOR)).isEqualTo(once);
     }
+
+    // ════════════════════════════════════════════════════════════
+    //  freshnessFor（W-3：动态 freshness 档位判定）
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("freshnessFor：单点/实时词 → oneDay")
+    void freshnessFor_pointWords_mapToOneDay() {
+        assertThat(normalizer.freshnessFor("今天的上证指数", ANCHOR)).isEqualTo("oneDay");
+        assertThat(normalizer.freshnessFor("昨日行情", ANCHOR)).isEqualTo("oneDay");
+        assertThat(normalizer.freshnessFor("实时金价", ANCHOR)).isEqualTo("oneDay");
+        assertThat(normalizer.freshnessFor("最新消息", ANCHOR)).isEqualTo("oneDay");
+    }
+
+    @Test
+    @DisplayName("freshnessFor：周区间词 → oneWeek")
+    void freshnessFor_weekWords_mapToOneWeek() {
+        assertThat(normalizer.freshnessFor("本周新闻", ANCHOR)).isEqualTo("oneWeek");
+        assertThat(normalizer.freshnessFor("上周的复盘", ANCHOR)).isEqualTo("oneWeek");
+        assertThat(normalizer.freshnessFor("最近一周AI动态", ANCHOR)).isEqualTo("oneWeek");
+        assertThat(normalizer.freshnessFor("近7天天气", ANCHOR)).isEqualTo("oneWeek");
+    }
+
+    @Test
+    @DisplayName("freshnessFor：月区间词 → oneMonth")
+    void freshnessFor_monthWords_mapToOneMonth() {
+        assertThat(normalizer.freshnessFor("本月行业报告", ANCHOR)).isEqualTo("oneMonth");
+        assertThat(normalizer.freshnessFor("上月数据", ANCHOR)).isEqualTo("oneMonth");
+        assertThat(normalizer.freshnessFor("最近30天趋势", ANCHOR)).isEqualTo("oneMonth");
+    }
+
+    @Test
+    @DisplayName("freshnessFor：年区间/宽泛最新 → oneYear")
+    void freshnessFor_yearWords_mapToOneYear() {
+        assertThat(normalizer.freshnessFor("今年的市场规模", ANCHOR)).isEqualTo("oneYear");
+        assertThat(normalizer.freshnessFor("去年的财报", ANCHOR)).isEqualTo("oneYear");
+        assertThat(normalizer.freshnessFor("最新技术动态", ANCHOR)).isEqualTo("oneYear");
+    }
+
+    @Test
+    @DisplayName("freshnessFor：无时效词 → noLimit")
+    void freshnessFor_withoutTimeWords_noLimit() {
+        assertThat(normalizer.freshnessFor("Python 教程", ANCHOR)).isEqualTo("noLimit");
+        assertThat(normalizer.freshnessFor("Java 并发面试题", ANCHOR)).isEqualTo("noLimit");
+        assertThat(normalizer.freshnessFor("膝盖旧伤 减脂训练计划 饮食方案 建议", ANCHOR)).isEqualTo("noLimit");
+    }
+
+    @Test
+    @DisplayName("freshnessFor：绝对日期反推（normalize 输出格式），按距今天数收紧")
+    void freshnessFor_absoluteDate_reverseInferFreshness() {
+        // normalize 输出 yyyy-MM-dd；锚点 2026-08-31
+        assertThat(normalizer.freshnessFor("2026-08-31的上证指数", ANCHOR)).isEqualTo("oneDay");
+        assertThat(normalizer.freshnessFor("2026-08-25 2026-08-31的行情", ANCHOR)).isEqualTo("oneWeek");
+        assertThat(normalizer.freshnessFor("2026-08-01的数据", ANCHOR)).isEqualTo("oneMonth");
+        assertThat(normalizer.freshnessFor("2025-12-31的年度总结", ANCHOR)).isEqualTo("oneYear");
+        // 一年以前 → noLimit
+        assertThat(normalizer.freshnessFor("2024-08-31的历史事件", ANCHOR)).isEqualTo("noLimit");
+    }
+
+    @Test
+    @DisplayName("freshnessFor：与 normalize 联动——归一化后的日期驱动 freshness")
+    void freshnessFor_normalizeOutput_feedsBackToFreshness() {
+        String normalized = normalizer.normalize("最近3天涨幅", ANCHOR);
+        assertThat(normalized).isEqualTo("2026-08-29 2026-08-31涨幅");
+        // 归一化后日期区间 ≤7 天 → oneWeek（freshness 判定与词表同源）
+        assertThat(normalizer.freshnessFor(normalized, ANCHOR)).isEqualTo("oneWeek");
+    }
+
+    @Test
+    @DisplayName("freshnessFor：null/空白 → noLimit")
+    void freshnessFor_nullOrBlank_noLimit() {
+        assertThat(normalizer.freshnessFor(null, ANCHOR)).isEqualTo("noLimit");
+        assertThat(normalizer.freshnessFor("   ", ANCHOR)).isEqualTo("noLimit");
+    }
 }

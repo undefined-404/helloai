@@ -2,6 +2,7 @@ package com.helloai.core.planner.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.planner.clarify.RelativeTimeNormalizer;
 import com.helloai.core.planner.search.WebSearchCredentialKeyStore;
 import com.helloai.core.planner.search.WebSearchResult;
 import org.junit.jupiter.api.DisplayName;
@@ -39,7 +40,8 @@ class AiSearchWebSearchServiceImplTest {
 
     private AiSearchWebSearchServiceImpl newService() {
         when(properties.getAiSearchTimeoutMs()).thenReturn(25_000L); // HttpClient.connectTimeout 需 >0
-        return new AiSearchWebSearchServiceImpl(properties, credentialKeyStore, new ObjectMapper());
+        return new AiSearchWebSearchServiceImpl(properties, credentialKeyStore,
+                new RelativeTimeNormalizer(), new ObjectMapper());
     }
 
     @SuppressWarnings("unchecked")
@@ -197,5 +199,52 @@ class AiSearchWebSearchServiceImplTest {
 
         assertThat(results).hasSize(1);
         assertThat(service.answerSummary("q")).contains("博查侧生成的需求总结");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  buildRequestBody（W-3：freshness 动态判定接线）
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("buildRequestBody：含时效词 → freshness 收紧（今天→oneDay，本周→oneWeek）")
+    void buildRequestBody_timeSensitiveQuery_dynamicFreshness() throws Exception {
+        when(properties.isAiSearchAnswer()).thenReturn(true);
+        AiSearchWebSearchServiceImpl service = newService();
+        java.util.regex.Pattern fresh = java.util.regex.Pattern.compile("\"freshness\":\"(\\w+)\"");
+
+        String today = service.buildRequestBody("今天上证指数", 15);
+        java.util.regex.Matcher mToday = fresh.matcher(today);
+        assertThat(mToday.find()).isTrue();
+        assertThat(mToday.group(1)).isEqualTo("oneDay");
+
+        String week = service.buildRequestBody("本周AI新闻", 15);
+        java.util.regex.Matcher mWeek = fresh.matcher(week);
+        assertThat(mWeek.find()).isTrue();
+        assertThat(mWeek.group(1)).isEqualTo("oneWeek");
+    }
+
+    @Test
+    @DisplayName("buildRequestBody：无时效词 → noLimit；answer 透传 properties.isAiSearchAnswer")
+    void buildRequestBody_plainQuery_noLimitAndAnswerPassthrough() throws Exception {
+        when(properties.isAiSearchAnswer()).thenReturn(true);
+        AiSearchWebSearchServiceImpl service = newService();
+
+        String body = service.buildRequestBody("Python 教程", 15);
+        assertThat(body)
+                .contains("\"freshness\":\"noLimit\"")
+                .contains("\"answer\":true")
+                .contains("\"count\":15");
+    }
+
+    @Test
+    @DisplayName("buildRequestBody：answer 关闭时透传 false")
+    void buildRequestBody_answerDisabled_passthroughFalse() throws Exception {
+        when(properties.isAiSearchAnswer()).thenReturn(false);
+        AiSearchWebSearchServiceImpl service = newService();
+
+        String body = service.buildRequestBody("最新行业动态", 15);
+        assertThat(body)
+                .contains("\"freshness\":\"oneYear\"") // 宽泛时效词「最新」→ oneYear
+                .contains("\"answer\":false");
     }
 }

@@ -2146,6 +2146,7 @@ class RequirementClarifyServiceTest {
             when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
             when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
             when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
+            when(webSearchProperties.isAiSearchAnswer()).thenReturn(true); // W-1：编排器透传 answer 请求
             when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
                     ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
                             WebSearchResult.builder().title("搜索结果")
@@ -2163,7 +2164,9 @@ class RequirementClarifyServiceTest {
             verify(toolExecutor).execute(eq("web_search"), argsCaptor.capture());
             assertThat(argsCaptor.getValue())
                     .doesNotContain("https://")
-                    .contains("快速上手");
+                    .contains("快速上手")
+                    // W-1：编排器请求 answer（withAnswer=true 随 webSearchProperties.isAiSearchAnswer()）
+                    .contains("\"withAnswer\":true");
             // 直取被提取出的 URL
             verify(pageFetchService).fetch("https://open.maic.chat/");
             // payload：直取来源置顶可见 + fetched 直取记录落键
