@@ -2,6 +2,7 @@ package com.helloai.core.task.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.Version;
 import com.helloai.common.base.BaseEntity;
 import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.TaskStatus;
@@ -95,4 +96,24 @@ public class Task extends BaseEntity {
      * 调度候选取数按优先级出队（C4 设计 §3.1/§3.2）。</p>
      */
     private String priority;
+
+    /**
+     * 乐观锁版本号（`V114` 新增列，与 {@code SubTask} / {@code AgentExecutionRecord} 同口径）。
+     *
+     * <p><b>存在理由</b>：{@code TaskServiceImpl} 的 {@code updateStatus} / {@code updatePriority} /
+     * 配置更新 / 重新发布四处都是「{@code getById} 载入 → 改字段 → {@code updateById}(整实体)」。
+     * 缺本字段时，两次读改写交错会让后写者用<b>陈旧的整行快照</b>覆盖前者刚写入的字段
+     * （丢失更新），且全程无报错。加 {@code @Version} 后由
+     * {@code OptimisticLockerInnerInterceptor} 自动完成 version 比较与自增（规范 §15），
+     * 冲突更新退化为 0 行受影响而不再静默覆盖。</p>
+     *
+     * <p><b>契约纪律</b>：本字段属持久层并发控制，按 {@code CODE_STYLE §7.2 / W10}
+     * <b>不得进入跨域契约</b>（{@code TaskView} / {@code TaskDraft} / {@code PlannerAgentRef}
+     * 等投影一律不携带），否则消费方会被迫复现 CAS 语义。</p>
+     *
+     * <p><b>兼容性</b>：{@code version} 为 null 时不触发 CAS 条件（MyBatis-Plus 行为），
+     * 故「新建实体后立即 {@code updateById}」的路径行为与迁移前一致。</p>
+     */
+    @Version
+    private Integer version;
 }
