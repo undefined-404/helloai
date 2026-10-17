@@ -1,4 +1,4 @@
-package com.helloai.core.agent.service.impl;
+package com.helloai.core.agent.projection;
 
 import com.helloai.core.agent.AgentCapability;
 import com.helloai.core.agent.entity.Agent;
@@ -14,6 +14,12 @@ import java.util.List;
  * 且快照契约已归属提供方 agent 域；集中一处可避免 planner / review / task 三域各自
  * 复制映射口径造成漂移。快照类本身位于 {@code agent.port}，<b>不得</b> import 消费方实体。</p>
  *
+ * <p><b>命名（2026-10-17 命名整改）</b>：原名 {@code AgentProfileSnapshotMapper}。§17 将 {@code *Mapper}
+ * 保留给 MyBatis 持久化映射，本类与 DB 无关（纯内存投影），故去 {@code Mapper} 后缀并迁出
+ * {@code service.impl}（该包只应容纳 {@code *ServiceImpl}），置入 {@code agent.projection}。后缀取
+ * {@code Projection} 而非裸 {@code AgentProfileSnapshot}，以避免与 {@code agent.port.AgentProfileSnapshot}
+ * 简单名混淆。</p>
+ *
  * <p><b>映射纪律</b>：快照是全量<b>读投影</b>，映射<b>不做业务判定</b>——只有一处
  * <b>提供方派生</b>例外：</p>
  * <ul>
@@ -24,9 +30,9 @@ import java.util.List;
  * </ul>
  * <p>其余字段仅逐项原样投影，<b>不解释、不校验、不归一化</b>。</p>
  */
-public final class AgentProfileSnapshotMapper {
+public final class AgentProfileSnapshotProjection {
 
-    private AgentProfileSnapshotMapper() {
+    private AgentProfileSnapshotProjection() {
     }
 
     /**

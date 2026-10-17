@@ -19,6 +19,8 @@ import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.HeartbeatService;
+import com.helloai.core.agent.service.McpReadModelService;
+import com.helloai.core.agent.service.McpTaskClaimService;
 import com.helloai.core.agent.service.McpToolService.AckResult;
 import com.helloai.core.agent.service.McpToolService.ClaimSubTaskResult;
 import com.helloai.core.agent.service.McpToolService.PullTasksResult;
@@ -46,7 +48,7 @@ import java.util.Map;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class McpTaskClaimService {
+public class McpTaskClaimServiceImpl implements McpTaskClaimService {
 
     private final AgentService agentService;
     private final AgentInboxService agentInboxService;
@@ -69,6 +71,7 @@ public class McpTaskClaimService {
      *                    补齐配额），每条消息带 read 状态位，供外部 Agent 轮询时区分新消息与已 ack 历史；
      *                    false（默认）保持原语义仅返回未读。
      */
+    @Override
     public PullTasksResult pullTasks(Long agentId, String role, int max, boolean includeRead) {
         // 应用参数约束（agent_mcp_server.param_constraints.max 优先）
         Map<String, Object> constraints = agentMcpServerService.getParamConstraints(agentId, "pullTasks");
@@ -132,6 +135,7 @@ public class McpTaskClaimService {
      * @param agentId   Agent ID
      * @param messageId 格式 "inbox-{id}"
      */
+    @Override
     public AckResult ack(Long agentId, String messageId) {
         Long inboxId = parseInboxId(messageId);
         try {
@@ -153,6 +157,7 @@ public class McpTaskClaimService {
      *
      * @return claimed=true 表示认领成功，claimed=false 表示已被他人抢走或状态已变
      */
+    @Override
     public ClaimSubTaskResult claimSubTask(Long agentId, Long subTaskId) {
         SubTaskSnapshot subTask = subTaskQueryPort.findById(subTaskId);
         if (subTask == null) {
@@ -291,6 +296,7 @@ public class McpTaskClaimService {
      * 使 Agent 重试调用安全。状态推进复用 {@link SubTaskCommandPort#start}，其内部经
      * task 域状态机校验合法性，并由 SubTask 的 {@code @Version} 乐观锁兜住并发。</p>
      */
+    @Override
     public StartSubTaskResult startSubTask(Long agentId, Long subTaskId) {
         StartSubTaskResult result = new StartSubTaskResult();
         result.setSubTaskId(subTaskId);

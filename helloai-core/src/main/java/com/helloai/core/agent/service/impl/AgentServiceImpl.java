@@ -25,6 +25,7 @@ import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.port.SubTaskStatsPort;
 import com.helloai.core.agent.port.TaskTeamMemberPort;
+import com.helloai.core.agent.projection.AgentProfileSnapshotProjection;
 import com.helloai.core.agent.service.AgentCredentialService;
 import com.helloai.core.agent.service.AgentLifecycleService;
 import com.helloai.core.agent.service.AgentMcpServerService;
@@ -470,37 +471,37 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
 
     // ══════════════════════════════════════════════════════════════
     //  读侧只读快照出口（RM5 批 2：planner/review/task 三域前向实体泄漏收口）
-    //  各方法逐字镜像一条既有查询 + AgentProfileSnapshotMapper 映射，零新增 DB 往返。
+    //  各方法逐字镜像一条既有查询 + AgentProfileSnapshotProjection 映射，零新增 DB 往返。
     // ══════════════════════════════════════════════════════════════
 
     /** 按 id 取快照（镜像 getById：不存在/已删返回 null）。 */
     @Override
     public AgentProfileSnapshot getProfileById(Long agentId) {
-        return AgentProfileSnapshotMapper.toSnapshot(getById(agentId));
+        return AgentProfileSnapshotProjection.toSnapshot(getById(agentId));
     }
 
     /** 按 id 集合取快照（镜像 listByIds：绝不返回 null）。 */
     @Override
     public List<AgentProfileSnapshot> listProfilesByIds(Collection<Long> ids) {
-        return AgentProfileSnapshotMapper.toSnapshots(listByIds(ids));
+        return AgentProfileSnapshotProjection.toSnapshots(listByIds(ids));
     }
 
     /** 按角色取快照（镜像 listByRole：绝不返回 null）。 */
     @Override
     public List<AgentProfileSnapshot> listProfilesByRole(AgentRole role) {
-        return AgentProfileSnapshotMapper.toSnapshots(listByRole(role));
+        return AgentProfileSnapshotProjection.toSnapshots(listByRole(role));
     }
 
     /** 全部 ACTIVE 快照，score DESC（镜像 listActive：绝不返回 null）。 */
     @Override
     public List<AgentProfileSnapshot> listActiveProfiles() {
-        return AgentProfileSnapshotMapper.toSnapshots(listActive());
+        return AgentProfileSnapshotProjection.toSnapshots(listActive());
     }
 
     /** 全量快照，score DESC（镜像 listAllOrderByScoreDesc：绝不返回 null）。 */
     @Override
     public List<AgentProfileSnapshot> listProfilesOrderByScoreDesc() {
-        return AgentProfileSnapshotMapper.toSnapshots(listAllOrderByScoreDesc());
+        return AgentProfileSnapshotProjection.toSnapshots(listAllOrderByScoreDesc());
     }
 
     // ══════════════════════════════════════════════════════════════

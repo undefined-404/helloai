@@ -23,19 +23,25 @@ import org.springframework.stereotype.Service;
  *
  * <p>原子防线不在本类（查询侧），而在 {@code SubTaskService.assignNext}
  * 的 agent 行锁 + 锁内判定（见 SubTaskServiceImpl），保证并发派发不超发。</p>
+ *
+ * <p><b>命名（2026-10-17 命名整改）</b>：原名 {@code InFlightDbQuotaService}。按
+ * {@code HelloAI_CODE_STYLE.md §8.1}，{@code {domain}.service.impl} 内的实现类须以
+ * {@code {接口名}ServiceImpl} 命名，故改为 {@code ConcurrencyQuotaServiceImpl}；
+ * 「InFlightDb（DB 在飞数实时统计）」这一<b>策略限定词</b>改由本 javadoc 承载，
+ * 语义未丢。</p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class InFlightDbQuotaService implements ConcurrencyQuotaService {
+public class ConcurrencyQuotaServiceImpl implements ConcurrencyQuotaService {
 
     /** capabilities 中的并发额度键（能力声明，无租约时生效）。 */
     public static final String MAX_CONCURRENT_CAPABILITY_KEY = "maxConcurrentTasks";
 
     // 懒解析打破循环：SubTaskServiceImpl 构造注入 ConcurrencyQuotaService（本类），
     // 本类再直接注入 SubTaskStatsPort（→ 适配器 → SubTaskServiceImpl）/AgentService/AgentDutyLeaseService
-    // 会形成多条构造器环（subTaskServiceImpl ↔ inFlightDbQuotaService、inFlightDbQuotaService →
-    // agentDutyLeaseServiceImpl → subTaskServiceImpl、inFlightDbQuotaService → agentServiceImpl，§6.86 引入，重启暴露）
+    // 会形成多条构造器环（subTaskServiceImpl ↔ concurrencyQuotaServiceImpl、concurrencyQuotaServiceImpl →
+    // agentDutyLeaseServiceImpl → subTaskServiceImpl、concurrencyQuotaServiceImpl → agentServiceImpl，§6.86 引入，重启暴露）
     private final ObjectProvider<SubTaskStatsPort> subTaskStatsPortProvider;
     private final ObjectProvider<AgentDutyLeaseService> agentDutyLeaseServiceProvider;
     private final ObjectProvider<AgentService> agentServiceProvider;

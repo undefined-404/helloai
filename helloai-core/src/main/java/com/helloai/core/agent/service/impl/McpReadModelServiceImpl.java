@@ -9,6 +9,7 @@ import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskRunningSpecPort;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
+import com.helloai.core.agent.service.McpReadModelService;
 import com.helloai.core.agent.service.McpToolService.AttachmentItem;
 import com.helloai.core.agent.service.McpToolService.GetDepsSummaryResult;
 import com.helloai.core.agent.service.McpToolService.SubTaskDetail;
@@ -40,7 +41,7 @@ import java.util.Map;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class McpReadModelService {
+public class McpReadModelServiceImpl implements McpReadModelService {
 
     private final SubTaskQueryPort subTaskQueryPort;
     private final TaskRunningSpecPort taskRunningSpecPort;
@@ -56,6 +57,7 @@ public class McpReadModelService {
      * {@code context.lastExecution.output}），单条超 {@link UpstreamAttachmentRenderer#DEP_CONTENT_MAX_CHARS} 字符截断并打标；
      * 任何异常降级为 degraded（deps 为空，不阻断调用），与执行链降级哲学一致。</p>
      */
+    @Override
     public GetDepsSummaryResult getDepsSummary(Long agentId, Long subTaskId) {
         SubTaskSnapshot subTask = subTaskQueryPort.findById(subTaskId);
         if (subTask == null) {
@@ -214,6 +216,7 @@ public class McpReadModelService {
      * 子任务可查——前者覆盖认领后开工 / 返工 / 重连，后者覆盖认领前评估；已转给他人、
      * 已回收或已终结的子任务对非归属者不可见。</p>
      */
+    @Override
     public SubTaskDetail getSubTaskDetail(Long agentId, Long subTaskId) {
         SubTaskSnapshot subTask = subTaskQueryPort.findById(subTaskId);
         if (subTask == null) {
@@ -241,6 +244,7 @@ public class McpReadModelService {
      * （RM9-a 抽取后成为 {@code McpTaskClaimService → McpReadModelService} 的单向依赖，
      * 无环、无 helper 环）。</p>
      */
+    @Override
     public SubTaskDetail buildSubTaskDetail(SubTaskSnapshot subTask) {
         SubTaskDetail detail = new SubTaskDetail();
         detail.setSubTaskId(subTask.id());

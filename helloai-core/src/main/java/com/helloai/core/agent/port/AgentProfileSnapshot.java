@@ -24,7 +24,7 @@ import lombok.Builder;
  * 天然具备；API_KEY_LLM 需 {@code capabilities.supportsMCP=true}），<b>null 实体视为 true</b>。
  * 消费方直接读派生布尔，无需复制 agent 域判定规则。</p>
  *
- * @see com.helloai.core.agent.service.impl.AgentProfileSnapshotMapper
+ * @see com.helloai.core.agent.projection.AgentProfileSnapshotProjection
  */
 @Builder
 public record AgentProfileSnapshot(

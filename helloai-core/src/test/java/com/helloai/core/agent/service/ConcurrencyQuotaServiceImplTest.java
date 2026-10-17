@@ -2,7 +2,7 @@ package com.helloai.core.agent.service;
 
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
-import com.helloai.core.agent.service.impl.InFlightDbQuotaService;
+import com.helloai.core.agent.service.impl.ConcurrencyQuotaServiceImpl;
 import com.helloai.core.agent.port.SubTaskStatsPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,15 +20,15 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
- * InFlightDbQuotaService 单元测试（E2 并发额度）。
+ * ConcurrencyQuotaServiceImpl 单元测试（E2 并发额度）。
  *
  * <p>验证额度解析优先级：值班租约 maxConcurrent &gt;
  * capabilities.maxConcurrentTasks 显式值 &gt; null（不限制），
  * 以及 canAccept 的占用边界（count &lt; quota 通过、count == quota 拒绝）。</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("InFlightDbQuotaService")
-class InFlightDbQuotaServiceTest {
+@DisplayName("ConcurrencyQuotaServiceImpl")
+class ConcurrencyQuotaServiceImplTest {
 
     private static final long AGENT_ID = 7L;
 
@@ -54,7 +54,7 @@ class InFlightDbQuotaServiceTest {
 
     @BeforeEach
     void setUp() {
-        quotaService = new InFlightDbQuotaService(
+        quotaService = new ConcurrencyQuotaServiceImpl(
                 subTaskStatsPortProvider, agentDutyLeaseServiceProvider, agentServiceProvider);
         // 懒解析：provider 返回实际 mock；lenient 避免严格模式对未使用 stub 报错
         lenient().when(subTaskStatsPortProvider.getIfAvailable()).thenReturn(subTaskStatsPort);

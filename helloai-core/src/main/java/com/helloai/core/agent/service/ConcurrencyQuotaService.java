@@ -11,11 +11,11 @@ package com.helloai.core.agent.service;
  * </ul>
  * </p>
  *
- * <p>默认实现 {@code InFlightDbQuotaService} 以 DB 实时统计为事实源（一条线，
- * 完成/改派/回收天然释放）；企业版可替换为 Redis 预扣实现（独立事实源 + 对账），
+ * <p>默认实现 {@code ConcurrencyQuotaServiceImpl}（InFlightDb 策略：DB 实时统计为事实源，
+ * 一条线，完成/改派/回收天然释放）；企业版可替换为 Redis 预扣实现（独立事实源 + 对账），
  * 接口保持不变。</p>
  *
- * @see com.helloai.core.agent.service.impl.InFlightDbQuotaService
+ * @see com.helloai.core.agent.service.impl.ConcurrencyQuotaServiceImpl
  * @see com.helloai.core.agent.executor.AgentSelector
  */
 public interface ConcurrencyQuotaService {

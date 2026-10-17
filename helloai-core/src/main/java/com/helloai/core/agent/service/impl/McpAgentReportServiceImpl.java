@@ -19,6 +19,7 @@ import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.HeartbeatService;
+import com.helloai.core.agent.service.McpAgentReportService;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.service.McpToolService.CheckInResult;
 import com.helloai.core.agent.service.McpToolService.CheckOutResult;
@@ -57,7 +58,7 @@ import java.util.List;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class McpAgentReportService {
+public class McpAgentReportServiceImpl implements McpAgentReportService {
 
     private final AgentService agentService;
     private final HeartbeatService heartbeatService;
@@ -92,6 +93,7 @@ public class McpAgentReportService {
      * {@code refreshDutyLease(agentId, true)}，故此处读到的租约已是<b>续租后</b>状态，
      * {@code remainingTtlSeconds} 语义与抽取前逐字一致。</p>
      */
+    @Override
     public HeartbeatResult heartbeat(Long agentId) {
         heartbeatService.seen(agentId);
 
@@ -131,6 +133,7 @@ public class McpAgentReportService {
      *
      * <p>上游已有产出直接复用其 storageUrl 登记即可，无需重复上传副本。</p>
      */
+    @Override
     public UploadArtifactResult uploadArtifact(Long agentId, Long subTaskId,
                                                 String fileName, String mimeType,
                                                 Long fileSize, String storageUrl) {
@@ -151,6 +154,7 @@ public class McpAgentReportService {
         return result;
     }
 
+    @Override
     public SubmitResultResult submitResult(Long agentId, Long subTaskId, String resultId,
                                           Boolean success, String output, String error, String finishReason,
                                           Integer tokenUsage) {
@@ -228,6 +232,7 @@ public class McpAgentReportService {
      * 上报任务阻塞。EXECUTOR 遇到无法自行解决的阻塞时调用。
      * 内部调用 SubTaskService.block()，自动通知所有 PLANNER 排障。
      */
+    @Override
     public ReportBlockedResult reportBlocked(Long agentId, Long subTaskId, String reason) {
         if (reason == null || reason.isBlank()) {
             throw new BizException("reason 不能为空");
@@ -269,6 +274,7 @@ public class McpAgentReportService {
      * @param maxConcurrent 最大并发子任务数，null 默认 1
      * @param ttlMinutes    租约有效期（分钟），null 时按 Agent 表现动态推断
      */
+    @Override
     public CheckInResult checkIn(Long agentId, String workMode, Integer maxConcurrent, Integer ttlMinutes,
                                  List<String> reportedSkills) {
         int ttl = agentDutyLeaseService.resolveTtlMinutes(agentId, ttlMinutes);
@@ -436,6 +442,7 @@ public class McpAgentReportService {
      * @param agentId Agent ID（鉴权后由服务端强制覆盖）
      * @param reason  关闭原因，可为 null（默认 manual_close）
      */
+    @Override
     public CheckOutResult checkOut(Long agentId, String reason) {
         String closeReason = (reason == null || reason.isBlank()) ? "manual_close" : reason;
         int closed = agentDutyLeaseService.closeLease(agentId, closeReason);
@@ -465,6 +472,7 @@ public class McpAgentReportService {
      * <p>业务逻辑统一下沉到 {@link McpToolService}，MCP SSE 与 REST 别名
      * 两条通道工具矩阵完全对齐（10 工具），避免实现漂移。</p>
      */
+    @Override
     public GetAgentStatusResult getAgentStatus(Long agentId) {
         Agent agent = agentService.getById(agentId);
         if (agent == null) {

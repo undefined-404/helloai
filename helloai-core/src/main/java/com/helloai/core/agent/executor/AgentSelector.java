@@ -12,12 +12,12 @@ import com.helloai.core.agent.SkillNormalizer;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
+import com.helloai.core.agent.projection.AgentProfileSnapshotProjection;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
-import com.helloai.core.agent.service.impl.AgentProfileSnapshotMapper;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import lombok.Data;
@@ -86,7 +86,7 @@ public class AgentSelector {
      * @return 首选 Agent 画像快照；无可选时返回 {@code null}
      */
     public AgentProfileSnapshot pickPreferredProfile(AgentRole role) {
-        return AgentProfileSnapshotMapper.toSnapshot(pickPreferred(role));
+        return AgentProfileSnapshotProjection.toSnapshot(pickPreferred(role));
     }
 
     /**
