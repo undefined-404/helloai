@@ -65,3 +65,12 @@ helloai:
   kb:
     # 本地开发默认开启 RAG（REF-4.x）；生产保持 application.yml 的默认关（REF-6.13）。
     enabled: ${KB_ENABLED:true}
+  sandbox:
+    opensandbox:
+      # 本地 OpenSandbox 沙箱执行链（S-7/S-8/S-9；docker-compose.yml opensandbox-server，
+      # 8090 发布端口）。api-key 与 compose 默认一致（${OPEN_SANDBOX_API_KEY:-dev-test-key}，
+      # 本地中间件公开占位，非机密，同本文件「保留本地默认口令」口径；生产经环境变量覆盖）。
+      # 开启后才会给内部执行链注入 internal_run_in_sandbox 工具（fail-closed：关=摘除）。
+      enabled: ${SANDBOX_ENABLED:true}
+      url: ${SANDBOX_URL:http://localhost:8090}
+      api-key: ${SANDBOX_API_KEY:dev-test-key}
