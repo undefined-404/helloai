@@ -210,7 +210,7 @@ RuntimeTurnExecutor          ← 唯一 AgentRuntime 实现
 ToolExecutor      → 契约+真身已具备（执行回路真身），AgentLoop 已接线
 AgentLoop         → 契约+真身已具备（手动工具循环真身），已组装进 RuntimeTurnExecutor
 Session 协调      → 已确认收敛口径（AgentSessionService 承载）
-SandboxProvider   → 契约已具备，隔离能力后置（Docker/K8s P2/P3）
+SandboxProvider   → 契约已具备；首个真实提供方 OpenSandbox 已按「能力预研 + 契约落地」接入（S-1~S-5，2026-10-17），隔离能力已具 ISOLATED 真身（filesystem/resource/credential），业务执行链接线后置（触发条件见 ADR-003 §6）
 Capability 体系   → 尚需完善
 ```
 
@@ -285,21 +285,34 @@ ExecutionEnvironmentProvider
 RemoteAgent
 LocalProcess
 ENVIRONMENT_RESOLVED
-SandboxProvider / SandboxContext / Sandbox / ExecutionPolicy（契约层；诚实策略无 ISOLATED）
+SandboxProvider / SandboxContext / Sandbox / ExecutionPolicy（契约层）
+SandboxSpec / OpenSandboxProperties / OpenSandboxSandboxProvider / OpenSandboxEnvironment / OpenSandboxProbe（OpenSandbox 集成，S-1~S-5）
 ```
 
 当前准确定位是：
 
-> **执行环境抽象已经存在；完整安全沙箱尚未完成。**
+> **执行环境抽象已经存在；首个真实沙箱提供方（OpenSandbox）已按「能力预研 + 契约落地」接入，
+> 平台首次具备可诚实标注 `ISOLATED` 的执行环境（filesystem/resource/credential = `ISOLATED`，
+> network/process = `PARTIAL`——刻意不标全 ISOLATED，防「安全沙箱已完成」误读）。**
 
-完整 Sandbox 还需要考虑：
+已落地（`S-1`~`S-5`，2026-10-17，见 `plan/HelloAI OpenSandbox 沙箱集成计划.md`）：
 
 ```text
-Filesystem Boundary
-Network Boundary
-Process Boundary
-Resource Limit
-Credential Boundary
+SandboxSpec                      声明式 spec（type/image/entrypoint/resourceLimits/networkPolicy/scope/timeoutSeconds，纯声明）
+ExecutionPolicy.openSandbox()    诚实五边界工厂（3×ISOLATED + 2×PARTIAL）
+OpenSandboxSandboxProvider       SandboxProvider 实现（enabled=false 默认关闭，REF-6.13；scope=agent 复用 + 显式回收）
+OpenSandboxProbe                 写→读→删回环 + 失败路径也销毁（finally 无条件 kill()）
+docker-compose(.server).yml      独立网络 opensandbox-net，app 不加入；api_key 走 config.toml；ACR 镜像源 + python:3.12 预热
+```
+
+**后续仍需考虑**（未接业务执行链；沙箱内执行 agent 工具链的触发条件见 `ADR-003` §6）：
+
+```text
+Filesystem Boundary   → 已落地（ISOLATED，OpenSandbox 沙箱文件系统）
+Network Boundary      → 部分落地（PARTIAL：默认禁出 + egress 白名单，容器侧已隔离）
+Process Boundary      → PARTIAL（沙箱内进程受限，但共享宿主内核）
+Resource Limit        → 已落地（ISOLATED，spec.resourceLimits K8s 风格字符串）
+Credential Boundary   → 已落地（ISOLATED，沙箱不注入 app 凭据；Vault 双层隔离属后置增强）
 ```
 
 # 11. 当前 Workflow / Team

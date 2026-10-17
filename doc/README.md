@@ -45,6 +45,7 @@
 | `HelloAI Task-Team 与附件可见性设计.md` | `Partial` | G-014 |
 | `design/adr/ADR-001-run-turn-step-model.md` | （ADR） | — |
 | `design/adr/ADR-002-embedding-provider.md` | （ADR · Accepted 2026-10-11） | `G-019` |
+| `design/adr/ADR-003-opensandbox-deployment-topology.md` | （ADR · Accepted 2026-10-17） | OpenSandbox 集成（S-5） |
 
 > **2026-09-30 出列记录（design/ 只留设计文档）**：
 > - 改造 / 修复方案 → `archive/implemented/`：`HelloAI_契约层能力注入与最终报告整合改造方案.md`、`HelloAI_外部Agent执行通道缺陷修复方案.md`（均为**已实施**）；

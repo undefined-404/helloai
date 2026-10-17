@@ -350,8 +350,93 @@ services:
     depends_on:
       - app
 
+  # --- OpenSandbox sandbox service (S-5, OpenSandbox integration plan) ---
+  # Self-hosted OpenSandbox lifecycle server. It mounts docker.sock to create/destroy
+  # sandbox containers. The app container does NOT join opensandbox-net (plan 4.6:
+  # avoid widening the attack surface by putting app and sandbox containers on the
+  # same network). The app only reaches the server via HTTP API + api_key, and the
+  # Kotlin SDK must use useServerProxy(true) so execd requests are proxied through
+  # this server (verified in LOG-20261017-009).
+  # Required .env (in the deploy dir):
+  #   OPEN_SANDBOX_API_KEY    # REQUIRED; server refuses to start without a non-empty api_key
+  opensandbox-server:
+    image: opensandbox/server:release-1.1.0
+    container_name: opensandbox-server
+    restart: unless-stopped
+    networks:
+      - opensandbox-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8090:8090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    configs:
+      - source: opensandbox-config
+        target: /etc/opensandbox/config.toml
+    environment:
+      - SANDBOX_CONFIG_PATH=/etc/opensandbox/config.toml
+      - OPEN_SANDBOX_API_KEY=${OPEN_SANDBOX_API_KEY:?OPEN_SANDBOX_API_KEY is required}
+
+  # --- Sandbox image pre-warm placeholder (S-5) ---
+  # Declares the business sandbox image referenced by helloai.sandbox.opensandbox.spec.image
+  # so it can be pulled in advance:  docker compose pull opensandbox-images
+  # Not meant to be started (restart: no, sleep command, no ports).
+  opensandbox-images:
+    image: python:3.12
+    pull_policy: always
+    restart: "no"
+    command: ["sleep", "infinity"]
+
+configs:
+  # OpenSandbox server config.toml (S-5; ASCII-only per file header rule).
+  # execd / egress are runtime helper images pulled by the server when creating sandboxes.
+  # Use the Alibaba Cloud registry mirror to avoid Docker Hub timeouts on CN networks.
+  opensandbox-config:
+    content: |
+      [server]
+      host = "0.0.0.0"
+      port = 8090
+      api_key = "${OPEN_SANDBOX_API_KEY:?OPEN_SANDBOX_API_KEY is required}"
+
+      [proxy]
+      # The lifecycle server is attached to opensandbox-net, while sandboxes created
+      # through the mounted Docker socket use Docker's bridge network. Route through
+      # host-published ports instead of unreachable sandbox IPs.
+      resolve_internal = false
+
+      [log]
+      level = "INFO"
+
+      [runtime]
+      type = "docker"
+      execd_image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:v1.1.0"
+      # execd_image = "opensandbox/execd:v1.1.0"   # Docker Hub fallback
+
+      [egress]
+      image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:v1.1.7"
+      # image = "opensandbox/egress:v1.1.7"        # Docker Hub fallback
+      readiness_timeout_seconds = 30.0
+
+      [docker]
+      network_mode = "bridge"
+      host_ip = "host.docker.internal"
+      port_range_min = 40000
+      port_range_max = 60000
+      drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
+      no_new_privileges = true
+      pids_limit = 4096
+
+      [ingress]
+      mode = "direct"
+
 volumes:
   postgres_data:
   redis_data:
   rabbitmq_data:
   minio_data:
+
+networks:
+  opensandbox-net:
+    driver: bridge
+
