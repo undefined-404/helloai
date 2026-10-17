@@ -16,12 +16,19 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -44,6 +51,31 @@ public class ClarifyWebSearchOrchestrator {
     /** 消息中 http(s) 链接提取（尾随中文标点/括号/引号不算 URL 一部分）。 */
     private static final Pattern URL_IN_TEXT_PATTERN = Pattern.compile(
             "https?://[^\\s<>\"'，。；、（）()【】\\[\\]{}]+");
+
+    /**
+     * W-2 并行搜索共享线程池：多候选词并行调 web_search 工具。
+     * 池大小 = 2×CPU 核数（搜索是 IO 密集，略超核数容忍长尾），最小 4。
+     * 类级懒加载单例（编排器 Spring 单例，反复创建池会泄漏线程）。
+     */
+    private static volatile ExecutorService searchExecutor;
+
+    private static ExecutorService searchExecutor() {
+        ExecutorService s = searchExecutor;
+        if (s == null) {
+            synchronized (ClarifyWebSearchOrchestrator.class) {
+                s = searchExecutor;
+                if (s == null) {
+                    int size = Math.max(4, Runtime.getRuntime().availableProcessors() * 2);
+                    searchExecutor = s = Executors.newFixedThreadPool(size, r -> {
+                        Thread t = new Thread(r, "web-search-parallel");
+                        t.setDaemon(true);
+                        return t;
+                    });
+                }
+            }
+        }
+        return s;
+    }
 
     private final ToolExecutor toolExecutor;
     private final WebSearchProperties webSearchProperties;
@@ -163,58 +195,78 @@ public class ClarifyWebSearchOrchestrator {
         }
         long t0 = System.currentTimeMillis();
         List<String> attempted = new ArrayList<>();
-        String provider = "web_search_tool";
-        try {
-            // 多查询词合并（对齐 Kimi/DeepSeek 网页版 query expansion）：
+        // provider / answer 用 Holder 承载：absorb() 在并行/串行两分支内更新，
+        // 后续日志与 outcome 构建统一读取（Java 闭包需 final 引用才能被 lambda 捕获）
+        // provider 初始 null = 未解析到真实供应商，outcome 构建时兜底 "web_search_tool"
+        Holder<String> providerRef = new Holder<>();
+        Holder<String> answerRef = new Holder<>();
+        try {            // 多查询词合并（对齐 Kimi/DeepSeek 网页版 query expansion）：
             // 对全部候选词都搜索、按 URL 去重合并，总条数 cap 到 maxResults；
             // 每词条数 = ceil(maxResults / 候选词数)，避免单次吃满上限、多词覆盖不全。
             int maxResults = Math.max(1, webSearchProperties.getMaxResults());
             int perQuery = Math.max(1, (int) Math.ceil((double) maxResults / Math.max(1, candidates.size())));
             List<WebSearchResult> searched = new ArrayList<>();
             Set<String> seenUrls = new HashSet<>();
-            String answer = null;
             long budgetMs = webSearchProperties.getSearchBudgetMs();
-            for (String q : candidates) {
-                if (q == null || q.isBlank()) {
-                    continue;
-                }
-                // 时间预算：多候选词串行，预算耗尽即停止后续（保留已有结果），
-                // 避免 AI Search + 总结的 25 秒量级单次耗时把澄清轮拖成分钟级
-                if (budgetMs > 0 && System.currentTimeMillis() - t0 > budgetMs) {
-                    log.info("澄清联网搜索：时间预算 {}ms 耗尽，停止后续候选词: tried={}", budgetMs, attempted);
-                    break;
-                }
-                attempted.add(q);
-                // 阶段四：搜索动作走平台工具 web_search（能力归 planner），
-                // 失败/无结果降级空列表（与旧直调契约语义一致）；provider 取工具输出；
-                // withAnswer 对齐 WebSearchProperties.isAiSearchAnswer()（默认开）——
-                // 让博查侧已生成的 answer 经工具回传（W-1），供 toContextText 渲染总结节
-                WebSearchToolResult out = callWebSearchTool(q, perQuery, webSearchProperties.isAiSearchAnswer());
-                int hits = 0;
-                if (out != null) {
-                    if (out.provider() != null && !out.provider().isBlank()
-                            && !"web_search_tool".equals(out.provider())) {
-                        provider = out.provider();
+            // W-2 并行搜索：多候选词 CompletableFuture 并行调工具（替代串行 for），
+            // 受 searchBudgetMs 总预算约束（超时未完成的 future 丢弃，保留已完成结果）。
+            // answer 取首个有 answer 的词（按候选词顺序遍历 future，服务层 per-query 槽保证各词不串扰）。
+            boolean withAnswer = webSearchProperties.isAiSearchAnswer();
+            List<String> queryList = candidates.stream()
+                    .filter(q -> q != null && !q.isBlank())
+                    .toList();
+            if (queryList.size() <= 1) {
+                // 单候选词（含退化场景）：保持串行，避免线程池开销与多词竞态
+                for (String q : queryList) {
+                    if (budgetMs > 0 && System.currentTimeMillis() - t0 > budgetMs) {
+                        log.info("澄清联网搜索：时间预算 {}ms 耗尽，停止后续候选词: tried={}", budgetMs, attempted);
+                        break;
                     }
-                    // 大模型总结取首个成功候选词的（withAnswer=true 且供应商支持才返回）
-                    if (answer == null && out.answer() != null && !out.answer().isBlank()) {
-                        answer = out.answer();
-                    }
-                    for (WebSearchResult r : out.results()) {
-                        if (r == null || r.getUrl() == null || r.getUrl().isBlank()
-                                || !seenUrls.add(r.getUrl())) {
-                            continue; // 跨词同 URL 去重
-                        }
-                        searched.add(r);
-                        hits++;
-                        if (searched.size() >= maxResults) {
-                            break;
-                        }
+                    attempted.add(q);
+                    WebSearchToolResult out = callWebSearchTool(q, perQuery, withAnswer);
+                    int hits = absorb(out, searched, seenUrls, maxResults, providerRef, answerRef);
+                    log.info("澄清联网搜索：候选词命中 {} 条: query={}", hits, q);
+                    if (searched.size() >= maxResults) {
+                        break;
                     }
                 }
-                log.info("澄清联网搜索：候选词命中 {} 条: query={}", hits, q);
-                if (searched.size() >= maxResults) {
-                    break;
+            } else {
+                // 多候选词并行：每词一个 future，全部提交后按候选词顺序 await（保留确定性输出顺序）。
+                // exceptionally 把单词异常转 null（该词丢弃），allOf().get() 永不抛——
+                // 一个词失败不阻断整批（与串行「异常落 failed outcome」语义分治：并行是尽力而为）
+                List<CompletableFuture<WebSearchToolResult>> futures = new ArrayList<>();
+                for (String q : queryList) {
+                    attempted.add(q);
+                    futures.add(CompletableFuture
+                            .supplyAsync(() -> callWebSearchTool(q, perQuery, withAnswer), searchExecutor())
+                            .exceptionally(e -> {
+                                log.warn("澄清联网搜索：候选词并行执行异常，丢弃该词: query={}, err={}",
+                                        q, e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+                                return null;
+                            }));
+                }
+                try {
+                    // 总预算内等全部完成；超时未完成的 future 丢弃（保留已完成结果，不阻断主流程）
+                    long waitMs = budgetMs > 0 ? Math.max(0, budgetMs - (System.currentTimeMillis() - t0)) : Long.MAX_VALUE;
+                    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                            .get(waitMs, TimeUnit.MILLISECONDS);
+                } catch (java.util.concurrent.TimeoutException e) {
+                    log.info("澄清联网搜索：时间预算 {}ms 内并行候选词未全部完成，保留已完成结果: tried={}",
+                            budgetMs, attempted);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.warn("澄清联网搜索：并行等待被中断，保留已完成结果: err={}", e.getMessage());
+                } catch (ExecutionException e) {
+                    log.warn("澄清联网搜索：并行任务异常（exceptionally 已转 null，此处不应到达）: err={}",
+                            e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+                }
+                for (int i = 0; i < futures.size() && searched.size() < maxResults; i++) {
+                    WebSearchToolResult out = futures.get(i).getNow(null);
+                    if (out == null) {
+                        continue; // 超时未完成 → 丢弃该词（queryList 已入 attempted，结果缺失可接受）
+                    }
+                    int hits = absorb(out, searched, seenUrls, maxResults, providerRef, answerRef);
+                    log.info("澄清联网搜索：候选词命中 {} 条: query={}", hits, queryList.get(i));
                 }
             }
             int rounds = 1;
@@ -247,9 +299,10 @@ public class ClarifyWebSearchOrchestrator {
             }
             long costMs = System.currentTimeMillis() - t0;
             List<WebSearchResult> merged = mergeFetchedIntoResults(pages, searched);
+            String provider = providerRef.value == null ? "web_search_tool" : providerRef.value;
             log.info("澄清联网搜索结束: provider={}, queries={}, rounds={}, answer={}, pages={}, results={}, costMs={}",
                     provider, attempted, rounds,
-                    answer != null ? "有" : "无", pages.size(), merged.size(), costMs);
+                    answerRef.value != null ? "有" : "无", pages.size(), merged.size(), costMs);
             return WebSearchOutcome.builder()
                     .provider(provider)
                     .query(attempted.isEmpty() ? "" : attempted.get(0))
@@ -258,13 +311,13 @@ public class ClarifyWebSearchOrchestrator {
                     .total(merged.size())
                     .results(merged)
                     .fetchedPages(pages)
-                    .answer(answer)
+                    .answer(answerRef.value)
                     .rounds(rounds)
                     .build();
         } catch (Exception e) {
             log.warn("澄清联网搜索异常降级（不动澄清主流程）: queries={}, err={}", attempted, e.getMessage());
             return WebSearchOutcome.builder()
-                    .provider(provider)
+                    .provider(providerRef.value == null ? "web_search_tool" : providerRef.value)
                     .query(attempted.isEmpty() ? "" : attempted.get(0))
                     .queries(attempted)
                     .costMs(System.currentTimeMillis() - t0)
@@ -273,6 +326,45 @@ public class ClarifyWebSearchOrchestrator {
                     .reason(e.getMessage())
                     .build();
         }
+    }
+
+    /**
+     * 吸收一次工具调用的结果：provider 取首个真实供应商（非占位）、answer 取首个成功词、
+     * 结果按 URL 去重并入 searched（cap 在 maxResults 内）。
+     *
+     * @return 本次命中条数（去重后实际并入数）
+     */
+    private int absorb(WebSearchToolResult out, List<WebSearchResult> searched, Set<String> seenUrls,
+                       int maxResults, Holder<String> providerRef, Holder<String> answerRef) {
+        if (out == null) {
+            return 0;
+        }
+        if (out.provider() != null && !out.provider().isBlank()
+                && !"web_search_tool".equals(out.provider()) && providerRef.value == null) {
+            providerRef.value = out.provider();
+        }
+        // 大模型总结取首个成功候选词的（withAnswer=true 且供应商支持才返回）
+        if (answerRef.value == null && out.answer() != null && !out.answer().isBlank()) {
+            answerRef.value = out.answer();
+        }
+        int hits = 0;
+        for (WebSearchResult r : out.results()) {
+            if (r == null || r.getUrl() == null || r.getUrl().isBlank()
+                    || !seenUrls.add(r.getUrl())) {
+                continue; // 跨词同 URL 去重
+            }
+            searched.add(r);
+            hits++;
+            if (searched.size() >= maxResults) {
+                break;
+            }
+        }
+        return hits;
+    }
+
+    /** 可变引用小容器（absorb 多返回值用，避免引元组/数组）。 */
+    private static final class Holder<T> {
+        T value;
     }
 
     /**
@@ -298,6 +390,10 @@ public class ClarifyWebSearchOrchestrator {
                     query, e.getMessage());
             return null;
         }
+        // 注意：toolExecutor.execute 异常不在本方法内兜住——异常向上传播，
+        // 串行下由 doWebSearch 顶层 catch 落 failed outcome（可查验）；
+        // 并行下由 future.exceptionally 转 null 丢弃该词（不阻断整批）。
+        // 两种路径语义分治，避免「并行吞异常导致失败不可查验」。
         ToolExecutionResult result = toolExecutor.execute("web_search", argsJson);
         if (result == null || !result.success()
                 || result.output() == null || result.output().isBlank()) {

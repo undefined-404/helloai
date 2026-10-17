@@ -52,9 +52,16 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
 
     /** 单条候选搜索词最大字数：过长查询词检索命中率低，强制截断。 */
     private static final int QUERY_CHAR_LIMIT = 20;
-
     /** LLM 改写条件触发的原文长度阈值（配合"规则仅单候选词"判定）。 */
     private static final int LLM_REWRITE_TEXT_LIMIT = 30;
+
+    /**
+     * W-4：规则已拆出多候选词时仍进 LLM 改写的原文长度阈值。
+     * 多主题长句被规则连接符拆成多个候选词后，各词仍可能过长/语义碎
+     * （如「膝盖旧伤 减脂训练计划 饮食方案 建议」拆出 4 个词）；
+     * 原文超本阈值时交给 LLM 产正交查询（对齐 query expansion）。
+     */
+    private static final int LLM_REWRITE_MULTI_TEXT_LIMIT = 40;
 
     /**
      * 前导噪音（敬语/疑问句式开头）：反复从头部剥离直到不再命中。
@@ -128,8 +135,13 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
             if (clean.isBlank()) {
                 continue;
             }
+            // W-4：硬截断 → 语义单元截断。在长度上限位置向前找最近空格
+            // （词边界），保留完整词；整段无空格才退化硬截（保留前 N 字）。
+            // 修复实测：20 字硬截把「膝盖旧伤 减脂训练计划 饮食方案 建议」切碎成
+            // 「膝盖旧伤 减脂训练计划 饮」——多主题长句被截断处切词，检索命中率暴跌。
             if (clean.length() > QUERY_CHAR_LIMIT) {
-                clean = clean.substring(0, QUERY_CHAR_LIMIT);
+                int cut = clean.lastIndexOf(' ', QUERY_CHAR_LIMIT);
+                clean = clean.substring(0, cut > QUERY_CHAR_LIMIT / 2 ? cut : QUERY_CHAR_LIMIT);
             }
             if (!out.contains(clean)) {
                 out.add(clean);
@@ -159,15 +171,19 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
     }
 
     /**
-     * LLM 改写条件触发判定：开关开 + 规则仅产出单候选词，
-     * 且（原文超阈值长度 或 含疑问句式）才改写；短而干净的消息零额外成本。
+     * LLM 改写条件触发判定：开关开 + 规则产出单一候选词（或规则多候选词但原文超长
+     * 需 LLM 精化），且原文超阈值长度或含疑问句式才改写；短而干净的消息零额外成本。
      * 凭证由平台内执行链供给（系统设置页平台级 Key），不再检查独立快模型 Key。
+     *
+     * <p>W-4 放宽：规则产出 2~N 个候选词时，若原文仍超 {@link #LLM_REWRITE_MULTI_TEXT_LIMIT}，
+     * 也进 LLM——多主题长句被连接符拆碎后各词仍过长/语义不完整，LLM 可产正交查询
+     * （对齐 Kimi/DeepSeek 网页版 query expansion）。</p>
      */
     private boolean shouldLlmRewrite(String text, List<String> ruleQueries) {
         if (!properties.isQueryRewriteEnabled()) {
             return false;
         }
-        if (ruleQueries.size() > 1) {
+        if (ruleQueries.size() > 1 && text.length() <= LLM_REWRITE_MULTI_TEXT_LIMIT) {
             return false;
         }
         return text.length() > LLM_REWRITE_TEXT_LIMIT || QUESTION_HINT_PATTERN.matcher(text).find();

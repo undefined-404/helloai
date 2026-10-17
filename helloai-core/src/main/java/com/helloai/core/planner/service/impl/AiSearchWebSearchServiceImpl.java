@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 博查 AI Search API 实现（高级搜索，最接近 Kimi / DeepSeek 网页版检索体验）。
@@ -57,9 +58,16 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
-    /** 最近一次 {@link #search} 的大模型总结答案（answer=true 时博查侧生成）。
-     * 搜索为串行调用（澄清轮内一次），每次 search 覆盖；供 {@link #answerSummary} 读取。 */
-    private volatile String lastAnswer;
+    /**
+     * 各查询词的大模型总结答案槽（answer=true 时博查侧生成）。
+     *
+     * <p>W-2 并行搜索引入：多候选词经 {@code CompletableFuture} 并行调 {@link #search} 时，
+     * 单槽 {@code lastAnswer} 会被并发覆盖（A 词 search 写、B 词 search 又写 → A 词
+     * {@link #answerSummary} 读到 B 词答案）。改 per-query 槽：{@code search(query)} 写
+     * 自己键，{@code answerSummary(query)} 只读自己键——并行下各词互不干扰。
+     * 语义约束不变：{@code search} 先行、{@code answerSummary} 紧随（编排器层配对调用）。</p>
+     */
+    private final Map<String, String> answerByQuery = new ConcurrentHashMap<>();
 
     public AiSearchWebSearchServiceImpl(WebSearchProperties properties,
                                         WebSearchCredentialKeyStore credentialKeyStore,
@@ -77,10 +85,14 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
     @Override
     public String provider() { return "bocha-ai-search"; }
 
-    /** 最近一次搜索的大模型总结（answer=true 时博查侧生成；answer=false 或无则为 null）。 */
+    /** 最近一次搜索该查询词的大模型总结（answer=true 时博查侧生成；answer=false 或无则为 null）。
+     *  按 query 精确取槽，支持并行搜索下多词互不干扰（W-2）。 */
     @Override
     public String answerSummary(String query) {
-        return lastAnswer;
+        if (query == null) {
+            return null;
+        }
+        return answerByQuery.get(query);
     }
 
     @Override
@@ -147,7 +159,7 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
         // provider 级容量：AI Search 是高容量检索，走专用条数（默认 15，上限 50），
         // 不受通用 maxResults 护栏约束（见类注释）
         int limit = Math.max(1, Math.min(properties.getAiSearchMaxResults(), MAX_AI_SEARCH_COUNT));
-        lastAnswer = null; // 每次搜索重置，供 answerSummary 读取本次总结（避免上次残留）
+        answerByQuery.remove(query); // 每次搜索重置该词槽，供 answerSummary 读取本次总结（避免上次残留）
         try {
             // W-3：freshness 由查询词时效动态判定（含时效词收紧档位，否则 noLimit），
             // 替代硬编码 noLimit——对齐成熟产品「时间衰减」检索体验
@@ -166,7 +178,7 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
                         truncate(response.body(), 200));
                 return List.of();
             }
-            return parseResponse(response.body(), limit);
+            return parseResponse(response.body(), limit, query);
         } catch (Exception e) {
             log.warn("博查 AI Search 失败（已降级为空列表）: query={}, err={}", query, e.getMessage());
             return List.of();
@@ -205,8 +217,12 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
      *       {@code content}（对象或 JSON 字符串）内的 {@code value[]} —— AI Search 实际结构。</li>
      * </ol>
      * 每条 value 含 name / url / summary（AI 摘要）→ snippet / siteName 等字段。
+     *
+     * @param body  响应体
+     * @param limit 结果条数上限
+     * @param query 本次查询词（answer 落 per-query 槽用，W-2 并行下各词互不干扰）
      */
-    private List<WebSearchResult> parseResponse(String body, int limit) {
+    private List<WebSearchResult> parseResponse(String body, int limit, String query) {
         List<WebSearchResult> out = new ArrayList<>();
         try {
             JsonNode root = objectMapper.readTree(body);
@@ -229,7 +245,7 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
                     if ("answer".equals(type)) {
                         String ans = textOrNull(msg.path("content"));
                         if (ans != null) {
-                            lastAnswer = ans;
+                            answerByQuery.put(query, ans);
                         }
                         continue;
                     }
