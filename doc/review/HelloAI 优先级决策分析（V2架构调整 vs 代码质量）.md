@@ -264,7 +264,7 @@
 - ✅ `doc/plan/HelloAI 重构实施计划.md` §3 现状基线与 P0-B 各段、`doc/design/Agent_Runtime.md`「迁移模型」段 → 已加**历史段订正横幅**（保留过程记录，但显式标注已被单轨硬切取代）；
 - ✅ `doc/HelloAI_CODE_STYLE.md` §47.2 集成测试示例里的 `LegacyExecutorAdapter`（已删类）→ 换为 `RuntimeTurnExecutor / ChatModel`；
 - ✅ `doc/HelloAI_登录页原创AI虚拟人物生成提示词.md`（231 行，2026-07-23，不属架构文档体系）→ 移至 `doc/helloai_avatar/`（与生成产物同目录）；
-- ✅ `doc/HelloAI 文档治理审计.md`（2026-09-07 治理记录）→ 移至 `doc/review/` 并规范命名为「（2026-09-07）」；
+- ✅ `doc/HelloAI 文档治理审计.md`（2026-09-07 治理记录）→ 移至 `doc/review/` 并规范命名为「（2026-09-07）」；**（2026-10-17 追加指针：该报告结论已全部消化，现位于 `doc/archive/reference/`）**；
 - ⏳ **未修（登记）**：`doc/diagrams/package-architecture-mapping.html` 命中旧链口径——图类产物，需重绘，不在本次文本治理范围。
 
 ### 11.7 净结论

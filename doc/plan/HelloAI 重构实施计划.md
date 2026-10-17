@@ -1,8 +1,29 @@
 # HelloAI 重构实施计划
 
-> **状态：Active**
+> **状态：Active**（**2026-10-17 复核：主体 4 节已退场，本文件剩余在办仅 §5 / §8 / §9 三处尾部缺口**——见下表）
 >
-> 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 全链收官，P1 主体推进——G-004 / G-006 / G-010 / G-011 落地并完成 2026-09-10 外部执行者双轮全链闭环（Round2/Round3）。后续：P1 剩余项（技能回流规范〔`REF-1.4` 待接线，**条件触发**〕 / Sandbox 第二阶段〔**条件触发**，Fork 已 WONTFIX〕）+ 技术债清偿。**`Recovery` 消费面已于 2026-10-16 建成，自本清单移除**（见 §7；`D-2026-10-16-11` / `LOG-20261016-011`）。近况增量：2026-09-11 外部上下文供给打通（子任务详情 MCP 工具 V76 + REST/inbox 三通道，提交 8fa09e0）；2026-09-13 Sa-Token 异步上下文修复（SSE 流式接口 500：拦截器 ASYNC 放行 + 异常处理器 SSE 分支，提交 dd3bd18，见 §14）。
+> **★章节状态速查（2026-10-17 全量复核）**：下表是**唯一**「哪节还要不要读」的判据；已完成节的正文一律加删除线并给指针，**不再作为行动依据**。
+>
+> | 节 | 主题 | 状态 | 依据 |
+> |---|---|---|---|
+> | §1 | 重构目标 | 🟢 长期有效（设计意图，非进度） | — |
+> | §2 | P0-A 统一 Agent Event Stream | ✅ **已完成**（2026-09-07 结项） | 差距表 `G-001` |
+> | §3 | P0-B Executor 双轨迁移 | ✅ **已终结**（2026-09-30 `G-002` 单轨硬切） | 差距表 `G-002` |
+> | §4 | P0-C AgentRuntime | ✅ **已完成**（八件套全落地） | 差距表 `G-002` / `G-003` |
+> | §5 | P1 Skill Capability Package | 🔵 **在办**（`REF-1.4` 能力已落、待接线） | `G-004` / `REF-1` |
+> | §6 | P1 Sandbox Provider | ⏸ **条件触发、不排期**（正文为预案） | `G-005` / `REF-3` / `D-2026-10-09-6③` |
+> | §7 | P1 Event Consumers | ✅ **已完成**（`Recovery` 2026-10-16 建成，序列收官） | 差距表 `G-006` |
+> | §8 | P1 Planner 能力感知与粒度 | 🔵 **在办** | 差距表 `G-010` |
+> | §9 | P1 需求包准入与不确定性 | 🔵 **在办** | 差距表 `G-011` |
+> | §10 | P2 Quality Gate / Agent Fleet | ⬜ **未启动**（仅目标描述，无动作） | — |
+> | §11 | P3 Dynamic Workflow | ⬜ **未启动**（仅目标描述，无动作） | — |
+> | §12 | 当前禁止扩张 | 🟢 长期有效（约束清单） | — |
+> | §13 | 最终验收问题 | 🟢 长期有效（验收标准） | — |
+> | §14 | 运行时缺陷清偿记录 | 🟢 记录性段落（治理规则 §3.2 定则保留） | — |
+>
+> **读法**：只看 🔵 / ⏸ / ⬜ 六节即可；🟢 三节是长期口径；✅ 四节（§2 / §3 / §4 / §7）已退场，正文划线保留追溯。
+>
+> **（历史主线陈述 · 截至 2026-09-13 时点，**真实状态以上方速查表为准**）** 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 全链收官，P1 主体推进——G-004 / G-006 / G-010 / G-011 落地并完成 2026-09-10 外部执行者双轮全链闭环（Round2/Round3）。后续：P1 剩余项（技能回流规范〔`REF-1.4` 待接线，**条件触发**〕 / Sandbox 第二阶段〔**条件触发**，Fork 已 WONTFIX〕）+ 技术债清偿。**`Recovery` 消费面已于 2026-10-16 建成，自本清单移除**（见 §7；`D-2026-10-16-11` / `LOG-20261016-011`）。近况增量：2026-09-11 外部上下文供给打通（子任务详情 MCP 工具 V76 + REST/inbox 三通道，提交 8fa09e0）；2026-09-13 Sa-Token 异步上下文修复（SSE 流式接口 500：拦截器 ASYNC 放行 + 异常处理器 SSE 分支，提交 dd3bd18，见 §14）。
 >
 > **2026-10-09 次序与范围变更（用户裁定，`D-2026-10-09-4` / `D-2026-10-09-5` / `D-2026-10-09-6`）**：借鉴落地专项（`plan/HelloAI 借鉴落地实施计划.md`，编号 `REF-x.y`）并入本主线执行：
 >
@@ -20,7 +41,7 @@
 >
 > **2026-10-12 主线补充（用户裁定，`D-2026-10-12-1` / `D-2026-10-12-2`）**：**`REF-8`「内部 LLM 能力面」列为当前 T1 最高优先**（差距锚点 `G-021`）——这是「让内部 LLM 从单轮文本生成器进化为有工具、有手脚、能按需装配技能的 agent」的唯一直接产出层。次序 **`REF-8.1` 工具面解封 → `REF-8.2` 手脚+上下文 → `REF-8.3` 技能惰性加载 → `REF-8.5` 覆盖面收敛**（`REF-8.4` 拦截链可并行铺，~~是 `LOG-20261011-007` A+B 的唯一挂点~~ —— **⚠️ 2026-10-15 订正**：`REF-8.4` 已于 2026-10-13 交付（形态 = 循环自有 `LoopHook` 三档，**非** Advisors）；**B 收敛熔断挂拦截链、A 能力闸出列落 `ResilientDispatcher`**，见 `D-2026-10-15-6`）。细则见 `plan/HelloAI 借鉴落地实施计划.md` §10（动作明细 / 收敛完成判据 / 红线）；**本主线不内嵌其进度**（进度以《实现差距表》`G-021` 为准）。
 >
-> 最后更新：2026-10-15（2026-10-12 主线补充；2026-10-15 仅加 `REF-8.4` 交付 / A+B 挂点订正指针，**本主线正文与次序未变**）
+> 最后更新：2026-10-17（**全量复核：新增「章节状态速查」+ §2 / §3 / §4 / §7 四节已完成部分加删除线退场**；2026-10-15 加 `REF-8.4` 交付 / A+B 挂点订正指针；2026-10-12 主线补充。**本主线次序未变**）
 
 # 1. 重构目标
 
@@ -36,6 +57,10 @@
 ```
 
 # 2. P0-A：统一 Agent Event Stream
+
+> **✅ 本节已完成并退场（2026-09-07 结项）** —— 当前状态见《差距表》`G-001`（Event Stream）/ `G-006`（消费面）。
+> **仍有效**：`## 目标` 的三层模型与字段表 —— 它就是 `agent_event` 的**现行**结构，不是历史。
+> **已划线退场**：`## 实施顺序` 与 `## 落地点` 的全部实施描述（A1~A7 已落地，仅作追溯）。
 
 ## 目标
 
@@ -63,7 +88,9 @@ causationId
 payload
 ```
 
-## 实施顺序
+## ~~实施顺序~~（✅ A1~A7 均已落地，2026-09-07 结项）
+
+> ⛔ 下列原文为**当时的推进次序**，已全部完成、**不再作为行动依据**（代码块保留原样以便追溯）。
 
 ```text
 A1 Event Contract
@@ -75,21 +102,27 @@ A6 Timeline 消费迁移
 A7 Replay / Audit 最小读取
 ```
 
-## 落地点（P0-A 已结项，2026-09-07）
+## ~~落地点（P0-A 已结项，2026-09-07）~~
 
-> **进度指针（不内嵌快照，`C1`）**：Event Stream 验收与消费面进度**以《差距表》`G-001` / `G-006` 为准**。以下为 P0-A 的**结项证据留痕**（A1~A7 均已落地），**不是**「当前基线」。
+> **进度指针（不内嵌快照，`C1`）**：Event Stream 验收与消费面进度**以《差距表》`G-001` / `G-006` 为准**。以下四段为 P0-A 的**结项证据留痕**（A1~A7 均已落地），已划线，**不是**「当前基线」。
 
-A1~A5 已落地：`agent_event` 三层模型（Run / Turn / Step，append-only）+ EventType（含 SKILL_RESOLVED=5 / TOOL_RESOLVED=6 / ENVIRONMENT_RESOLVED=7 step 槽位）+ AgentEventRecorder（write-only）。验证：`verify-c3-events.ps1`。
+~~A1~A5 已落地：`agent_event` 三层模型（Run / Turn / Step，append-only）+ EventType（含 SKILL_RESOLVED=5 / TOOL_RESOLVED=6 / ENVIRONMENT_RESOLVED=7 step 槽位）+ AgentEventRecorder（write-only）。验证：`verify-c3-events.ps1`。~~
 
-A6 路线 B（2026-09-07 已落地）：新增 `AgentEventQueryService#traceBySubTaskId` 读侧投影（`agent_event` 按 subTaskId 以 `createTime ASC, id ASC` 有序重建轨迹），仅后端读侧，未接 UI；单测 3 用例 + dev 库连库验证 PASS。
+~~A6 路线 B（2026-09-07 已落地）：新增 `AgentEventQueryService#traceBySubTaskId` 读侧投影（`agent_event` 按 subTaskId 以 `createTime ASC, id ASC` 有序重建轨迹），仅后端读侧，未接 UI；单测 3 用例 + dev 库连库验证 PASS。~~
 
-A6 收口（2026-09-07 已落地）：`/timeline` 读侧并轨 `agent_event`——`TaskTimelineService.listBySubTaskId` 合并 task_timeline 粗事件 + agent_event 细轨迹（createTime ASC + id ASC 二级排序）；前端 SubTaskDetail 时间线/时序图补 agent_event 事件字典与泳道映射（COMPACT_HIDDEN 隐藏例行 Step 事件防刷屏）；后端单测 7 用例 + 前端 vue-tsc type-check PASS。`task_timeline` 保持不迁移（ADR-001 §4）。
+~~A6 收口（2026-09-07 已落地）：`/timeline` 读侧并轨 `agent_event`——`TaskTimelineService.listBySubTaskId` 合并 task_timeline 粗事件 + agent_event 细轨迹（createTime ASC + id ASC 二级排序）；前端 SubTaskDetail 时间线/时序图补 agent_event 事件字典与泳道映射（COMPACT_HIDDEN 隐藏例行 Step 事件防刷屏）；后端单测 7 用例 + 前端 vue-tsc type-check PASS。`task_timeline` 保持不迁移（ADR-001 §4）。~~
 
-A7（2026-09-07 已落地）：Replay / Audit 最小读取——`AgentEventQueryService` 新增 `traceByRunId`（按 runId 以 `createTime ASC, id ASC` 重建 Run 级轨迹，Replay 读侧，G-001 验收「一个 Run 可以按 sequence 重建轨迹」成立）与 `pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，按写入时序正序）；`AgentEventMapper` 对应新增 `selectByRunIdOrdered` / `selectPageAuditByTaskId`（`idx_agent_event_run` 索引支撑）；纯后端读侧，未接 API/UI（与 A6 路线 B 同形态）；单测 8 用例 + dev 库连库探针 PASS。
+~~A7（2026-09-07 已落地）：Replay / Audit 最小读取——`AgentEventQueryService` 新增 `traceByRunId`（按 runId 以 `createTime ASC, id ASC` 重建 Run 级轨迹，Replay 读侧，G-001 验收「一个 Run 可以按 sequence 重建轨迹」成立）与 `pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，按写入时序正序）；`AgentEventMapper` 对应新增 `selectByRunIdOrdered` / `selectPageAuditByTaskId`（`idx_agent_event_run` 索引支撑）；纯后端读侧，未接 API/UI（与 A6 路线 B 同形态）；单测 8 用例 + dev 库连库探针 PASS。~~
 
-**当前动作**：P0-A 完整闭环（A1~A7 已落地）——G-001 Event Stream 验收全量成立；消费面已在 P1 补齐至全链暴露（G-006 增量 C1/C2/D，2026-09-08~10，见 §7）。**本组四项消费面（Timeline / Replay / Audit / Recovery）已全部落地** —— 末项 **`Recovery` 消费面于 2026-10-16 建成**（只读恢复点投影 + 续跑兜底注入 + 只读端点；方向裁定与边界见 `D-2026-10-16-11`，记录 `LOG-20261016-011`）。Fork 已于 2026-10-09 裁定 WONTFIX（见 `D-2026-10-09-5`）⇒ **Event 消费面无剩余在办项**。
+**当前结论（有效）**：~~P0-A 完整闭环（A1~A7 已落地）——G-001 Event Stream 验收全量成立；消费面已在 P1 补齐至全链暴露（G-006 增量 C1/C2/D，2026-09-08~10，见 §7）。~~ **本组四项消费面（Timeline / Replay / Audit / Recovery）已全部落地** —— 末项 **`Recovery` 消费面于 2026-10-16 建成**（只读恢复点投影 + 续跑兜底注入 + 只读端点；方向裁定与边界见 `D-2026-10-16-11`，记录 `LOG-20261016-011`）。Fork 已于 2026-10-09 裁定 WONTFIX（见 `D-2026-10-09-5`）⇒ **Event 消费面无剩余在办项**。
 
 # 3. P0-B：Executor 双轨迁移
+
+> **✅ 本节已终结并退场（2026-09-30 `G-002` 单轨硬切）** —— 当前只有单轨 `RuntimeTurnExecutor`，**不存在双轨、不存在灰度**。当前状态见《差距表》`G-002`。
+> **仍有效**：下列「原则」六条（共享同一 Result Handler / 全部进 Event Stream / 不建第二状态机 / 不靠简单 fallback 重复副作用）—— 它们约束**现行单轨**，不是双轨期专属。
+> **已划退场**：双轨图与迁移节奏（100% Legacy → 5/95 → Runtime 主路径）。
+
+~~双轨结构（代码块保留原样以便追溯）：~~
 
 ```text
 ExecutionRouter
@@ -108,7 +141,7 @@ Legacy    Runtime
 - 不通过简单 fallback 造成副作用重复执行；
 - Runtime 异常的补偿必须基于 Execution Idempotency / Compensation。
 
-迁移节奏：
+~~迁移节奏：~~
 
 ```text
 100% Legacy
@@ -128,7 +161,11 @@ Legacy    Runtime
 
 # 4. P0-C：AgentRuntime
 
-第一阶段：
+> **✅ 本节已完成并退场** —— 八件套 **Context / EventRecorder / Environment / ToolRegistry / ToolExecutor / AgentLoop / Session / SandboxProvider** 已全部落地（第一~第四阶段）。当前状态见《差距表》`G-002` / `G-003`。
+> **仍有效**：「Runtime 禁止直接依赖」四条（Planner / Global Scheduler / Reviewer Decision / Task Service）—— 这是**现行架构约束**，由 `check-arch-freeze.sh` 组 1 机械拦截。
+> **已划退场**：下列四阶段的搭建次序（代码块保留原样以便追溯）。
+
+~~第一阶段：~~
 
 ```text
 AgentRuntime
@@ -137,20 +174,20 @@ AgentRuntime
 └── execute()
 ```
 
-第二阶段：
+~~第二阶段：~~
 
 ```text
 ToolRegistry
 ToolExecutor
 ```
 
-第三阶段：
+~~第三阶段：~~
 
 ```text
 AgentLoop
 ```
 
-第四阶段：
+~~第四阶段：~~
 
 ```text
 Session
@@ -225,6 +262,12 @@ K8s
 
 # 7. P1：Event Consumers
 
+> **✅ 本节已完成并退场（2026-10-16 序列收官）** —— `Timeline → Replay → Audit → Recovery` 四项消费面**全部落地**，Fork 已 WONTFIX ⇒ **无剩余在办动作**。当前状态见《差距表》`G-006`。
+> **已划退场**：下列「推进序列图」与「后续再做 Recovery」（代码块保留原样以便追溯）。
+> **仍有效**：Fork 的 WONTFIX 裁定与「勿混」口径（见本节末两段）。
+
+~~Event 消费面推进序列：~~
+
 ```text
 Event Stream
  ↓
@@ -235,7 +278,7 @@ Replay
 Audit
 ```
 
-后续再做：
+~~后续再做：~~
 
 ```text
 Recovery
