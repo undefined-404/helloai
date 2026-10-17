@@ -1,7 +1,10 @@
 package com.helloai.core.review.support;
 
+import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -110,5 +113,66 @@ class FinalReportFidelityCheckerTest {
         FinalReportFidelityChecker.Result result = FinalReportFidelityChecker.check(report);
 
         assertThat(result.hasHard()).isFalse();
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  S-9：脚本类交付物可执行性判定（纯静态，沙箱执行链设计方案 §3.5）
+    // ────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("S-9 证据有效（ExecuteResponse exitCode=0 未截断）→ 零违规")
+    void shouldPassWhenScriptExecutable() {
+        ExecuteResponse ok = new ExecuteResponse("done", 0, false);
+
+        FinalReportFidelityChecker.Result result =
+                FinalReportFidelityChecker.checkScriptExecutability("echo ok", ok);
+
+        assertThat(result.hasHard()).isFalse();
+        assertThat(result.violations()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-9 执行失败（exitCode=1）→ HARD script_execution_failed 机械驳回")
+    void shouldBlockWhenScriptFails() {
+        ExecuteResponse failed = new ExecuteResponse("Traceback...", 1, false);
+
+        FinalReportFidelityChecker.Result result =
+                FinalReportFidelityChecker.checkScriptExecutability("python -c '1/0'", failed);
+
+        assertThat(result.hasHard()).isTrue();
+        assertThat(result.hardIssueList()).contains("script_execution_failed");
+    }
+
+    @Test
+    @DisplayName("S-9 输出截断（truncated=true）→ HARD 机械驳回（无法确认完整执行）")
+    void shouldBlockWhenScriptTruncated() {
+        ExecuteResponse truncated = new ExecuteResponse("...", 0, true);
+
+        FinalReportFidelityChecker.Result result =
+                FinalReportFidelityChecker.checkScriptExecutability("echo x", truncated);
+
+        assertThat(result.hasHard()).isTrue();
+        assertThat(result.hardIssueList()).contains("script_execution_failed");
+    }
+
+    @Test
+    @DisplayName("S-9 沙箱证据不可得（null）→ HARD script_execution_unavailable 机械驳回（fail-closed）")
+    void shouldBlockWhenExecutionUnavailable() {
+        FinalReportFidelityChecker.Result result =
+                FinalReportFidelityChecker.checkScriptExecutability("echo ok", null);
+
+        assertThat(result.hasHard()).isTrue();
+        assertThat(result.hardIssueList()).contains("script_execution_unavailable");
+    }
+
+    @Test
+    @DisplayName("S-9 兼容 Map 结构执行结果（exitCode/truncated）→ 判定一致")
+    void shouldAcceptMapExecution() {
+        assertThat(FinalReportFidelityChecker.checkScriptExecutability("x", Map.of("exitCode", 0, "truncated", false))
+                .hasHard()).isFalse();
+        assertThat(FinalReportFidelityChecker.checkScriptExecutability("x", Map.of("exitCode", 2, "truncated", false))
+                .hasHard()).isTrue();
+        assertThat(FinalReportFidelityChecker.checkScriptExecutability("x", Map.of())
+                .hasHard()).isTrue();
     }
 }

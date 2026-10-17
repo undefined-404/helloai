@@ -2,6 +2,8 @@ package com.helloai.core.agent.runtime.tool;
 
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.port.AttachmentPort;
+import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
+import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
@@ -37,8 +39,10 @@ class InternalLlmExecutorToolsTest {
     private final AgentSkillSpecService agentSkillSpecService = mock(AgentSkillSpecService.class);
     private final com.helloai.core.agent.port.SubTaskCommandPort subTaskCommandPort =
             mock(com.helloai.core.agent.port.SubTaskCommandPort.class);
+    private final SandboxExecutionService sandboxExecutionService = mock(SandboxExecutionService.class);
     private final InternalLlmExecutorTools tools =
-            new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService, subTaskCommandPort);
+            new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService,
+                    subTaskCommandPort, sandboxExecutionService);
 
     /** REF-8.1 A1 强制闸门：本类工具仅可由内部执行链调用，单测需先绑定执行链上下文。 */
     @BeforeEach
@@ -65,6 +69,9 @@ class InternalLlmExecutorToolsTest {
         assertThatThrownBy(() -> tools.internalRegisterOutputAttachment(
                 11L, 22L, "x.md", "text/markdown", 1L, "minio://b/x.md"))
                 .isInstanceOf(BizException.class);
+        assertThatThrownBy(() -> tools.internalRunInSandbox(11L, 22L, "echo ok", null))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("仅可由平台内部执行链调用");
     }
 
     @Test
@@ -247,5 +254,46 @@ class InternalLlmExecutorToolsTest {
         ToolInvocationContext.unbind();
         assertThat(ToolInvocationContext.hasCalled("internal_get_sub_task_detail")).isFalse();
         ToolInvocationContext.bind(11L, 22L);   // 复位供 @AfterEach/#后续用例
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  S-8：沙箱执行通道（internal_run_in_sandbox）
+    // ────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("S-8 internal_run_in_sandbox：绑定执行链下委托 SandboxExecutionService.execute（用绑定 subTaskId）")
+    void shouldRunInSandboxWithBoundSubTaskId() {
+        ExecuteResponse response = new ExecuteResponse("out", 0, false);
+        when(sandboxExecutionService.execute(22L, "python -c 'print(1)'", 30)).thenReturn(response);
+
+        Object result = tools.internalRunInSandbox(999L, 888L, "python -c 'print(1)'", 30);
+
+        // 调用方冒充 (999,888) 也必须落到绑定值 (11,22) → subTaskId=22
+        assertThat(result).isSameAs(response);
+        verify(sandboxExecutionService).execute(22L, "python -c 'print(1)'", 30);
+    }
+
+    @Test
+    @DisplayName("S-8 internal_run_in_sandbox：timeoutSeconds 为空时透传 null（由执行服务按默认 30 处理）")
+    void shouldPassNullTimeoutToExecutionService() {
+        when(sandboxExecutionService.execute(22L, "echo ok", null))
+                .thenReturn(new ExecuteResponse("ok", 0, false));
+
+        tools.internalRunInSandbox(11L, 22L, "echo ok", null);
+
+        verify(sandboxExecutionService).execute(22L, "echo ok", null);
+    }
+
+    @Test
+    @DisplayName("S-8 internal_run_in_sandbox：执行失败/超时也结构化返回（不抛异常，交给模型判定）")
+    void shouldReturnStructuredFailureFromSandbox() {
+        ExecuteResponse failed = new ExecuteResponse("sandbox execution failed: ConnectException: x",
+                ExecuteResponse.EXIT_CODE_ERROR, false);
+        when(sandboxExecutionService.execute(22L, "cat nope.txt", 30)).thenReturn(failed);
+
+        Object result = tools.internalRunInSandbox(11L, 22L, "cat nope.txt", 30);
+
+        assertThat(result).isSameAs(failed);
+        verify(sandboxExecutionService).execute(22L, "cat nope.txt", 30);
     }
 }

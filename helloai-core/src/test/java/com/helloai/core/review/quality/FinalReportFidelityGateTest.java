@@ -3,6 +3,8 @@ package com.helloai.core.review.quality;
 import com.helloai.core.agent.quality.gate.GateDecision;
 import com.helloai.core.agent.quality.gate.GateOutcome;
 import com.helloai.core.agent.quality.gate.GateSeverity;
+import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
+import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.review.support.FinalReportFidelityChecker;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -10,6 +12,11 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * {@link FinalReportFidelityGate} 单测（RM12 收口切片）。
@@ -79,5 +86,89 @@ class FinalReportFidelityGateTest {
             assertEquals(legacy.softIssueList(), decision.detailList(GateSeverity.SOFT),
                     "SOFT 渲染应逐字一致: " + report);
         }
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  S-9：脚本类交付物可执行性机械判定（沙箱执行链设计方案 §3.5/§4）
+    // ────────────────────────────────────────────────────────────
+
+    /** 报告声明脚本交付物（sh 围栏）但沙箱未接线（无参构造）→ S-9 不触发，行为零变化。 */
+    private static final String REPORT_WITH_SH_SCRIPT =
+            "# 报告\n## 0. 覆盖追溯表\n| a | b |\n\n## 1. 结论\n```sh\necho ok\n```\n";
+
+    @Test
+    @DisplayName("S-9 沙箱未接线（无参构造）：报告含脚本围栏也零变化（不验证、不追加违规）")
+    void shouldNotVerifyWhenSandboxNotWired() {
+        // gate 是无参构造 ⇒ sandboxExecutionService=null ⇒ S-9 不触发
+        GateDecision d = gate.evaluate(REPORT_WITH_SH_SCRIPT);
+        // 既有判定：含覆盖追溯表、无空壳引用、围栏平衡 ⇒ PASS
+        assertEquals(GateOutcome.PASS, d.outcome());
+    }
+
+    @Test
+    @DisplayName("S-9 脚本执行成功（exitCode=0）→ 不新增违规（证据有效，供 Reviewer 参考）")
+    void shouldPassWhenSandboxScriptSucceeds() {
+        SandboxExecutionService sandbox = mock(SandboxExecutionService.class);
+        when(sandbox.execute(any(), any(), any())).thenReturn(new ExecuteResponse("ok", 0, false));
+        FinalReportFidelityGate wiredGate = new FinalReportFidelityGate(sandbox);
+
+        GateDecision d = wiredGate.evaluate(REPORT_WITH_SH_SCRIPT);
+
+        assertEquals(GateOutcome.PASS, d.outcome());
+        verify(sandbox).execute(null, "echo ok", null);
+    }
+
+    @Test
+    @DisplayName("S-9 脚本执行失败（exitCode=1）→ HARD script_execution_failed → BLOCK（机械驳回）")
+    void shouldBlockWhenSandboxScriptFails() {
+        SandboxExecutionService sandbox = mock(SandboxExecutionService.class);
+        when(sandbox.execute(any(), any(), any())).thenReturn(new ExecuteResponse("Traceback", 1, false));
+        FinalReportFidelityGate wiredGate = new FinalReportFidelityGate(sandbox);
+
+        GateDecision d = wiredGate.evaluate(REPORT_WITH_SH_SCRIPT);
+
+        assertEquals(GateOutcome.BLOCK, d.outcome());
+        assertTrue(d.hasSeverity(GateSeverity.HARD));
+        assertTrue(d.detailList(GateSeverity.HARD).contains("script_execution_failed"));
+    }
+
+    @Test
+    @DisplayName("S-9 沙箱不可用（execute 返回 -1 结构化失败）→ HARD → BLOCK（fail-closed）")
+    void shouldBlockWhenSandboxUnavailable() {
+        SandboxExecutionService sandbox = mock(SandboxExecutionService.class);
+        when(sandbox.execute(any(), any(), any()))
+                .thenReturn(new ExecuteResponse("sandbox execution disabled", ExecuteResponse.EXIT_CODE_ERROR, false));
+        FinalReportFidelityGate wiredGate = new FinalReportFidelityGate(sandbox);
+
+        GateDecision d = wiredGate.evaluate(REPORT_WITH_SH_SCRIPT);
+
+        assertEquals(GateOutcome.BLOCK, d.outcome());
+        assertTrue(d.detailList(GateSeverity.HARD).contains("script_execution_failed"));
+    }
+
+    @Test
+    @DisplayName("S-9 无脚本围栏的报告（纯文档交付物）→ 不调沙箱，行为零变化")
+    void shouldNotCallSandboxWithoutScriptFence() {
+        SandboxExecutionService sandbox = mock(SandboxExecutionService.class);
+        FinalReportFidelityGate wiredGate = new FinalReportFidelityGate(sandbox);
+
+        GateDecision d = wiredGate.evaluate(CLEAN);
+
+        assertEquals(GateOutcome.PASS, d.outcome());
+        verify(sandbox, never()).execute(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("S-9 既有 HARD（空壳引用）且沙箱验证成功 → 仍按既有 HARD 驳回（沙箱不掩盖既有违规）")
+    void shouldKeepExistingHardEvenWhenScriptSucceeds() {
+        SandboxExecutionService sandbox = mock(SandboxExecutionService.class);
+        when(sandbox.execute(any(), any(), any())).thenReturn(new ExecuteResponse("ok", 0, false));
+        FinalReportFidelityGate wiredGate = new FinalReportFidelityGate(sandbox);
+        String report = "# 报告\n## 1. 开源矩阵\n完整矩阵见分册第4章。\n\n## 2. 脚本\n```sh\necho ok\n```\n";
+
+        GateDecision d = wiredGate.evaluate(report);
+
+        assertEquals(GateOutcome.BLOCK, d.outcome());
+        assertTrue(d.detailList(GateSeverity.HARD).contains("shell_reference"));
     }
 }
