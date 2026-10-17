@@ -186,8 +186,10 @@ public class ClarifyWebSearchOrchestrator {
                 }
                 attempted.add(q);
                 // 阶段四：搜索动作走平台工具 web_search（能力归 planner），
-                // 失败/无结果降级空列表（与旧直调契约语义一致）；provider 取工具输出
-                WebSearchToolResult out = callWebSearchTool(q, perQuery);
+                // 失败/无结果降级空列表（与旧直调契约语义一致）；provider 取工具输出；
+                // withAnswer 对齐 WebSearchProperties.isAiSearchAnswer()（默认开）——
+                // 让博查侧已生成的 answer 经工具回传（W-1），供 toContextText 渲染总结节
+                WebSearchToolResult out = callWebSearchTool(q, perQuery, webSearchProperties.isAiSearchAnswer());
                 int hits = 0;
                 if (out != null) {
                     if (out.provider() != null && !out.provider().isBlank()
@@ -224,7 +226,8 @@ public class ClarifyWebSearchOrchestrator {
                         stripUrls(userMessage), new ArrayList<>(searched), attempted);
                 if (gapQuery != null && !gapQuery.isBlank()) {
                     attempted.add(gapQuery);
-                    WebSearchToolResult gap = callWebSearchTool(gapQuery, perQuery);
+                    WebSearchToolResult gap = callWebSearchTool(gapQuery, perQuery,
+                            webSearchProperties.isAiSearchAnswer());
                     if (gap != null) {
                         for (WebSearchResult r : gap.results()) {
                             if (r == null || r.getUrl() == null || r.getUrl().isBlank()
@@ -277,11 +280,19 @@ public class ClarifyWebSearchOrchestrator {
      *
      * <p>入参序列化 + 工具执行 + 输出反序列化；任意环节失败（工具失败/非 JSON/缺字段）
      * 返回 null，调用方按「空结果」降级——与旧直调契约（失败返回空列表）语义一致。</p>
+     *
+     * <p>W-1：{@code withAnswer} 为 true 时工具侧同步请求供应商大模型总结（answer），
+     * 结果回传 {@code WebSearchToolResult.answer}——博查 AI Search 请求层本就
+     * {@code answer=true} 生成总结，此前丢失在工具调用参数层（工具默认 false 不取）。</p>
      */
-    private WebSearchToolResult callWebSearchTool(String query, int maxResults) {
+    private WebSearchToolResult callWebSearchTool(String query, int maxResults, boolean withAnswer) {
         String argsJson;
         try {
-            argsJson = objectMapper.writeValueAsString(Map.of("query", query, "maxResults", maxResults));
+            Map<String, Object> args = new java.util.LinkedHashMap<>();
+            args.put("query", query);
+            args.put("maxResults", maxResults);
+            args.put("withAnswer", withAnswer);
+            argsJson = objectMapper.writeValueAsString(args);
         } catch (Exception e) {
             log.warn("澄清联网搜索：web_search 入参序列化失败，降级空结果: query={}, err={}",
                     query, e.getMessage());

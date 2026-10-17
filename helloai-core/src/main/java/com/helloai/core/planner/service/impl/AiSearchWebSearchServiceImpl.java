@@ -3,6 +3,7 @@ package com.helloai.core.planner.service.impl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.planner.clarify.RelativeTimeNormalizer;
 import com.helloai.core.planner.search.WebSearchCredentialKeyStore;
 import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.WebSearchService;
@@ -16,6 +17,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -50,6 +52,8 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
 
     private final WebSearchProperties properties;
     private final WebSearchCredentialKeyStore credentialKeyStore;
+    /** W-3：freshness 动态判定（查询词时效词表单一事实源，与搜索词日期归一化同源）。 */
+    private final RelativeTimeNormalizer relativeTimeNormalizer;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
@@ -59,9 +63,11 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
 
     public AiSearchWebSearchServiceImpl(WebSearchProperties properties,
                                         WebSearchCredentialKeyStore credentialKeyStore,
+                                        RelativeTimeNormalizer relativeTimeNormalizer,
                                         ObjectMapper objectMapper) {
         this.properties = properties;
         this.credentialKeyStore = credentialKeyStore;
+        this.relativeTimeNormalizer = relativeTimeNormalizer;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.max(1L, properties.getAiSearchTimeoutMs())))
@@ -143,13 +149,9 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
         int limit = Math.max(1, Math.min(properties.getAiSearchMaxResults(), MAX_AI_SEARCH_COUNT));
         lastAnswer = null; // 每次搜索重置，供 answerSummary 读取本次总结（避免上次残留）
         try {
-            String body = objectMapper.writeValueAsString(Map.of(
-                    "query", query,
-                    "freshness", "noLimit",
-                    "count", limit,
-                    "answer", properties.isAiSearchAnswer(),
-                    "stream", false
-            ));
+            // W-3：freshness 由查询词时效动态判定（含时效词收紧档位，否则 noLimit），
+            // 替代硬编码 noLimit——对齐成熟产品「时间衰减」检索体验
+            String body = buildRequestBody(query, limit);
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(properties.getAiSearchBaseUrl()))
                     .timeout(Duration.ofMillis(Math.max(1L, properties.getAiSearchTimeoutMs())))
@@ -168,6 +170,30 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
         } catch (Exception e) {
             log.warn("博查 AI Search 失败（已降级为空列表）: query={}, err={}", query, e.getMessage());
             return List.of();
+        }
+    }
+
+    /**
+     * 组装 AI Search 请求体（包私有，供单测直接断言 freshness 动态判定结果，W-3）。
+     *
+     * @param query 查询词
+     * @param limit provider 级结果条数（已收敛 1~50）
+     * @return JSON 请求体字符串
+     */
+    String buildRequestBody(String query, int limit) {
+        String freshness = relativeTimeNormalizer.freshnessFor(query, LocalDate.now());
+        try {
+            return objectMapper.writeValueAsString(Map.of(
+                    "query", query,
+                    "freshness", freshness,
+                    "count", limit,
+                    "answer", properties.isAiSearchAnswer(),
+                    "stream", false
+            ));
+        } catch (Exception e) {
+            // 与 search() 的降级语义一致：序列化失败返回最小请求体（query + noLimit）
+            log.warn("博查 AI Search 请求体序列化失败，降级最小请求体: err={}", e.getMessage());
+            return "{\"query\":\"" + query + "\",\"freshness\":\"noLimit\"}";
         }
     }
 

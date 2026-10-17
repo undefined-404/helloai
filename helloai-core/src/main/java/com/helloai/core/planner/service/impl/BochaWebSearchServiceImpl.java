@@ -3,6 +3,7 @@ package com.helloai.core.planner.service.impl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.planner.clarify.RelativeTimeNormalizer;
 import com.helloai.core.planner.search.WebSearchCredentialKeyStore;
 import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.WebSearchService;
@@ -16,6 +17,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,14 +42,18 @@ public class BochaWebSearchServiceImpl implements WebSearchService {
 
     private final WebSearchProperties properties;
     private final WebSearchCredentialKeyStore credentialKeyStore;
+    /** W-3：freshness 动态判定（查询词时效词表单一事实源，与搜索词日期归一化同源）。 */
+    private final RelativeTimeNormalizer relativeTimeNormalizer;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
     public BochaWebSearchServiceImpl(WebSearchProperties properties,
                                      WebSearchCredentialKeyStore credentialKeyStore,
+                                     RelativeTimeNormalizer relativeTimeNormalizer,
                                      ObjectMapper objectMapper) {
         this.properties = properties;
         this.credentialKeyStore = credentialKeyStore;
+        this.relativeTimeNormalizer = relativeTimeNormalizer;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(properties.getTimeoutMs()))
@@ -126,11 +132,14 @@ public class BochaWebSearchServiceImpl implements WebSearchService {
 
         int limit = Math.max(1, Math.min(maxResults, properties.getMaxResults()));
         try {
+            // W-3：freshness 由查询词时效动态判定（含时效词收紧档位，否则 noLimit），
+            // 替代硬编码 noLimit——对齐成熟产品「时间衰减」检索体验
+            String freshness = relativeTimeNormalizer.freshnessFor(query, LocalDate.now());
             String body = objectMapper.writeValueAsString(Map.of(
                     "query", query,
                     "summary", true,
                     "count", limit,
-                    "freshness", "noLimit"
+                    "freshness", freshness
             ));
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(properties.getBochaBaseUrl()))
