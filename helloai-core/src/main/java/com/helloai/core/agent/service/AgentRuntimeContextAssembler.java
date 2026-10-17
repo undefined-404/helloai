@@ -68,7 +68,8 @@ import java.util.stream.Collectors;
  * <p><b>边界</b>：Turn 事件骨架（AGENT_STARTED / SKILL_RESOLVED / TOOL_RESOLVED /
  * ENVIRONMENT_RESOLVED / CONTEXT_BUILT / TOOL_CALL）由 {@code RuntimeTurnExecutor} 在真身内
  * 自行记录（与旧链同 payload 语义），本类不再记录——避免事件双写。本类不做状态推进
- * （{@code SubTaskExecutionService.startIfNeeded}）与结果回写（{@link ExecutionResultHandler}），
+ * （{@code SubTaskCommandPort#startIfNeeded}，原 {@code SubTaskExecutionService} 已随 G-002 删除）
+ * 与结果回写（{@link ExecutionResultHandler}），
  * 两者是消费侧（{@code LocalExecutionCommandConsumer}）的编排职责。</p>
  *
  * <p><b>跨域访问（2026-10-01 W11）</b>：本类曾直接 import {@code task.entity.SubTask} /

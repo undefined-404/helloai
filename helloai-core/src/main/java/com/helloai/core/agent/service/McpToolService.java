@@ -85,7 +85,7 @@ public interface McpToolService {
      *
      * <p>「验收标准下发」缺口补齐：外部执行者经 MCP 此前只能看到收件箱摘要（仅交付物），
      * 但审查侧按 {@code acceptance} 核验——本工具把执行者据此开工所需的子任务全文
-     * 一次性下发，与平台内执行 Prompt（SubTaskExecutionServiceImpl.buildUserPrompt）
+     * 一次性下发，与平台内执行 Prompt（{@code AgentRuntimeContextAssembler#buildUserPrompt}）
      * 的「当前任务」四要素同源。授权：仅当前已分配给本 Agent 的子任务，
      * 或尚未分配且状态为 PENDING（可认领）的子任务可查。</p>
      */

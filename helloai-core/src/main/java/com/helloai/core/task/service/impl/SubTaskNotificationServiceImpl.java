@@ -340,7 +340,7 @@ public class SubTaskNotificationServiceImpl implements SubTaskNotificationServic
     /**
      * 不确定性申报下行渲染（P0 增量）：逐条「[kind] note + 分级后缀」正文，替代此前的
      * 「待确认: N 项」计数——计数无法告诉执行者要验证什么。后缀语义与执行侧注入同源
-     * （{@code SubTaskExecutionServiceImpl.buildUserPrompt}）：ASSUMPTION 可自行验证 / 推翻；
+     * （{@code AgentRuntimeContextAssembler#buildUserPrompt}）：ASSUMPTION 可自行验证 / 推翻；
      * 其余（含人工编辑引入的非法值）一律按 UNCONFIRMED 的 fail-close 语义处理。
      *
      * @return 每条前缀换行；空列表 / 全空白返回空串（零注入，存量行为不变）

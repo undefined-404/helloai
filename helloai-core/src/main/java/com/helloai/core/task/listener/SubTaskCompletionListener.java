@@ -135,7 +135,7 @@ public class SubTaskCompletionListener {
     /**
      * 提取契约子任务产出正文：物化附件（仅 ACTIVE 有效版本）优先，
      * 失败/无附件回退 {@link SubTaskOutputExtractor#extractExecutionOutput(java.util.Map)}；
-     * 两者均无返回 null。与 SubTaskExecutionService.loadUpstreamContent 同源口径。
+     * 两者均无返回 null。与 {@code AgentRuntimeContextAssembler#loadUpstreamContent} 同源口径。
      *
      * <p><b>P-1 修复（2026-09-30）</b>：与 AgentRuntimeContextAssembler / McpToolServiceImpl
      * 同模式——反转 {@code listActive} 倒序为正序（最早创建在前，主文件优先）+ 拼接全部

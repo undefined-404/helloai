@@ -9,7 +9,7 @@ import java.util.Map;
  *
  * <p>职责边界：只负责「读任务 required_skills（装箱传入）→ 命中插件标签 → 渲染规范速览段」，
  * 不参与选人匹配（选人由 {@code AgentSelectionConstraints} + {@code SkillNormalizer} 承担）；
- * 渲染结果由 {@code SubTaskExecutionServiceImpl} 拼入执行 Prompt 全局段。</p>
+ * 渲染结果由 {@code AgentRuntimeContextAssembler} 拼入执行 Prompt 全局段。</p>
  *
  * <p>与 task 域的解耦：本服务<b>纯函数式</b>——requiredSkills 由调用方（执行命令装箱
  * 传播，见 {@code ExecutionCommand.requiredSkills}）传入，不再反向查询 task，
