@@ -103,7 +103,7 @@ if [ -f "$TURN_EXEC" ]; then
   # 埋点仍在 step=7 且按事实记录 environment + accessType（原语义：null 也按事实记录，不阻断链路）
   step7="$(grep -nE 'record\(ctx, 7, AgentEventType\.ENVIRONMENT_RESOLVED' "$TURN_EXEC" | head -1)"
   if [ -n "$step7" ]; then
-    ok "ENVIRONMENT_RESOLVED 仍在 RuntimeTurnExecutor step=7 埋点（$step7）"
+    ok "ENVIRONMENT_RESOLVED 仍在 RuntimeTurnExecutor step=7 埋点（${step7}）"
   else
     bad "ENVIRONMENT_RESOLVED 埋点缺失或步骤号漂移（应为 step=7）——既有沙箱观测日志语义被破坏"
   fi
