@@ -816,7 +816,9 @@ review.ReviewPortAdapter
 
 > **判据**：**「判断依据属于谁，判定就由谁做」**——这与「能力判定按归属域二分」（W8）同源，只是发生在**数据契约**而非**行为契约**上。
 > **为什么不能做成独立查询**（如 `isContentLoadable(id)` / `isAssumption(id)`）：那会让提供方**每条都回查一次实体**（+N 次 DB 往返、随条数线性增长）；顺带算进快照则是**零额外往返**。
-> **代价**：映射器多一处派生逻辑 ⇒ 必须在映射器 javadoc 逐条登记「本层有哪些派生字段、依据什么」，否则后人会以为它「只做纯投影」。当前 `SubTaskSnapshotMapper` 登记了两处（`dependsOn` 归一化、`assumption` 等值判定）。
+> **代价**：投影器多一处派生逻辑 ⇒ 必须在投影器 javadoc 逐条登记「本层有哪些派生字段、依据什么」，否则后人会以为它「只做纯投影」。当前 `SubTaskSnapshotProjection`（`task.projection`）登记了两处（`dependsOn` 归一化、`assumption` 等值判定）。
+>
+> **★命名与落点（2026-10-17，`LOG-20261017-002`）**：这类「提供方侧纯内存投影」**不放 `{domain}.service.impl`**（该包**只**容纳 `{接口名}ServiceImpl`，见 §8.1），也**不得**占用 `*Mapper` 后缀（§17 保留给 MyBatis）—— 统一置入 `{domain}.projection` 包并以 `XxxProjection` 命名。
 
 ***
 
@@ -871,6 +873,17 @@ Controller 和跨域调用：
 ```text
 XxxServiceImpl
 ```
+
+> **★`{domain}.service.impl` 的收容口径（2026-10-17 明确，`LOG-20261017-002`）**：该包**只容纳** `XxxServiceImpl` —— 包内**任何**非 `XxxServiceImpl` 命名的 Java 文件均为违规，按下列方式归位：
+>
+> | 形态 | 处置 |
+> |---|---|
+> | **无接口**的实现类（含事务边界 Bean、`Impl` 语义要求「实现某接口」） | **补接口**（接口置 `{domain}.service`）+ 实现改名 `XxxServiceImpl`；消费方改为**经接口注入** |
+> | **纯内存投影 / 映射助手**（零 DB、零状态） | 迁出到 `{domain}.projection`，以 `XxxProjection` 命名（**不得**占用 `*Mapper`——§17 保留给 MyBatis） |
+> | 跨域适配器 | 迁出到 `{domain}.adapter`（§7.3） |
+> | 具名 `record` / `interface` | 若因父包即接口等技术原因必须留在该包，须**显式豁免登记** |
+>
+> 自查：`find . -path "*/main/java/*service/impl/*" -name '*.java' ! -name '*ServiceImpl.java'` 应**为空**。
 
 ***
 

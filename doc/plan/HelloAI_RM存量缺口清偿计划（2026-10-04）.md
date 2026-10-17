@@ -110,6 +110,10 @@
 > **★沉淀**：「**行数未变 ⇒ 推定锚点未漂移**」这条推定**在同一工作日内的多笔也适用失败** —— 任何一笔新增方法都会同时破坏「行数不变」与其派生推定；故**锚点重取只能以「开工那一刻的文件」为准**，不得继承任何历史结论。
 >
 > **★行数复测（2026-10-16 三次，RM9-b 交付后）**：`SubTaskServiceImpl` **1592 → 551**（薄门面），业务实现迁入 **4** 个包内 `@Service`（`SubTaskStateMachineService` **655** / `SubTaskQueryService` **380** / `SubTaskNotificationService` **357** / `SubTaskLeaseService` **195**）+ 1 个包内映射器（`SubTaskProjectionMapper` **78**）= **2216** 行。`McpToolServiceImpl` **409**（RM9-a 后未变）、`RequirementClarifyServiceImpl` **1557**（仍未变）。执行结果与验证见 §7.6。
+> **★行数复测（2026-10-17 四次，RM9-c 交付后）**：`RequirementClarifyServiceImpl` **1557 → 320**（薄门面），业务实现迁入 **5** 个实现类（`ClarifyRoundOrchestratorServiceImpl` **438** / `ClarifyPromptRenderServiceImpl` **367** / `ClarifyCommandSearchServiceImpl` **215** / `ClarifyStreamServiceImpl` **210** / `ClarifyFinalizeServiceImpl` **196**）+ **5** 个接口（`ClarifyRoundOrchestratorService` 69 / `ClarifyCommandSearchService` 64 / `ClarifyPromptRenderService` 38 / `ClarifyFinalizeService` 36 / `ClarifyStreamService` 27）。另：`McpToolServiceImpl` **409**（RM9-a 后未变）、`SubTaskServiceImpl` **551**（RM9-b 后未变）。执行结果与验证见 §7.7 ⇒ **`RM9` 三笔 3/3 收官**。
+>
+> **★命名整改连带对照（2026-10-17，`D-2026-10-17-2` / `LOG-20261017-002`）**：本计划 §4.3 的目标名中 `ClarifyPromptRenderer` **已按用户裁定改为接口 `ClarifyPromptRenderService` + 实现 `ClarifyPromptRenderServiceImpl`**（口径 =「接口加 `Service` 后缀（严格字面）」）；§7.2~§7.6 行文内出现的 4 个映射器**已迁出 `service.impl` 并去 `*Mapper` 后缀** —— `SubTaskProjectionMapper` → `task.projection.SubTaskProjection`、`SubTaskSnapshotMapper` → `task.projection.SubTaskSnapshotProjection`、`AgentProfileSnapshotMapper` → `agent.projection.AgentProfileSnapshotProjection`、`LlmProviderProfileMapper` → `system.projection.LlmProviderProfileProjection`；`InFlightDbQuotaService` → `agent.service.impl.ConcurrencyQuotaServiceImpl`。**历史笔次的行文一律不改**（只给当前名对照）。
+>
 
 | 类 | 行数(10-12) | 方法数 | 主要职责（§9.1 判据：两个以上即应拆） |
 |---|---|---|---|
@@ -207,8 +211,10 @@
 ```text
 RM9-a  McpToolServiceImpl     → 门面 + 3 类（最小、协议面单一，先做以验证手感）  ✅ 已完成（2026-10-16，见 §7.5）
 RM9-b  SubTaskServiceImpl     → 门面 + 4 类（含状态机单点收敛，风险最高）        ✅ 已完成（2026-10-16，见 §7.6）
-RM9-c  RequirementClarifyServiceImpl → 门面 + 5 类（最大，纯编排无跨域副作用）  ⬜ 待办
+RM9-c  RequirementClarifyServiceImpl → 门面 + 5 类（最大，纯编排无跨域副作用）  ✅ 已完成（2026-10-17，见 §7.7）
 ```
+
+> **★2026-10-17 命名整改（`D-2026-10-17-2`）**：本序列三笔的产物命名已按 `CODE_STYLE §8.1`/`§17` 归位 —— ① 所有拆出的职责类在 `{domain}.service.impl` 内**一律以 `{接口名}ServiceImpl` 命名**（并**补齐接口**置于 `{domain}.service`）；② 4 个纯静态投影助手**迁出** `service.impl` 到新建 `{domain}.projection` 包、去 `*Mapper` 后缀。整改后 `{domain}.service.impl` 下**非 `*ServiceImpl` 文件 = 0**。详见 §7.7 末段与 `LOG-20261017-002`。
 
 **每笔内部子序**：① 先抽**只读簇**（`McpReadModelService` / `SubTaskQueryService` / `ClarifyPromptRenderer`、`ClarifyCommandSearchService`）⇒ 零行为变更、易验证；② 再抽**副作用簇**（通知 / 流式 / 租约）；③ 最后抽**状态机 / 编排簇**（风险最高）。
 
@@ -430,6 +436,44 @@ RM9-c  RequirementClarifyServiceImpl → 门面 + 5 类（最大，纯编排无�
 | 文档守卫 | ✅ `scripts/shell/verify-doc-gap-table.sh` **4/4**（tripwire 仍 **23**：本批**未新增矩阵行**，只在 §0 加决策） |
 | 回滚 | ✅ 单笔 `git revert`（门面保留原类名 ⇒ 外部零改动） |
 | PS1 / E2E | **NOT RUN** |
+
+### 7.7 RM9-c 执行结果（2026-10-17）：`RequirementClarifyServiceImpl` → 薄门面 + 5 职责类（收官笔）
+
+**决策**：`D-2026-10-17-1`（记录 `LOG-20261017-001`）。**本笔为 RM9 一类一笔序列的最后一笔**（三笔中体量最大：拆分前 **1557 行 / 97 方法**）。切分线已定稿（§4.3.3，2026-10-12 用户裁定「全部接受」）⇒ 只做实施。
+
+**产物**
+
+| 文件 | 行数 | 说明 |
+|---|---|---|
+| `planner/service/impl/RequirementClarifyServiceImpl.java`（**保留原类名，薄门面**） | **320**（原 1557） | 门面职责：`create`×3 / `sendMessage`×2 / `retryRound` / `streamRound` / `finalize` / `regenerate` / `abandon` / `delete` / `switchToClarify`×2 / `switchToChat` / `listConversations` / `detail` / `listPlannerOptions`（多数为逐方法委托） |
+| `planner/service/ClarifyCommandSearchService.java`（新增·接口） | **64** | **叶子契约**（零反向依赖）：命令解析 + 模式谓词 + Web Search 决策；含 `enum SearchPolicy` |
+| `planner/service/impl/ClarifyCommandSearchServiceImpl.java`（新增） | **215** | 上述实现 |
+| `planner/service/ClarifyRoundOrchestratorService.java`（新增·接口） | **69** | 编排契约（含 `record RoundDecision` + `static degradedDefaults()`） |
+| `planner/service/impl/ClarifyRoundOrchestratorServiceImpl.java`（新增） | **438** | 编排簇（`doRound` **重载对整组迁移** + `enterClarify`） |
+| `planner/service/ClarifyPromptRenderService.java`（新增·接口） | **38** | 渲染契约 |
+| `planner/service/impl/ClarifyPromptRenderServiceImpl.java`（新增） | **367** | 渲染簇（含包内静态 `windowHistory`，供单测直引） |
+| `planner/service/ClarifyFinalizeService.java`（新增·接口） | **36** | 成任务契约 |
+| `planner/service/impl/ClarifyFinalizeServiceImpl.java`（新增） | **196** | 终稿 → `Task`（含 CAS 幂等） |
+| `planner/service/ClarifyStreamService.java`（新增·接口） | **27** | SSE 流式契约 |
+| `planner/service/impl/ClarifyStreamServiceImpl.java`（新增） | **210** | `Flux<ChatStreamEvent>` 流式面 |
+
+**★门面 ⇄ 编排器破环（实现层微调，显式登记）**：按原方法归属直接拆会造**构造器环**（门面 `switchToClarify` 需编排器能力；而编排器的「会话激活校验 / 模式谓词」又需门面入口）⇒ `requireActive` / `isClarifyMode` / `isChatMode` 下移**叶子契约** `ClarifyCommandSearchService`；`switchToClarify` 的核心下移编排器为 `enterClarify(conversationId, extraMessage)`，门面保留 `switchToChat`。
+
+**★`renderPrompt` 按模板拆分**：原单入口 `renderPrompt(templatePath)` 对外改为 `renderClarifyPrompt` / `renderChatPrompt` / `renderFinalizePrompt` 三个方法，私有 `renderPrompt(templatePath)` 保留 ⇒ **模板路径常量不外泄**、可测性更好。
+
+**★依赖方向无环**：`门面 → 编排器 → {命令搜索, 渲染, 终稿}` + `编排器 → 状态机` + `流式 → 编排器 / 渲染 / 命令搜索`；`ClarifyCommandSearchService` 为叶子。
+
+**验证**
+
+| 项 | 结果 |
+|---|---|
+| 编译 | ✅ `mvn -o -B -pl helloai-core -am test-compile`（**不 clean**，应用在跑）**BUILD SUCCESS** |
+| 定向回归 | ✅ **105 例 0 失败 0 错误**（`RequirementClarifyServiceTest` 95 / `RequirementPromptTemplateContractTest` 4 / `RequirementClarifyContextWindowTest` 6）—— 与本笔前基线**逐数一致** |
+| 全量 | ✅ **7 模块 BUILD SUCCESS**；`<testcase>` **2569** 例 / **0 失败 0 错误** —— 与 `RM9-a`/`RM9-b` 基线**逐数一致** |
+| 守卫 | ✅ `scripts/ci/check-arch-freeze.sh` **EXIT=0**（组 1 反向 / 组 2 跨域 Mapper 持平）；`scripts/shell/verify-doc-gap-table.sh` **4/4** |
+| 回滚 | ✅ 单笔 `git revert`（接口与类名不变 ⇒ 外部注入点零改动） |
+
+**★命名合规整改（2026-10-17，`D-2026-10-17-2` / `LOG-20261017-002`）**：用户复核后指出三笔产物命名未完全符合 `CODE_STYLE §8.1`/`§17`（`{domain}.service.impl` 内应 `XxxServiceImpl`；`*Mapper` 不该被非 MyBatis 类占用）。经 3 轮问询裁定后执行：① **4 个纯静态投影助手迁出** `service.impl` → 新建 `{domain}.projection` 包 + `XxxProjection` 后缀（`SubTaskProjection` / `SubTaskSnapshotProjection` / `AgentProfileSnapshotProjection` / `LlmProviderProfileProjection`）；② `InFlightDbQuotaService` → `ConcurrencyQuotaServiceImpl`（接口已存在，纯改名）；③ `FinalReportPersistService` → **补接口** + `FinalReportPersistServiceImpl`（消费方改经接口注入）。**收敛判据**：`find … main/java/*service/impl/* -name '*.java' ! -name '*ServiceImpl.java'` = **空**。全量 `<testcase>` **2569** 例 0 失败 0 错误（与基线逐数一致）。
 
 ---
 
