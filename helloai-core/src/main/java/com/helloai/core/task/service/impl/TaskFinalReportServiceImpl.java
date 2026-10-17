@@ -24,6 +24,7 @@ import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.AttachmentService;
+import com.helloai.core.task.service.FinalReportPersistService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskFinalReportService;
 import com.helloai.core.task.service.TaskIterationService;

@@ -20,11 +20,10 @@ import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.port.ReviewSummary;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
-import com.helloai.core.task.service.impl.SubTaskLeaseService;
-import com.helloai.core.task.service.impl.SubTaskNotificationService;
-import com.helloai.core.task.service.impl.SubTaskQueryService;
+import com.helloai.core.task.service.impl.SubTaskNotificationServiceImpl;
+import com.helloai.core.task.service.impl.SubTaskQueryServiceImpl;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
-import com.helloai.core.task.service.impl.SubTaskStateMachineService;
+import com.helloai.core.task.service.impl.SubTaskStateMachineServiceImpl;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.TaskService;
@@ -101,11 +100,11 @@ class SubTaskServiceHandoverTest {
     void setUp() {
         AgentDispatchProperties dispatchProps = new AgentDispatchProperties();
         dispatchProps.setEnforceMaxConcurrent(true);
-        SubTaskQueryService queryService = new SubTaskQueryService(
+        SubTaskQueryService queryService = new SubTaskQueryServiceImpl(
                 subTaskMapper, taskServiceProvider, reviewPort);
-        SubTaskNotificationService notificationService = new SubTaskNotificationService(
+        SubTaskNotificationService notificationService = new SubTaskNotificationServiceImpl(
                 agentInboxService, agentServiceProvider, applicationEventPublisher, reviewPort, queryService);
-        SubTaskStateMachineService stateMachineService = new SubTaskStateMachineService(
+        SubTaskStateMachineService stateMachineService = new SubTaskStateMachineServiceImpl(
                 subTaskMapper, notificationService, agentOutboxService, heartbeatService,
                 concurrencyQuotaService, dispatchProps,
                 // 租约看门狗配置（changeStatus 进 IN_PROGRESS 时会读，默认值即可）

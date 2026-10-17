@@ -4,9 +4,9 @@ import com.helloai.core.agent.port.SubTaskClaimConstraint;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.projection.SubTaskSnapshotProjection;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.impl.SubTaskSnapshotMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -19,7 +19,7 @@ import java.util.List;
  *
  * <p>纯薄委托：转发到 {@link SubTaskService}，<b>不改动任何 SQL、参数顺序与语义</b>；
  * 唯一附加动作是把返回的 task 实体映射为 {@link SubTaskSnapshot}
- * （见 {@link SubTaskSnapshotMapper}）。实现侧依赖 {@code task → agent.port} 属顺向合法。</p>
+ * （见 {@link SubTaskSnapshotProjection}）。实现侧依赖 {@code task → agent.port} 属顺向合法。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -29,7 +29,7 @@ public class SubTaskQueryPortAdapter implements SubTaskQueryPort {
 
     @Override
     public SubTaskSnapshot findById(Long subTaskId) {
-        return SubTaskSnapshotMapper.toSnapshot(subTaskService.getById(subTaskId));
+        return SubTaskSnapshotProjection.toSnapshot(subTaskService.getById(subTaskId));
     }
 
     /**
@@ -41,12 +41,12 @@ public class SubTaskQueryPortAdapter implements SubTaskQueryPort {
      */
     @Override
     public SubTaskSnapshot findByIdForUpdate(Long subTaskId) {
-        return SubTaskSnapshotMapper.toSnapshot(subTaskService.getByIdForUpdate(subTaskId));
+        return SubTaskSnapshotProjection.toSnapshot(subTaskService.getByIdForUpdate(subTaskId));
     }
 
     @Override
     public List<SubTaskSnapshot> listRecentlyChanged(OffsetDateTime since, int limit) {
-        return SubTaskSnapshotMapper.toSnapshots(subTaskService.listRecentlyChanged(since, limit));
+        return SubTaskSnapshotProjection.toSnapshots(subTaskService.listRecentlyChanged(since, limit));
     }
 
     @Override
@@ -54,7 +54,7 @@ public class SubTaskQueryPortAdapter implements SubTaskQueryPort {
         if (subTaskIds == null || subTaskIds.isEmpty()) {
             return List.of();
         }
-        return SubTaskSnapshotMapper.toSnapshots(subTaskService.listByIds(subTaskIds));
+        return SubTaskSnapshotProjection.toSnapshots(subTaskService.listByIds(subTaskIds));
     }
 
     /**

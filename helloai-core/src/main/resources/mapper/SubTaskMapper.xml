@@ -154,7 +154,7 @@
 
     <!--
         统计某 Agent 在飞子任务数（E2 并发额度占用口径）。
-        与 selectInFlightByAgent 同一状态口径，供 InFlightDbQuotaService
+        与 selectInFlightByAgent 同一状态口径，供 ConcurrencyQuotaServiceImpl
         实时统计占用；任务进入终态后自动减一，无需显式释放。
     -->
     <select id="countInFlightByAgent" resultType="int">

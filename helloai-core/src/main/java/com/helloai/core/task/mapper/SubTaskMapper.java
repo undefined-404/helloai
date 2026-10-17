@@ -83,7 +83,7 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
      *
      * <p>与 {@link #selectInFlightByAgent} 同一口径：
      * ASSIGNED / IN_PROGRESS / REWORK 且 deleted = 0，供
-     * {@code InFlightDbQuotaService} 实时统计占用，完成/改派/回收后自然释放。</p>
+     * {@code ConcurrencyQuotaServiceImpl} 实时统计占用，完成/改派/回收后自然释放。</p>
      *
      * @param agentId Agent ID
      * @return 在飞任务数（&gt;= 0）

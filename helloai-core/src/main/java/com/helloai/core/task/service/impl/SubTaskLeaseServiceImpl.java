@@ -9,7 +9,10 @@ import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.projection.SubTaskProjection;
 import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.task.service.SubTaskLeaseService;
+import com.helloai.core.task.service.SubTaskStateMachineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -42,7 +45,7 @@ import java.util.Map;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class SubTaskLeaseService {
+public class SubTaskLeaseServiceImpl implements SubTaskLeaseService {
 
     private final SubTaskMapper subTaskMapper;
     private final TaskTimelineService taskTimelineService;
@@ -59,6 +62,7 @@ public class SubTaskLeaseService {
      * 返工达上限卡死的 REVIEW 孤儿扫描（§6.52）：候选已人工介入的不返回，
      * 让「返工上限熔断后晾在 REVIEW」的任务能被兜底发现。
      */
+    @Override
     public List<SubTask> listReviewOrphans(int thresholdSeconds, int limit) {
         OffsetDateTime threshold = OffsetDateTime.now().minusSeconds(thresholdSeconds);
         List<SubTask> candidates = subTaskMapper.selectList(new LambdaQueryWrapper<SubTask>()
@@ -73,11 +77,13 @@ public class SubTaskLeaseService {
         return candidates;
     }
 
+    @Override
     public List<SubTaskView> listReviewOrphanViews(int thresholdSeconds, int limit) {
         return listReviewOrphans(thresholdSeconds, limit).stream()
-                .map(SubTaskProjectionMapper::toView).toList();
+                .map(SubTaskProjection::toView).toList();
     }
 
+    @Override
     public List<SubTask> listPausedBefore(Long agentId, OffsetDateTime expiredBefore) {
         return subTaskMapper.selectList(new LambdaQueryWrapper<SubTask>()
                 .eq(SubTask::getAssignedAgentId, agentId)
@@ -85,6 +91,7 @@ public class SubTaskLeaseService {
                 .le(SubTask::getUpdateTime, expiredBefore));
     }
 
+    @Override
     public List<SubTask> listTimedOutAssigned(OffsetDateTime deadline, int limit) {
         return subTaskMapper.selectTimedOutAssigned(deadline, limit);
     }
@@ -189,6 +196,7 @@ public class SubTaskLeaseService {
     }
 
     /** 原子累加 {@code external_fallback_count}（N11 阈值回退口径；不触碰 status）。 */
+    @Override
     public int incrementExternalFallbackCount(Long subTaskId, OffsetDateTime now) {
         return subTaskMapper.incrementExternalFallbackCount(subTaskId, now);
     }

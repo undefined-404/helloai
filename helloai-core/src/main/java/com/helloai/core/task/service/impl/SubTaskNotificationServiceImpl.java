@@ -10,6 +10,8 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.port.ReviewSummary;
+import com.helloai.core.task.service.SubTaskNotificationService;
+import com.helloai.core.task.service.SubTaskQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -38,7 +40,7 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class SubTaskNotificationService {
+public class SubTaskNotificationServiceImpl implements SubTaskNotificationService {
 
     private final AgentInboxService agentInboxService;
     /** 懒解析打破循环：AgentServiceImpl 依赖 SubTaskService（阶段五级联清理收口）。 */
@@ -55,6 +57,7 @@ public class SubTaskNotificationService {
     /**
      * 向相关 Agent 投递收件箱通知（按新状态分派）。整段 try-catch：通知失败不影响主流程。
      */
+    @Override
     public void sendInboxNotification(SubTask subTask, SubTaskStatus newStatus, SubTaskStatus oldStatus) {
         String eventId = "subtask." + subTask.getId() + "." + System.currentTimeMillis();
         Long agentId = subTask.getAssignedAgentId();
@@ -158,6 +161,7 @@ public class SubTaskNotificationService {
      * 初始分配（{@code oldAgentId == null}）与原地保留（old == new）不通知。
      * API_KEY_LLM 旧执行者由 {@link AgentInboxService#send} 内部守卫跳过（其消费链走 outbox→MQ）。</p>
      */
+    @Override
     public void notifyAgentHandover(SubTask subTask, Long oldAgentId) {
         Long newAgentId = subTask.getAssignedAgentId();
         if (oldAgentId == null || oldAgentId.equals(newAgentId)) {
@@ -179,6 +183,7 @@ public class SubTaskNotificationService {
     }
 
     /** 领域事件：仅在落点 {@code ASSIGNED} 且有执行者时发布（与既有口径逐字一致）。 */
+    @Override
     public void publishAssignmentEvent(SubTask subTask, SubTaskStatus newStatus) {
         if (newStatus != SubTaskStatus.ASSIGNED || subTask.getAssignedAgentId() == null) {
             return;
@@ -196,6 +201,7 @@ public class SubTaskNotificationService {
      * 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因。
      * 发送失败只 warn 不阻断（返工主链路优先）。
      */
+    @Override
     public void sendReworkInboxNotification(SubTask subTask) {
         try {
             Long agentId = subTask.getAssignedAgentId();
@@ -241,7 +247,7 @@ public class SubTaskNotificationService {
                 Object missingEvidence = m.get("missingEvidence");
                 if (missingEvidence instanceof List<?> evidenceList && !evidenceList.isEmpty()) {
                     String joined = evidenceList.stream()
-                            .map(SubTaskNotificationService::formatMissingEvidence)
+                            .map(SubTaskNotificationServiceImpl::formatMissingEvidence)
                             .filter(s -> !s.isBlank())
                             .collect(Collectors.joining("；"));
                     if (!joined.isBlank()) {
@@ -285,6 +291,7 @@ public class SubTaskNotificationService {
      * 审查通过补发收件箱通知（携带最新一轮 review 评分/评语），
      * 外部 Agent 轮询 pullTasks 即可感知交付结果反馈。发送失败只 warn 不阻断。
      */
+    @Override
     public void sendApprovedInboxNotification(SubTask subTask) {
         try {
             Long agentId = subTask.getAssignedAgentId();
@@ -302,6 +309,7 @@ public class SubTaskNotificationService {
     }
 
     /** 从 {@code review_record} 取最新一轮（round 最大）的评分/评语拼摘要；无记录时回退默认文案。 */
+    @Override
     public String buildApprovedSummary(SubTask subTask) {
         try {
             // §6.146：最新一轮评分/评语经 ReviewPort 摘要收口，不直捅 review 域
@@ -337,6 +345,7 @@ public class SubTaskNotificationService {
      *
      * @return 每条前缀换行；空列表 / 全空白返回空串（零注入，存量行为不变）
      */
+    @Override
     public String buildUncertaintyLines(List<Uncertainty> uncertainties) {
         if (uncertainties == null || uncertainties.isEmpty()) {
             return "";

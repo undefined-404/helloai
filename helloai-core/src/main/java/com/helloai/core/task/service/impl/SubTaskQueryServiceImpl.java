@@ -11,7 +11,10 @@ import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.projection.SubTaskProjection;
 import com.helloai.core.task.service.TaskService;
+import com.helloai.core.task.service.SubTaskNotificationService;
+import com.helloai.core.task.service.SubTaskQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -52,7 +55,7 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class SubTaskQueryService {
+public class SubTaskQueryServiceImpl implements SubTaskQueryService {
 
     /** 同域 Mapper 直捅（CODE_STYLE §7.1：同域合规）；不继承 ServiceImpl 以保持本类零基类耦合。 */
     private final SubTaskMapper subTaskMapper;
@@ -71,6 +74,7 @@ public class SubTaskQueryService {
      * <p>全部异常路径（taskId null / 服务不可用 / 任务不存在 / 字段 null）统一返回空列表，
      * 保证装箱调用方拿到恒非 null 值，消费端无需再判空。</p>
      */
+    @Override
     public List<String> requiredSkillsOf(Long taskId) {
         if (taskId == null) {
             return List.of();
@@ -89,6 +93,7 @@ public class SubTaskQueryService {
      * G-010 并集装箱：子任务级（拆解侧指派）在前，任务级声明在后；去重保序。
      * 存量子任务 {@code required_skills} 为空数组时退化为纯任务级，行为零变化。
      */
+    @Override
     public List<String> mergeSkills(SubTask subTask) {
         List<String> merged = new java.util.ArrayList<>();
         if (subTask != null && subTask.getRequiredSkills() != null) {
@@ -107,6 +112,7 @@ public class SubTaskQueryService {
     }
 
     /** 按 id 读取后合并技能标签（{@code null} id 与不存在行均安全）。 */
+    @Override
     public List<String> mergeSkills(Long subTaskId) {
         return mergeSkills(subTaskId == null ? null : subTaskMapper.selectById(subTaskId));
     }
@@ -122,6 +128,7 @@ public class SubTaskQueryService {
      * 匹配动作由消费方 agent 域用既有
      * {@code AgentSelector.AgentSelectionConstraints.denialReason} 完成（§7.2 端口反转）。</p>
      */
+    @Override
     public SubTaskClaimConstraint claimConstraint(Long subTaskId) {
         SubTask subTask = subTaskId == null ? null : subTaskMapper.selectById(subTaskId);
         if (subTask == null) {
@@ -139,6 +146,7 @@ public class SubTaskQueryService {
     //  列表 / 就绪判定
     // ══════════════════════════════════════════════════════════════
 
+    @Override
     public IPage<SubTask> list(Long taskId, SubTaskStatus status, Long assignedAgentId, Integer page, int pageSize) {
         LambdaQueryWrapper<SubTask> wrapper = new LambdaQueryWrapper<SubTask>()
                 .eq(taskId != null, SubTask::getTaskId, taskId)
@@ -160,6 +168,7 @@ public class SubTaskQueryService {
         return subTaskMapper.selectPage(new Page<>(page, pageSize), wrapper);
     }
 
+    @Override
     public List<SubTask> listAvailable() {
         List<SubTask> pending = subTaskMapper.selectList(new LambdaQueryWrapper<SubTask>()
                 .eq(SubTask::getStatus, SubTaskStatus.PENDING)
@@ -197,6 +206,7 @@ public class SubTaskQueryService {
                 .toList();
     }
 
+    @Override
     public List<SubTask> listMine(Long assignedAgentId) {
         return subTaskMapper.selectList(new LambdaQueryWrapper<SubTask>()
                 .eq(SubTask::getAssignedAgentId, assignedAgentId)
@@ -204,6 +214,7 @@ public class SubTaskQueryService {
     }
 
     /** 事件对账候选源：按 {@code update_time} 倒序截断（update_time 由 MetaObjectHandler 自动填充）。 */
+    @Override
     public List<SubTask> listRecentlyChanged(OffsetDateTime since, int limit) {
         return subTaskMapper.selectList(new LambdaQueryWrapper<SubTask>()
                 .ge(SubTask::getUpdateTime, since)
@@ -219,12 +230,14 @@ public class SubTaskQueryService {
      * 行锁随调用方事务存续而释放（方法返回即释放），自开事务会立刻释放锁，失去互斥意义。
      * 唯一主代码调用方 {@code ExecutionCommandServiceImpl.createAssignedCommand} 已满足该前提。</p>
      */
+    @Override
     public SubTask getByIdForUpdate(Long subTaskId) {
         return subTaskMapper.selectOne(new LambdaQueryWrapper<SubTask>()
                 .eq(SubTask::getId, subTaskId)
                 .last("FOR UPDATE"));
     }
 
+    @Override
     public boolean isReady(SubTask subTask) {
         if (subTask == null) {
             return false;
@@ -243,6 +256,7 @@ public class SubTaskQueryService {
     //  统计（阶段五 agent→task.mapper 清零承接）
     // ══════════════════════════════════════════════════════════════
 
+    @Override
     public Map<String, Integer> countByStatusForAgent(Long agentId) {
         Map<String, Integer> m = new LinkedHashMap<>();
         m.put("assignedCount", 0);
@@ -273,6 +287,7 @@ public class SubTaskQueryService {
         return m;
     }
 
+    @Override
     public long countByAssignedAgent(Long agentId) {
         if (agentId == null) {
             return 0;
@@ -282,6 +297,7 @@ public class SubTaskQueryService {
         return count == null ? 0 : count;
     }
 
+    @Override
     public long countReviewByReviewerAgent(Long agentId) {
         if (agentId == null) {
             return 0;
@@ -291,6 +307,7 @@ public class SubTaskQueryService {
     }
 
     /** 按 taskId 统计排除指定状态的子任务数（planner 重复拆解前置校验用）。 */
+    @Override
     public long countByTaskIdExcludingStatus(Long taskId, SubTaskStatus excluded) {
         Long count = subTaskMapper.selectCount(new LambdaQueryWrapper<SubTask>()
                 .eq(SubTask::getTaskId, taskId)
@@ -299,6 +316,7 @@ public class SubTaskQueryService {
     }
 
     /** 按 taskId + 状态统计子任务数（planner 拒绝前清理判定用）。 */
+    @Override
     public long countByTaskIdAndStatus(Long taskId, SubTaskStatus status) {
         Long count = subTaskMapper.selectCount(new LambdaQueryWrapper<SubTask>()
                 .eq(SubTask::getTaskId, taskId)
@@ -306,18 +324,22 @@ public class SubTaskQueryService {
         return count == null ? 0 : count;
     }
 
+    @Override
     public List<SubTask> selectInFlightByAgent(Long agentId, int limit) {
         return subTaskMapper.selectInFlightByAgent(agentId, limit);
     }
 
+    @Override
     public int countInFlightByAgent(Long agentId) {
         return subTaskMapper.countInFlightByAgent(agentId);
     }
 
+    @Override
     public int countInFlightAll() {
         return subTaskMapper.countInFlightAll();
     }
 
+    @Override
     public boolean existsInFlightAssignedOrInProgress(Long agentId) {
         Long count = subTaskMapper.selectCount(new LambdaQueryWrapper<SubTask>()
                 .eq(SubTask::getAssignedAgentId, agentId)
@@ -325,6 +347,7 @@ public class SubTaskQueryService {
         return count != null && count > 0;
     }
 
+    @Override
     public List<SubTask> listInFlightAssignedOrInProgress(Long agentId) {
         // 无 limit、无排序——与重派范围同口径，加 limit 会截断重派范围
         return subTaskMapper.selectList(new LambdaQueryWrapper<SubTask>()
@@ -332,49 +355,57 @@ public class SubTaskQueryService {
                 .in(SubTask::getStatus, SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS));
     }
 
+    @Override
     public List<Long> listPendingUnassignedWithoutActiveExecutionRecord(int limit) {
         return subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(limit);
     }
 
+    @Override
     public List<Long> listStalePendingWithoutExecutionRecord(OffsetDateTime cutoff, int limit) {
         return subTaskMapper.selectStalePendingWithoutExecutionRecord(cutoff, limit);
     }
 
+    @Override
     public List<Long> listStaleBlockedSubTaskIds(OffsetDateTime cutoff, int limit) {
         return subTaskMapper.selectStaleBlockedSubTaskIds(cutoff, limit);
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  只读视图投影（RM5 批 4 / 5a；映射口径统一在 SubTaskProjectionMapper）
+    //  只读视图投影（RM5 批 4 / 5a；映射口径统一在 SubTaskProjection）
     // ══════════════════════════════════════════════════════════════
 
+    @Override
     public SubTaskView getView(Long subTaskId) {
-        return SubTaskProjectionMapper.toView(subTaskMapper.selectById(subTaskId));
+        return SubTaskProjection.toView(subTaskMapper.selectById(subTaskId));
     }
 
+    @Override
     public List<SubTaskView> listViewsByTaskId(Long taskId) {
         return subTaskMapper.selectList(new LambdaQueryWrapper<SubTask>()
                         .eq(SubTask::getTaskId, taskId)
                         .orderByAsc(SubTask::getCreateTime))
-                .stream().map(SubTaskProjectionMapper::toView).toList();
+                .stream().map(SubTaskProjection::toView).toList();
     }
 
+    @Override
     public List<SubTaskView> listViewsByTaskIdAndStatus(Long taskId, SubTaskStatus status) {
         return list(taskId, status, null, null, 0).getRecords().stream()
-                .map(SubTaskProjectionMapper::toView).toList();
+                .map(SubTaskProjection::toView).toList();
     }
 
     /** 待审草案的只读快照，按 <b>createTime asc + id asc</b>（与批量插入序一致，供依赖序号回写）。 */
+    @Override
     public List<SubTaskView> listDraftsInInsertOrder(Long taskId, SubTaskStatus status) {
         return subTaskMapper.selectList(new LambdaQueryWrapper<SubTask>()
                         .eq(SubTask::getTaskId, taskId)
                         .eq(SubTask::getStatus, status)
                         .orderByAsc(SubTask::getCreateTime, SubTask::getId))
-                .stream().map(SubTaskProjectionMapper::toView).toList();
+                .stream().map(SubTaskProjection::toView).toList();
     }
 
     /** 按 id 集合查询只读快照（顺序与 {@code selectBatchIds} 一致）。 */
+    @Override
     public List<SubTaskView> listViewsByIds(Collection<Long> ids) {
-        return subTaskMapper.selectBatchIds(ids).stream().map(SubTaskProjectionMapper::toView).toList();
+        return subTaskMapper.selectBatchIds(ids).stream().map(SubTaskProjection::toView).toList();
     }
 }

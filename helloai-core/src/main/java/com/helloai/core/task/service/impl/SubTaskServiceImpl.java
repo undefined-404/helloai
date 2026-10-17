@@ -11,7 +11,12 @@ import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.SubTaskDraft;
 import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.projection.SubTaskProjection;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.SubTaskLeaseService;
+import com.helloai.core.task.service.SubTaskNotificationService;
+import com.helloai.core.task.service.SubTaskQueryService;
+import com.helloai.core.task.service.SubTaskStateMachineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -221,16 +226,16 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
      * <p>RM9-b 归属说明：本方法含<b>批量插入</b>（{@code saveBatch}，MyBatis-Plus 基类能力），
      * 属「写」而非「只读投影」，故留在门面（沿用 §4.3.2 门面行「保留 {@code extends ServiceImpl}
      * 供 CRUD」的判据）；映射两半（{@code toEntity} / {@code toView}）统一在
-     * {@link SubTaskProjectionMapper}，避免与只读簇各持一份口径（RM9-b 微调①）。</p>
+     * {@link SubTaskProjection}，避免与只读簇各持一份口径（RM9-b 微调①）。</p>
      */
     @Override
     public List<SubTaskView> saveDrafts(List<SubTaskDraft> drafts) {
         if (drafts == null || drafts.isEmpty()) {
             return List.of();
         }
-        List<SubTask> entities = drafts.stream().map(SubTaskProjectionMapper::toEntity).toList();
+        List<SubTask> entities = drafts.stream().map(SubTaskProjection::toEntity).toList();
         saveBatch(entities);
-        return entities.stream().map(SubTaskProjectionMapper::toView).toList();
+        return entities.stream().map(SubTaskProjection::toView).toList();
     }
 
     @Override

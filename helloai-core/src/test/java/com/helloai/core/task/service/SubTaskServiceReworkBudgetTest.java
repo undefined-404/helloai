@@ -16,11 +16,10 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
-import com.helloai.core.task.service.impl.SubTaskLeaseService;
-import com.helloai.core.task.service.impl.SubTaskNotificationService;
-import com.helloai.core.task.service.impl.SubTaskQueryService;
+import com.helloai.core.task.service.impl.SubTaskNotificationServiceImpl;
+import com.helloai.core.task.service.impl.SubTaskQueryServiceImpl;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
-import com.helloai.core.task.service.impl.SubTaskStateMachineService;
+import com.helloai.core.task.service.impl.SubTaskStateMachineServiceImpl;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
@@ -96,11 +95,11 @@ class SubTaskServiceReworkBudgetTest {
     @BeforeEach
     void setUp() {
         dispatchProps = new AgentDispatchProperties();
-        SubTaskQueryService queryService = new SubTaskQueryService(
+        SubTaskQueryService queryService = new SubTaskQueryServiceImpl(
                 subTaskMapper, taskServiceProvider, reviewPort);
-        SubTaskNotificationService notificationService = new SubTaskNotificationService(
+        SubTaskNotificationService notificationService = new SubTaskNotificationServiceImpl(
                 agentInboxService, agentServiceProvider, applicationEventPublisher, reviewPort, queryService);
-        stateMachineService = spy(new SubTaskStateMachineService(
+        stateMachineService = spy(new SubTaskStateMachineServiceImpl(
                 subTaskMapper, notificationService, agentOutboxService, heartbeatService,
                 concurrencyQuotaService, dispatchProps, new WatchdogProperties(), taskTimelineService,
                 agentServiceProvider, attachmentServiceProvider, agentEventRecorder,

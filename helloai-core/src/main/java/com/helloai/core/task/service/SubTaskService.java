@@ -392,7 +392,7 @@ public interface SubTaskService extends IService<SubTask> {
     /**
      * 指定 Agent 在跑子任务计数（并发额度占用统计）。
      *
-     * <p>原实现位于 agent 域 InFlightDbQuotaService（直捅 SubTaskMapper.countInFlightByAgent），
+     * <p>原实现位于 agent 域 ConcurrencyQuotaServiceImpl（直捅 SubTaskMapper.countInFlightByAgent），
      * 阶段五收口到 task 域。</p>
      *
      * @param agentId Agent ID

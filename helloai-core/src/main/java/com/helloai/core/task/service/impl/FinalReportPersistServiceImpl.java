@@ -5,6 +5,7 @@ import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.shared.event.TaskFinalReportGeneratedEvent;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.service.FinalReportPersistService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.statemachine.FinalReportStateMachine;
 import lombok.RequiredArgsConstructor;
@@ -45,11 +46,16 @@ import java.time.OffsetDateTime;
  * Redis 防双审锁 + {@code final_report_status} 状态守卫消解（先到者收敛后，
  * 后到者见状态已非 {@code REVIEWING} 直接跳过）。这与子任务核验链的
  * 三级容错设计一致。</p>
+ *
+ * <p><b>命名（2026-10-17 命名整改）</b>：原名 {@code FinalReportPersistService}。按
+ * {@code HelloAI_CODE_STYLE.md §8.1}，{@code {domain}.service.impl} 内的实现类须以
+ * {@code {接口名}ServiceImpl} 命名 —— 本类原缺接口，故同步补齐
+ * {@link FinalReportPersistService} 契约（消费方 {@code TaskFinalReportServiceImpl} 改为经接口注入）。</p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class FinalReportPersistService {
+public class FinalReportPersistServiceImpl implements FinalReportPersistService {
 
     private final TaskService taskService;
     private final AgentOutboxService agentOutboxService;
@@ -67,6 +73,7 @@ public class FinalReportPersistService {
      * @param reviewEnabled  自动审查开关：关时直接写 {@code DONE}，不产生审查触发
      * @return true=写回成功；false=CAS 未命中（状态已被其它链路接管，本次写回作废）
      */
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean persistAndRequestReview(Long taskId, String report, Long plannerAgentId,
                                            OffsetDateTime now, int attempt, int sectionCount,

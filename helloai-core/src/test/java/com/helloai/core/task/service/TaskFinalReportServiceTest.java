@@ -21,7 +21,6 @@ import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.port.PlannerAgentRef;
 import com.helloai.core.task.port.TaskPlannerPickerPort;
 import com.helloai.core.task.service.TaskIterationService;
-import com.helloai.core.task.service.impl.FinalReportPersistService;
 import com.helloai.core.task.service.impl.TaskFinalReportServiceImpl;
 import com.helloai.core.task.spec.ExecutionRecord;
 import org.junit.jupiter.api.BeforeAll;

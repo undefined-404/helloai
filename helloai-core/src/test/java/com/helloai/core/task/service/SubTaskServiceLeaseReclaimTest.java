@@ -16,11 +16,11 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
-import com.helloai.core.task.service.impl.SubTaskLeaseService;
-import com.helloai.core.task.service.impl.SubTaskNotificationService;
-import com.helloai.core.task.service.impl.SubTaskQueryService;
+import com.helloai.core.task.service.impl.SubTaskLeaseServiceImpl;
+import com.helloai.core.task.service.impl.SubTaskNotificationServiceImpl;
+import com.helloai.core.task.service.impl.SubTaskQueryServiceImpl;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
-import com.helloai.core.task.service.impl.SubTaskStateMachineService;
+import com.helloai.core.task.service.impl.SubTaskStateMachineServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -80,17 +80,17 @@ class SubTaskServiceLeaseReclaimTest {
 
     @BeforeEach
     void setUp() {
-        SubTaskQueryService queryService = new SubTaskQueryService(
+        SubTaskQueryService queryService = new SubTaskQueryServiceImpl(
                 subTaskMapper, taskServiceProvider, reviewPort);
-        SubTaskNotificationService notificationService = new SubTaskNotificationService(
+        SubTaskNotificationService notificationService = new SubTaskNotificationServiceImpl(
                 agentInboxService, agentServiceProvider, applicationEventPublisher, reviewPort, queryService);
-        SubTaskStateMachineService stateMachineService = new SubTaskStateMachineService(
+        SubTaskStateMachineService stateMachineService = new SubTaskStateMachineServiceImpl(
                 subTaskMapper, notificationService, agentOutboxService, heartbeatService,
                 concurrencyQuotaService, new AgentDispatchProperties(), new WatchdogProperties(),
                 taskTimelineService, agentServiceProvider, attachmentServiceProvider,
                 agentEventRecorder, implicitScoreCalculator, rewardService, reviewPort,
                 applicationEventPublisher);
-        SubTaskLeaseService leaseService = new SubTaskLeaseService(
+        SubTaskLeaseService leaseService = new SubTaskLeaseServiceImpl(
                 subTaskMapper, taskTimelineService, agentSessionService, stateMachineService);
         subTaskService = new SubTaskServiceImpl(
                 subTaskMapper, queryService, stateMachineService, leaseService);

@@ -24,11 +24,16 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewFact;
 import com.helloai.core.task.port.ReviewPort;
+import com.helloai.core.task.projection.SubTaskSnapshotProjection;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.score.ImplicitScoreCalculator.ScoreResult;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.statemachine.SubTaskStateMachine;
+import com.helloai.core.task.service.SubTaskLeaseService;
+import com.helloai.core.task.service.SubTaskNotificationService;
+import com.helloai.core.task.service.SubTaskQueryService;
+import com.helloai.core.task.service.SubTaskStateMachineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -67,7 +72,7 @@ import java.util.Set;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class SubTaskStateMachineService {
+public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineService {
 
     /**
      * 同域 Mapper 直捅（CODE_STYLE §7.1：同域合规）。
@@ -586,6 +591,7 @@ public class SubTaskStateMachineService {
      * <p><b>为何在本类（RM9-b 微调④）</b>：它与 {@code consumeReworkBudget}（本类）成对使用，
      * 且语义是「sub_task 行的人工介入状态标记」；留门面会迫使本类反向依赖门面成环。</p>
      */
+    @Override
     public void markManualIntervention(Long subTaskId, String reason, Map<String, Object> extra) {
         try {
             SubTask fresh = subTaskMapper.selectById(subTaskId);
@@ -620,6 +626,7 @@ public class SubTaskStateMachineService {
      * 对单实体的单次原子更新，无跨实体一致性诉求，故不加 {@code @Transactional}；
      * 整段 try-catch 降级——失败仅告警、不影响主链路。无标记时静默返回（幂等，避免无谓写）。</p>
      */
+    @Override
     public void clearManualIntervention(Long subTaskId) {
         try {
             SubTask fresh = subTaskMapper.selectById(subTaskId);
@@ -641,7 +648,7 @@ public class SubTaskStateMachineService {
     }
 
     /**
-     * 子任务实体 → agent 域只读快照（映射逻辑统一收敛到 {@link SubTaskSnapshotMapper}，
+     * 子任务实体 → agent 域只读快照（映射逻辑统一收敛到 {@link SubTaskSnapshotProjection}，
      * 与只读查询端口 {@code SubTaskQueryPortAdapter} 共用一份口径，避免漂移）。
      *
      * <p><b>为什么要由提供方映射</b>：{@code AgentOutboxService} 属 agent 域，其
@@ -650,6 +657,6 @@ public class SubTaskStateMachineService {
      * {@link SubTaskSnapshot} 后传入，依赖方向变为 {@code task → agent}，<b>顺向合法</b>。</p>
      */
     private SubTaskSnapshot toSnapshot(SubTask subTask) {
-        return SubTaskSnapshotMapper.toSnapshot(subTask);
+        return SubTaskSnapshotProjection.toSnapshot(subTask);
     }
 }

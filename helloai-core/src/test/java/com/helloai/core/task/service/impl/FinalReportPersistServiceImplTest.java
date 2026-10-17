@@ -7,6 +7,7 @@ import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.shared.event.TaskFinalReportGeneratedEvent;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.service.FinalReportPersistService;
 import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,7 +31,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * FinalReportPersistService 单元测试（§12.2 报告写回与审查触发同事务）。
+ * FinalReportPersistServiceImpl 单元测试（§12.2 报告写回与审查触发同事务）。
  *
  * <p>覆盖：审查开启时写回 REVIEWING + Outbox 落库 + 事件发布三者齐备；
  * 审查关闭时只写回 DONE 且不产生任何审查触发；
@@ -38,8 +39,8 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-@DisplayName("FinalReportPersistService 报告写回与审查触发同事务")
-class FinalReportPersistServiceTest {
+@DisplayName("FinalReportPersistServiceImpl 报告写回与审查触发同事务")
+class FinalReportPersistServiceImplTest {
 
     private static final Long TASK_ID = 1L;
     private static final Long PLANNER_ID = 99L;
@@ -63,7 +64,7 @@ class FinalReportPersistServiceTest {
 
     @BeforeEach
     void setUp() {
-        persistService = new FinalReportPersistService(taskService, agentOutboxService, applicationEventPublisher);
+        persistService = new FinalReportPersistServiceImpl(taskService, agentOutboxService, applicationEventPublisher);
         when(taskService.update(any())).thenReturn(true);
     }
 

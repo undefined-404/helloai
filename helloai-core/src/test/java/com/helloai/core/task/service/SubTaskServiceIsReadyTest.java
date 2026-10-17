@@ -4,10 +4,9 @@ import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
-import com.helloai.core.task.service.impl.SubTaskLeaseService;
-import com.helloai.core.task.service.impl.SubTaskQueryService;
+import com.helloai.core.task.service.impl.SubTaskLeaseServiceImpl;
+import com.helloai.core.task.service.impl.SubTaskQueryServiceImpl;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
-import com.helloai.core.task.service.impl.SubTaskStateMachineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,9 +48,9 @@ class SubTaskServiceIsReadyTest {
 
     @BeforeEach
     void setUp() {
-        SubTaskQueryService queryService = new SubTaskQueryService(subTaskMapper, taskServiceProvider, reviewPort);
+        SubTaskQueryService queryService = new SubTaskQueryServiceImpl(subTaskMapper, taskServiceProvider, reviewPort);
         SubTaskStateMachineService stateMachineService = mock(SubTaskStateMachineService.class);
-        SubTaskLeaseService leaseService = new SubTaskLeaseService(
+        SubTaskLeaseService leaseService = new SubTaskLeaseServiceImpl(
                 subTaskMapper, taskTimelineService, agentSessionService, stateMachineService);
         subTaskService = new SubTaskServiceImpl(
                 subTaskMapper, queryService, stateMachineService, leaseService);

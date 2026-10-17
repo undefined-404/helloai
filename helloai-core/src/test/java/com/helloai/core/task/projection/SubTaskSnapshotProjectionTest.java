@@ -1,4 +1,4 @@
-package com.helloai.core.task.service.impl;
+package com.helloai.core.task.projection;
 
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.port.SubTaskSnapshot;
@@ -16,7 +16,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@code SubTaskSnapshotMapper} 单测（2026-10-01 W7 新建）。
+ * {@code SubTaskSnapshotProjection} 单测（2026-10-01 W7 新建）。
  *
  * <p>本类此前只被 {@code SubTaskQueryPortAdapter} 间接覆盖（字段透传）。W7 把快照扩为
  * <b>全量读投影</b>并新增不确定性投影后，映射本身成为独立且易错的逻辑，故补专属单测：</p>
@@ -31,13 +31,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  *         —— 由 task 域常量 {@code Uncertainty.KIND_ASSUMPTION} 判定后透传，避免消费方复制常量）。</li>
  * </ul>
  */
-@DisplayName("SubTaskSnapshotMapper 实体 → agent 域快照")
-class SubTaskSnapshotMapperTest {
+@DisplayName("SubTaskSnapshotProjection 实体 → agent 域快照")
+class SubTaskSnapshotProjectionTest {
 
     @Test
     @DisplayName("toSnapshot：null 入参返回 null（保持调用方原空值语义）")
     void shouldReturnNullForNullEntity() {
-        assertThat(SubTaskSnapshotMapper.toSnapshot(null)).isNull();
+        assertThat(SubTaskSnapshotProjection.toSnapshot(null)).isNull();
     }
 
     @Test
@@ -63,7 +63,7 @@ class SubTaskSnapshotMapperTest {
         subTask.setVersion(5);
         subTask.setDependsOn(List.of(11L, 12L));
 
-        SubTaskSnapshot snapshot = SubTaskSnapshotMapper.toSnapshot(subTask);
+        SubTaskSnapshot snapshot = SubTaskSnapshotProjection.toSnapshot(subTask);
 
         assertThat(snapshot).isNotNull();
         assertThat(snapshot.id()).isEqualTo(7L);
@@ -91,7 +91,7 @@ class SubTaskSnapshotMapperTest {
         SubTask subTask = new SubTask();
         subTask.setId(1L);
 
-        SubTaskSnapshot snapshot = SubTaskSnapshotMapper.toSnapshot(subTask);
+        SubTaskSnapshot snapshot = SubTaskSnapshotProjection.toSnapshot(subTask);
 
         assertThat(snapshot.dependsOn()).isNotNull().isEmpty();
         assertThat(snapshot.uncertainties()).isNotNull().isEmpty();
@@ -100,8 +100,8 @@ class SubTaskSnapshotMapperTest {
     @Test
     @DisplayName("toUncertaintySnapshots：null / 空入参返回空列表，绝不返回 null")
     void shouldReturnEmptyUncertaintiesForBlankInput() {
-        assertThat(SubTaskSnapshotMapper.toUncertaintySnapshots(null)).isEmpty();
-        assertThat(SubTaskSnapshotMapper.toUncertaintySnapshots(List.of())).isEmpty();
+        assertThat(SubTaskSnapshotProjection.toUncertaintySnapshots(null)).isEmpty();
+        assertThat(SubTaskSnapshotProjection.toUncertaintySnapshots(List.of())).isEmpty();
     }
 
     @Test
@@ -111,7 +111,7 @@ class SubTaskSnapshotMapperTest {
                 new Uncertainty(Uncertainty.KIND_UNCONFIRMED, "存量调用方是否受影响未确认"),
                 new Uncertainty("weird_kind_未归一化", "note"));
 
-        List<UncertaintySnapshot> snapshots = SubTaskSnapshotMapper.toUncertaintySnapshots(source);
+        List<UncertaintySnapshot> snapshots = SubTaskSnapshotProjection.toUncertaintySnapshots(source);
 
         assertThat(snapshots).hasSize(2);
         assertThat(snapshots.get(0).kind()).isEqualTo("UNCONFIRMED");
@@ -128,7 +128,7 @@ class SubTaskSnapshotMapperTest {
                 new Uncertainty(Uncertainty.KIND_UNCONFIRMED, "接口待确认"),
                 new Uncertainty("weird_kind_未归一化", "note"));
 
-        List<UncertaintySnapshot> snapshots = SubTaskSnapshotMapper.toUncertaintySnapshots(source);
+        List<UncertaintySnapshot> snapshots = SubTaskSnapshotProjection.toUncertaintySnapshots(source);
 
         assertThat(snapshots.get(0).assumption()).isTrue();
         assertThat(snapshots.get(1).assumption()).isFalse();
@@ -143,7 +143,7 @@ class SubTaskSnapshotMapperTest {
         source.add(null);
         source.add(new Uncertainty(Uncertainty.KIND_ASSUMPTION, "假设可自证"));
 
-        List<UncertaintySnapshot> snapshots = SubTaskSnapshotMapper.toUncertaintySnapshots(source);
+        List<UncertaintySnapshot> snapshots = SubTaskSnapshotProjection.toUncertaintySnapshots(source);
 
         assertThat(snapshots).hasSize(1);
         assertThat(snapshots.get(0).kind()).isEqualTo("ASSUMPTION");
@@ -152,8 +152,8 @@ class SubTaskSnapshotMapperTest {
     @Test
     @DisplayName("toSnapshots：null / 空入参返回空列表，逐条 null 元素跳过")
     void shouldMapBatchWithNullTolerance() {
-        assertThat(SubTaskSnapshotMapper.toSnapshots(null)).isEmpty();
-        assertThat(SubTaskSnapshotMapper.toSnapshots(List.of())).isEmpty();
+        assertThat(SubTaskSnapshotProjection.toSnapshots(null)).isEmpty();
+        assertThat(SubTaskSnapshotProjection.toSnapshots(List.of())).isEmpty();
 
         List<SubTask> source = new ArrayList<>();
         source.add(null);
@@ -161,7 +161,7 @@ class SubTaskSnapshotMapperTest {
         subTask.setId(3L);
         source.add(subTask);
 
-        List<SubTaskSnapshot> snapshots = SubTaskSnapshotMapper.toSnapshots(source);
+        List<SubTaskSnapshot> snapshots = SubTaskSnapshotProjection.toSnapshots(source);
 
         assertThat(snapshots).hasSize(1);
         assertThat(snapshots.get(0).id()).isEqualTo(3L);
