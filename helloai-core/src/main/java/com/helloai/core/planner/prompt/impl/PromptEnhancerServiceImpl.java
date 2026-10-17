@@ -25,7 +25,7 @@ import java.util.Map;
  * <p>选型：{@link PlannerAgentPicker#pick(Long)} 传 null 走自动选择（与澄清链一致）；
  * 温度：{@link PromptEnhancerProperties#getTemperature()} 低值稳定改写；
  * 模板：{@code prompts/prompt-enhance.md}，加载范式照
- * {@code RequirementClarifyServiceImpl#renderPrompt}。</p>
+ * {@code ClarifyPromptRenderServiceImpl#renderPrompt}。</p>
  */
 @Slf4j
 @Service

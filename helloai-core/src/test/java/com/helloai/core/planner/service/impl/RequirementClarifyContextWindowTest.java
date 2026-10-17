@@ -11,12 +11,12 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@link RequirementClarifyServiceImpl#windowHistory} 纯函数单测（N-012 Context 分层收口）。
+ * {@link ClarifyPromptRenderServiceImpl#windowHistory} 纯函数单测（N-012 Context 分层收口；RM9-c 后随渲染职责由门面迁入）。
  *
  * <p>覆盖：超窗裁剪（最近 N 条 + 首条用户消息锚点前置）/ 锚点已在窗内不重复 / 窗内原样 /
  * 空列表与 null 兜底。windowHistory 为 package-private 静态方法，同包直测。</p>
  */
-@DisplayName("RequirementClarifyServiceImpl.windowHistory 历史窗口裁剪（B4）")
+@DisplayName("ClarifyPromptRenderServiceImpl.windowHistory 历史窗口裁剪（B4）")
 class RequirementClarifyContextWindowTest {
 
     private RequirementMessage msg(String role, String content) {
@@ -41,7 +41,7 @@ class RequirementClarifyContextWindowTest {
         @Test
         @DisplayName("history 10 条 / 窗口 3：保留最近 3 条 + 首条 user 锚点前置（共 4 条，首元素为首条 user）")
         void shouldTrimAndKeepFirstUserAnchor() {
-            List<RequirementMessage> result = RequirementClarifyServiceImpl.windowHistory(seq(10), 3);
+            List<RequirementMessage> result = ClarifyPromptRenderServiceImpl.windowHistory(seq(10), 3);
 
             assertThat(result).hasSize(4);
             assertThat(result.get(0).getContent()).isEqualTo("msg-1");   // 首条 user 锚点
@@ -63,7 +63,7 @@ class RequirementClarifyContextWindowTest {
                     msg("assistant", "a4"),
                     msg("user", "u4")));
 
-            List<RequirementMessage> result = RequirementClarifyServiceImpl.windowHistory(history, 7);
+            List<RequirementMessage> result = ClarifyPromptRenderServiceImpl.windowHistory(history, 7);
 
             assertThat(result).hasSize(7);
             assertThat(result.get(0).getContent()).isEqualTo("u1"); // 锚点即窗口首元素，不重复前置
@@ -79,7 +79,7 @@ class RequirementClarifyContextWindowTest {
             history.addAll(seq(10)); // msg-1..msg-10, msg-1 是 user
             history.add(msg("assistant", "tail"));
 
-            List<RequirementMessage> result = RequirementClarifyServiceImpl.windowHistory(history, 3);
+            List<RequirementMessage> result = ClarifyPromptRenderServiceImpl.windowHistory(history, 3);
 
             assertThat(result.get(0).getContent()).isEqualTo("msg-1"); // 首条 user 锚点
             assertThat(result).hasSize(4);
@@ -95,7 +95,7 @@ class RequirementClarifyContextWindowTest {
         void shouldReturnAsIsWithinWindow() {
             List<RequirementMessage> history = seq(3);
 
-            List<RequirementMessage> result = RequirementClarifyServiceImpl.windowHistory(history, 40);
+            List<RequirementMessage> result = ClarifyPromptRenderServiceImpl.windowHistory(history, 40);
 
             assertThat(result).isSameAs(history);
             assertThat(result).hasSize(3);
@@ -106,13 +106,13 @@ class RequirementClarifyContextWindowTest {
         void shouldReturnEmptyForEmptyList() {
             List<RequirementMessage> empty = List.of();
 
-            assertThat(RequirementClarifyServiceImpl.windowHistory(empty, 40)).isSameAs(empty);
+            assertThat(ClarifyPromptRenderServiceImpl.windowHistory(empty, 40)).isSameAs(empty);
         }
 
         @Test
         @DisplayName("null：返回 null（调用方防御）")
         void shouldReturnNullForNull() {
-            assertThat(RequirementClarifyServiceImpl.windowHistory(null, 40)).isNull();
+            assertThat(ClarifyPromptRenderServiceImpl.windowHistory(null, 40)).isNull();
         }
     }
 }

@@ -30,6 +30,11 @@ import com.helloai.core.planner.service.WebPageFetchService;
 import com.helloai.core.planner.service.SearchQueryPlannerService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.RequirementClarifyService;
+import com.helloai.core.planner.service.impl.ClarifyCommandSearchServiceImpl;
+import com.helloai.core.planner.service.impl.ClarifyFinalizeServiceImpl;
+import com.helloai.core.planner.service.impl.ClarifyPromptRenderServiceImpl;
+import com.helloai.core.planner.service.impl.ClarifyRoundOrchestratorServiceImpl;
+import com.helloai.core.planner.service.impl.ClarifyStreamServiceImpl;
 import com.helloai.core.planner.service.impl.RequirementClarifyServiceImpl;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
@@ -142,22 +147,37 @@ class RequirementClarifyServiceTest {
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）；
         // searchQueryPlannerService 默认 mock 返回空列表 → 走规则截断兜底路径（存量用例行为不变）；
         // 拆分组件 ClarifyReplyParser/ConfirmCardProtocol/ClarifyWebSearchOrchestrator/ChatRoundDecisionParser
-        // 用真实实例直连（纯函数/编排可测，无需 mock）；搜索服务 mock 不变
+        // 用真实实例直连（纯函数/编排可测，无需 mock）；搜索服务 mock 不变。
+        // RM9-c：门面委托 5 个职责实现，测试按同一装配口径直连（装配变更，断言语义逐条保留）
+        ClarifyReplyParser replyParser = new ClarifyReplyParser(new ObjectMapper());
+        ConfirmCardProtocol confirmCard = new ConfirmCardProtocol(new ObjectMapper());
+        ClarifyWebSearchOrchestrator webSearchOrchestrator = new ClarifyWebSearchOrchestrator(
+                toolExecutor, webSearchProperties, pageFetchService, searchQueryPlannerService,
+                new RelativeTimeNormalizer(),
+                new SearchGapAssessor(platformAgentExecutionService, plannerAgentPicker,
+                        new SystemTimeContextBuilder(), new ObjectMapper()),
+                new ObjectMapper());
+        ClarifyCommandSearchServiceImpl commandSearch = new ClarifyCommandSearchServiceImpl(
+                webSearchOrchestrator, messageService, confirmCard, conversationService);
+        ClarifyPromptRenderServiceImpl promptRenderService = new ClarifyPromptRenderServiceImpl(
+                messageService, conversationService, longTermMemoryService, new SystemTimeContextBuilder(),
+                taskTimelineService, platformAgentExecutionService, plannerAgentPicker, replyParser,
+                commandSearch);
+        ClarifyFinalizeServiceImpl finalizeService = new ClarifyFinalizeServiceImpl(
+                conversationService, messageService, taskService, agentService, agentInboxService,
+                taskTimelineService, longTermMemoryService, requirementConversationMapper,
+                new ObjectMapper(), commandSearch);
+        ClarifyRoundOrchestratorServiceImpl orchestrator = new ClarifyRoundOrchestratorServiceImpl(
+                commandSearch, promptRenderService, finalizeService, messageService, conversationService,
+                plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
+                new ChatRoundDecisionParser(new ObjectMapper()), webSearchOrchestrator);
+        ClarifyStreamServiceImpl streamService = new ClarifyStreamServiceImpl(
+                orchestrator, promptRenderService, commandSearch, messageService, conversationService,
+                plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
+                webSearchOrchestrator);
         clarifyService = new RequirementClarifyServiceImpl(
-                conversationService, messageService, taskService, agentService,
-                plannerAgentPicker, agentInboxService, platformAgentExecutionService,
-                taskTimelineService, new ClarifyReplyParser(new ObjectMapper()),
-                new ConfirmCardProtocol(new ObjectMapper()),
-                new ClarifyWebSearchOrchestrator(toolExecutor, webSearchProperties,
-                        pageFetchService, searchQueryPlannerService, new RelativeTimeNormalizer(),
-                        new SearchGapAssessor(platformAgentExecutionService, plannerAgentPicker,
-                                new SystemTimeContextBuilder(), new ObjectMapper()),
-                        new ObjectMapper()),
-                new ChatRoundDecisionParser(new ObjectMapper()),
-                new SystemTimeContextBuilder(),
-                longTermMemoryService,
-                new ObjectMapper(),
-                requirementConversationMapper);
+                conversationService, messageService, taskService, plannerAgentPicker,
+                orchestrator, streamService, finalizeService, commandSearch);
 
         // 会话 lambdaUpdate 链式 stub：默认全部成功；CAS 失败用例在测试内重钉 update() 返回 false。
         // eq/set 用 lenient：非 finalize 路径用例不触发链，避免 UnnecessaryStubbingException
