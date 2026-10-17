@@ -64,7 +64,7 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
     public ExecuteResponse execute(Long subTaskId, String command, Integer timeoutSeconds) {
         // 入口守卫（纵深防御：工具已按 enabled 摘除，正常情况下不会被调用）
         if (!properties.isEnabled()) {
-            return new ExecuteResponse("sandbox execution disabled (helloai.sandbox.execution.enabled=false)",
+            return new ExecuteResponse("sandbox execution disabled (helloai.sandbox.opensandbox.enabled=false)",
                     ExecuteResponse.EXIT_CODE_ERROR, false);
         }
         if (command == null || command.isBlank()) {

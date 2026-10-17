@@ -359,7 +359,7 @@ public class InternalLlmExecutorTools {
      * <p><b>安全边界（沙箱执行链设计方案 §3.4）</b>：命令在 OpenSandbox 容器内执行——
      * 默认禁网（egress 白名单外不可达）、零平台凭据 env（{@code credential=ISOLATED}）、
      * 文件系统/资源/进程受容器隔离；<b>不</b>执行技能包正文（只执行本调用传入的命令/脚本）；
-     * 沙箱未启用（{@code helloai.sandbox.execution.enabled=false}）时本工具经
+     * 沙箱未启用（{@code helloai.sandbox.opensandbox.enabled=false}）时本工具经
      * {@code toolAvailability()} 从模型可见列表<b>摘除</b>（fail-closed，不静默降级）。</p>
      *
      * @param agentId        执行者 Agent ID（平台自动注入）

@@ -14,7 +14,7 @@ import java.util.function.Predicate;
  *
  * <p><b>为什么存在</b>：{@link InternalLlmExecutorTools} 是 {@code @Component} 而非
  * {@link ToolCallbackContributor}，其工具名的「条件可用」由本贡献者独立声明——
- * {@code helloai.sandbox.execution.enabled=false}（默认关闭，对齐 REF-6.13）时，
+ * {@code helloai.sandbox.opensandbox.enabled=false}（默认关闭，对齐 REF-6.13）时，
  * {@code internal_run_in_sandbox} 从模型可见列表<b>摘除</b>（fail-closed，不静默降级），
  * 避免模型看到一个必然返回「sandbox execution disabled」的工具却无从判断「是没启用还是坏了」。</p>
  *

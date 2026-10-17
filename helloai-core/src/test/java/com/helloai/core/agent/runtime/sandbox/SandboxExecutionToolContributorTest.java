@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * {@link SandboxExecutionToolContributor} 单测（S-8，沙箱执行链设计方案 §3.4 fail-closed 摘除）。
  *
- * <p>验证「按条件可用」声明的判定：{@code helloai.sandbox.execution.enabled} 为 false（默认）
+ * <p>验证「按条件可用」声明的判定：{@code helloai.sandbox.opensandbox.enabled} 为 false（默认）
  * ⇒ {@code internal_run_in_sandbox} 从模型可见列表摘除；true ⇒ 可用。
  * 判定是纯函数（只读配置 boolean）、与上下文无关（null context 仍按配置判定）。</p>
  */
