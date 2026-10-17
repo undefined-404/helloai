@@ -44,9 +44,14 @@ public class SandboxExecutionToolContributor implements ToolCallbackContributor 
         this.properties = properties;
     }
 
+    /**
+     * 纯声明类 ⇒ 返回 {@code null}（不承载 {@code @Tool} 方法，工具本体在
+     * {@link InternalLlmExecutorTools}，经 {@code McpToolConfig.internalToolCallbacks} 单独承载、
+     * 不进对外 MCP 面）。收集器（{@code McpToolConfig.mcpToolCallbacks}）按契约过滤 null。
+     */
     @Override
     public Object toolObject() {
-        return this;
+        return null;
     }
 
     /**

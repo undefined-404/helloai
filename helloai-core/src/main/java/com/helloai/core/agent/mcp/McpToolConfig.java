@@ -71,7 +71,10 @@ public class McpToolConfig {
     @Bean
     public ToolCallbackProvider mcpToolCallbacks() {
         Object[] contributed = toolContributors == null ? new Object[0]
-                : toolContributors.stream().map(ToolCallbackContributor::toolObject).toArray();
+                : toolContributors.stream()
+                        .map(ToolCallbackContributor::toolObject)
+                        .filter(java.util.Objects::nonNull)
+                        .toArray();
         Object[] all = new Object[2 + contributed.length];
         all[0] = echoMcpTool;
         all[1] = mcpMcpServer;
