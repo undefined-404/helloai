@@ -454,3 +454,19 @@ shared->agent = 0  （期望 0  ✅）
 - 步骤④ 构建期（经主理人授权、白客停机后）：执行 `mvn -o -B -DskipTests=false clean test`（1 次全量复跑）+ `bash scripts/ci/check-arch-freeze.sh`；输出留存 `.tmp/qa-step4-fulltest.log`。
 - git 只读命令使用：`git rev-parse`、`git log`、`git show`、`git diff`、`git diff --cached`、`git status`、`git ls-tree`、`git cat-file`。
 - 文件系统只读操作：`ls` / `find` / `grep` / Read。
+
+---
+
+## ★遗留项处置记录（2026-10-17 回填）
+
+> 本报告为 **2026-10-01 时间点快照**。下列为缺陷清单（P3-1~P3-4）、④ 「遗留 / 静态不可判」与提交卫生提示的**后续处置结论**，仅作闭环登记 —— **不改动上文任何原始结论与证据**（同本报告「更正记录（2026-10-01）」的体例）。
+
+| 项 | 原结论 | 处置（2026-10-17） |
+|---|---|---|
+| **P3-1** 旧包 FQN「全仓为空」口径不严 | 残留仅在 `.tmp/`、`doc/archive/legacy/`、`.qoder/` | ⚠️ **不适用（载体已归档冻结）** —— 该「声明」的行文载体 `deploy-checklist-arch-collect-2026-10.md` 已于 2026-10-09 迁 `archive/implemented/` 并冻结（只读、不改史）⇒ 口径文字**不回改**。**其判据本身已成立**：`grep -rn "core\.shared\.doorbell" helloai-{core,api,start,job}/src` = **0**（2026-10-17 复核）。残留分布（同日复算）：`.tmp/**`（构建/回归日志）+ `doc/archive/**`（冻结历史）+ `doc/review/**`·`doc/log/**`（**本报告与 Log 自带的证据引用块**，非实际漂移）。 |
+| **P3-2** `shared/event` 计数笔误（声明称「其余 8 个」） | 实为 7 | ⚠️ **不适用（载体已归档冻结）**，理由同 P3-1。**事实以本报告为准**：8（原始，含被迁走的 `ExecutionCommandCreatedEvent`）→ 7（迁走后）。 |
+| **P3-3** 声明未提旧方法的 `if (subTask == null) return null;` 守卫 | 描述不完整 | ⚠️ **不适用（载体已归档冻结）**，理由同 P3-1。补注**落在代码侧**（见 P3-4），不落在已冻结的清单文档。 |
+| **P3-4** 去实体化后 API 语义收窄，建议补 javadoc | 建议级，无需落库 | ✅ **已处置** —— `shared/util/SubTaskOutputExtractor.extractExecutionOutput(Map)` 的 javadoc 新增「★契约边界（去实体化后）」段：**仅保证**「`context == null` ⇒ 返回 `null`」，来源实体（`subTask`/`dep` 等）非空由**调用方**保证（旧签名首行的 `subTask` null 守卫已随之移除）。 |
+| ④ 遗留：`PAUSED` 宽限期窗口条件由 SQL 承担（单测层 Mockito 无法构造）/ 真 PG·MinIO·Redis 的 E2E | 集成·E2E 覆盖范围，**NOT RUN** | ⬜ **留待（归部署/集成侧）** —— 属「本地无真 PG / MinIO / Redis」的验证面，归 `plan/HelloAI 上线核对清单.md` 口径（只收本地不可验项），**不在本报告闭环**。 |
+| 提交卫生提示-1（暂存区 2 笔 `git rm`） | 经主理人核实**非缺陷** | ✅ **已消解** —— 该两项删除已随架构收口批次提交入库（`a4fd4c50`，2026-10-01），工作区已无该推断文件。 |
+| 基线说明（原 P2-1：HEAD `2bb78b8` vs `e2c7e8c`） | 非缺陷，基线取 `2bb78b8` | ✅ 已闭合（本报告已更正）。 |

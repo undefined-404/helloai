@@ -1,7 +1,7 @@
 # HelloAI 上线核对清单
 
 > **状态：Active**
-> 最后更新：2026-10-12
+> 最后更新：2026-10-17
 > 依据：《文档体系分类与治理规则》§3.2（执行清单与预案 → `plan/`）；各条目在自己的小节里给出事实源与验证出处
 >
 > **执行状态（2026-10-16 更新）**：本清单条目**均属「只在部署环境可验」**，**当前尚未在服务器执行** —— 阻塞点 = 缺**部署环境 / 服务器时间窗**。**★触发条件（2026-10-16 用户裁定）**：**不设时间表** —— 只有**所有 `plan/` 计划完成、且 `review/` 中遗留的问题全部解决之后**才考虑启动本清单（原「待环境确认」的表述作废）。见 `plan/HelloAI 计划编排与排期总览.md` §5.1 项 8。
@@ -179,7 +179,31 @@ docker --version && docker compose version && docker info >/dev/null && echo ENG
 
 ---
 
-## 3. 后续小节（按需追加）
+## 3. 启动配置注入（部署前置）
+
+> 出处：`doc/review/HelloAI 优先级决策分析（V2架构调整 vs 代码质量）.md` **§13.4** item 1 / item 2（2026-10-01 暴露；其中 RabbitMQ 密码于同日**部分清偿**，registration-token 仍未处置）。复核与闭环登记见 `LOG-20261017-004`。
+>
+> 本节全部条目满足收录口径：`HELLOAI_AGENT_REGISTRATION_TOKEN` 的注入点在生产 `compose` 的 `app` 服务（本机不跑该栈）；「随包生效」只能在服务器重打包后验证。
+
+**现状（2026-10-17 实测）**：生产 app 走 `dev` profile。
+
+| 配置 | 文件 | 现状 |
+|---|---|---|
+| `spring.rabbitmq.{username,password,virtual-host}` | `application-dev.yml`（`git ls-files -v` = **`S`**，`skip-worktree` 本机专属） | ✅ 2026-10-01 已补齐（可被 `RABBITMQ_PASSWORD` 覆盖）；**服务器需重打包 jar 才生效** |
+| `helloai.agent.registration-token` | 同上 | ⬜ **仍缺占位符**（base 已是无默认占位符） |
+| `HELLOAI_AGENT_REGISTRATION_TOKEN` | `docker-compose.server.yml`（`git ls-files -v` = **`H`**，已在库）的 `app` 服务 | ⬜ **未注入** |
+| `MINIO_ACCESS_KEY / SECRET_KEY` | `docker-compose.server.yml` 内**硬编码** `minioadmin/minioadmin123` | ⬜ 建议改由 `deploy/app/.env` 注入 —— **与 §2.6 同一条，见该节**（`deploy/app/` 当前只有 `.env.example`） |
+
+- [ ] 服务器侧重打包 jar（使 `application-dev.yml` 的 RabbitMQ 改动随包生效）—— 判据：app 启动后 RabbitMQ 连接成功，无 `ACCESS_REFUSED`
+- [ ] 在 `docker-compose.server.yml` 的 `app` 服务补 `HELLOAI_AGENT_REGISTRATION_TOKEN`（**纯 ASCII** —— 该文件是功能性字符串，非注释）
+- [ ] `application-dev.yml` 补 `${HELLOAI_AGENT_REGISTRATION_TOKEN:…}` 占位符（与既有「本地私有默认值」口径一致；该文件 `skip-worktree`，改索引需按 `§13.4` item 2 的手法，勿泄露真实 IP）
+- [ ] MinIO 凭据轮换与三处同步 —— **按 §2.6 执行**（不在本节重复）
+
+**判据**：app 容器 `logs app` 出现 `Started HelloAIApplication`，且无 `registration-token` 缺失 / `ACCESS_REFUSED` 类错误；Agent 注册链路可用。
+
+---
+
+## 4. 后续小节（按需追加）
 
 新的专项若产出「只在部署环境可验」的核对项，追加为独立小节，并在小节首行给出出处
 （`LOG-…` / 差距表 `G-0xx`），与本节同构。**不要把本地可验项搬进来。**
@@ -192,3 +216,4 @@ docker --version && docker compose version && docker info >/dev/null && echo ENG
 |---|---|
 | 2026-10-10 | 建立本清单；首节「备份 / 恢复（`REF-2`）」三条来自 `LOG-20261010-008` —— 该轮 REF-2 回归与门禁均在**本地**完成，三条部署侧核对项此前无任何载体。 |
 | 2026-10-11 | 新增 §2「生产环境 Docker 引擎 / Compose 升级前置」（§2.0~§2.7）：来源 = 2026-10-11 用户指令（回单位升级生产 Docker）+ `G-017` 部署侧安全动作同窗口核对；配套只读探测脚本 `deploy/docker-host-preflight.sh`（`--record` 落回退记录）。原「后续小节」占位顺延为 §3。见 `LOG-20261011-011`。 |
+| 2026-10-17 | 新增 §3「启动配置注入（部署前置）」：来源 = `review/HelloAI 优先级决策分析（V2架构调整 vs 代码质量）.md` §13.4 item 1 / item 2（2026-10-01 暴露的部署遗留）。原「后续小节」占位顺延为 §4。**同批判定 §13.4 item 3（本机 `scripts/powershell/logs/` 含真实凭据）不列入本清单** —— 它是**本机动作**，不符收录口径；改在 `LOG-20261017-004` 登记为待停机处置项。见 `LOG-20261017-004`。 |
