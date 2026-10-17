@@ -25,6 +25,7 @@
 | `BASE-x.y` | 基础架构专项任务（`doc/archive/implemented/HelloAI 基础架构调整实施计划.md`，2026-10-12 已完成归档；编号已退役，不再新增） |
 | `REF-x.y` | 借鉴落地专项任务（`plan/HelloAI 借鉴落地实施计划.md`，2026-10-09 建号）；`x` 取 1~8 —— **`REF-8` 内部 LLM 能力面**（2026-10-12 新增，`D-2026-10-12-1`） |
 | `M-x` | **供应商 / 模型注册信息完善**（magpie 借鉴，2026-10-13 建号，`x` 取 1~9）：来源 `research/magpie_借鉴分析.md`，实施见 `plan/HelloAI 借鉴落地实施计划.md` **§11**。与 `REF-x.y` **并列**——`REF-` 号段 `x` 已占满 1~8，不扩号段 |
+| `S-x` | **OpenSandbox 沙箱专项任务**（2026-10-17 建号，`x` 取 1~6）：实施见 `plan/HelloAI OpenSandbox 沙箱集成计划.md`。与 `REF-x.y` / `M-x` 并列——`REF-` 号段不扩，另立号段（实测 `doc/archive/**` 无 `S-` 号段 ⇒ 不撞号） |
 | `N-x` | **明确不抄项**——**仅存于 `research/magpie_借鉴分析.md` §八**（`x` 取 1~5），不承载任务、不进排期。⚠️ 与 `doc/archive/implemented/HelloAI_全面复测清单（2026-10-06）.md` 的复测用例号 `N-1` **同名不同义**（archive 为历史现场，不改） |
 | `ARCH-YYYYMMDD-NNN` | 架构决策（`log/HelloAI 架构变更记录.md`） |
 | `LOG-YYYYMMDD-NNN` | 迭代记录（`log/YYYY-MM.md`） |
