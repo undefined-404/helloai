@@ -20,6 +20,12 @@ public final class SubTaskOutputExtractor {
     /**
      * 读取子任务最近一次成功执行的产出正文；无产出（未执行/失败/缺字段）返回 null。
      *
+     * <p>★契约边界（去实体化后）：仅保证「{@code context} 为 null ⇒ 返回 null」。
+     * 参数已由 task 域实体收窄为 context 映射 —— 调用方需**自行保证来源实体**
+     * （{@code subTask} / {@code dep} 等）非空后再取其 {@code getContext()}
+     * （旧签名 {@code extractExecutionOutput(SubTask)} 首行的
+     * {@code if (subTask == null) return null;} 守卫已随之移除）。</p>
+     *
      * @param context 子任务 context（{@code subTask.getContext()}），可为 null
      * @return 产出文本；不存在时返回 null
      */
