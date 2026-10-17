@@ -5,6 +5,7 @@ import com.helloai.core.system.entity.LlmProvider;
 import com.helloai.core.system.mapper.LlmProviderMapper;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import com.helloai.core.system.port.LlmProviderProfile;
+import com.helloai.core.system.projection.LlmProviderProfileProjection;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -64,16 +65,16 @@ public class LlmProviderQueryServiceImpl implements LlmProviderQueryService {
 
     @Override
     public Optional<LlmProviderProfile> findProfileByCode(String code) {
-        return findByCode(code).map(LlmProviderProfileMapper::toProfile);
+        return findByCode(code).map(LlmProviderProfileProjection::toProfile);
     }
 
     @Override
     public List<LlmProviderProfile> listEnabledProfiles() {
-        return LlmProviderProfileMapper.toProfiles(listEnabled());
+        return LlmProviderProfileProjection.toProfiles(listEnabled());
     }
 
     @Override
     public List<LlmProviderProfile> listAllProfiles() {
-        return LlmProviderProfileMapper.toProfiles(listAll());
+        return LlmProviderProfileProjection.toProfiles(listAll());
     }
 }

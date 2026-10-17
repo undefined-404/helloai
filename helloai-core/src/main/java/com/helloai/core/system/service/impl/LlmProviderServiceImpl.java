@@ -5,6 +5,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.core.system.entity.LlmProvider;
 import com.helloai.core.system.port.LlmProviderProfile;
 import com.helloai.core.system.mapper.LlmProviderMapper;
+import com.helloai.core.system.projection.LlmProviderProfileProjection;
 import com.helloai.core.system.service.LlmProviderModelService;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import com.helloai.core.system.service.LlmProviderService;
@@ -172,7 +173,7 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
 
     @Override
     public LlmProviderProfile getProfileById(Long id) {
-        return LlmProviderProfileMapper.toProfile(getById(id));
+        return LlmProviderProfileProjection.toProfile(getById(id));
     }
 }
 

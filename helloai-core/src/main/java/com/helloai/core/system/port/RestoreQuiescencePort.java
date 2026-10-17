@@ -26,7 +26,7 @@ public interface RestoreQuiescencePort {
     /**
      * 探测当前在飞（占用额度口径：{@code ASSIGNED / IN_PROGRESS / REWORK}）的子任务数。
      *
-     * <p>口径与 {@code ConcurrencyQuotaService} / {@code InFlightDbQuotaService} 一致 ——
+     * <p>口径与 {@code ConcurrencyQuotaService} / {@code ConcurrencyQuotaServiceImpl} 一致 ——
      * 用宽口径（如"未完成任务总数"）会让恢复在正常运行时也被拒，把守卫变成噪声。</p>
      *
      * @return 在飞子任务数；绝不返回负数
