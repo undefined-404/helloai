@@ -43,4 +43,24 @@ public record ExecutionPolicy(
         return new ExecutionPolicy(IsolationLevel.NONE, IsolationLevel.PARTIAL,
                 IsolationLevel.NONE, IsolationLevel.NONE, IsolationLevel.NONE);
     }
+
+    /**
+     * OpenSandbox 容器沙箱的诚实五边界（S-2，沙箱集成计划 §4.3）。
+     *
+     * <p>这是平台首次可诚实标注「平台强制隔离」的边界，但<b>逐项诚实标注、不标全
+     * ISOLATED</b>（《协作规约》§22 + 《目标架构》§7 + 差距表 §6：不得在无实际
+     * 隔离能力时宣称「安全沙箱已完成」）：</p>
+     *
+     * <ul>
+     *   <li>filesystem = {@link IsolationLevel#ISOLATED}：沙箱容器独立文件系统，工作区随容器生命周期（OpenSandbox server 强制）；</li>
+     *   <li>network = {@link IsolationLevel#PARTIAL}：容器与 app 网络物理隔离 + egress 白名单控制，但默认 egress 为空（deny），实际连通性取决于配置，平台未强制「全禁」；</li>
+     *   <li>process = {@link IsolationLevel#PARTIAL}：容器内进程隔离 + pids 限制，但共享宿主内核（非 microVM）；</li>
+     *   <li>resource = {@link IsolationLevel#ISOLATED}：cpu/memory 资源限制由 server 强制；</li>
+     *   <li>credential = {@link IsolationLevel#ISOLATED}：沙箱容器零平台凭据 env（不注入 app env；平台凭据密钥绝不进沙箱）——「执行环境接触不到凭据」是真实隔离事实。</li>
+     * </ul>
+     */
+    public static ExecutionPolicy openSandbox() {
+        return new ExecutionPolicy(IsolationLevel.ISOLATED, IsolationLevel.PARTIAL,
+                IsolationLevel.PARTIAL, IsolationLevel.ISOLATED, IsolationLevel.ISOLATED);
+    }
 }
