@@ -1,6 +1,11 @@
 # HelloAI RM 存量缺口清偿计划（2026-10-04）
 
-> **状态：Active**（RM5 / RM6 / RM8 / RM9 仍在办；RM9 上帝类拆分未动）
+> **状态：Done** — 归档 2026-10-17（原 `doc/plan/HelloAI_RM存量缺口清偿计划（2026-10-04）.md`）。
+> **完成依据**：① **RM8**（9 个跨域适配器迁 `adapter/` 包）+ **RM6**（`TaskPlannerPickerPort` 去实体，返回 `PlannerAgentRef`）批 1 完成（2026-10-04）；② **RM5 前向实体泄漏六项全部归零（61→0）** —— 批 2（`AgentProfileSnapshot` 收 25 行）/ 批 3（`agent→system.entity` 11→0）/ 批 4（`review→task.entity` 13→0）/ 批 5a（`planner→task.entity` 9→0）/ 批 5b（`task→agent.entity` 3→0）全部完成（2026-10-04）；③ **RM9 上帝类拆分三笔 3/3 收官** —— `McpToolServiceImpl` 1334 → **409**（2026-10-16）/ `SubTaskServiceImpl` 1592 → **551**（2026-10-16）/ `RequirementClarifyServiceImpl` 1557 → **320**（2026-10-17），详见 §7.5~§7.7；④ 同批**命名合规整改** —— `{domain}.service.impl` 下非 `*ServiceImpl` 文件 = **0**（投影助手迁出 `{domain}.projection`）。
+> **代码实测（2026-10-17 归档前复核）**：`review→task.entity` = **0**、`planner→task.entity` = **0**、`task→agent.entity` = **0**（逐域 `grep -rn "helloai.core.task.entity"` / `"helloai.core.agent.entity"` 取证）⇒ **RM5 六项全归零，本计划无遗留项**。
+> **★正文口径说明（勿据下列段落判定「未完成」）**：本文件 §0 状态行「RM9 上帝类拆分未动」、§3.3「分轮建议」、§7 表末行「RM9 …（2/3 笔）」、§8「批 4 / 批 5a 未完成 —— 需先出设计稿」均为**执行过程中的现场表述**，已被 §7.5~§7.7 与归档前实测取代。按归档纪律（**不改史、不更新正文**）原样保留；**终态一律以 §7.5~§7.7 与《HelloAI 实现差距表》为准**。
+> **本文件冻结只读**，不再更新正文；当前状态以《HelloAI 实现差距表》为准。
+>
 > **范围**：代码质量路线图 **RM5 / RM6 / RM8 / RM9**（阶段 B 剩余存量缺口）
 > **依据**：`doc/review/HelloAI 架构V2进度与质量审计报告（2026-10-02）.md` §6.3
 > **规范**：`doc/HelloAI_AI开发协作规约.md`（§9 生命周期 / §13 先计划 / §14 最小变更 / §40 红线）；`doc/HelloAI_CODE_STYLE.md`（§6 依赖方向 / §7.2 端口反转判据 / §7.3 Adapter / §9 类规模）
