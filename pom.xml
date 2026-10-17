@@ -48,6 +48,9 @@
         <shedlock.version>6.6.0</shedlock.version>
         <!-- Sa-Token 鉴权底座（RBAC：登录会话 + @SaCheckPermission 权限码） -->
         <sa-token.version>1.44.0</sa-token.version>
+        <!-- OpenSandbox Kotlin SDK（S-3：沙箱集成，OpenSandbox 集成计划；官方 Maven Central 1.1.1，
+             依赖 kotlin-stdlib/OkHttp/SLF4J，与 Java17 栈兼容；version 统一由父 POM 管理） -->
+        <opensandbox.version>1.1.1</opensandbox.version>
 
         <!-- 打包时默认跳过测试执行，需要跑测试时加 -DskipTests=false -->
         <skipTests>true</skipTests>
@@ -247,6 +250,12 @@
                 <version>${sa-token.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <!-- OpenSandbox Kotlin SDK（S-3 沙箱集成；版本统一由父 POM 管理，见 properties） -->
+            <dependency>
+                <groupId>com.alibaba.opensandbox</groupId>
+                <artifactId>sandbox</artifactId>
+                <version>${opensandbox.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

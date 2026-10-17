@@ -127,8 +127,80 @@ services:
       timeout: 5s
       retries: 3
 
+  # --- OpenSandbox 沙箱服务（OpenSandbox 集成计划 S-5；本地 dev 形态） ---
+  # 只挂 docker.sock 于本容器；app 容器【不加入】opensandbox-net（计划 §4.6：
+  # 避免「app 与沙箱容器同网」扩大攻击面），app 仅经 HTTP API + api_key 访问 8090。
+  # 生产形态（docker-compose.server.yml 的等价服务块）在批次 3（S-5）落。
+  opensandbox-server:
+    image: opensandbox/server:release-1.1.0
+    container_name: opensandbox-server
+    restart: unless-stopped
+    networks:
+      - opensandbox-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8090:8090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    configs:
+      - source: opensandbox-config
+        target: /etc/opensandbox/config.toml
+    environment:
+      - SANDBOX_CONFIG_PATH=/etc/opensandbox/config.toml
+      # server 不配 api_key 则启动要求显式风险确认（middleware/auth.py:37）；
+      # 生产必配，本地 dev 用占位即可。见 .env / shell 注入。
+      - OPEN_SANDBOX_API_KEY=${OPEN_SANDBOX_API_KEY:-dev-test-key}
+
+configs:
+  # OpenSandbox server 配置文件（server 侧 config.toml，官方 example 裁剪）。
+  # execd / egress 为 server 建沙箱时的运行时辅助镜像（非用户任务镜像）。
+  opensandbox-config:
+    content: |
+      [server]
+      host = "0.0.0.0"
+      port = 8090
+      api_key = "${OPEN_SANDBOX_API_KEY:-dev-test-key}"
+
+      [proxy]
+      # 生命周期 server 挂在 opensandbox-net，而经 docker.sock 建的沙箱走 Docker
+      # bridge 网络 —— 经宿主发布端口路由，而非不可达的沙箱 IP。
+      resolve_internal = false
+
+      [log]
+      level = "INFO"
+
+      [runtime]
+      type = "docker"
+      # execd：沙箱内部执行守护进程（每个沙箱容器启动时注入）
+      execd_image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:v1.1.0"
+      # execd_image = "opensandbox/execd:v1.1.0"   # Docker Hub 备选（网络受限用阿里云源）
+
+      [egress]
+      # egress：网络出口 sidecar（networkPolicy egress 白名单 + Credential Vault 凭据侧车）
+      image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:v1.1.7"
+      # image = "opensandbox/egress:v1.1.7"        # Docker Hub 备选
+      readiness_timeout_seconds = 30.0
+
+      [docker]
+      network_mode = "bridge"
+      host_ip = "host.docker.internal"
+      port_range_min = 40000
+      port_range_max = 60000
+      drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
+      no_new_privileges = true
+      pids_limit = 4096
+
+      [ingress]
+      mode = "direct"
+
 volumes:
   postgres_data:
   redis_data:
   rabbitmq_data:
   minio_data:
+
+networks:
+  opensandbox-net:
+    driver: bridge
+

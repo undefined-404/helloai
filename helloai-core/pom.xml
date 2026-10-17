@@ -129,6 +129,12 @@
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>
         </dependency>
+        <!-- OpenSandbox Kotlin SDK（S-3，沙箱集成计划；提供方 OpenSandboxSandboxProvider 用其自托管连接）。
+             依赖栈 kotlin-stdlib/OkHttp/SLF4J 与既有栈一致；版本统一由根 pom dependencyManagement 管理。 -->
+        <dependency>
+            <groupId>com.alibaba.opensandbox</groupId>
+            <artifactId>sandbox</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
