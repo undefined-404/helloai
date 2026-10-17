@@ -119,8 +119,8 @@ ALTER TABLE attachment ADD COLUMN IF NOT EXISTS visibility VARCHAR(16) NOT NULL 
 ### 4.2 判定入口**单一化**（不写死层级）
 
 ```java
-// 唯一判定入口：所有读附件路径都走它
-AttachmentAccessPolicy.canRead(Long agentId, Attachment att)
+// 唯一判定入口：所有读附件路径都走它（P1 已按此落地：core/task/policy/AttachmentVisibilityPolicy）
+AttachmentVisibilityPolicy.canRead(Long agentId, Attachment att)
 ```
 
 内部两步：
@@ -130,7 +130,7 @@ AttachmentAccessPolicy.canRead(Long agentId, Attachment att)
    - **未来层级加深（子任务的子任务）只需改这一个函数**，权限入口零改动
 2. 按 `att.visibility` 判定：
    - `PERSONAL` → `agentId == uploaderOf(att)`
-   - `TASK` → `TaskMemberPort.isMember(ownerTaskId, agentId)`（或 `agentId == uploaderOf(att)`）
+   - `TASK` → `TaskAgentMemberService.isMember(taskId, agentId)`（或 `agentId == uploaderOf(att)`）
    - `PUBLIC` → agent 存在且 ACTIVE
 
 ### 4.3 ⚠️ 纠正：可见性**不要绑"角色"**

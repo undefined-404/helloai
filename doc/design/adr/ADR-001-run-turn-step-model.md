@@ -8,6 +8,8 @@
 | **关联文档** | [HelloAI\_架构改造长期思路](../../archive/reference/HelloAI_架构改造长期思路.md)、[HelloAI\_Phase0\_架构改造执行方案](../../archive/implemented/HelloAI_Phase0_架构改造执行方案.md)、[HelloAI\_CODE\_STYLE.md](../../HelloAI_CODE_STYLE.md) |
 | **决策类型** | 模型定义（contract-first，先于 Event Stream 建表）                                                                                                                       |
 
+> **★类名沿革补注（2026-10-17）**：本 ADR 正文 §5.2 等处以 `SubTaskExecutionServiceImpl`（`executeOnce`）标注埋点位置 —— 该类已随 `G-002` 单轨硬切**整体删除**（全仓 0 文件），现行等价埋点位于 `RuntimeTurnExecutor`。按 `doc/README.md` §2.1 补充条（被引用对象**整体删除**后引用不再可解析），在此补注现行载体；**ADR 的决策结论与现场描述不改**（ADR 为 Accepted 决策记录，不改史）。
+
 ***
 
 ## 1. 背景与问题

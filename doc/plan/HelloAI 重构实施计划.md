@@ -2,7 +2,7 @@
 
 > **状态：Active**
 >
-> 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 全链收官，P1 主体推进——G-004 / G-006 / G-010 / G-011 落地并完成 2026-09-10 外部执行者双轮全链闭环（Round2/Round3）。后续：P1 剩余项（**Recovery 消费面** / 技能回流规范〔`REF-1.4` 待接线〕 / Sandbox 第二阶段〔**条件触发**，Fork 已 WONTFIX〕）+ 技术债清偿。近况增量：2026-09-11 外部上下文供给打通（子任务详情 MCP 工具 V76 + REST/inbox 三通道，提交 8fa09e0）；2026-09-13 Sa-Token 异步上下文修复（SSE 流式接口 500：拦截器 ASYNC 放行 + 异常处理器 SSE 分支，提交 dd3bd18，见 §14）。
+> 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 全链收官，P1 主体推进——G-004 / G-006 / G-010 / G-011 落地并完成 2026-09-10 外部执行者双轮全链闭环（Round2/Round3）。后续：P1 剩余项（技能回流规范〔`REF-1.4` 待接线，**条件触发**〕 / Sandbox 第二阶段〔**条件触发**，Fork 已 WONTFIX〕）+ 技术债清偿。**`Recovery` 消费面已于 2026-10-16 建成，自本清单移除**（见 §7；`D-2026-10-16-11` / `LOG-20261016-011`）。近况增量：2026-09-11 外部上下文供给打通（子任务详情 MCP 工具 V76 + REST/inbox 三通道，提交 8fa09e0）；2026-09-13 Sa-Token 异步上下文修复（SSE 流式接口 500：拦截器 ASYNC 放行 + 异常处理器 SSE 分支，提交 dd3bd18，见 §14）。
 >
 > **2026-10-09 次序与范围变更（用户裁定，`D-2026-10-09-4` / `D-2026-10-09-5` / `D-2026-10-09-6`）**：借鉴落地专项（`plan/HelloAI 借鉴落地实施计划.md`，编号 `REF-x.y`）并入本主线执行：
 >
@@ -172,7 +172,7 @@ Task Service
 > 快照与 `REF-1.x` / `REF-4.x` 的实际推进不一致（曾造成「技能 / RAG 尚未开工」的误判），且违反借鉴落地 §1「双方不得互相复述进度」。
 > **当前状态以《差距表》为准**（`AgentRuntime` → `G-002` / `G-003`）；**技能与工具面进度见 `plan/HelloAI 借鉴落地实施计划.md` `REF-1` / `REF-4` 各节 `Status`**。
 >
-> 结构性结论（长期有效，**非**进度）：八件套 **Context / EventRecorder / Environment / ToolRegistry / ToolExecutor / AgentLoop / Session / SandboxProvider** 均已落地（第一阶段~第四阶段）；`SandboxProvider` 为契约 + 诚实策略（见 §6）；旧链编排仍在 `SubTaskExecutionServiceImpl`。Docker / K8s 隔离能力后置（见 §6）。
+> 结构性结论（长期有效，**非**进度）：八件套 **Context / EventRecorder / Environment / ToolRegistry / ToolExecutor / AgentLoop / Session / SandboxProvider** 均已落地（第一阶段~第四阶段）；`SandboxProvider` 为契约 + 诚实策略（见 §6）；**旧链编排已随 `G-002` 单轨硬切整体退出，`SubTaskExecutionService` / `SubTaskExecutionServiceImpl` 两个类均已删除（全仓 0 文件），当前唯一执行入口为 `RuntimeTurnExecutor`**。Docker / K8s 隔离能力后置（见 §6）。
 
 # 5. P1：Skill Capability Package
 
@@ -243,7 +243,7 @@ Recovery
 
 > **Fork 移出本序列（2026-10-09，`D-2026-10-09-5`）**：Fork 的触发入口 / 原 Run 冻结 / 驱动新 Run 执行三项 **WONTFIX**；`AgentEventForkService`（快照复制）保留为未接线的内部能力。故 Event 消费面以 **Recovery 收尾**。
 
-> **进度指针（不内嵌快照，`C1`）**：Event 消费面落地进度见《差距表》`G-006`。**长期有效口径**：`Timeline → Replay → Audit` 已全链暴露；**`Fork` 已于 2026-10-09 `D-2026-10-09-5` WONTFIX**，序列以 **`Recovery` 收尾**（`Recovery` 消费面 = 本项当前下一动作）；`agent_execution_record` 仍 0 行（细线状态）。
+> **进度指针（不内嵌快照，`C1`）**：Event 消费面落地进度见《差距表》`G-006`。**长期有效口径**：`Timeline → Replay → Audit` 已全链暴露；**`Fork` 已于 2026-10-09 `D-2026-10-09-5` WONTFIX**，序列以 **`Recovery` 收尾**（`Recovery` 消费面**已于 2026-10-16 建成**，`D-2026-10-16-11` / `LOG-20261016-011` ⇒ 本项**无剩余在办动作**）；`agent_execution_record` 仍 0 行（细线状态）。
 > **勿混**：MQ 级死信恢复（`DeadLetterRecoveryService` / `DlxAlertConsumer` / `V60 mq_dead_letter_archive`）为子任务重派兜底，属**命令 / 结果链路**，**非** Event Stream 消费面。
 
 # 8. P1：Planner 能力感知与自适应粒度（G-010）
