@@ -152,6 +152,19 @@ services:
       # 生产必配，本地 dev 用占位即可。见 .env / shell 注入。
       - OPEN_SANDBOX_API_KEY=${OPEN_SANDBOX_API_KEY:-dev-test-key}
 
+  # --- 业务沙箱镜像预热（仅用于 `docker compose pull opensandbox-images` 预拉） ---
+  # 业务沙箱镜像 = helloai.sandbox.opensandbox.spec.image（如 python:3.12），由 server 建沙箱时引用；
+  # 本服务不启动（command: sleep infinity + 无端口/无网络依赖），只作为「镜像清单」载体，
+  # 便于 `docker compose pull opensandbox-images` 一键预拉，避免首建沙箱时现场拉镜像卡顿。
+  # 用法：
+  #   docker compose pull opensandbox-images            # 预拉所有业务沙箱镜像（推荐）
+  #   docker compose up -d opensandbox-images           # 不推荐（会启动无意义容器，别用）
+  opensandbox-images:
+    image: python:3.12
+    pull_policy: always
+    restart: "no"
+    command: ["sleep", "infinity"]
+
 configs:
   # OpenSandbox server 配置文件（server 侧 config.toml，官方 example 裁剪）。
   # execd / egress 为 server 建沙箱时的运行时辅助镜像（非用户任务镜像）。
