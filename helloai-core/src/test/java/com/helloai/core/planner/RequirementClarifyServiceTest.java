@@ -1343,6 +1343,9 @@ class RequirementClarifyServiceTest {
                     ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
                             WebSearchResult.builder().title("AI 编程最新进展")
                                     .url("https://a.example/1").snippet("摘要").build()))));
+            // 规则词「规则候选词」零结果（W-2 并行下两词并发，均需 stub；不 stub 会触发 strict 报错）
+            when(toolExecutor.execute(eq("web_search"), contains("规则候选词"))).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of())));
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "你好", 1)));

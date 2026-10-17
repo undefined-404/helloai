@@ -2,6 +2,7 @@ package com.helloai.core.planner;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
@@ -128,5 +129,53 @@ class SearchQueryPlannerServiceImplTest {
         // 开关关闭时与规则层行为一致：单候选词、无外部调用（未 stub 平台执行即证明未触达）
         assertThat(queries).hasSize(1);
         assertThat(queries.get(0)).contains("Kubernetes");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  W-4：语义单元截断 + 多主题长句进 LLM 改写
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("W-4 语义截断：空格处断词保留完整语义单元，不再硬切")
+    void planQueries_w4_semanticTruncation_keepsWholeWords() {
+        properties.setQueryRewriteEnabled(false); // 纯规则路径
+        // 实测回归：「膝盖旧伤 减脂训练计划 饮食方案 建议」20 字硬截会切碎成
+        // 「膝盖旧伤 减脂训练计划 饮」——空格边界截断应保留完整词
+        List<String> queries = planner.planQueries("膝盖旧伤 减脂训练计划 饮食方案 建议");
+
+        assertThat(queries).isNotEmpty();
+        assertThat(queries.get(0))
+                .doesNotEndWith("饮") // 不在空格中间切词
+                .hasSizeLessThanOrEqualTo(20)
+                .contains("膝盖旧伤");
+    }
+
+    @Test
+    @DisplayName("W-4 无空格长词：退化为上限硬截（不丢搜索机会）")
+    void planQueries_w4_noSpaceLongWord_degradesToHardTruncation() {
+        properties.setQueryRewriteEnabled(false);
+        // 无空格连续长词（如中英文混排无空格）——找不到词边界，退化保留前 N 字
+        List<String> queries = planner.planQueries(
+                "这是一个超长的没有空格的中文搜索需求描述场景演示文本案例");
+
+        assertThat(queries).isNotEmpty();
+        assertThat(queries.get(0)).hasSizeLessThanOrEqualTo(20);
+    }
+
+    @Test
+    @DisplayName("W-4 多主题长句（超 40 字）：即使规则拆出多词也进 LLM 改写")
+    void planQueries_w4_longMultiTopic_sendsToLlmRewrite() {
+        // 原文超 LLM_REWRITE_MULTI_TEXT_LIMIT=40，规则拆出多候选词也进 LLM；
+        // mock 平台执行返回 LLM 改写结果（正交查询）
+        when(plannerAgentPicker.pick(isNull())).thenReturn(mock(AgentProfileSnapshot.class));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "[\"膝盖旧伤 减脂训练\",\"减脂饮食方案\"]", "stop", "llm", 100));
+
+        List<String> queries = planner.planQueries(
+                "膝盖旧伤恢复期想制定减脂训练计划，同时需要饮食方案建议，最好能结合我的情况给出建议");
+
+        // LLM 改写生效：正交查询（不是规则拆碎的长尾词）
+        assertThat(queries).containsExactlyInAnyOrder("膝盖旧伤 减脂训练", "减脂饮食方案");
     }
 }

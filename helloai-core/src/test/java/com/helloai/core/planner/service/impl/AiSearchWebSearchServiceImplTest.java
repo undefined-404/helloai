@@ -47,9 +47,9 @@ class AiSearchWebSearchServiceImplTest {
     @SuppressWarnings("unchecked")
     private List<WebSearchResult> parse(String body, int limit) throws Exception {
         Method m = AiSearchWebSearchServiceImpl.class
-                .getDeclaredMethod("parseResponse", String.class, int.class);
+                .getDeclaredMethod("parseResponse", String.class, int.class, String.class);
         m.setAccessible(true);
-        return (List<WebSearchResult>) m.invoke(newService(), body, limit);
+        return (List<WebSearchResult>) m.invoke(newService(), body, limit, "q");
     }
 
     @Test
@@ -192,10 +192,10 @@ class AiSearchWebSearchServiceImplTest {
                 """;
         AiSearchWebSearchServiceImpl service = newService();
         Method m = AiSearchWebSearchServiceImpl.class
-                .getDeclaredMethod("parseResponse", String.class, int.class);
+                .getDeclaredMethod("parseResponse", String.class, int.class, String.class);
         m.setAccessible(true);
         @SuppressWarnings("unchecked")
-        List<WebSearchResult> results = (List<WebSearchResult>) m.invoke(service, body, 15);
+        List<WebSearchResult> results = (List<WebSearchResult>) m.invoke(service, body, 15, "q");
 
         assertThat(results).hasSize(1);
         assertThat(service.answerSummary("q")).contains("博查侧生成的需求总结");
