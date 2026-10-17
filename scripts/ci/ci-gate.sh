@@ -251,6 +251,12 @@ run_static_guard "技能/能力词表三源一致性 + V52 两列退役守卫（
 run_static_guard "Shell 可移植性（bash3 兼容 / 变量插值边界 / 管道右端 grep -q）" \
   "$SCRIPT_DIR/check-shell-portability.sh"
 
+# OpenSandbox 集成契约守卫（S-6 验证集·静态模式）：S-1~S-5 契约文件齐全 / openSandbox()
+# 诚实五边界不标全 ISOLATED（network/process 保持 PARTIAL）/ ENVIRONMENT_RESOLVED 埋点
+# 语义不变（step=7 按事实记录）/ Provider 默认关闭。纯文本 grep，零外部依赖，CI 可跑。
+run_static_guard "OpenSandbox 集成契约守卫（契约齐全 / 诚实五边界 / ENVIRONMENT_RESOLVED 语义 / 默认关闭）" \
+  "$SCRIPT_DIR/../shell/verify-opensandbox-contract.sh"
+
 # ---------------------------------------------------------------------------
 # 门禁 4：前端类型检查 + 构建
 # ---------------------------------------------------------------------------

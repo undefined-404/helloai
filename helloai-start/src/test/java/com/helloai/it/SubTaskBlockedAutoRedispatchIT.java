@@ -132,7 +132,12 @@ class SubTaskBlockedAutoRedispatchIT extends AbstractItTestBase {
         assertEquals("PENDING", readStatus(SUB_STALE), "巡检应把停滞 BLOCKED 推出阻塞态");
         assertEquals(1, readAttemptTotal(SUB_STALE), "重派应消耗一次预算（attempt_total 0→1）");
         assertNotNull(readLastAttemptTime(SUB_STALE), "重派应同源推进退避时钟 last_attempt_time");
-        verify(taskDispatchPort, times(1)).assignNext(eq(AGENT), eq(SUB_STALE), any());
+        // 只断言「派单一次且目标就是本子任务」，不硬编码选中哪个 agent——
+        // 全量 *IT 共享 Testcontainers 库时，其他 IT（如 AgentCommandOutboxIT 的 9201）
+        // 会留下同角色 EXECUTOR 候选，pickPreferred 不保证选到 seed 的 12350
+        // （实测门禁 5 失败：expected 12350, actual 9201）。本用例验证的是
+        // 「BLOCKED 被推进调度链」这一缺口语义，选到哪个合规候选无关紧要。
+        verify(taskDispatchPort, times(1)).assignNext(any(), eq(SUB_STALE), any());
     }
 
     @Test

@@ -1,6 +1,6 @@
 # HelloAI OpenSandbox 沙箱集成计划
 
-> **Status**: `Active`
+> **Status**: `Active`（S-1~S-6 已全部落地 2026-10-17；本计划作为 OpenSandbox 集成唯一事实源保留在办，`REF-3` 预案未触发保持原状）
 > **依据**: 用户指令（2026-10-17）——「OpenSandbox 我已下载（`E:\workspace\OpenSandbox-main`），设计 Plan 将沙箱集成到当前项目」；用户裁定集成目标 = **能力预研 + 契约落地**（`S-1`~`S-6`，不触发 `G-005` 重新排期）。
 > **调研支撑**: `doc/research/沙箱运作机制与HelloAI沙箱设计分析（2026-10-17）.md`（三仓源码实测 + 可引入开源沙箱评估，首选 OpenSandbox）。
 > **最后更新**: 2026-10-17
@@ -75,14 +75,14 @@
 
 ## 3. 任务表（S-1 ~ S-6）
 
-| 项 | 动作 | 验收 |
-|---|---|---|
-| **S-1 声明式 spec** | 定义 `SandboxSpec`（纯声明）：`type=opensandbox` + `image` + `entrypoint` + `resourceLimits(cpu,memory)` + `networkPolicy(defaultAction,egress[])` + `scope(agent/user/fixed)` + `timeoutSeconds`。**纯声明，不得内嵌 Docker API 调用参数**（对齐 `REF-3.2` 预案；否则将来换独立服务要返工） | 同一份 spec 能渲染出 OpenSandbox `POST /sandboxes` 请求体；单测断言字段映射 |
-| **S-2 诚实五边界策略** | `ExecutionPolicy` 补 `openSandbox()` 静态工厂，五边界逐项诚实标注（见 §4.3）；**不得**标全 `ISOLATED` | 单测：`openSandbox()` 返回五边界与 §4.3 一致 |
-| **S-3 OpenSandboxProvider** | 新增 `impl/OpenSandboxSandboxProvider`（`SandboxProvider` 实现）：引入 Kotlin SDK；`resolve(SandboxContext)` 在 `SandboxSpec` 配置存在且 `enabled=true` 时返回带 `openSandbox()` 策略的 `Sandbox`，否则返回 `null`（沿既有 null 契约）；**scope=agent 命名复用**（同 Agent 复用同一沙箱，对齐 `REF-3.5`）；**显式回收、不自动销毁** | 单测：`SandboxContext` → 返回 `providerName="opensandbox"`、五边界非 `NONE` 的 `Sandbox`；`enabled=false` → `null`；同 Agent 复用断言 |
-| **S-4 探针** | 照抄 `octop-harness probe_backend`：写→读→删真实往返（`.helloai-probe-<uuid>.txt`），**失败路径也 `destroy()`**；结果落 timeline（可观测登记，对齐 `REF-3.4`） | 探针用例：真实 server 环境写读删回环 `ok`；失败路径容器已销毁 |
-| **S-5 部署拓扑** | `docker-compose.server.yml` 增 `opensandbox-server` 服务（独立网络 `opensandbox-net`，**app 不加入**；挂 `docker.sock`；`api_key` 必配）；app 侧新增配置 `helloai.sandbox.opensandbox.{url,api-key,enabled}`（**默认 `enabled=false`**，对齐 `REF-6.13` 新能力默认关闭）；`deploy/*.sh` 与基线技术栈表同步 | 部署拓扑变更清单落 ADR；compose 起服后 `GET /health` 可达；`enabled=false` 时 app 零行为变化 |
-| **S-6 验证集** | 单测（spec 渲染 / 五边界 / scope 复用）+ 探针用例（含失败路径回收）+ `verify-agent-execution-preview.ps1` / `verify-c3-events.ps1`（`ENVIRONMENT_RESOLVED` 语义不变）+ `bash scripts/ci/ci-gate.sh` | 全套绿；回归断言既有沙箱观测日志语义不变 |
+| 项 | 动作 | 验收 | 状态 |
+|---|---|---|---|
+| **S-1 声明式 spec** | 定义 `SandboxSpec`（纯声明）：`type=opensandbox` + `image` + `entrypoint` + `resourceLimits(cpu,memory)` + `networkPolicy(defaultAction,egress[])` + `scope(agent/user/fixed)` + `timeoutSeconds`。**纯声明，不得内嵌 Docker API 调用参数**（对齐 `REF-3.2` 预案；否则将来换独立服务要返工） | 同一份 spec 能渲染出 OpenSandbox `POST /sandboxes` 请求体；单测断言字段映射 | ✅ 落地（`c34c6742`，`LOG-20261017-008`） |
+| **S-2 诚实五边界策略** | `ExecutionPolicy` 补 `openSandbox()` 静态工厂，五边界逐项诚实标注（见 §4.3）；**不得**标全 `ISOLATED` | 单测：`openSandbox()` 返回五边界与 §4.3 一致 | ✅ 落地（`c34c6742`，`LOG-20261017-008`） |
+| **S-3 OpenSandboxProvider** | 新增 `impl/OpenSandboxSandboxProvider`（`SandboxProvider` 实现）：引入 Kotlin SDK；`resolve(SandboxContext)` 在 `SandboxSpec` 配置存在且 `enabled=true` 时返回带 `openSandbox()` 策略的 `Sandbox`，否则返回 `null`（沿既有 null 契约）；**scope=agent 命名复用**（同 Agent 复用同一沙箱，对齐 `REF-3.5`）；**显式回收、不自动销毁** | 单测：`SandboxContext` → 返回 `providerName="opensandbox"`、五边界非 `NONE` 的 `Sandbox`；`enabled=false` → `null`；同 Agent 复用断言 | ✅ 落地（`f16191df` + SDK gate PASS `d09ab20c`，`LOG-20261017-009`） |
+| **S-4 探针** | 照抄 `octop-harness probe_backend`：写→读→删真实往返（`.helloai-probe-<uuid>.txt`），**失败路径也 `destroy()`**；结果落 timeline（可观测登记，对齐 `REF-3.4`） | 探针用例：真实 server 环境写读删回环 `ok`；失败路径容器已销毁 | ✅ 落地（`330d2e6c`；真实探针双路径验收，`LOG-20261017-010`） |
+| **S-5 部署拓扑** | `docker-compose.server.yml` 增 `opensandbox-server` 服务（独立网络 `opensandbox-net`，**app 不加入**；挂 `docker.sock`；`api_key` 必配）；app 侧新增配置 `helloai.sandbox.opensandbox.{url,api-key,enabled}`（**默认 `enabled=false`**，对齐 `REF-6.13` 新能力默认关闭）；`deploy/*.sh` 与基线技术栈表同步 | 部署拓扑变更清单落 ADR；compose 起服后 `GET /health` 可达；`enabled=false` 时 app 零行为变化 | ✅ 落地（`330d2e6c` + `ADR-003`；compose `/health` 200 实测） |
+| **S-6 验证集** | 单测（spec 渲染 / 五边界 / scope 复用）+ 探针用例（含失败路径回收）+ `verify-agent-execution-preview.ps1` / `verify-c3-events.ps1`（`ENVIRONMENT_RESOLVED` 语义不变）+ `bash scripts/ci/ci-gate.sh` | 全套绿；回归断言既有沙箱观测日志语义不变 | ✅ 落地（`verify-opensandbox-contract.sh` 静态守卫入 ci-gate 门禁 3；单测 16 例 + 探针双路径全绿） |
 
 > **REF-3 预案对照**：S-1 ↔ REF-3.2（spec）、S-2 ↔ REF-3.1（策略工厂）、S-3 ↔ REF-3.3（独立服务形态）+ REF-3.5（scope 生命周期）、S-4 ↔ REF-3.4（探针）。REF-3 预案为「触发后执行」，本计划在**未触发**状态下以「能力预研 + 契约落地」先行落地 S-1~S-6（用户裁定），`REF-3` 整组状态**保持不变**。
 
