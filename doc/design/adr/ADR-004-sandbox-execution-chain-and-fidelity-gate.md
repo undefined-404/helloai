@@ -79,7 +79,7 @@ Codex / WorkBuddy）后，**把沙箱真正接成执行通道**，让沙箱参�
 
 **决策**：
 
-- `helloai.sandbox.execution.enabled` 默认 `false`（对齐 REF-6.13 新能力默认关闭）；
+- `helloai.sandbox.opensandbox.enabled` 默认 `false`（对齐 REF-6.13 新能力默认关闭）；
   开启后才注入 `internal_run_in_sandbox` 工具；
 - **`G-005` 三个触发条件仍均未命中**（① 不碰宿主工具——执行在 OpenSandbox 容器内；
   ② 不执行技能包正文——工具只执行现场写的命令/脚本；③ 不改浏览器）⇒ 整体仍 DEFERRED 不排期，
