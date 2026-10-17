@@ -305,6 +305,16 @@ OpenSandboxProbe                 写→读→删回环 + 失败路径也销毁�
 docker-compose(.server).yml      独立网络 opensandbox-net，app 不加入；api_key 走 config.toml；ACR 镜像源 + python:3.12 预热
 ```
 
+**执行链已接线（`S-7`~`S-9`，2026-10-17，见 `plan/HelloAI 沙箱执行链设计方案（2026-10-17）.md`）**：
+
+```text
+SandboxExecutionService           执行通道接口（ExecuteResponse 统一三字段）
+OpenSandboxExecutionService       执行通道实现（enabled 守卫 / 超时钳制 / 输出截断 / finally 无条件 kill）
+internal_run_in_sandbox           内部 LLM 自检 + Reviewer 验证脚本工具（requireInternalChain 闸门 + fail-closed 摘除）
+SandboxExecutionToolContributor   条件可用声明（enabled=false ⇒ 工具从模型可见列表摘除）
+FinalReportFidelityGate           S-9 机械判定接入点（脚本类交付物可执行性 HARD 规则，checker 保持纯静态）
+```
+
 **后续仍需考虑**（未接业务执行链；沙箱内执行 agent 工具链的触发条件见 `ADR-003` §6）：
 
 ```text
