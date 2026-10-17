@@ -114,6 +114,77 @@ public final class FinalReportFidelityChecker {
         return new Result(List.copyOf(violations));
     }
 
+    // ────────────────────────────────────────────────────────────
+    //  S-9：脚本类交付物可执行性判定（沙箱执行链设计方案 §3.5/§4）
+    //  纯静态、无 Spring 依赖：脚本正文 + 沙箱执行结果 → 确定性判定。
+    //  由 FinalReportFidelityGate（Spring Bean）在检测到「报告声明可执行文件交付物」时
+    //  调用 SandboxExecutionService.execute 取得 ExecuteResponse 后注入本方法。
+    // ────────────────────────────────────────────────────────────
+
+    /**
+     * 判定「脚本类交付物可执行性」是否成立（S-9 机械判定接入，HARD 规则）。
+     *
+     * <p><b>语义（对齐沙箱执行链设计方案 §3.5，沙箱是证据提供者不是判定者）</b>：</p>
+     * <ul>
+     *   <li><b>证据有效</b>（不新增违规）：{@code execution} 非空且 {@code succeeded()}
+     *       （exitCode=0 且未截断）——脚本确实跑通，作为 Reviewer / 人工复核的一手证据；</li>
+     *   <li><b>证据不足 / 执行失败 ⇒ HARD 机械驳回</b>：{@code execution} 为空
+     *       （沙箱未启用 / 不可用 / 未执行，本判定不适用 ⇒ fail-closed，同 {@code shell_reference} 语义——
+     *       「报告声明可执行文件交付物却拿不出可执行证据」不给 LLM 放过的机会）；
+     *       {@code exitCode != 0}（脚本本身报错，声称「已跑通」与事实矛盾）；
+     *       {@code truncated=true}（输出被截断，无法确认完整执行）。</li>
+     *   <li><b>不判内容正确性</b>：exitCode=0 只说明「命令跑通」，不自动判定验收达标
+     *       （可能测的是无关属性）——内容达标与否仍由 Reviewer / LLM 判定。</li>
+     * </ul>
+     *
+     * <p><b>调用方契约</b>：{@link com.helloai.core.review.quality.FinalReportFidelityGate}
+     * 只在「报告声明可执行文件交付物（.sh/.py/.ps1/.jar 等）」时才调用本方法并注入
+     * {@code scriptText}（提取自报告围栏或附件正文）；无脚本交付物时 <b>不调用</b>本方法
+     * （既有 3A 判定行为零变化）。{@code scriptText} 仅用于违规描述定位（不回显全量正文）。</p>
+     *
+     * @param scriptText 脚本正文（仅用于违规描述定位；可 null）
+     * @param execution  沙箱执行结果（可 null = 未执行 / 沙箱不可用）
+     * @return 违规清单（证据有效 ⇒ 空；证据不足/失败 ⇒ 单条 HARD）
+     */
+    public static Result checkScriptExecutability(String scriptText, Object execution) {
+        List<Violation> violations = new ArrayList<>();
+        try {
+            if (execution == null) {
+                violations.add(new Violation(Severity.HARD, "script_execution_unavailable",
+                        "报告声明脚本类交付物，但沙箱执行证据不可得（沙箱未启用 / 不可达 / 未执行）："
+                                + "无法确认脚本可执行性，机械驳回"));
+                return new Result(List.copyOf(violations));
+            }
+            // 统一入口：接受 ExecuteResponse 或任意含 exitCode/truncated 的结构
+            Integer exitCode = null;
+            Boolean truncated = null;
+            if (execution instanceof com.helloai.core.agent.runtime.sandbox.ExecuteResponse r) {
+                exitCode = r.exitCode();
+                truncated = r.truncated();
+            } else if (execution instanceof java.util.Map<?, ?> m) {
+                Object code = m.get("exitCode");
+                Object tr = m.get("truncated");
+                exitCode = code instanceof Number n ? n.intValue() : null;
+                truncated = tr instanceof Boolean b ? b : null;
+            }
+            boolean evidenceValid = exitCode != null && exitCode == 0 && !Boolean.TRUE.equals(truncated);
+            if (evidenceValid) {
+                return new Result(List.of());
+            }
+            String reason = exitCode == null ? "沙箱返回结构不可识别"
+                    : (Boolean.TRUE.equals(truncated)
+                    ? "输出被截断（truncated=true），无法确认完整执行"
+                    : "脚本执行退出码 = " + exitCode + "（期望 0）");
+            violations.add(new Violation(Severity.HARD, "script_execution_failed",
+                    "报告声明脚本类交付物可执行，但沙箱实测未跑通：" + reason
+                            + (scriptText == null || scriptText.isBlank() ? "" : "（脚本前 " + SNIPPET_LENGTH + " 字符：" + snippet(scriptText, 0) + "）")));
+        } catch (Exception e) {
+            // 判定器自身异常不阻断审查（回退 LLM 单轨）
+            return new Result(List.of());
+        }
+        return new Result(List.copyOf(violations));
+    }
+
     /** 硬违规①：契约性事实外置表述（「见分册」「详见子任务X」「详见前文」等）。 */
     private static void detectShellReferences(String report, List<Violation> out) {
         for (String phrase : SHELL_REFERENCE_PHRASES) {

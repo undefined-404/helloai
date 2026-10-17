@@ -4,6 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.ManualInterventionReasons;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
@@ -75,6 +76,8 @@ public class InternalLlmExecutorTools {
     private final AgentSkillSpecService agentSkillSpecService;
     /** 子任务命令端口（REF-8.1.1：自报阻塞 → {@code block} + 人工介入标记）。 */
     private final SubTaskCommandPort subTaskCommandPort;
+    /** 沙箱执行通道（S-7，沙箱执行链设计方案 §3.3）：{@code internal_run_in_sandbox} 的底层执行。 */
+    private final SandboxExecutionService sandboxExecutionService;
 
     /** 自报阻塞前置：必须先读过子任务详情（知情拒绝闸门，见 {@code internal_report_blocked}）。 */
     private static final String TOOL_GET_SUB_TASK_DETAIL = "internal_get_sub_task_detail";
@@ -341,6 +344,49 @@ public class InternalLlmExecutorTools {
             @ToolParam(description = "技能名（来自 internal_list_skills）", required = true) String name) {
         requireInternalChain();
         return agentSkillSpecService.loadBody(name);
+    }
+
+    /**
+     * 在 OpenSandbox 沙箱内执行验证命令或脚本（S-8，沙箱执行链设计方案 §3.2）。
+     *
+     * <p><b>为什么存在</b>：内部 LLM 自检（{@code REF-8.2.2} 验证证据围栏）与 Reviewer
+     * 核验（{@code subtask-review.md}）此前的「验证」只能是<b>声称</b>——模型把
+     * 「已跑通 / 无错误」写进报告，平台无从核实，只能依赖 {@code FinalReportFidelityChecker}
+     * 的静态文本检查。本工具把 OpenSandbox 沙箱接成<b>受控执行通道</b>：模型可在容器内
+     * 实际执行验证命令，拿到 {@link com.helloai.core.agent.runtime.sandbox.ExecuteResponse}
+     * 的 <b>一手证据</b>（stdout/stderr + exitCode + truncated），自检证据围栏从声称变实证。</p>
+     *
+     * <p><b>安全边界（沙箱执行链设计方案 §3.4）</b>：命令在 OpenSandbox 容器内执行——
+     * 默认禁网（egress 白名单外不可达）、零平台凭据 env（{@code credential=ISOLATED}）、
+     * 文件系统/资源/进程受容器隔离；<b>不</b>执行技能包正文（只执行本调用传入的命令/脚本）；
+     * 沙箱未启用（{@code helloai.sandbox.execution.enabled=false}）时本工具经
+     * {@code toolAvailability()} 从模型可见列表<b>摘除</b>（fail-closed，不静默降级）。</p>
+     *
+     * @param agentId        执行者 Agent ID（平台自动注入）
+     * @param subTaskId      目标子任务 ID（平台自动注入）
+     * @param command        要在沙箱内执行的命令（bash -lc 语义）或脚本正文
+     * @param timeoutSeconds 命令超时秒数（默认 30，上限 300；超出钳制到上限）
+     * @return 统一执行结果 {output, exitCode, truncated}；exitCode=124 表示命令超时
+     */
+    @Tool(name = "internal_run_in_sandbox", description = """
+            【何时使用】需要执行一段命令或脚本以验证产出时调用——自检：验证脚本跑通、命令输出与结论一致；
+            Reviewer：验证脚本确实能通过目标验收标准。
+            【Gotchas】
+            - 命令在 OpenSandbox 容器内执行：默认禁网（egress 白名单外不可达）、零平台凭据 env、
+              文件系统/资源/进程受容器隔离——执行不可信脚本的安全边界
+            - 返回 {output, exitCode, truncated}；exitCode=124 表示命令超时（默认 30s，上限 300s）
+            - 不能访问宿主文件系统 / 平台凭据 / 外部网络（白名单外）
+            - 不执行技能包正文：只执行本调用传入的命令/脚本正文
+            - 沙箱未启用时本工具不会出现（fail-closed，不静默降级）；输出超 100KB 会被截断并标注 truncated
+            【相关工具】internal_get_sub_task_detail / internal_register_output_attachment
+            """)
+    public Object internalRunInSandbox(
+            @ToolParam(description = "内部执行链鉴定的执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
+            @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId,
+            @ToolParam(description = "要在沙箱内执行的命令（bash -lc 语义）或脚本正文", required = true) String command,
+            @ToolParam(description = "命令超时秒数（默认 30，上限 300）", required = false) Integer timeoutSeconds) {
+        ToolInvocationContext.Ids ids = requireInternalChain();
+        return sandboxExecutionService.execute(ids.subTaskId(), command, timeoutSeconds);
     }
 
     /**
