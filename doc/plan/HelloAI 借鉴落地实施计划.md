@@ -772,7 +772,7 @@ REF-8.4 拦截链（**已交付 2026-10-13**）─────────┘─
 
 > 依据：`research/DSH 与 HelloAI 执行流与状态机比对（2026-10-13）.md`。本节**不改变** 10.7.1~10.7.5 的结论，只补「能力鉴别在哪一层」的裁定与其唯一缺口。
 >
-> **✅ 唯一缺口已于 2026-10-16 关闭（按本节裁定的方案 (b) 落地；`D-2026-10-16-10`，记录 `LOG-20261016-010`）**：实现载体 = `helloai-job/…/task/SubTaskBlockedAutoRedispatchTask`（60s 巡检，ShedLock 实例互斥）+ `SubTaskDispatchService#dispatchBlockedSubTaskAuto`（判定收敛在 core Service），**复用既有 `dispatchBlockedSubTask` 全链、状态机零改动**。下方「唯一缺口」段与两条候选表**保留为裁定记录**（非在办项）。
+> **✅ 唯一缺口已于 2026-10-16 关闭（按本节裁定的方案 (b) 落地；`D-2026-10-16-10`，记录 `LOG-20261016-010`）**：实现载体 = `helloai-job/…/task/SubTaskBlockedAutoRedispatchTask`（60s 巡检，ShedLock 实例互斥）+ `SubTaskDispatchService#dispatchBlockedSubTaskAuto`（判定收敛在 core Service），**复用既有 `dispatchBlockedSubTask` 全链、状态机零改动**。**2026-10-17 补端到端证据**（`LOG-20261017-005`）：`helloai-start/…/it/SubTaskBlockedAutoRedispatchIT` 真库 4 例全绿 —— 停滞 `BLOCKED` 真被推出阻塞态（`BLOCKED→PENDING` + 预算/时钟推进 + 出站派单一次），阈值内 / 依赖未就绪 / 人工介入三类**确不动**；关闭结论不变（`D-2026-10-16-10` 仍成立），仅把关闭依据由「单测」补齐为「单测 + 真库 IT」。下方「唯一缺口」段与两条候选表**保留为裁定记录**（非在办项）。
 
 **裁定**：**发现放内部 LLM 内部流程；处置放平台派发层。** 既不走「评审驳回」（消耗返工轮次、把能力不足记成质量不合格），也不走「循环内换 apiKey / 换模型」（DSH 无此机制可抄；且污染成本画像与打分、造成会话流归属歧义）。
 
