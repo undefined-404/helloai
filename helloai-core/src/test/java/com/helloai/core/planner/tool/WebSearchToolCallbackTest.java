@@ -133,14 +133,16 @@ class WebSearchToolCallbackTest {
     @Test
     @DisplayName("WebSearchToolResult 构造器：null 字段规范化为默认值，empty 工厂幂等")
     void shouldNormalizeNullFieldsInResult() {
-        WebSearchToolResult normalized = new WebSearchToolResult(null, null, null);
+        WebSearchToolResult normalized = new WebSearchToolResult(null, null, null, null);
         assertThat(normalized.provider()).isEmpty();
         assertThat(normalized.results()).isEmpty();
         assertThat(normalized.answer()).isNull();
+        assertThat(normalized.modalCards()).as("W-7：null 模态卡规范化为空列表").isEmpty();
 
         WebSearchToolResult empty = WebSearchToolResult.empty("web_search_tool");
         assertThat(empty.provider()).isEqualTo("web_search_tool");
         assertThat(empty.results()).isEmpty();
+        assertThat(empty.modalCards()).isEmpty();
     }
 
     @Test

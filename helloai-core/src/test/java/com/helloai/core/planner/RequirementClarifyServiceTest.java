@@ -26,6 +26,8 @@ import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.mapper.RequirementConversationMapper;
 import com.helloai.core.planner.memory.service.LongTermMemoryService;
+import com.helloai.core.planner.search.BochaRerankService;
+import com.helloai.core.planner.search.WebSearchCredentialKeyStore;
 import com.helloai.core.planner.service.WebPageFetchService;
 import com.helloai.core.planner.service.SearchQueryPlannerService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
@@ -122,6 +124,10 @@ class RequirementClarifyServiceTest {
     @Mock
     private WebSearchProperties webSearchProperties;
 
+    /** W-5：重排服务依赖（switch 默认 false ⇒ isAvailable()=false，不读密钥，不影响存量用例）。 */
+    @Mock
+    private WebSearchCredentialKeyStore webSearchCredentialKeyStore;
+
     @Mock
     private WebPageFetchService pageFetchService;
 
@@ -156,6 +162,7 @@ class RequirementClarifyServiceTest {
                 new RelativeTimeNormalizer(),
                 new SearchGapAssessor(platformAgentExecutionService, plannerAgentPicker,
                         new SystemTimeContextBuilder(), new ObjectMapper()),
+                new BochaRerankService(webSearchProperties, webSearchCredentialKeyStore, new ObjectMapper()),
                 new ObjectMapper());
         ClarifyCommandSearchServiceImpl commandSearch = new ClarifyCommandSearchServiceImpl(
                 webSearchOrchestrator, messageService, confirmCard, conversationService);

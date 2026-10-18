@@ -94,4 +94,33 @@ class RequirementPromptTemplateContractTest {
                 .contains("missingEvidence")
                 .contains("acceptanceRef");
     }
+
+    /** W-6 Grounding 契约：答案必须锚定检索资料、标注来源编号、区分资料与己见。 */
+    private void assertGroundingContract(String template) {
+        assertThat(template)
+                .as("W-6：Grounding 段必须存在（防模板回退致 LLM 脱离检索资料自由发挥）")
+                .contains("Grounding")
+                .contains("资料未覆盖")
+                .contains("[1]");
+    }
+
+    @Test
+    @DisplayName("W-6：requirement-chat.md 携带 Grounding 约束（来源标注 / 资料与己见区分 / 资料不足直说）")
+    void chatTemplateCarriesGroundingContract() throws IOException {
+        String template = loadTemplate("requirement-chat.md");
+        assertGroundingContract(template);
+        assertThat(template)
+                .contains("基于我的一般知识")
+                .contains("编造编号");
+    }
+
+    @Test
+    @DisplayName("W-6：requirement-clarify.md 携带 Grounding 约束（不得把资料功能点写进 scope）")
+    void clarifyTemplateCarriesGroundingContract() throws IOException {
+        String template = loadTemplate("requirement-clarify.md");
+        assertGroundingContract(template);
+        assertThat(template)
+                .contains("把资料里的功能点直接写进")
+                .contains("基于一般知识");
+    }
 }

@@ -3,6 +3,7 @@ package com.helloai.core.planner.service.impl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
 import com.helloai.core.planner.clarify.RelativeTimeNormalizer;
+import com.helloai.core.planner.search.WebModalCard;
 import com.helloai.core.planner.search.WebSearchCredentialKeyStore;
 import com.helloai.core.planner.search.WebSearchResult;
 import org.junit.jupiter.api.DisplayName;
@@ -50,6 +51,16 @@ class AiSearchWebSearchServiceImplTest {
                 .getDeclaredMethod("parseResponse", String.class, int.class, String.class);
         m.setAccessible(true);
         return (List<WebSearchResult>) m.invoke(newService(), body, limit, "q");
+    }
+
+    /** W-7：需要读取同一实例的 per-query 模态卡槽，故返回 service 供后续断言。 */
+    private AiSearchWebSearchServiceImpl parseOn(AiSearchWebSearchServiceImpl service,
+                                                 String body, int limit, String query) throws Exception {
+        Method m = AiSearchWebSearchServiceImpl.class
+                .getDeclaredMethod("parseResponse", String.class, int.class, String.class);
+        m.setAccessible(true);
+        m.invoke(service, body, limit, query);
+        return service;
     }
 
     @Test
@@ -246,5 +257,115 @@ class AiSearchWebSearchServiceImplTest {
         assertThat(body)
                 .contains("\"freshness\":\"oneYear\"") // 宽泛时效词「最新」→ oneYear
                 .contains("\"answer\":false");
+    }
+
+    // ---------- W-7 模态卡消费 ----------
+
+    @Test
+    @DisplayName("W-7：垂域模态卡（weather_china）进入 per-query 槽，title/summary 启发式提取")
+    void parseModalCard_weather_extractedIntoQuerySlot() throws Exception {
+        when(properties.getMaxSnippetChars()).thenReturn(200);
+        String body = """
+                {
+                  "messages": [
+                    {
+                      "role": "assistant", "type": "source", "content_type": "weather_china",
+                      "content": "{\\"title\\":\\"北京天气\\",\\"summary\\":\\"今天晴，26℃，微风\\"}"
+                    }
+                  ]
+                }
+                """;
+        AiSearchWebSearchServiceImpl service = parseOn(newService(), body, 15, "北京天气");
+
+        List<WebModalCard> cards = service.modalCards("北京天气");
+        assertThat(cards).hasSize(1);
+        assertThat(cards.get(0).getType()).isEqualTo("weather_china");
+        assertThat(cards.get(0).getTitle()).isEqualTo("北京天气");
+        assertThat(cards.get(0).getSummary()).contains("26℃");
+        // 未搜过的词不串槽
+        assertThat(service.modalCards("其他词")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("W-7：白名单外 content_type（image / video）不产生模态卡")
+    void parseModalCard_nonWhitelistedType_ignored() throws Exception {
+        when(properties.getMaxSnippetChars()).thenReturn(200);
+        String body = """
+                {
+                  "messages": [
+                    {"role": "assistant", "type": "source", "content_type": "image",
+                     "content": "{\\"contentUrl\\":\\"https://img.example/a.png\\",\\"width\\":100}"},
+                    {"role": "assistant", "type": "source", "content_type": "video",
+                     "content": "{\\"contentUrl\\":\\"https://v.example/a.mp4\\"}"}
+                  ]
+                }
+                """;
+        AiSearchWebSearchServiceImpl service = parseOn(newService(), body, 15, "q");
+
+        assertThat(service.modalCards("q")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("W-7：纯结构化数值卡无文本正文字段 → JSON 紧凑序列化兜底（保证精确数据进 Prompt）")
+    void parseModalCard_structuredOnlyFields_fallsBackToJsonSummary() throws Exception {
+        when(properties.getMaxSnippetChars()).thenReturn(200);
+        String body = """
+                {
+                  "messages": [
+                    {
+                      "role": "assistant", "type": "source", "content_type": "gold_price",
+                      "content": "{\\"title\\":\\"今日金价\\",\\"price\\":612.35,\\"unit\\":\\"元/克\\",\\"change\\":1.2}"
+                    }
+                  ]
+                }
+                """;
+        AiSearchWebSearchServiceImpl service = parseOn(newService(), body, 15, "今日金价");
+
+        List<WebModalCard> cards = service.modalCards("今日金价");
+        assertThat(cards).hasSize(1);
+        assertThat(cards.get(0).getTitle()).isEqualTo("今日金价");
+        assertThat(cards.get(0).getSummary()).contains("612.35").contains("元/克");
+    }
+
+    @Test
+    @DisplayName("W-7：模态卡与网页结果共存——网页走 results，卡走 modalCards，互不侵占条数上限")
+    void parseModalCard_coexistsWithWebpageResults() throws Exception {
+        when(properties.getMaxSnippetChars()).thenReturn(200);
+        String body = """
+                {
+                  "messages": [
+                    {
+                      "role": "assistant", "type": "source", "content_type": "stock",
+                      "content": "{\\"title\\":\\"上证指数\\",\\"summary\\":\\"收盘 3210.55，涨 0.82%\\"}"
+                    },
+                    {
+                      "role": "assistant", "type": "source", "content_type": "webpage",
+                      "content": {"value": [{"name": "行情页", "url": "https://a.com/1", "snippet": "大盘分析"}]}
+                    }
+                  ]
+                }
+                """;
+        AiSearchWebSearchServiceImpl service = newService();
+        Method m = AiSearchWebSearchServiceImpl.class
+                .getDeclaredMethod("parseResponse", String.class, int.class, String.class);
+        m.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<WebSearchResult> results = (List<WebSearchResult>) m.invoke(service, body, 1, "上证指数");
+
+        assertThat(results).as("limit=1 只收 1 条网页，模态卡不占位").hasSize(1);
+        assertThat(results.get(0).getTitle()).isEqualTo("行情页");
+        assertThat(service.modalCards("上证指数")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("W-7：webPages 路径（Web Search 同构）早退——不产生模态卡，也不误判")
+    void parseModalCard_webPagesPath_returnsEarly() throws Exception {
+        when(properties.getMaxSnippetChars()).thenReturn(200);
+        String body = """
+                {"data": {"webPages": {"value": [{"name": "页", "url": "https://a.com/1", "snippet": "x"}]}}}
+                """;
+        AiSearchWebSearchServiceImpl service = parseOn(newService(), body, 15, "q");
+
+        assertThat(service.modalCards("q")).isEmpty();
     }
 }
