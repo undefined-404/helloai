@@ -302,23 +302,33 @@
         <div class="detail-caption">
           需求包
         </div>
+        <!-- 需求包排版（2026-10-18 二次调整）：与「任务描述」里的 Markdown 小节同一视觉语言
+             —— 小标题 + 项目符号，纵向堆叠。原「定宽标签列 132px + 省略号」在
+             「任务级验收标准（acceptanceCriteria）」这类长标签上必然被截成「任务级验收标准（ac…」，
+             用户读不到字段名；而中文名本身足够表意，英文契约字段名降级到 title 悬浮提示。 -->
         <div
           v-if="descPackage.goal"
-          class="detail-row"
+          class="pkg-sec"
         >
-          <span class="detail-label">目标</span>
-          <span class="detail-value">{{ descPackage.goal }}</span>
+          <div class="pkg-label">
+            目标
+          </div>
+          <p class="pkg-text">
+            {{ descPackage.goal }}
+          </p>
         </div>
         <div
           v-for="group in descPackageGroups"
-          :key="group.label"
-          class="detail-row"
+          :key="group.zh"
+          class="pkg-sec"
         >
-          <span
-            class="detail-label"
-            :title="group.label"
-          >{{ group.label }}</span>
-          <ul class="detail-list">
+          <div
+            class="pkg-label"
+            :title="group.key"
+          >
+            {{ group.zh }}
+          </div>
+          <ul class="pkg-list">
             <li
               v-for="(item, idx) in group.items"
               :key="idx"
@@ -457,16 +467,17 @@ function normalizeRequirementPackage(raw: unknown): DescRequirementPackage | nul
   return empty ? null : pkg
 }
 
-// 需求包分组：只渲染有条目的组（字段顺序与后端 RequirementPackageParser.render 一致）
-const descPackageGroups = computed((): { label: string; items: string[] }[] => {
+// 需求包分组：只渲染有条目的组（字段顺序与后端 RequirementPackageParser.render 一致）。
+// zh = 展示用中文名（不截断、不折行）；key = 契约字段名，仅作 title 悬浮提示，不占版面。
+const descPackageGroups = computed((): { zh: string; key?: string; items: string[] }[] => {
   const pkg = descPackage.value
   if (!pkg) return []
   return [
-    { label: '范围', items: pkg.scope },
-    { label: '明确不做（outOfScope）', items: pkg.outOfScope },
-    { label: '任务级验收标准（acceptanceCriteria）', items: pkg.acceptanceCriteria },
-    { label: '关键假设（推断项）', items: pkg.assumptions },
-    { label: '待确认事项（openQuestions）', items: pkg.openQuestions },
+    { zh: '范围', key: 'scope', items: pkg.scope },
+    { zh: '明确不做', key: 'outOfScope', items: pkg.outOfScope },
+    { zh: '任务级验收标准', key: 'acceptanceCriteria', items: pkg.acceptanceCriteria },
+    { zh: '关键假设（推断项）', key: 'assumptions', items: pkg.assumptions },
+    { zh: '待确认事项', key: 'openQuestions', items: pkg.openQuestions },
   ].filter(group => group.items.length > 0)
 })
 
@@ -723,12 +734,10 @@ async function handlePlan(row: Task) {
 .member-dot.is-idle { background: var(--el-color-warning); }
 .member-dot.is-offline, .member-dot.is-sleeping { background: var(--el-color-info-light-3); }
 
-/* 任务详情弹窗：描述 / 需求包分区，标签定宽 + 条目列表紧凑行高 */
-.detail-block + .detail-block { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--el-border-color-lighter); }
-/* 任务详情弹窗排版（2026-10-18 重做）
-   原实现问题：①标签 min-width 72px 装不下「任务级验收标准（acceptanceCriteria）」，
-   被强制折成两行并把右侧内容压窄；②各分区之间只有 6px 间距，长列表糊成一片；
-   ③标签与内容行高不一致，长内容首行与标签对不齐。 */
+/* 任务详情弹窗分区（2026-10-18 两次调整合并）
+   ① 分区之间靠「上间距 + 细分隔线」区分，长列表不再糊成一片；
+   ② 需求包已从「定宽标签列」改为「小标题 + 列表」的纵向堆叠（见 `.pkg-*`），
+      原 `min-width:72px → width:132px` 的两次放宽都在跟中文长标签较劲，属于方向问题。 */
 .detail-block + .detail-block {
   margin-top: 18px;
   padding-top: 16px;
@@ -740,32 +749,30 @@ async function handlePlan(row: Task) {
   font-size: 13.5px;
   color: var(--el-text-color-primary);
 }
-/* 标签列固定宽度且不换行：超长标签省略号 + 原生 title 提示（避免两行折行挤压正文） */
-.detail-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 8px;
-  line-height: 1.7;
-}
-.detail-label {
-  flex: none;
-  width: 132px;
-  color: var(--el-text-color-secondary);
+/* 需求包：小标题 + 项目符号的纵向堆叠（与「任务描述」的 Markdown 小节同一语言）。
+   弃用「定宽标签列」——中文长标签（任务级验收标准…）在 132px 里必然省略号截断，
+   而加宽到能容纳长标签又会把正文压窄，两个目标无法同时满足（2026-10-18 用户反馈）。 */
+.pkg-sec + .pkg-sec { margin-top: 14px; }
+.pkg-label {
+  margin-bottom: 4px;
   font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 600;
+  color: var(--el-text-color-regular);
 }
-.detail-value { flex: 1; min-width: 0; word-break: break-word; }
-.detail-list {
-  flex: 1;
-  min-width: 0;
+.pkg-text {
   margin: 0;
-  padding-left: 18px;
+  line-height: 1.75;
+  word-break: break-word;
 }
-.detail-list li { line-height: 1.75; }
-.detail-list li + li { margin-top: 3px; }
+.pkg-list {
+  margin: 0;
+  padding-left: 20px;
+}
+.pkg-list li {
+  line-height: 1.75;
+  word-break: break-word;
+}
+.pkg-list li + li { margin-top: 3px; }
 /* 长描述正文：限制阅读宽度并给足行距（Markdown 渲染块） */
 .desc-md { line-height: 1.75; }
 .detail-empty { margin: 0; color: var(--el-text-color-placeholder); }
