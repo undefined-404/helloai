@@ -59,7 +59,7 @@ export const AGENT_STATIC_ROUTES: RouteRecordRaw[] = [
   { path: '/activity', component: () => import('@/views/activity/ActivityList.vue'), name: `${DYNAMIC_ROUTE_PREFIX}agent-activity`, meta: { title: '活动流' } },
   { path: '/rules', component: () => import('@/views/rule/RuleList.vue'), name: `${DYNAMIC_ROUTE_PREFIX}agent-rules`, meta: { title: '规则配置' } },
   { path: '/duty-leases', component: () => import('@/views/duty/DutyLeaseList.vue'), name: `${DYNAMIC_ROUTE_PREFIX}agent-duty`, meta: { title: '打卡上班' } },
-  { path: '/inbox', component: () => import('@/views/inbox/AgentInbox.vue'), name: `${DYNAMIC_ROUTE_PREFIX}agent-inbox`, meta: { title: '收件箱' } },
+  { path: '/inbox', component: () => import('@/views/inbox/AgentInbox.vue'), name: `${DYNAMIC_ROUTE_PREFIX}agent-inbox`, meta: { title: 'Agent 收件箱' } },
   { path: '/attachments', component: () => import('@/views/attachment/AttachmentList.vue'), name: `${DYNAMIC_ROUTE_PREFIX}agent-attachments`, meta: { title: '附件管理' } }
 ]
 

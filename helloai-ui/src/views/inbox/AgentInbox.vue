@@ -3,7 +3,7 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>收件箱</span>
+          <span>Agent 收件箱</span>
           <div>
             <!-- 未读筛选（管理端默认「全部」：admin 应能看所有，而不是只看未读） -->
             <el-radio-group
