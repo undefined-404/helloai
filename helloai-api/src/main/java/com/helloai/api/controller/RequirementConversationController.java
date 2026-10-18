@@ -100,6 +100,9 @@ public class RequirementConversationController {
 
         private final SseEmitter emitter;
         private final StringBuilder pending = new StringBuilder();
+        /** 思考过程独立缓冲（2026-10-18）：高频小帧若不聚合会打爆连接，且与正文缓冲分开
+         *  才能保证两条流各自的顺序（前端分区渲染，思考在前、正文在正文区）。 */
+        private final StringBuilder pendingReasoning = new StringBuilder();
         private long lastSendAt;
         private boolean alive = true;
 
@@ -110,10 +113,13 @@ public class RequirementConversationController {
         void onEvent(ChatStreamEvent event) {
             if (event.type() == ChatStreamEvent.Type.TOKEN) {
                 pending.append(event.data());
-                long now = System.currentTimeMillis();
-                if (pending.length() >= FLUSH_CHAR_THRESHOLD
-                        || now - lastSendAt >= FLUSH_INTERVAL_MS) {
-                    flush();
+                if (shouldFlush(pending)) {
+                    flushContent();
+                }
+            } else if (event.type() == ChatStreamEvent.Type.REASONING) {
+                pendingReasoning.append(event.data());
+                if (shouldFlush(pendingReasoning)) {
+                    flushReasoning();
                 }
             } else {
                 flush();
@@ -121,10 +127,28 @@ public class RequirementConversationController {
             }
         }
 
+        /** 聚合判据：缓冲够长或距上次发送够久（两个通道共用同一口径，避免各写一套）。 */
+        private boolean shouldFlush(StringBuilder buffer) {
+            return buffer.length() >= FLUSH_CHAR_THRESHOLD
+                    || System.currentTimeMillis() - lastSendAt >= FLUSH_INTERVAL_MS;
+        }
+
         void flush() {
+            flushReasoning();
+            flushContent();
+        }
+
+        private void flushContent() {
             if (pending.length() > 0) {
                 send("token", pending.toString());
                 pending.setLength(0);
+            }
+        }
+
+        private void flushReasoning() {
+            if (pendingReasoning.length() > 0) {
+                send("reasoning", pendingReasoning.toString());
+                pendingReasoning.setLength(0);
             }
         }
 

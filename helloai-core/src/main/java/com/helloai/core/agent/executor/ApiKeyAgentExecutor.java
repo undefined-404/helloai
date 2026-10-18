@@ -89,7 +89,7 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
      * 供上层在业务线程池里订阅时异步执行。</p>
      */
     @Override
-    public Flux<String> executeStream(Agent agent, AgentTask task) {
+    public Flux<com.helloai.core.agent.chat.LlmStreamChunk> executeStream(Agent agent, AgentTask task) {
         final String provider = AgentProviderResolver.resolveProvider(agent, executionProperties.getProvider());
         return Flux.defer(() -> {
             String vaultApiKey = resolveApiKey(agent, provider);

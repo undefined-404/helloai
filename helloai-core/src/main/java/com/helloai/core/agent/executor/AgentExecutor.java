@@ -28,7 +28,7 @@ public interface AgentExecutor {
      * 覆写本方法；上层（{\@link PlatformAgentExecutionService#executeStream}）通过
      * BizException 失败路径回退同步语义，绝不静默吞掉流式请求。</p>
      */
-    default Flux<String> executeStream(Agent agent, AgentTask task) {
+    default Flux<com.helloai.core.agent.chat.LlmStreamChunk> executeStream(Agent agent, AgentTask task) {
         throw new BizException(getName() + " 暂不支持流式执行（agentId=" + agent.getId() + "）");
     }
 

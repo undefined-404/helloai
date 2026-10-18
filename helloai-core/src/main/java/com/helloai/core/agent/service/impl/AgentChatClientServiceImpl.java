@@ -1,6 +1,8 @@
 package com.helloai.core.agent.service.impl;
 
 import com.helloai.core.agent.chat.AgentProviderResolver;
+import com.helloai.core.agent.chat.ChatResponseContentExtractor;
+import com.helloai.core.agent.chat.LlmStreamChunk;
 import com.helloai.core.agent.chat.ConcurrencyGuardedChatModel;
 import com.helloai.core.agent.chat.LlmCallConcurrencyGuard;
 import com.helloai.core.agent.service.AgentChatClientService;
@@ -104,12 +106,12 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
      * 仅真实 Provider 模式占用许可，mock 模式不占；许可在订阅前获取、doFinally 保证
      * 完成/异常/取消路径都释放（流式时长不定，不能依赖 try/finally 的同步释放）。</p>
      */
-    public Flux<String> generateStream(Agent agent, String systemPrompt, String userPrompt) {
+    public Flux<LlmStreamChunk> generateStream(Agent agent, String systemPrompt, String userPrompt) {
         return generateStream(agent, systemPrompt, userPrompt, null, null);
     }
 
-    public Flux<String> generateStream(Agent agent, String systemPrompt, String userPrompt,
-                                       String provider, String apiKeyPlaintext) {
+    public Flux<LlmStreamChunk> generateStream(Agent agent, String systemPrompt, String userPrompt,
+                                               String provider, String apiKeyPlaintext) {
         if (!executionProperties.isEnabled()) {
             throw new BizException("平台内 Agent 执行链已关闭");
         }
@@ -126,14 +128,21 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
     }
 
     /**
-     * 流式主实现：与 {@link #doGenerate} 同构组装 ChatClient，仅末端由
-     * {@code call().chatResponse()} 换成 {@code stream().content()}（正文增量）。
+     * 流式主实现：与 {@link #doGenerate} 同构组装 ChatClient，末端由
+     * {@code call().chatResponse()} 换成 {@code stream().chatResponse()}。
      *
-     * <p>空串帧过滤：mock 分片不产生空串，真实 provider 首帧/流间隙可能出现空串帧；
-     * 只丢弃空串、保留空白与换行（它们是正文的一部分）。</p>
+     * <p><b>为什么不是 {@code stream().content()}</b>（2026-10-18 修复）：
+     * {@code content()} 只吐正文，推理模型的思考过程（DeepSeek {@code reasoningContent} /
+     * Anthropic thinking block）被整体丢弃 ⇒ 前端「思考中」永远空白、用户只能干等。
+     * 改走 {@code chatResponse()} 后每个增量 ChatResponse 交
+     * {@link ChatResponseContentExtractor#extract} 分离——与同步链路**同一把尺子**，
+     * 避免两条路径的 thinking 判定漂移。</p>
+     *
+     * <p>空块过滤：mock 分片不产生空串，真实 provider 首帧/流间隙可能出现空块
+     * （正文或思考都为空）——只丢空块，保留空白与换行（它们是正文的一部分）。</p>
      */
-    private Flux<String> doGenerateStream(Agent agent, String systemPrompt, String userPrompt,
-                                          String provider, String apiKeyPlaintext) {
+    private Flux<LlmStreamChunk> doGenerateStream(Agent agent, String systemPrompt, String userPrompt,
+                                                  String provider, String apiKeyPlaintext) {
         ChatClient chatClient = buildChatClient(agent, provider, apiKeyPlaintext);
 
         ChatClient.ChatClientRequestSpec prompt = chatClient.prompt();
@@ -143,8 +152,21 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
         return prompt
                 .user(userPrompt != null ? userPrompt : "")
                 .stream()
-                .content()
-                .filter(token -> token != null && !token.isEmpty());
+                .chatResponse()
+                .flatMapIterable(response -> {
+                    ChatResponseContentExtractor.ExtractedContent extracted =
+                            ChatResponseContentExtractor.extract(response);
+                    // 思考增量先于正文增量：推理模型同一帧里两者可能都有，
+                    // 前端按「思考→正文」顺序渲染才符合阅读直觉
+                    List<LlmStreamChunk> chunks = new ArrayList<>(2);
+                    if (!extracted.thinking().isEmpty()) {
+                        chunks.add(LlmStreamChunk.reasoning(extracted.thinking()));
+                    }
+                    if (!extracted.text().isEmpty()) {
+                        chunks.add(LlmStreamChunk.content(extracted.text()));
+                    }
+                    return chunks;
+                });
     }
 
     /**

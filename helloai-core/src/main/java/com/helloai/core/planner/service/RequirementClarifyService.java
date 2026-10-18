@@ -114,6 +114,13 @@ public interface RequirementClarifyService {
         public enum Type {
             /** 主回复增量文本块。 */
             TOKEN,
+            /**
+             * 思考过程增量文本块（推理模型的 reasoning / thinking，2026-10-18 新增）。
+             *
+             * <p>与 {@link #TOKEN} 分离：思考内容<b>只用于前端实时展示</b>，不并入正文、
+             * 不参与落库与 JSON 解析——否则会污染澄清回复的解析与最终交付物。</p>
+             */
+            REASONING,
             /** 本轮完成（data 为 [DONE]，前端随后拉 detail 对齐落库）。 */
             DONE,
             /** 本轮失败（data 为错误描述；消息可能已落库，可走 retryRound 重试）。 */
@@ -122,6 +129,11 @@ public interface RequirementClarifyService {
 
         public static ChatStreamEvent token(String text) {
             return new ChatStreamEvent(Type.TOKEN, text);
+        }
+
+        /** 思考过程增量帧（前端渲染「思考中…」区域，done 后通常折叠）。 */
+        public static ChatStreamEvent reasoning(String text) {
+            return new ChatStreamEvent(Type.REASONING, text);
         }
 
         public static ChatStreamEvent done() {

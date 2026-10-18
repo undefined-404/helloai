@@ -40,14 +40,15 @@ public interface AgentChatClientService {
      *
      * <p>语义与 {@link #generate(Agent, String, String)} 完全一致，仅传输形态不同：
      * mock 模式走 {@code MockChatModel.stream()} 分片伪流式（输出与同步 call 一致），
-     * 真实模式走 {@code ChatClient.prompt().stream().content()}；并发限流与错误语义同同步路径。</p>
+     * 真实模式走 {@code ChatClient.prompt().stream().chatResponse()}（正文与思考过程**分离**输出，
+     * 与同步链路的 {@code ChatResponseContentExtractor} 同一把尺子）；并发限流与错误语义同同步路径。</p>
      */
-    Flux<String> generateStream(Agent agent, String systemPrompt, String userPrompt);
+    Flux<com.helloai.core.agent.chat.LlmStreamChunk> generateStream(Agent agent, String systemPrompt, String userPrompt);
 
     /**
      * 流式生成回复（显式 provider / 明文 API Key，语义同 {@link #generate(Agent, String, String, String, String)}）。
      */
-    Flux<String> generateStream(Agent agent, String systemPrompt, String userPrompt,
+    Flux<com.helloai.core.agent.chat.LlmStreamChunk> generateStream(Agent agent, String systemPrompt, String userPrompt,
                                 String provider, String apiKeyPlaintext);
 
     /**

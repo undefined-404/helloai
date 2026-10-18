@@ -82,10 +82,11 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
         if (commandSearch.isTaskCommand(trimmed) || commandSearch.isPlannerCommand(trimmed)) {
             throw new BizException("斜杠命令暂不支持流式，请使用普通发送");
         }
-        if (commandSearch.isChatMode(conversation)
-                && Boolean.TRUE.equals(conversation.getPendingClarifyConfirm())) {
-            throw new BizException("存在待确认卡片，请使用普通发送回答确认卡");
-        }
+        // 确认卡前置处理（2026-10-18）：与同步 runLlmRound 共用同一方法——确认即切 CLARIFY
+        // 并清标记（随后按 CLARIFY 分支流式出回复），非确认消息仅清标记继续对话。
+        // 此前这里是「抛 BizException 要求走普通发送」，会把「确认卡点确认」误拦
+        // （结构化卡提交已改走流式），故改为与同步路径同口径。
+        orchestrator.resolvePendingClarifyConfirm(conversation, selections);
         int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
         if (rounds >= ClarifyRoundOrchestratorServiceImpl.MAX_CHAT_ROUNDS) {
             throw new BizException("对话轮数已达上限 " + ClarifyRoundOrchestratorServiceImpl.MAX_CHAT_ROUNDS
@@ -122,13 +123,16 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                 .requiredCapabilities(Map.of())
                 .build();
         // 流式主回复：增量转发 → 完成后与 runLlmRound 同语义落库 → done
+        // ★2026-10-18：正文与思考分两路——思考进 reasoning 帧（仅展示），正文进 token 帧并累积落库
         StringBuilder buffer = new StringBuilder();
         return platformAgentExecutionService.executeStream(planner.id(), agentTask)
-                .map(token -> {
-                    buffer.append(token);
-                    return token;
+                .map(chunk -> {
+                    if (chunk.isReasoning()) {
+                        return ChatStreamEvent.reasoning(chunk.text());
+                    }
+                    buffer.append(chunk.text());
+                    return ChatStreamEvent.token(chunk.text());
                 })
-                .map(ChatStreamEvent::token)
                 .concatWith(Flux.defer(() -> {
                     orchestrator.persistChatOutcome(conversation, buffer.toString(), webSearchOutcome);
                     log.info("流式对话轮完成并落库: conversationId={}, round={}", conversationId, rounds + 1);
@@ -161,11 +165,15 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                 .build();
         StringBuilder buffer = new StringBuilder();
         return platformAgentExecutionService.executeStream(planner.id(), agentTask)
-                .map(token -> {
-                    buffer.append(token);
-                    return token;
+                .map(chunk -> {
+                    // ★2026-10-18：思考过程走 reasoning 帧（前端实时展示），
+                    // 绝不并入 buffer——buffer 参与 JSON 解析与落库，混入思考会毁掉解析
+                    if (chunk.isReasoning()) {
+                        return ChatStreamEvent.reasoning(chunk.text());
+                    }
+                    buffer.append(chunk.text());
+                    return ChatStreamEvent.token(chunk.text());
                 })
-                .map(ChatStreamEvent::token)
                 .concatWith(Flux.defer(() -> {
                     // 与 runLlmRound 同语义解析落库（描述守卫纠偏走同步 LLM，罕见路径可接受）
                     ClarifyReply reply = replyParser.parseReply(buffer.toString());

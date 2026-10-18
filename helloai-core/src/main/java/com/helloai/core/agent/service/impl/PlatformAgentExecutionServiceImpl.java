@@ -101,7 +101,7 @@ public class PlatformAgentExecutionServiceImpl implements PlatformAgentExecution
      * 明确裁定为「留单次」。此处<b>不</b>接循环是裁定结果，不是遗漏。</p>
      */
     @Override
-    public Flux<String> executeStream(Agent agent, AgentTask task) {
+    public Flux<com.helloai.core.agent.chat.LlmStreamChunk> executeStream(Agent agent, AgentTask task) {
         return Flux.defer(() -> {
             AgentExecutor executor = agentExecutorRouter.route(agent);
             if (!executor.checkCapability(agent, task.getRequiredCapabilities())) {
@@ -121,7 +121,7 @@ public class PlatformAgentExecutionServiceImpl implements PlatformAgentExecution
      * Agent 不存在时在订阅时抛 BizException（与 {@link #execute(Long, AgentTask)} 的守卫一致）。
      */
     @Override
-    public Flux<String> executeStream(Long agentId, AgentTask task) {
+    public Flux<com.helloai.core.agent.chat.LlmStreamChunk> executeStream(Long agentId, AgentTask task) {
         return Flux.defer(() -> {
             Agent agent = agentService.getById(agentId);
             if (agent == null) {
