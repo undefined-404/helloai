@@ -521,9 +521,9 @@
             </div>
             <div
               class="tl-title"
-              :title="eventLabel(ev.eventType)"
+              :title="eventTitleWithDetail(ev)"
             >
-              {{ eventLabel(ev.eventType) }}
+              {{ eventTitleWithDetail(ev) }}
             </div>
             <!-- 人话化：把事件类型/payload 翻译成非开发者能看懂的一句话 -->
             <div class="tl-desc">
@@ -858,9 +858,119 @@ function dualVerdictText(pass: boolean | undefined, score: number | undefined): 
   return score !== undefined && score !== null ? text + '（评分 ' + score + '/5）' : text
 }
 
+/**
+ * 时间线卡片标题：静态 label + 具体名称（2026-10-18）。
+ *
+ * <p>「工具调用 · web_search」「工具返回 · web_search」比只有「工具调用」信息量高得多；
+ * 无具体名称的事件（大部分状态流转）保持原样，不产生视觉噪声。</p>
+ */
+function eventTitleWithDetail(ev: TaskTimelineItem): string {
+  const base = eventLabel(ev.eventType)
+  const p = ev.payload || {}
+  switch (ev.eventType) {
+    case 'tool_call_started':
+    case 'tool_call_completed': {
+      const tool = String(p.tool || '')
+      return tool ? `${base} · ${tool}` : base
+    }
+    case 'skill_resolved': {
+      const skills = (p.requiredSkills as string[] | undefined) ?? []
+      if (!skills.length) return base
+      return `${base} · ${skills.length <= 2 ? skills.join('、') : skills.slice(0, 2).join('、') + ' 等 ' + skills.length + ' 个'}`
+    }
+    case 'tool_resolved': {
+      const effective = (p.effectiveTools as string[] | undefined) ?? []
+      return `${base} · ${effective.length} 个可用`
+    }
+    default:
+      return base
+  }
+}
+
+/**
+ * 执行链事件的具体化描述（2026-10-18）。
+ *
+ * <p>背景：agent_event 里 `skill_resolved` / `tool_resolved` / `tool_call_started` /
+ * `tool_call_completed` 的 payload 已带具体名称（技能名+版本、模型可见工具集、
+ * 工具名+入参+成败+输出），但时间线只显示静态 label（「技能解析」「工具调用」）——
+ * 内部 LLM 到底用了哪些技能、调了哪些工具，界面上完全不可见。</p>
+ *
+ * <p>参照实现：deepseek-harness 的 Chat 折叠行「类别文案 + 从参数提取的摘要」、
+ * Trajectory 视图「工具名 + 完整参数 + 输出 + 耗时」。本函数做同一件事的最小版本。</p>
+ *
+ * @return 具体化描述；非执行链事件返回 null（交回原通用分支处理）
+ */
+function executionChainDetail(ev: TaskTimelineItem, p: Record<string, unknown>): string | null {
+  switch (ev.eventType) {
+    case 'skill_resolved': {
+      const skills = (p.requiredSkills as string[] | undefined) ?? []
+      // ★resolvedVersions 是 Map<技能名, 版本>（后端 ResolvedSpec 定义），不是数组——
+      //   按数组 join 会得到 [object Object]
+      const versions = (p.resolvedVersions as Record<string, string> | undefined) ?? {}
+      const specs = (p.resolvedSpecs as string[] | undefined) ?? []
+      const parts: string[] = []
+      if (skills.length) parts.push('技能：' + skills.join('、'))
+      const versionText = Object.entries(versions).map(([name, v]) => `${name}@${v}`).join('、')
+      if (versionText) parts.push('版本：' + versionText)
+      if (specs.length && specs.join(',') !== skills.join(',')) parts.push('命中：' + specs.join('、'))
+      if (!parts.length) return '技能解析：本次未声明技能（纯通用能力执行）'
+      return '技能解析：' + parts.join('；')
+    }
+    case 'tool_resolved': {
+      const effective = (p.effectiveTools as string[] | undefined) ?? []
+      const removed = (p.removedTools as string[] | undefined) ?? []
+      const requested = (p.tools as string[] | undefined) ?? []
+      const parts: string[] = []
+      parts.push(`模型可见工具 ${effective.length} 个` + (effective.length ? '：' + effective.join('、') : ''))
+      if (removed.length) parts.push(`按条件摘除 ${removed.length} 个：${removed.join('、')}`)
+      if (!effective.length && requested.length) parts.push(`请求 ${requested.length} 个但均不可用`)
+      return '工具解析：' + parts.join('；')
+    }
+    case 'tool_call_started': {
+      const tool = String(p.tool || '未知工具')
+      const args = compactArgs(p.arguments)
+      return `工具调用：${tool}` + (args ? `，入参 ${args}` : '')
+    }
+    case 'tool_call_completed': {
+      const tool = String(p.tool || '未知工具')
+      const ok = p.success === true
+      const out = p.output ? String(p.output) : ''
+      const outSummary = out ? '，返回 ' + abbreviateText(out, 60) : ''
+      return `工具返回：${tool} · ${ok ? '成功' : '失败'}${outSummary}`
+    }
+    case 'environment_resolved':
+      return '环境解析：' + [p.environment, p.accessType].filter(Boolean).join(' / ')
+    case 'context_built': {
+      const total = Number(p.promptChars ?? 0)
+      const sys = Number(p.systemPromptChars ?? 0)
+      return `上下文装配：提示词 ${total} 字（系统段 ${sys} 字）`
+    }
+    default:
+      return null
+  }
+}
+
+/** 入参 JSON 压缩成一行短摘要（超长截断，避免时间线被撑开）。 */
+function compactArgs(raw: unknown): string {
+  if (raw === undefined || raw === null || raw === '') return ''
+  const text = typeof raw === 'string' ? raw : JSON.stringify(raw)
+  return abbreviateText(text.replace(/\s+/g, ' '), 80)
+}
+
+/** 文本截断（保留头部语义，尾部省略号）。 */
+function abbreviateText(text: string, limit: number): string {
+  const s = String(text ?? '')
+  return s.length <= limit ? s : s.slice(0, limit) + '…'
+}
+
 function eventDescription(ev: TaskTimelineItem): string {
   const base = eventCatalog.descOf(ev.eventType) || ev.eventType
   const p = ev.payload || {}
+  // ── 执行链细节（2026-10-18）：把「技能解析/工具解析/工具调用/工具返回」落到具体名称 ──
+  // 后端 payload 早已带全量字段（skill_resolved.resolvedSpecs / tool_resolved.effectiveTools /
+  // tool_call_*.tool），此前只在卡片上显示阶段名，等于把执行细节藏起来了。
+  const chainDetail = executionChainDetail(ev, p)
+  if (chainDetail) return chainDetail
   // 改派专属事件：标注改派前的原负责人（从 Agent 名单解析名字，失败降级短 ID）
   if (ev.eventType === 'sub_task_offline_reassign'
       || ev.eventType === 'sub_task_unclaimed_timeout_reassign'

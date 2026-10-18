@@ -113,7 +113,44 @@ function shortLabel(ev: TaskTimelineItem): string {
   const store = useEventCatalogStore()
   store.ensureLoaded() // fire-and-forget：未就绪则回退伪英文，就绪后重渲染生效
   const fallback = ev.eventType.replace(/^sub_task_/, '').replace(/_/g, ' ')
-  return store.labelOf(ev.eventType, fallback)
+  const base = store.labelOf(ev.eventType, fallback)
+  const detail = chainDetailLabel(ev)
+  return detail ? `${base} · ${detail}` : base
+}
+
+/**
+ * 执行链事件的具体名称（2026-10-18）：`技能解析 · s1、s2` / `工具调用 · web_search`。
+ *
+ * <p>参照 deepseek-harness 的 Chat 折叠行做法：阶段文案 + 从 payload 提取的具体摘要，
+ * 让「用了哪个技能、调了哪个工具」在时序图上直接可读，而不是只有一个阶段名。</p>
+ *
+ * <p>只取短名（工具/技能标识），入参与输出留在时间线卡片的 description 里——
+ * 时序图节点过宽会挤压泳道。</p>
+ */
+function chainDetailLabel(ev: TaskTimelineItem): string {
+  const p = ev.payload || {}
+  switch (ev.eventType) {
+    case 'skill_resolved': {
+      const skills = (p.requiredSkills as string[] | undefined) ?? []
+      if (!skills.length) return '无技能'
+      return skills.length <= 2 ? skills.join('、') : `${skills.slice(0, 2).join('、')} 等 ${skills.length} 个`
+    }
+    case 'tool_resolved': {
+      const effective = (p.effectiveTools as string[] | undefined) ?? []
+      const removed = (p.removedTools as string[] | undefined) ?? []
+      const suffix = removed.length ? `（摘除 ${removed.length}）` : ''
+      return `${effective.length} 个可用${suffix}`
+    }
+    case 'tool_call_started':
+    case 'tool_call_completed':
+      return String(p.tool || '未知工具')
+    case 'environment_resolved':
+      return [p.environment, p.accessType].filter(Boolean).join('/') || ''
+    case 'context_built':
+      return `${Number(p.promptChars ?? 0)} 字`
+    default:
+      return ''
+  }
 }
 
 // ── Note 推导：失败 / 重试 / 熔断 / 人工 / 恢复 → 加 note ──
@@ -174,6 +211,19 @@ function inferNote(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, at
   if (t === 'sub_task_llm_call_end' && prev && prev.eventType === 'sub_task_llm_call_start') {
     const dt = new Date(cur.createTime).getTime() - new Date(prev.createTime).getTime()
     if (dt >= 1000) return `LLM 耗时 ${(dt / 1000).toFixed(1)}s`
+  }
+  // 工具耗时（2026-10-18）：started → completed 的墙钟差。
+  // 与 deepseek-harness 同口径（它也不在事件里存 duration，由消费方按时间戳求差）；
+  // 但注意：该差值是「含排队/准备的上界」，不是纯工具执行时间。
+  if (t === 'tool_call_completed' && prev && prev.eventType === 'tool_call_started') {
+    const prevTool = String((prev.payload || {}).tool || '')
+    const curTool = String(p.tool || '')
+    // 同名工具才配对（并行调用不同工具时顺序可能交错，避免算错）
+    if (prevTool && prevTool === curTool) {
+      const dt = new Date(cur.createTime).getTime() - new Date(prev.createTime).getTime()
+      const ok = p.success === true
+      if (dt >= 0) return `${ok ? '成功' : '失败'} · 耗时 ${(dt / 1000).toFixed(1)}s`
+    }
   }
   return undefined
 }
