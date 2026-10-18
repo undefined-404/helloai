@@ -34,9 +34,9 @@
           <template #default="{ row }">
             <el-tag
               size="small"
-              :type="row.ruleType==='global'?'danger':row.ruleType==='module'?'warning':''"
+              :type="typeTag(row.ruleType)"
             >
-              {{ row.ruleType }}
+              {{ typeLabel(row.ruleType) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -147,10 +147,14 @@
             label="内容"
             prop="content"
           >
+            <!-- 正文是 Markdown（渲染在「查看」弹窗）：编辑态给等宽字体 + 语法提示，
+                 让换行/表格对齐在文本域里就是对的，而不是保存后才发现错位 -->
             <el-input
               v-model="editForm.content"
               type="textarea"
-              :rows="12"
+              :rows="14"
+              class="rule-editor"
+              placeholder="支持 Markdown：## 标题、| 表格 |、``` 代码块 ```"
             />
           </el-form-item>
         </el-form>
@@ -168,33 +172,45 @@
         </template>
       </el-dialog>
 
-      <!-- 只读查看弹窗：GUEST 等只读角色唯一的规则内容入口 -->
+      <!-- 只读查看弹窗：GUEST 等只读角色唯一的规则内容入口。
+           规则正文本身是 Markdown（标题 / 表格 / 状态流转代码块），早先用 pre-wrap 直出
+           ⇒ `##`、`|` 全裸露成「一堆符号」（2026-10-18 用户反馈样式乱）。
+           现改用统一 MarkdownView，与对话 / 报告页同一套排版。 -->
       <el-dialog
         v-model="viewDialog"
         title="查看规则"
-        width="650px"
-        top="5vh"
+        width="880px"
+        top="6vh"
         append-to-body
       >
-        <el-form label-width="80px">
-          <el-form-item label="名称">
-            {{ viewRow?.name || '-' }}
-          </el-form-item>
-          <el-form-item label="类型">
-            {{ viewRow?.ruleType || '-' }}
-          </el-form-item>
-          <el-form-item label="优先级">
-            {{ viewRow?.priority ?? '-' }}
-          </el-form-item>
-          <el-form-item label="更新时间">
-            {{ fmtTime(viewRow?.updateTime) }}
-          </el-form-item>
-          <el-form-item label="内容">
-            <div class="rule-content">
-              {{ viewRow?.content || '-' }}
-            </div>
-          </el-form-item>
-        </el-form>
+        <!-- 元信息：紧凑标签行。原 el-form-item 固定 label-width=80 + 行间距，
+             四行元信息占了小半屏，且「更新时间」等长标签被挤成方块。 -->
+        <div class="rule-meta">
+          <div class="rule-meta__item">
+            <span class="rule-meta__k">名称</span>
+            <span class="rule-meta__v">{{ viewRow?.name || '-' }}</span>
+          </div>
+          <div class="rule-meta__item">
+            <span class="rule-meta__k">类型</span>
+            <el-tag
+              size="small"
+              :type="typeTag(viewRow?.ruleType)"
+            >
+              {{ typeLabel(viewRow?.ruleType) }}
+            </el-tag>
+          </div>
+          <div class="rule-meta__item">
+            <span class="rule-meta__k">优先级</span>
+            <span class="rule-meta__v">{{ viewRow?.priority ?? '-' }}</span>
+          </div>
+          <div class="rule-meta__item">
+            <span class="rule-meta__k">更新时间</span>
+            <span class="rule-meta__v">{{ fmtTime(viewRow?.updateTime) }}</span>
+          </div>
+        </div>
+        <div class="rule-body">
+          <MarkdownView :content="viewRow?.content" />
+        </div>
         <template #footer>
           <el-button @click="viewDialog=false">
             关闭
@@ -210,7 +226,23 @@ import { ref, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ruleApi } from '@/api/rule'
 import { fmtTime } from '@/utils/tableConfig'
+import MarkdownView from '@/components/MarkdownView.vue'
 import type { Rule } from '@/types'
+
+/**
+ * 规则类型只用于展示（后端存字符串）：给中文名 + 标签色，
+ * 避免列表与详情里出现裸露的 `global` / `module` 英文码。
+ * 若要并入后端枚举字典（`/api/enums/catalog`），只需在此处换成 `enumStore.labelOf('ruleType', code)`。
+ */
+const RULE_TYPE_LABEL: Record<string, string> = { global: '全局', module: '模块', agent: 'Agent' }
+const RULE_TYPE_TAG: Record<string, 'danger' | 'warning' | 'info'> = { global: 'danger', module: 'warning', agent: 'info' }
+
+function typeLabel(t?: string | null): string {
+  return (t && RULE_TYPE_LABEL[t]) || t || '-'
+}
+function typeTag(t?: string | null): 'danger' | 'warning' | 'info' {
+  return (t && RULE_TYPE_TAG[t]) || 'info'
+}
 
 const list = ref<any[]>([])
 const loading = ref(false)
@@ -260,6 +292,49 @@ onMounted(() => load())
 
 <style scoped>
 .page { max-width: var(--ha-content-width); }
-/* 查看弹窗：规则内容保留换行，超长内部滚动 */
-.rule-content { max-height: 50vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+
+/* ---- 查看规则弹窗（2026-10-18 排版重整）----
+   原问题三处：① 元信息四行 el-form-item 占掉小半屏、长标签被挤成方块；
+   ② 正文 `white-space: pre-wrap` 直出 ⇒ `##` 与表格 `|` 全裸露；
+   ③ 滚动条紧贴文字，长文读起来像挤在缝里。
+   改法：元信息压成一行 chips；正文交 MarkdownView 渲染，放进带内边距的滚动面板。 */
+.rule-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  align-items: center;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border-radius: 8px;
+  background: var(--ha-surface, rgba(127, 127, 127, 0.06));
+  border: 1px solid var(--ha-border, rgba(127, 127, 127, 0.14));
+  font-size: 13px;
+}
+.rule-meta__item { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.rule-meta__k { color: var(--ha-muted, #909399); white-space: nowrap; }
+.rule-meta__v { font-weight: 500; color: var(--ha-text, inherit); word-break: break-word; }
+
+/* 正文面板：四周留白 + 独立滚动（不撑高弹窗） */
+.rule-body {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 16px 20px 18px;
+  border: 1px solid var(--ha-border, rgba(127, 127, 127, 0.14));
+  border-radius: 8px;
+}
+/* 细滚动条：8px，避免抢走正文的视觉焦点 */
+.rule-body::-webkit-scrollbar { width: 8px; }
+.rule-body::-webkit-scrollbar-thumb {
+  background: rgba(127, 127, 127, 0.28);
+  border-radius: 4px;
+}
+.rule-body::-webkit-scrollbar-thumb:hover { background: rgba(127, 127, 127, 0.45); }
+.rule-body::-webkit-scrollbar-track { background: transparent; }
+
+/* 编辑态：Markdown 正文用等宽字体，表格/代码块的对齐关系在输入时就成立 */
+.rule-editor :deep(textarea) {
+  font-family: 'SFMono-Regular', Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
 </style>
