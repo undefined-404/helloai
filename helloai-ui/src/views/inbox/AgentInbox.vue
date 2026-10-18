@@ -22,6 +22,22 @@
                 已读
               </el-radio-button>
             </el-radio-group>
+            <el-radio-group
+              v-model="archiveFilter"
+              size="small"
+              style="margin-right:8px"
+              @change="onFilterChange"
+            >
+              <el-radio-button :value="null">
+                含归档
+              </el-radio-button>
+              <el-radio-button :value="0">
+                未归档
+              </el-radio-button>
+              <el-radio-button :value="1">
+                已归档
+              </el-radio-button>
+            </el-radio-group>
             <el-tag
               v-if="unreadCount > 0"
               type="danger"
@@ -74,6 +90,27 @@
               v-else
               class="agent-name is-missing"
             >…{{ String(row.agentId || '').slice(-6) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="状态"
+          width="100"
+        >
+          <template #default="{ row }">
+            <el-tag
+              v-if="row.isArchived === 1"
+              size="small"
+              type="info"
+            >
+              已归档
+            </el-tag>
+            <el-tag
+              v-else
+              size="small"
+              :type="row.isRead === 1 ? 'info' : 'danger'"
+            >
+              {{ row.isRead === 1 ? '已读' : '未读' }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column
@@ -161,6 +198,9 @@ const page = ref(1)
 const pageSize = ref(20)
 // 未读筛选：null=全部（管理端默认看全部，才符合「admin 能看所有」的预期）
 const readFilter = ref<number | null>(null)
+// 归档筛选：null=含归档（默认）。★实测库中消息全部已被过期归档，
+// 默认排除归档会让页面再次变空——归档与否必须由用户显式筛选。
+const archiveFilter = ref<number | null>(null)
 
 const eventTagMap: Record<string, string> = {
   'sub_task.assigned': '', 'sub_task.submitted': 'warning',
@@ -175,7 +215,9 @@ async function load() {
     const res = await inboxApi.list({
       page: page.value,
       pageSize: pageSize.value,
-      isRead: readFilter.value ?? undefined
+      isRead: readFilter.value ?? undefined,
+      // 归档三态：null=全部（不传），0=未归档，1=已归档
+      isArchived: archiveFilter.value ?? undefined
     })
     list.value = res?.list || []
     total.value = Number(res?.total) || 0

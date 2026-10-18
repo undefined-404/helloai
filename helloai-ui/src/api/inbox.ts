@@ -34,7 +34,8 @@ export const inboxApi = {
   list(params?: {
     agentId?: string | number
     isRead?: number
-    includeArchived?: boolean
+    /** 归档三态：0=未归档 1=已归档 不传=全部（默认全部） */
+    isArchived?: number
     page?: number
     pageSize?: number
   }): Promise<PageResult<InboxRow>> {

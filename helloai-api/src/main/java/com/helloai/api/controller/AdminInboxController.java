@@ -50,17 +50,20 @@ public class AdminInboxController {
      *
      * @param agentId 可选，按 Agent 过滤；不传 = 全部 Agent
      * @param isRead  可选，0=未读 1=已读；不传 = 不限（管理端默认看全部）
-     * @param includeArchived 是否含已归档，默认 false
+     * @param isArchived 归档状态过滤：0=未归档 / 1=已归档 / 不传=全部（管理端默认看全部）
      */
     @SaCheckPermission("inbox:view")
     @GetMapping("/list")
     public R<PageResult<Map<String, Object>>> list(
             @RequestParam(value = "agentId", required = false) Long agentId,
             @RequestParam(value = "isRead", required = false) Integer isRead,
-            @RequestParam(value = "includeArchived", defaultValue = "false") boolean includeArchived,
+            // ★不传 = 全部（2026-10-18 修正）：实测库中 53 条**全部已归档**（过期自动归档），
+            // 若默认排除归档，admin 打开页面依然是空的。管理端语义是「看全部」，
+            // 归档与否交筛选显式控制，不默认藏起来。
+            @RequestParam(value = "isArchived", required = false) Integer isArchived,
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
-        IPage<AgentInbox> result = inboxService.pageForAdmin(agentId, isRead, includeArchived, page, pageSize);
+        IPage<AgentInbox> result = inboxService.pageForAdmin(agentId, isRead, isArchived, page, pageSize);
         // 批量补 Agent 名字（页面只显示 agentId 无法辨认是谁的收件箱）
         Map<Long, String> agentNames = resolveAgentNames(result.getRecords());
         return R.ok(PageResult.of(result, r -> toRow(r, agentNames)));

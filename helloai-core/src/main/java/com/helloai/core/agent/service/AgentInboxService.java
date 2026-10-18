@@ -80,13 +80,15 @@ public interface AgentInboxService extends IService<AgentInbox> {
      * 管理端分页查询收件箱（可按 Agent 过滤）。
      *
      * @param agentId  Agent ID；{@code null} = 全部 Agent
-     * @param isRead   已读状态过滤：{@code 0} 未读 / {@code 1} 已读 / {@code null} 不限
-     * @param includeArchived 是否包含已归档；默认 {@code false}（只看在用消息）
-     * @param page     页码（从 1 开始）
-     * @param pageSize 每页条数
+     * @param isRead    已读状态过滤：{@code 0} 未读 / {@code 1} 已读 / {@code null} 不限
+     * @param isArchived 归档状态过滤：{@code 0} 未归档 / {@code 1} 已归档 / {@code null} 全部
+     *                  （**三态**而非布尔：实测库中消息可能全部已过期归档，
+     *                  用布尔「是否含归档」会让「只看已归档」无法表达）
+     * @param page      页码（从 1 开始）
+     * @param pageSize  每页条数
      */
     com.baomidou.mybatisplus.core.metadata.IPage<AgentInbox> pageForAdmin(
-            Long agentId, Integer isRead, boolean includeArchived, int page, int pageSize);
+            Long agentId, Integer isRead, Integer isArchived, int page, int pageSize);
 
     /** 管理端未读数统计（可按 Agent 过滤；{@code agentId=null} = 全平台）。 */
     long countUnreadForAdmin(Long agentId);

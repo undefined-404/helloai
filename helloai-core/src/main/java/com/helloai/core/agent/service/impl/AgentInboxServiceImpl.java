@@ -187,13 +187,14 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
     // ══════════════════════════════════════════════════════════════
 
     @Override
-    public IPage<AgentInbox> pageForAdmin(Long agentId, Integer isRead, boolean includeArchived,
+    public IPage<AgentInbox> pageForAdmin(Long agentId, Integer isRead, Integer isArchived,
                                           int page, int pageSize) {
         LambdaQueryWrapper<AgentInbox> q = Wrappers.<AgentInbox>lambdaQuery()
                 .eq(agentId != null, AgentInbox::getAgentId, agentId)
                 // isRead 语义：0=未读 1=已读；null=不限（管理端要看全部才有意义）
                 .eq(isRead != null, AgentInbox::getIsRead, isRead)
-                .eq(!includeArchived, AgentInbox::getIsArchived, 0)
+                // 三态：null=全部（管理端默认），0=未归档，1=已归档
+                .eq(isArchived != null, AgentInbox::getIsArchived, isArchived)
                 // 优先级高的先看（URGENT > HIGH > NORMAL > LOW 按字符串无法比较，故用 create_time 兜底）
                 .orderByDesc(AgentInbox::getCreateTime);
         return page(new Page<>(Math.max(1, page), Math.max(1, Math.min(pageSize, 200))), q);
