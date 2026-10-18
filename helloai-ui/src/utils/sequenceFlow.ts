@@ -26,6 +26,7 @@
 
 import type { TaskTimelineItem } from '@/types'
 import { useEventCatalogStore } from '@/stores/eventCatalog'
+import { useToolCatalogStore } from '@/stores/toolCatalog'
 
 // ── 泳道枚举 ──
 export type Swimlane = 'BIZ' | 'SCH' | 'EXT' | 'RVW' | 'DLQ' | 'OPS'
@@ -119,10 +120,14 @@ function shortLabel(ev: TaskTimelineItem): string {
 }
 
 /**
- * 执行链事件的具体名称（2026-10-18）：`技能解析 · s1、s2` / `工具调用 · web_search`。
+ * 执行链事件的具体名称（2026-10-18）：`技能解析 · s1、s2` / `工具调用 · 沙箱执行`。
  *
  * <p>参照 deepseek-harness 的 Chat 折叠行做法：阶段文案 + 从 payload 提取的具体摘要，
  * 让「用了哪个技能、调了哪个工具」在时序图上直接可读，而不是只有一个阶段名。</p>
+ *
+ * <p>工具名经 {@link useToolCatalogStore} 翻译为中文短名（`沙箱执行` /
+ * `读子任务详情`…），避免非技术用户面对 `internal_run_in_sandbox` 这类英文标识；
+ * 目录未就绪或未收录时**回退原始英文名**（不显示「未知工具」掩盖事实）。</p>
  *
  * <p>只取短名（工具/技能标识），入参与输出留在时间线卡片的 description 里——
  * 时序图节点过宽会挤压泳道。</p>
@@ -143,7 +148,7 @@ function chainDetailLabel(ev: TaskTimelineItem): string {
     }
     case 'tool_call_started':
     case 'tool_call_completed':
-      return String(p.tool || '未知工具')
+      return toolLabelOf(String(p.tool || ''))
     case 'environment_resolved':
       return [p.environment, p.accessType].filter(Boolean).join('/') || ''
     case 'context_built':
@@ -151,6 +156,14 @@ function chainDetailLabel(ev: TaskTimelineItem): string {
     default:
       return ''
   }
+}
+
+/** 工具名 → 中文短名（目录未就绪/未收录时回退原名）。 */
+function toolLabelOf(toolName: string): string {
+  if (!toolName) return '未知工具'
+  const store = useToolCatalogStore()
+  store.ensureLoaded() // fire-and-forget：就绪后重渲染生效
+  return store.labelOf(toolName, toolName)
 }
 
 // ── Note 推导：失败 / 重试 / 熔断 / 人工 / 恢复 → 加 note ──
@@ -216,10 +229,13 @@ function inferNote(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, at
   // 与 deepseek-harness 同口径（它也不在事件里存 duration，由消费方按时间戳求差）；
   // 但注意：该差值是「含排队/准备的上界」，不是纯工具执行时间。
   if (t === 'tool_call_completed' && prev && prev.eventType === 'tool_call_started') {
-    const prevTool = String((prev.payload || {}).tool || '')
-    const curTool = String(p.tool || '')
-    // 同名工具才配对（并行调用不同工具时顺序可能交错，避免算错）
-    if (prevTool && prevTool === curTool) {
+    // 优先用 callId 硬关联（2026-10-18 起 payload 带 callId）；历史事件无 callId 时回退「同名 + 相邻」
+    const prevCallId = String((prev.payload || {}).callId || '')
+    const curCallId = String(p.callId || '')
+    const sameCall = prevCallId && curCallId
+      ? prevCallId === curCallId
+      : String((prev.payload || {}).tool || '') === String(p.tool || '') && !!p.tool
+    if (sameCall) {
       const dt = new Date(cur.createTime).getTime() - new Date(prev.createTime).getTime()
       const ok = p.success === true
       if (dt >= 0) return `${ok ? '成功' : '失败'} · 耗时 ${(dt / 1000).toFixed(1)}s`

@@ -20,7 +20,10 @@ const ERROR_BY_CALLER_URL_PREFIXES = [
   '/skills/catalog',
   // 事件码目录（REF-6.8）：由 eventCatalog store 懒加载并静默降级（未命中回退原始码），
   // 失败不弹错——否则每个事件时间线渲染都会弹错。baseURL 已含 /api，此处用相对路径（对齐 skills/catalog）。
-  '/events/catalog'
+  '/events/catalog',
+  // 工具名目录（2026-10-18）：由 toolCatalog store 懒加载并静默降级（未命中回退原始工具名），
+  // 失败不弹错——否则每次渲染含工具调用的时间线都会弹错。
+  '/tools/catalog'
 ]
 
 function shouldLetCallerHandleError(url: string | undefined): boolean {

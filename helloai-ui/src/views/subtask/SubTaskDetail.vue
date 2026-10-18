@@ -631,6 +631,7 @@ import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { fmtTime } from '@/utils/tableConfig'
 // G-006 抽取：事件字典与语义色/分类派生统一由 utils/eventMeta 提供（与事件流工作台同源）
 import { eventCategory, eventLabel, eventTypeColor } from '@/utils/eventMeta'
+import { useToolCatalogStore } from '@/stores/toolCatalog'
 import { orderByDependency } from '@/utils/subTaskDag'
 import { useEventCatalogStore } from '@/stores/eventCatalog'
 import { useSkillCatalogStore } from '@/stores/skillCatalog'
@@ -870,8 +871,8 @@ function eventTitleWithDetail(ev: TaskTimelineItem): string {
   switch (ev.eventType) {
     case 'tool_call_started':
     case 'tool_call_completed': {
-      const tool = String(p.tool || '')
-      return tool ? `${base} · ${tool}` : base
+      const code = String(p.tool || '')
+      return code ? `${base} · ${toolLabelOf(code)}` : base
     }
     case 'skill_resolved': {
       const skills = (p.requiredSkills as string[] | undefined) ?? []
@@ -885,6 +886,25 @@ function eventTitleWithDetail(ev: TaskTimelineItem): string {
     default:
       return base
   }
+}
+
+/**
+ * 工具名 → 中文短名（2026-10-18）：`internal_run_in_sandbox` → `沙箱执行`。
+ *
+ * <p>非技术用户看不懂英文工具标识；目录来自后端 {@code /api/tools/catalog}
+ * （{@code ToolDisplayName} 单一事实源），未就绪/未收录时回退原名。</p>
+ */
+function toolLabelOf(toolName: string): string {
+  if (!toolName) return '未知工具'
+  const store = useToolCatalogStore()
+  store.ensureLoaded()
+  return store.labelOf(toolName, toolName)
+}
+
+/** 工具名 → 「中文名（英文标识）」，需要同时保留可检索原始名的场景用。 */
+function toolLabelWithCode(toolName: string): string {
+  const label = toolLabelOf(toolName)
+  return label === toolName ? toolName : `${label}（${toolName}）`
 }
 
 /**
@@ -919,24 +939,25 @@ function executionChainDetail(ev: TaskTimelineItem, p: Record<string, unknown>):
     case 'tool_resolved': {
       const effective = (p.effectiveTools as string[] | undefined) ?? []
       const removed = (p.removedTools as string[] | undefined) ?? []
-      const requested = (p.tools as string[] | undefined) ?? []
       const parts: string[] = []
-      parts.push(`模型可见工具 ${effective.length} 个` + (effective.length ? '：' + effective.join('、') : ''))
-      if (removed.length) parts.push(`按条件摘除 ${removed.length} 个：${removed.join('、')}`)
-      if (!effective.length && requested.length) parts.push(`请求 ${requested.length} 个但均不可用`)
+      // 工具清单也走中文名（用户诉求：英文标识非专业人士看不懂），
+      // 但保留原标识括注以便对日志/文档检索
+      parts.push(`模型可见工具 ${effective.length} 个` +
+          (effective.length ? '：' + effective.map(toolLabelWithCode).join('、') : ''))
+      if (removed.length) parts.push(`按条件摘除 ${removed.length} 个：${removed.map(toolLabelWithCode).join('、')}`)
       return '工具解析：' + parts.join('；')
     }
     case 'tool_call_started': {
-      const tool = String(p.tool || '未知工具')
+      const code = String(p.tool || '')
       const args = compactArgs(p.arguments)
-      return `工具调用：${tool}` + (args ? `，入参 ${args}` : '')
+      return `工具调用：${toolLabelWithCode(code)}` + (args ? `，入参 ${args}` : '')
     }
     case 'tool_call_completed': {
-      const tool = String(p.tool || '未知工具')
+      const code = String(p.tool || '')
       const ok = p.success === true
       const out = p.output ? String(p.output) : ''
       const outSummary = out ? '，返回 ' + abbreviateText(out, 60) : ''
-      return `工具返回：${tool} · ${ok ? '成功' : '失败'}${outSummary}`
+      return `工具返回：${toolLabelWithCode(code)} · ${ok ? '成功' : '失败'}${outSummary}`
     }
     case 'environment_resolved':
       return '环境解析：' + [p.environment, p.accessType].filter(Boolean).join(' / ')
