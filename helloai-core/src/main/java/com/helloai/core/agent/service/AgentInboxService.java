@@ -65,4 +65,35 @@ public interface AgentInboxService extends IService<AgentInbox> {
      * @return 本轮实际归档条数
      */
     int archiveExpired(int batchLimit);
+
+    // ══════════════════════════════════════════════════════════════
+    //  管理端视角（2026-10-18）
+    //  ------------------------------------------------------------
+    //  为什么需要：原接口全部以 @RequestAttribute("_authId") 取 Agent 身份，
+    //  只回答「我这个 Agent 的收件箱」。admin 不是 Agent、没有 _authId
+    //  ⇒ 页面永远空（实测 agent_inbox 有 53 条，接口返回 []）。
+    //  管理端语义不同（可看全部 / 可按 agent 过滤 / 可跨 agent 标记），
+    //  故独立一组方法，**不改动上面 Agent 侧契约**（避免越权面扩大）。
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 管理端分页查询收件箱（可按 Agent 过滤）。
+     *
+     * @param agentId  Agent ID；{@code null} = 全部 Agent
+     * @param isRead   已读状态过滤：{@code 0} 未读 / {@code 1} 已读 / {@code null} 不限
+     * @param includeArchived 是否包含已归档；默认 {@code false}（只看在用消息）
+     * @param page     页码（从 1 开始）
+     * @param pageSize 每页条数
+     */
+    com.baomidou.mybatisplus.core.metadata.IPage<AgentInbox> pageForAdmin(
+            Long agentId, Integer isRead, boolean includeArchived, int page, int pageSize);
+
+    /** 管理端未读数统计（可按 Agent 过滤；{@code agentId=null} = 全平台）。 */
+    long countUnreadForAdmin(Long agentId);
+
+    /** 管理端标记已读：按主键直接改，不做 Agent 归属校验（调用方负责鉴权）。 */
+    void markReadById(Long inboxId);
+
+    /** 管理端归档：按主键直接改，不做 Agent 归属校验（调用方负责鉴权）。 */
+    void markArchivedById(Long inboxId);
 }

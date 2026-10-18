@@ -191,11 +191,13 @@ export const paths = {
   dashboard: {
     stats: '/dashboard/getStats'
   },
+  // 管理端收件箱（2026-10-18）：/agent/inbox 是「Agent 视角（按 _authId 取自己的）」，
+  // admin 没有 _authId ⇒ 恒返回空；管理端改用 /inbox（可看全部、可按 agent 过滤）。
   inbox: {
-    list: '/agent/inbox',
-    unreadCount: '/agent/inbox/getUnreadCount',
-    markRead: (id: string | number) => `/agent/inbox/markReadById/${enc(id)}`,
-    archive: (id: string | number) => `/agent/inbox/archiveById/${enc(id)}`
+    list: '/inbox/list',
+    unreadCount: '/inbox/getUnreadCount',
+    markRead: (id: string | number) => `/inbox/markReadById/${enc(id)}`,
+    archive: (id: string | number) => `/inbox/archiveById/${enc(id)}`
   },
   modules: {
     list: (taskId: string | number) => `/modules/findModulesByTaskId/${enc(taskId)}`,

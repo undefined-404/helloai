@@ -5,6 +5,23 @@
         <div class="card-header">
           <span>收件箱</span>
           <div>
+            <!-- 未读筛选（管理端默认「全部」：admin 应能看所有，而不是只看未读） -->
+            <el-radio-group
+              v-model="readFilter"
+              size="small"
+              style="margin-right:8px"
+              @change="onFilterChange"
+            >
+              <el-radio-button :value="null">
+                全部
+              </el-radio-button>
+              <el-radio-button :value="0">
+                未读
+              </el-radio-button>
+              <el-radio-button :value="1">
+                已读
+              </el-radio-button>
+            </el-radio-group>
             <el-tag
               v-if="unreadCount > 0"
               type="danger"
@@ -40,6 +57,23 @@
             >
               {{ INBOX_EVENT_TYPE_MAP[row.eventType] || row.eventType }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="所属 Agent"
+          width="180"
+          show-overflow-tooltip
+        >
+          <template #default="{ row }">
+            <span
+              v-if="row.agentName"
+              class="agent-name"
+            >{{ row.agentName }}</span>
+            <!-- Agent 已删除时后端 name 为 null：回退 ID 短尾，不显示「未知」 -->
+            <span
+              v-else
+              class="agent-name is-missing"
+            >…{{ String(row.agentId || '').slice(-6) }}</span>
           </template>
         </el-table-column>
         <el-table-column
@@ -114,14 +148,19 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { inboxApi } from '@/api/inbox'
+import { inboxApi, type InboxRow } from '@/api/inbox'
 import { INBOX_EVENT_TYPE_MAP } from '@/types'
 import { ACTION } from '@/utils/tableConfig'
 import { fmtTime } from '@/utils/tableConfig'
 
-const list = ref<any[]>([])
+const list = ref<InboxRow[]>([])
 const loading = ref(false)
 const unreadCount = ref(0)
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(20)
+// 未读筛选：null=全部（管理端默认看全部，才符合「admin 能看所有」的预期）
+const readFilter = ref<number | null>(null)
 
 const eventTagMap: Record<string, string> = {
   'sub_task.assigned': '', 'sub_task.submitted': 'warning',
@@ -133,10 +172,21 @@ function eventTypeTag(type: string) { return eventTagMap[type] || '' }
 async function load() {
   loading.value = true
   try {
-    list.value = await inboxApi.list(50)
+    const res = await inboxApi.list({
+      page: page.value,
+      pageSize: pageSize.value,
+      isRead: readFilter.value ?? undefined
+    })
+    list.value = res?.list || []
+    total.value = Number(res?.total) || 0
     const c = await inboxApi.count()
     unreadCount.value = c?.total_unread || 0
   } finally { loading.value = false }
+}
+
+function onFilterChange() {
+  page.value = 1
+  load()
 }
 async function markRead(row: any) {
   await inboxApi.markRead(row.id); row.isRead = 1
@@ -152,4 +202,6 @@ onMounted(() => load())
 <style scoped>
 .page { max-width: var(--ha-content-width); }
 .ml-sm { margin-left: var(--ha-space-sm); }
+.agent-name { color: var(--el-text-color-primary); }
+.agent-name.is-missing { color: var(--ha-muted); }
 </style>

@@ -1,6 +1,9 @@
 package com.helloai.core.agent.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentInboxProperties;
@@ -175,6 +178,56 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
         lambdaUpdate()
                 .eq(AgentInbox::getId, inboxId)
                 .eq(AgentInbox::getAgentId, agentId)
+                .set(AgentInbox::getIsArchived, 1)
+                .update();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  管理端视角（2026-10-18）
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    public IPage<AgentInbox> pageForAdmin(Long agentId, Integer isRead, boolean includeArchived,
+                                          int page, int pageSize) {
+        LambdaQueryWrapper<AgentInbox> q = Wrappers.<AgentInbox>lambdaQuery()
+                .eq(agentId != null, AgentInbox::getAgentId, agentId)
+                // isRead 语义：0=未读 1=已读；null=不限（管理端要看全部才有意义）
+                .eq(isRead != null, AgentInbox::getIsRead, isRead)
+                .eq(!includeArchived, AgentInbox::getIsArchived, 0)
+                // 优先级高的先看（URGENT > HIGH > NORMAL > LOW 按字符串无法比较，故用 create_time 兜底）
+                .orderByDesc(AgentInbox::getCreateTime);
+        return page(new Page<>(Math.max(1, page), Math.max(1, Math.min(pageSize, 200))), q);
+    }
+
+    @Override
+    public long countUnreadForAdmin(Long agentId) {
+        return count(Wrappers.<AgentInbox>lambdaQuery()
+                .eq(agentId != null, AgentInbox::getAgentId, agentId)
+                .eq(AgentInbox::getIsRead, 0)
+                .eq(AgentInbox::getIsArchived, 0));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void markReadById(Long inboxId) {
+        if (inboxId == null) {
+            return;
+        }
+        lambdaUpdate()
+                .eq(AgentInbox::getId, inboxId)
+                .set(AgentInbox::getIsRead, 1)
+                .set(AgentInbox::getReadTime, OffsetDateTime.now())
+                .update();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void markArchivedById(Long inboxId) {
+        if (inboxId == null) {
+            return;
+        }
+        lambdaUpdate()
+                .eq(AgentInbox::getId, inboxId)
                 .set(AgentInbox::getIsArchived, 1)
                 .update();
     }
