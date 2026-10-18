@@ -8,6 +8,7 @@ import com.helloai.core.planner.search.WebPageContent;
 import com.helloai.core.planner.search.WebSearchOutcome;
 import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.RequirementClarifyService;
+import com.helloai.core.planner.service.RoundProcess;
 import com.helloai.core.shared.util.LlmJsonSanitizer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -44,6 +45,9 @@ public class ClarifyReplyParser {
 
     /** assistant 消息 payload 的联网搜索查验键（与 mode/progress/questions 同级）。 */
     private static final String PAYLOAD_KEY_WEB_SEARCH = "webSearch";
+
+    /** payload 中「思考 + 检索步骤」的键（RoundProcess 序列化位置，2026-10-18）。 */
+    private static final String PAYLOAD_KEY_PROCESS = "process";
 
     /** LLM auto 意图标记的 JSON 键名（CHAT 轮次 LLM 输出末尾隐藏行）。 */
     private static final String INTENT_KEY = "__intent__";
@@ -264,9 +268,20 @@ public class ClarifyReplyParser {
      *                前端据此渲染折叠查验条
      */
     public String buildQuestionPayload(RequirementClarifyService.ClarifyReply reply, WebSearchOutcome outcome) {
+        return buildQuestionPayload(reply, outcome, null);
+    }
+
+    /**
+     * 结构化/自由追问 payload（含过程数据）。
+     *
+     * @param process 思考与检索步骤（null/空 ⇒ 不写 {@code process} 键，payload 与旧版逐字一致）
+     */
+    public String buildQuestionPayload(RequirementClarifyService.ClarifyReply reply, WebSearchOutcome outcome,
+                                       RoundProcess process) {
         boolean structured = MODE_STRUCTURED.equals(reply.getMode())
                 && reply.getQuestions() != null && !reply.getQuestions().isEmpty();
-        if (!structured && reply.getProgress() == null && outcome == null) {
+        boolean hasProcess = process != null && !process.isEmpty();
+        if (!structured && reply.getProgress() == null && outcome == null && !hasProcess) {
             return null;
         }
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -280,6 +295,9 @@ public class ClarifyReplyParser {
         if (outcome != null) {
             payload.put(PAYLOAD_KEY_WEB_SEARCH, buildWebSearchMap(outcome));
         }
+        if (hasProcess) {
+            payload.put(PAYLOAD_KEY_PROCESS, buildProcessMap(process));
+        }
         try {
             return objectMapper.writeValueAsString(payload);
         } catch (Exception e) {
@@ -288,15 +306,49 @@ public class ClarifyReplyParser {
         }
     }
 
-    /** 终稿轮的纯搜索查验 payload：{@code {"webSearch":{...}}}；序列化失败降级 null。 */
+    /** 纯搜索/纯过程查验 payload：{@code {"webSearch":{...},"process":{...}}}；序列化失败降级 null。 */
     public String buildWebSearchOnlyPayload(WebSearchOutcome outcome) {
+        return buildWebSearchOnlyPayload(outcome, null);
+    }
+
+    /**
+     * 纯过程 payload（终稿轮 / 纯文本回复）：webSearch 与 process 均可为 null，
+     * 二者都为空时返回 null（不写空 payload）。
+     */
+    public String buildWebSearchOnlyPayload(WebSearchOutcome outcome, RoundProcess process) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (outcome != null) {
+            payload.put(PAYLOAD_KEY_WEB_SEARCH, buildWebSearchMap(outcome));
+        }
+        if (process != null && !process.isEmpty()) {
+            payload.put(PAYLOAD_KEY_PROCESS, buildProcessMap(process));
+        }
+        if (payload.isEmpty()) {
+            return null;
+        }
         try {
-            return objectMapper.writeValueAsString(
-                    Map.of(PAYLOAD_KEY_WEB_SEARCH, buildWebSearchMap(outcome)));
+            return objectMapper.writeValueAsString(payload);
         } catch (Exception e) {
             log.warn("澄清终稿轮 webSearch payload 序列化失败，降级纯文本消息", e);
             return null;
         }
+    }
+
+    /**
+     * 过程数据 → payload 嵌套 Map：{@code thinking}（思考全文）+ {@code steps}（步骤文本列表）。
+     *
+     * <p>前端据此在消息上方渲染可折叠的「思考与检索过程」区——done 后与刷新后都能回看，
+     * 对齐 DeepSeek 网页版「已深度思考（用时 N 秒）」与 ChatGPT「Thinking」面板。</p>
+     */
+    private Map<String, Object> buildProcessMap(RoundProcess process) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        if (process.thinking() != null && !process.thinking().isBlank()) {
+            map.put("thinking", process.thinking());
+        }
+        if (process.steps() != null && !process.steps().isEmpty()) {
+            map.put("steps", process.steps());
+        }
+        return map;
     }
 
     /**

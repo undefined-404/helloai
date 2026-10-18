@@ -76,9 +76,23 @@ public interface ClarifyRoundOrchestratorService {
     void persistClarifyOutcome(RequirementConversation conversation, ClarifyReply reply,
                                WebSearchOutcome webSearchOutcome);
 
+    /**
+     * CLARIFY 模式主回复落库（含过程数据）：{@code process} 落 payload 的 {@code process} 键，
+     * 供前端在 done 后/刷新后回看思考与检索步骤（空过程不写该键）。
+     */
+    void persistClarifyOutcome(RequirementConversation conversation, ClarifyReply reply,
+                               WebSearchOutcome webSearchOutcome, RoundProcess process);
+
     /** CHAT 模式主回复落库（结构化追问卡 / 纯文本），同步与流式共用。 */
     void persistChatOutcome(RequirementConversation conversation, String output,
                             WebSearchOutcome webSearchOutcome);
+
+    /**
+     * CHAT 模式主回复落库（含过程数据）：与 {@link #persistChatOutcome(RequirementConversation, String, WebSearchOutcome)}
+     * 同构，额外把思考与检索步骤落 payload（空过程不写该键）。
+     */
+    void persistChatOutcome(RequirementConversation conversation, String output,
+                            WebSearchOutcome webSearchOutcome, RoundProcess process);
 
     /**
      * 确认卡待确认状态的前置处理（同步 {@code sendMessage} 与流式 {@code streamRound} <b>共用</b>）。

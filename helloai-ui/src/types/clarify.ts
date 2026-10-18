@@ -30,6 +30,16 @@ export interface ClarifyAssistantPayload {
   questions?: ClarifyQuestion[]
   // V41 联网搜索查验轨迹（仅本轮实际发起过搜索时存在）
   webSearch?: WebSearchTrace
+  // 2026-10-18 过程数据：思考全文 + 平台动作步骤（done 后/刷新后仍可回看）
+  process?: RoundProcessTrace
+}
+
+/** 一轮对话的过程数据（assistant payload.process，对齐 DeepSeek「已深度思考」/ ChatGPT「Thinking」） */
+export interface RoundProcessTrace {
+  /** 模型思考过程全文（无推理模型时缺省） */
+  thinking?: string | null
+  /** 平台动作步骤（「正在联网检索：xxx」「已检索 N 条 · 21.5s」），按发生顺序 */
+  steps?: string[] | null
 }
 
 /** V41 联网搜索单条来源（webSearch payload 的 results 元素） */

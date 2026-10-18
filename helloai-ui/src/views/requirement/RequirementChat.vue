@@ -243,6 +243,40 @@
                       {{ row.msg.role === 'user' ? '我' : 'AI' }}
                     </div>
                     <div class="msg-col">
+                      <!-- 历史消息的过程区（2026-10-18）：思考 + 检索步骤从 payload 重建，
+                           默认折叠、可展开回看（对齐 DeepSeek「已深度思考」/ ChatGPT「Thinking」） -->
+                      <div
+                        v-if="row.process && (row.process.thinking || (row.process.steps && row.process.steps.length))"
+                        class="msg-bubble msg-thinking msg-thinking-history"
+                      >
+                        <div
+                          class="msg-thinking-head"
+                          @click="toggleHistoryProcess(row.msg.id)"
+                        >
+                          <span>{{ historyProcessHeadline(row.process) }}</span>
+                          <span class="msg-thinking-toggle">
+                            {{ expandedHistoryProcess === String(row.msg.id) ? '收起' : '展开' }}
+                          </span>
+                        </div>
+                        <div
+                          v-if="expandedHistoryProcess === String(row.msg.id)"
+                          class="msg-thinking-body"
+                        >
+                          <div
+                            v-for="(step, si) in row.process.steps || []"
+                            :key="`hstep-${si}`"
+                            class="msg-process-step"
+                          >
+                            {{ step }}
+                          </div>
+                          <div
+                            v-if="row.process.thinking"
+                            class="msg-process-thinking"
+                          >
+                            {{ row.process.thinking }}
+                          </div>
+                        </div>
+                      </div>
                       <div class="msg-bubble">
                         <!-- 用户消息原样展示；assistant 回复渲染 Markdown（标题/表格/列表/引用，流式与历史回显统一） -->
                         <template v-if="row.msg.role === 'user'">
@@ -395,29 +429,41 @@
                   AI
                 </div>
                 <div class="msg-col">
-                  <!-- 思考过程区（2026-10-18）：推理模型的 reasoning 帧实时展示；
-                       正文开始后自动折叠为一行可展开（避免长思考撑满屏） -->
+                  <!-- 过程区（2026-10-18）：联网检索等平台步骤 + 推理模型思考内容，
+                       按到达顺序混排；正文开始后自动折叠为一行可展开（对齐 DeepSeek/ChatGPT） -->
                   <div
-                    v-if="thinkingText"
+                    v-if="processSteps.length || thinkingText"
                     class="msg-bubble msg-thinking"
                   >
                     <div
                       class="msg-thinking-head"
                       @click="thinkingExpanded = !thinkingExpanded"
                     >
-                      <el-icon class="is-loading" v-if="reasoningActive && !streamText">
+                      <el-icon class="is-loading" v-if="isProcessRunning">
                         <Loading />
                       </el-icon>
-                      <span>{{ reasoningActive && !streamText ? '思考中…' : '思考过程' }}</span>
+                      <span>{{ processHeadline }}</span>
                       <span class="msg-thinking-toggle">
-                        {{ thinkingExpanded || (reasoningActive && !streamText) ? '收起' : '展开' }}
+                        {{ thinkingExpanded || isProcessRunning ? '收起' : '展开' }}
                       </span>
                     </div>
                     <div
-                      v-if="thinkingExpanded || (reasoningActive && !streamText)"
+                      v-if="thinkingExpanded || isProcessRunning"
                       class="msg-thinking-body"
                     >
-                      {{ thinkingText }}
+                      <div
+                        v-for="(step, si) in processSteps"
+                        :key="`step-${si}`"
+                        class="msg-process-step"
+                      >
+                        {{ step }}
+                      </div>
+                      <div
+                        v-if="thinkingText"
+                        class="msg-process-thinking"
+                      >
+                        {{ thinkingText }}
+                      </div>
                     </div>
                   </div>
                   <!-- S1 流式回复：token 增量渲染 Markdown；尚未产出 token 时保持思考中占位 -->
@@ -428,7 +474,7 @@
                     <MarkdownView :content="streamText" />
                   </div>
                   <div
-                    v-else-if="!thinkingText"
+                    v-else-if="!thinkingText && !processSteps.length"
                     class="msg-bubble msg-loading"
                   >
                     <el-icon class="is-loading">
@@ -683,7 +729,7 @@ import { fmtTime } from '@/utils/tableConfig'
 import StructuredQuestionCard from './StructuredQuestionCard.vue'
 import WebSearchBar from './WebSearchBar.vue'
 import MarkdownView from '@/components/MarkdownView.vue'
-import type { ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, WebSearchTrace } from '@/types'
+import type { ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, RoundProcessTrace, WebSearchTrace } from '@/types'
 
 const router = useRouter()
 
@@ -738,6 +784,25 @@ let reasoningBuffer = ''
 let reasoningFlushTimer: number | null = null
 let reasoningActive = false
 const thinkingExpanded = ref(true)
+// 过程步骤（2026-10-18）：联网检索等平台动作，与思考内容按到达顺序混排展示
+// （对齐 DeepSeek「已搜索 N 个网页」/ ChatGPT「Searching the web」）
+const processSteps = ref<string[]>([])
+// 历史消息的过程区展开态（存 msg.id；同时只展开一条，避免长会话页面被撑爆）
+const expandedHistoryProcess = ref<string>('')
+
+/** 历史过程区标题：N 步检索 / 有思考；两者都有时合并描述。 */
+function historyProcessHeadline(process: RoundProcessTrace): string {
+  const steps = process.steps?.length ?? 0
+  const hasThinking = !!process.thinking
+  if (steps > 0 && hasThinking) return `思考与检索过程（${steps} 步）`
+  if (steps > 0) return `检索过程（${steps} 步）`
+  return '思考过程'
+}
+
+function toggleHistoryProcess(id: string | number) {
+  const key = String(id)
+  expandedHistoryProcess.value = expandedHistoryProcess.value === key ? '' : key
+}
 
 // Planner 下拉选：'__auto__' = 系统自动选择（等权重，优先空闲）
 const plannerOptions = ref<PlannerOption[]>([])
@@ -819,7 +884,10 @@ const renderMessages = computed(() => {
     const p = assistantPayloadOf(msg)
     const structured = p?.mode === 'structured' && p.questions?.length ? p : null
     const webSearch: WebSearchTrace | null = p?.webSearch ?? null
-    if (!structured) return { msg, structured: null, intro: msg.content, selections: null, webSearch, liked: false }
+    // 2026-10-18：过程数据（思考 + 检索步骤）随 payload 落库 ⇒ 历史消息也能回看，
+    // 这是「思考过程在回复完成后消失」的根治点（此前只存在于 SSE 流里）
+    const process: RoundProcessTrace | null = p?.process ?? null
+    if (!structured) return { msg, structured: null, intro: msg.content, selections: null, webSearch, process, liked: false }
     const interactive = i === msgs.length - 1 && activeStructured.value != null
     const next = msgs[i + 1]
     return {
@@ -828,6 +896,7 @@ const renderMessages = computed(() => {
       intro: introOf(msg.content),
       selections: next ? userSelectionsOf(next) : null,
       webSearch,
+      process,
       liked: false
     }
   })
@@ -1152,6 +1221,7 @@ async function streamSendActiveMessage(id: LongId, text: string,
     await streamSendConversation(id, text, selections, {
       onToken: appendStreamToken,
       onReasoning: appendStreamReasoning,
+      onProgress: appendProcessStep,
       onDone: () => { void settleStream(id, true) },
       onError: (msg) => {
         ElMessage.error(msg)
@@ -1178,6 +1248,7 @@ async function streamSendOrCreate(text: string, plannerId: string | null) {
       await streamSendConversation(existingId, text, null, {
         onToken: appendStreamToken,
         onReasoning: appendStreamReasoning,
+        onProgress: appendProcessStep,
         onDone: () => { void settleStream(existingId, true) },
         onError: (msg) => {
           ElMessage.error(msg)
@@ -1193,6 +1264,7 @@ async function streamSendOrCreate(text: string, plannerId: string | null) {
         },
         onToken: appendStreamToken,
         onReasoning: appendStreamReasoning,
+        onProgress: appendProcessStep,
         onDone: () => {
           const id = settleId()
           if (id == null) { sending.value = false; return }
@@ -1210,11 +1282,34 @@ async function streamSendOrCreate(text: string, plannerId: string | null) {
   }
 }
 
-/** 流式状态复位（正文/思考/围栏标记/缓冲）。 */
+/** 过程步骤增量（progress 帧）：一行一条，直接追加并保持展开（用户要看到「在做什么」）。 */
+function appendProcessStep(text: string) {
+  if (!text) return
+  // 同一行重复推送（正在检索 → 已检索）不去重：它们语义不同，按序展示更符合「过程」直觉
+  processSteps.value = [...processSteps.value, text]
+  scrollToBottom()
+}
+
+/** 过程区是否仍在进行（思考流未结束且正文未开始）——决定转圈图标与是否强制展开。 */
+const isProcessRunning = computed(() =>
+  !streamText.value && (reasoningActive || processSteps.value.length > 0)
+)
+
+/** 过程区标题：进行中显示「思考中…（已 N 步）」，结束后显示「思考与检索过程」。 */
+const processHeadline = computed(() => {
+  const stepCount = processSteps.value.length
+  if (isProcessRunning.value) {
+    return stepCount > 0 ? `思考中…（已 ${stepCount} 步）` : '思考中…'
+  }
+  return stepCount > 0 ? `思考与检索过程（${stepCount} 步）` : '思考过程'
+})
+
+/** 流式状态复位（正文/思考/步骤/围栏标记/缓冲）。 */
 function resetStreamState() {
   streamText.value = ''
   thinkingText.value = ''
   thinkingExpanded.value = true
+  processSteps.value = []
   streamBuffer = ''
   reasoningBuffer = ''
   reasoningActive = false
@@ -1908,6 +2003,26 @@ onMounted(() => {
   font-size: 12px;
   opacity: 0.7;
 }
+.msg-process-step {
+  padding: 2px 0;
+  color: var(--ha-muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.msg-process-step::before {
+  content: '·';
+  margin-right: 6px;
+  opacity: 0.6;
+}
+.msg-process-thinking {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+.msg-thinking-history { margin-bottom: 6px; }
 .msg-thinking-body {
   margin-top: 6px;
   max-height: 240px;

@@ -20,6 +20,7 @@ import com.helloai.core.planner.service.RequirementClarifyService.ChatStreamEven
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifyReply;
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifySelection;
 import com.helloai.core.planner.service.RequirementConversationService;
+import com.helloai.core.planner.service.RoundProcess;
 import com.helloai.core.planner.service.RequirementMessageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,6 +49,9 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
 
     /** 确认卡流式播放片间延时（毫秒）：模拟逐字节奏，避免瞬间整段出现。 */
     private static final long CLARIFY_PLAY_DELAY_MS = 12L;
+
+    /** 过程步骤里「正在联网检索：xxx」的检索词展示上限（防止把整段消息塞进过程区）。 */
+    private static final int PROGRESS_TEXT_LIMIT = 60;
 
     private final ClarifyRoundOrchestratorService orchestrator;
     private final ClarifyPromptRenderService promptRenderService;
@@ -119,17 +123,48 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
     private Flux<ChatStreamEvent> runChatStream(RequirementConversation conversation, String userMessage,
                                                 String userPayload, int roundNo) {
         Long conversationId = conversation.getId();
-        // 联合决策（intent + 澄清问题 + 搜索决策）
-        RoundDecision roundDecision = orchestrator.makeRoundDecision(conversation, userMessage);
-        if (roundDecision.decision().isClarify()) {
-            // 确认卡流式播放：question 分片打字机 → 落库确认卡 → done（前端 done 后收敛为卡片）
-            return playClarifyQuestion(conversation, roundDecision.decision());
-        }
-        WebSearchOutcome webSearchOutcome = commandSearch.resolveChatSearchOutcome(conversation, userMessage, userPayload,
-                roundDecision.decision(), roundDecision.degraded());
+        // ★过程数据（2026-10-18）：思考全文 + 检索步骤，随消息 payload 落库
+        // （done 后/刷新后仍可回看，对齐 DeepSeek「已深度思考」与 ChatGPT「Thinking」面板）
+        StringBuilder thinking = new StringBuilder();
+        List<String> steps = new ArrayList<>();
+        // ★分层 defer（关键）：决策（~2s）与联网检索（15~25s）都是同步阻塞调用。
+        // 若在 Flux 组装期执行，「正在检索」这条步骤要等检索结束才一起发出——用户照样干等。
+        // 故：每一步都「先发进度帧 → 再 defer 执行该步」，保证进度帧在耗时动作开始前就已达前端。
+        return Flux.concat(
+                Flux.just(ChatStreamEvent.progress("正在理解问题并规划检索…")),
+                Flux.defer(() -> {
+                    // 联合决策（intent + 澄清问题 + 搜索决策）
+                    RoundDecision roundDecision = orchestrator.makeRoundDecision(conversation, userMessage);
+                    if (roundDecision.decision().isClarify()) {
+                        // 确认卡流式播放：question 分片打字机 → 落库确认卡 → done
+                        return playClarifyQuestion(conversation, roundDecision.decision());
+                    }
+                    boolean willSearch = commandSearch.isWebSearchEnabled(conversation);
+                    String searchStep = willSearch
+                            ? "正在联网检索：" + abbreviate(userMessage, PROGRESS_TEXT_LIMIT)
+                            : "本轮未联网检索（会话搜索开关关闭）";
+                    steps.add(searchStep);
+                    return Flux.concat(
+                            Flux.just(ChatStreamEvent.progress(searchStep)),
+                            Flux.defer(() -> {
+                                WebSearchOutcome outcome = commandSearch.resolveChatSearchOutcome(
+                                        conversation, userMessage, userPayload,
+                                        roundDecision.decision(), roundDecision.degraded());
+                                if (willSearch) {
+                                    steps.add(describeSearchResult(outcome));
+                                }
+                                return runChatMainReply(conversation, outcome, steps, thinking, roundNo);
+                            }));
+                }));
+    }
 
+    /** CHAT 主回复段（检索完成后）：流式主回复 → 连同过程数据落库 → done。 */
+    private Flux<ChatStreamEvent> runChatMainReply(RequirementConversation conversation,
+                                                   WebSearchOutcome outcome, List<String> steps,
+                                                   StringBuilder thinking, int roundNo) {
+        Long conversationId = conversation.getId();
         // 主回复 prompt 构造（与 runLlmRound CHAT 分支同构：固定 CHAT 模板）
-        String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
+        String webSearchContext = outcome != null ? outcome.toContextText() : "";
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
@@ -137,22 +172,59 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                 .context(Map.of("conversationId", conversationId, "scene", "requirement_chat"))
                 .requiredCapabilities(Map.of())
                 .build();
-        // 流式主回复：增量转发 → 完成后与 runLlmRound 同语义落库 → done
-        // ★2026-10-18：正文与思考分两路——思考进 reasoning 帧（仅展示），正文进 token 帧并累积落库
+        // 先补发「检索结果」进度帧（此时检索确已完成），再进主回复流
+        Flux<ChatStreamEvent> resultSteps = steps.size() > 1
+                ? Flux.just(ChatStreamEvent.progress(steps.get(steps.size() - 1)))
+                : Flux.empty();
         StringBuilder buffer = new StringBuilder();
-        return platformAgentExecutionService.executeStream(planner.id(), agentTask)
+        return Flux.concat(resultSteps, platformAgentExecutionService.executeStream(planner.id(), agentTask)
                 .map(chunk -> {
                     if (chunk.isReasoning()) {
+                        thinking.append(chunk.text());
                         return ChatStreamEvent.reasoning(chunk.text());
                     }
                     buffer.append(chunk.text());
                     return ChatStreamEvent.token(chunk.text());
                 })
                 .concatWith(Flux.defer(() -> {
-                    orchestrator.persistChatOutcome(conversation, buffer.toString(), webSearchOutcome);
-                    log.info("流式对话轮完成并落库: conversationId={}, round={}", conversationId, roundNo);
+                    orchestrator.persistChatOutcome(conversation, buffer.toString(), outcome,
+                            new RoundProcess(thinking.toString(), steps));
+                    log.info("流式对话轮完成并落库: conversationId={}, round={}, thinkingChars={}, steps={}",
+                            conversationId, roundNo, thinking.length(), steps.size());
                     return Flux.just(ChatStreamEvent.done());
-                }));
+                })));
+    }
+
+    /**
+     * 检索结果 → 一行过程步骤文本（前端过程区展示用）。
+     *
+     * <p>对齐 DeepSeek「已搜索 N 个网页」/ ChatGPT「Searching the web」：让用户知道
+     * 「搜了什么词、拿到几条、花了多久」，而不仅仅是一个转圈。</p>
+     */
+    private static String describeSearchResult(WebSearchOutcome outcome) {
+        if (outcome == null) {
+            // 搜索未执行（开关关闭）或调用被短路：措辞用「未返回结果」而非「未执行」，
+            // 因为调用方无法区分二者，统一描述对用户无害
+            return "联网检索未返回结果（将使用模型自有知识回答）";
+        }
+        if (outcome.isFailed()) {
+            return "联网检索失败，已降级为模型自有知识回答";
+        }
+        String queries = outcome.getQueries() == null || outcome.getQueries().isEmpty()
+                ? "" : "（检索词：" + String.join(" / ", outcome.getQueries()) + "）";
+        String cards = outcome.getModalCards() == null || outcome.getModalCards().isEmpty()
+                ? "" : "，含 " + outcome.getModalCards().size() + " 条结构化数据";
+        return "已检索 " + outcome.getTotal() + " 条结果" + cards + queries
+                + "，耗时 " + String.format(java.util.Locale.ROOT, "%.1fs", outcome.getCostMs() / 1000.0);
+    }
+
+    /** 过程步骤文本截断（防止把整段用户消息塞进过程区）。 */
+    private static String abbreviate(String text, int limit) {
+        if (text == null) {
+            return "";
+        }
+        String oneLine = text.replaceAll("\\s+", " ").trim();
+        return oneLine.length() <= limit ? oneLine : oneLine.substring(0, limit) + "…";
     }
 
     /**
@@ -198,14 +270,36 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
     private Flux<ChatStreamEvent> runClarifyStream(RequirementConversation conversation,
                                                    String userMessage, String userPayload) {
         Long conversationId = conversation.getId();
-        WebSearchOutcome webSearchOutcome;
-        if (commandSearch.isWebSearchEnabled(conversation)) {
-            webSearchOutcome = webSearchOrchestrator.doWebSearch(
-                    commandSearch.resolveSearchSource(conversationId, userMessage, userPayload));
-        } else {
-            webSearchOutcome = null;
-        }
-        String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
+        // ★过程数据（2026-10-18）：思考全文 + 检索步骤随 payload 落库（done 后仍可回看）
+        StringBuilder thinking = new StringBuilder();
+        List<String> steps = new ArrayList<>();
+        boolean willSearch = commandSearch.isWebSearchEnabled(conversation);
+        String searchStep = willSearch
+                ? "正在联网检索：" + abbreviate(userMessage, PROGRESS_TEXT_LIMIT)
+                : "本轮未联网检索（会话搜索开关关闭）";
+        steps.add(searchStep);
+        // 分层 defer：先发「正在检索」进度帧，再把同步阻塞的检索放进 defer 执行
+        // （否则进度帧要等检索结束才与结果帧一起到达，用户依旧干等）
+        return Flux.concat(
+                Flux.just(ChatStreamEvent.progress(searchStep)),
+                Flux.defer(() -> {
+                    WebSearchOutcome outcome = willSearch
+                            ? webSearchOrchestrator.doWebSearch(
+                                    commandSearch.resolveSearchSource(conversationId, userMessage, userPayload))
+                            : null;
+                    if (willSearch) {
+                        steps.add(describeSearchResult(outcome));
+                    }
+                    return runClarifyMainReply(conversation, userMessage, outcome, steps, thinking);
+                }));
+    }
+
+    /** CLARIFY 主回复段（检索完成后）：流式主回复 → 解析落库（含过程数据）→ done。 */
+    private Flux<ChatStreamEvent> runClarifyMainReply(RequirementConversation conversation, String userMessage,
+                                                      WebSearchOutcome outcome, List<String> steps,
+                                                      StringBuilder thinking) {
+        Long conversationId = conversation.getId();
+        String webSearchContext = outcome != null ? outcome.toContextText() : "";
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         String prompt = promptRenderService.renderClarifyPrompt(conversationId, webSearchContext);
         AgentTask agentTask = AgentTask.builder()
@@ -214,12 +308,16 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                 .context(Map.of("conversationId", conversationId, "scene", "requirement_clarify"))
                 .requiredCapabilities(Map.of())
                 .build();
+        Flux<ChatStreamEvent> resultSteps = steps.size() > 1
+                ? Flux.just(ChatStreamEvent.progress(steps.get(steps.size() - 1)))
+                : Flux.empty();
         StringBuilder buffer = new StringBuilder();
-        return platformAgentExecutionService.executeStream(planner.id(), agentTask)
+        return Flux.concat(resultSteps, platformAgentExecutionService.executeStream(planner.id(), agentTask)
                 .map(chunk -> {
                     // ★2026-10-18：思考过程走 reasoning 帧（前端实时展示），
                     // 绝不并入 buffer——buffer 参与 JSON 解析与落库，混入思考会毁掉解析
                     if (chunk.isReasoning()) {
+                        thinking.append(chunk.text());
                         return ChatStreamEvent.reasoning(chunk.text());
                     }
                     buffer.append(chunk.text());
@@ -230,10 +328,12 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                     ClarifyReply reply = replyParser.parseReply(buffer.toString());
                     reply = promptRenderService.applyDescriptionSectionGuard(conversation, planner, prompt,
                             "requirement_clarify", reply);
-                    orchestrator.persistClarifyOutcome(conversation, reply, webSearchOutcome);
-                    log.info("流式澄清轮完成并落库: conversationId={}", conversationId);
+                    orchestrator.persistClarifyOutcome(conversation, reply, outcome,
+                            new RoundProcess(thinking.toString(), steps));
+                    log.info("流式澄清轮完成并落库: conversationId={}, thinkingChars={}, steps={}",
+                            conversationId, thinking.length(), steps.size());
                     return Flux.just(ChatStreamEvent.done());
-                }));
+                })));
     }
 
     /**

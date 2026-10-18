@@ -21,6 +21,7 @@ import com.helloai.core.planner.service.RequirementClarifyService;
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifyConversationDetail;
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifyReply;
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifySelection;
+import com.helloai.core.planner.service.RoundProcess;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
 import com.helloai.core.task.port.TaskView;
@@ -444,14 +445,20 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     @Override
     public void persistClarifyOutcome(RequirementConversation conversation, ClarifyReply reply,
                                       WebSearchOutcome webSearchOutcome) {
+        persistClarifyOutcome(conversation, reply, webSearchOutcome, RoundProcess.EMPTY);
+    }
+
+    @Override
+    public void persistClarifyOutcome(RequirementConversation conversation, ClarifyReply reply,
+                                      WebSearchOutcome webSearchOutcome, RoundProcess process) {
         Long conversationId = conversation.getId();
         if ("final".equals(reply.getType())) {
             String note = reply.getMessage() != null && !reply.getMessage().isBlank()
                     ? reply.getMessage() : "已生成终稿";
             // 终稿轮同样落联网搜索查验信息（未发生搜索时保持原 3 参形态）
-            if (webSearchOutcome != null) {
+            if (webSearchOutcome != null || hasProcess(process)) {
                 messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT, note,
-                        replyParser.buildWebSearchOnlyPayload(webSearchOutcome));
+                        replyParser.buildWebSearchOnlyPayload(webSearchOutcome, process));
             } else {
                 messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT, note);
             }
@@ -460,7 +467,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
             // 终稿需求包防御式解析（G-011 S2）：缺失 / 非法形态 → null，行为零变化
             Map<String, Object> finalPackage = replyParser.resolvePackage(reply);
             conversation.setFinalPackage(finalPackage);
-            // 终稿字段定点写入：本轮实体是轮开始时的快照，全字段 updateById 会盖掉期间并发
+            // 终稿字段定点写入：本轮实体是轮开始时的快照，全字段更新会盖掉期间并发
             // finalize 已写入的 status=FINALIZED / task_id（生产实际丢失更新竞态）
             finalizeService.updateFinalDraftFields(conversationId, reply.getTitle(), reply.getDescription(), finalPackage);
             log.info("澄清会话产出终稿: conversationId={}, finalTitle={}",
@@ -468,13 +475,24 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         } else {
             messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT,
                     replyParser.composeAssistantContent(reply),
-                    replyParser.buildQuestionPayload(reply, webSearchOutcome));
+                    replyParser.buildQuestionPayload(reply, webSearchOutcome, process));
         }
     }
 
     @Override
     public void persistChatOutcome(RequirementConversation conversation, String output,
                                    WebSearchOutcome webSearchOutcome) {
+        persistChatOutcome(conversation, output, webSearchOutcome, RoundProcess.EMPTY);
+    }
+
+    /** 过程数据是否值得落库（思考非空或至少一条步骤）。 */
+    private static boolean hasProcess(RoundProcess process) {
+        return process != null && !process.isEmpty();
+    }
+
+    @Override
+    public void persistChatOutcome(RequirementConversation conversation, String output,
+                                   WebSearchOutcome webSearchOutcome, RoundProcess process) {
         Long conversationId = conversation.getId();
         if (output == null || output.isBlank()) {
             throw new BizException("自由对话 LLM 返回内容为空");
@@ -484,12 +502,12 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         if (chatReply != null) {
             messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT,
                     replyParser.composeAssistantContent(chatReply),
-                    replyParser.buildQuestionPayload(chatReply, webSearchOutcome));
+                    replyParser.buildQuestionPayload(chatReply, webSearchOutcome, process));
             log.info("自由对话结构化追问落库: conversationId={}", conversationId);
         } else {
-            if (webSearchOutcome != null) {
+            if (webSearchOutcome != null || hasProcess(process)) {
                 messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT, visible,
-                        replyParser.buildWebSearchOnlyPayload(webSearchOutcome));
+                        replyParser.buildWebSearchOnlyPayload(webSearchOutcome, process));
             } else {
                 messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT, visible, null);
             }

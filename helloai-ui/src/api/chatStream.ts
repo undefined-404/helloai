@@ -19,6 +19,8 @@ export interface ChatStreamHandlers {
   onToken: (token: string) => void
   /** 增量思考过程块（可选；推理模型才有，非推理模型永不触发） */
   onReasoning?: (text: string) => void
+  /** 过程步骤（可选；联网检索等平台动作，一行一条，与思考混排展示） */
+  onProgress?: (text: string) => void
   /** 主回复生成完毕并落库（成功语义） */
   onDone: () => void
   /** 流失败（含服务端业务拒绝与连接中断），message 可直接提示 */
@@ -114,6 +116,8 @@ async function consumeSse(
       handlers.onToken(data)
     } else if (event === 'reasoning' && data) {
       handlers.onReasoning?.(data)
+    } else if (event === 'progress' && data) {
+      handlers.onProgress?.(data)
     } else if (event === 'done') {
       finish('done')
     } else if (event === 'error') {

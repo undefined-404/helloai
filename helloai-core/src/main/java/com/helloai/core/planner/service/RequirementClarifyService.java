@@ -137,6 +137,14 @@ public interface RequirementClarifyService {
              * 不参与落库与 JSON 解析——否则会污染澄清回复的解析与最终交付物。</p>
              */
             REASONING,
+            /**
+             * 过程步骤事件（2026-10-18 新增，data = 一行人类可读文本）。
+             *
+             * <p>平台侧动作的「思考过程」：如「正在联网检索：xxx」「已检索 15 条 · 21.5s」。
+             * 与 {@link #REASONING} 同属过程区、按到达顺序混排；同样**不并入正文**，
+             * 但会与 reasoning 一起随消息 payload 落库（{@code process} 键），done 后仍可回看。</p>
+             */
+            PROGRESS,
             /** 本轮完成（data 为 [DONE]，前端随后拉 detail 对齐落库）。 */
             DONE,
             /** 本轮失败（data 为错误描述；消息可能已落库，可走 retryRound 重试）。 */
@@ -155,6 +163,11 @@ public interface RequirementClarifyService {
         /** 思考过程增量帧（前端渲染「思考中…」区域，done 后通常折叠）。 */
         public static ChatStreamEvent reasoning(String text) {
             return new ChatStreamEvent(Type.REASONING, text);
+        }
+
+        /** 过程步骤帧（联网检索等平台动作）：data 为一整行可读文本，前端追加到过程区。 */
+        public static ChatStreamEvent progress(String text) {
+            return new ChatStreamEvent(Type.PROGRESS, text);
         }
 
         public static ChatStreamEvent done() {
