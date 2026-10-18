@@ -2451,9 +2451,12 @@ class RequirementClarifyServiceTest {
                 .map(RequirementClarifyService.ChatStreamEvent::data)
                 .reduce("", String::concat);
         assertThat(joined).isEqualTo("你好，自由模式的回答 分片二 分片三");
-        // 与同步路径同语义：user 消息（payload null）+ assistant 全文一次性落库
+        // 与同步路径同语义：user 消息（payload null）+ assistant 全文一次性落库；
+        // 2026-10-18：assistant payload 额外承载 process（思考/检索步骤）⇒ 用 any() 断言
         verify(messageService).addMessage(CONV_ID, "user", "你好", null);
-        verify(messageService).addMessage(CONV_ID, "assistant", "你好，自由模式的回答 分片二 分片三", null);
+        verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                eq("你好，自由模式的回答 分片二 分片三"), argThat(p ->
+                        p != null && p.contains("\"process\"") && p.contains("正在联网检索：你好")));
         verify(conversationService).updateById(conversation);
     }
 
@@ -2542,10 +2545,15 @@ class RequirementClarifyServiceTest {
         List<RequirementClarifyService.ChatStreamEvent> events =
                 clarifyService.streamRound(CONV_ID, "你好", null).collectList().block();
 
-        assertThat(events).hasSize(1);
-        assertThat(events.get(0).type())
-                .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.ERROR);
-        assertThat(events.get(0).data()).contains("上游 LLM 超时");
+        // 2026-10-18：失败前会先推送过程帧（「正在理解…」「正在检索…」），
+        // 故不再断言「只有 1 个事件」，改为断言「末帧 ERROR + 无正文 token」
+        assertThat(events).isNotEmpty();
+        RequirementClarifyService.ChatStreamEvent last = events.get(events.size() - 1);
+        assertThat(last.type()).isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.ERROR);
+        assertThat(last.data()).contains("上游 LLM 超时");
+        assertThat(events)
+                .as("失败路径不得产出正文 token")
+                .noneMatch(e -> e.type() == RequirementClarifyService.ChatStreamEvent.Type.TOKEN);
         verify(messageService).addMessage(CONV_ID, "user", "你好", null);
         verify(messageService, never()).addMessage(eq(CONV_ID), eq("assistant"), anyString(), any());
     }
