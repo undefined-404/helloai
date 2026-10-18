@@ -161,6 +161,16 @@ public class WebSearchProperties {
      */
     private boolean urlFetchAllowInsecureHttp = false;
 
+    /**
+     * 结构化模态卡消费开关（W-7，默认 {@code true}）。
+     *
+     * <p><b>与 W-5 的灰度口径不同</b>（plan §四 原写「W-5/W-7 默认关」）：模态卡与网页结果
+     * 在同一次 HTTP 响应内返回，解析它**零额外请求、零额外计费**；消费侧有严格白名单前缀
+     * 过滤（未知卡不注入）+ 单测覆盖。默认关等于「功能未交付」，故默认开，
+     * 保留本开关作为 kill switch（上游卡形态异常时一键停用，无需回滚代码）。</p>
+     */
+    private boolean modalCardsEnabled = true;
+
     // ---------------------------------------------------------------- W-5 语义重排（Rerank）
 
     /**

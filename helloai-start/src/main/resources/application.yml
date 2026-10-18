@@ -195,11 +195,14 @@ helloai:
   # W-5 rerank-enabled：语义重排（博查 gte-rerank，约 0.005 元/次）**默认关**灰度。
   #   开启后对搜索引擎结果按语义相关度精排（用户直取页面固定置顶、不参与重排）；
   #   rerank-min-score 默认 0 = 只排不过滤（0.1~0.2 可滤掉明确无关条目，需按语料调）。
+  # W-7 modal-cards-enabled：模态卡消费**默认开**（零额外请求/计费，白名单过滤）；
+  #   作为 kill switch 用——上游卡形态异常时置 false 一键停用，无需回滚代码。
   web-search:
     provider: bocha-ai-search
     ai-search-max-results: 15
     # ai-search-answer: true
     # ai-search-max-rounds: 2
+    # modal-cards-enabled: true
     # rerank-enabled: false
     # rerank-model: gte-rerank
     # rerank-min-score: 0.0

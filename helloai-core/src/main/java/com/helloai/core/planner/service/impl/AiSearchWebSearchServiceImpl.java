@@ -296,9 +296,11 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
                     String contentType = textOrNull(msg.path("content_type"));
                     // W-7：垂域模态卡（非 webpage 的 source，命中白名单前缀）
                     if (contentType != null && !"webpage".equals(contentType)) {
-                        WebModalCard card = toModalCard(contentType, msg.path("content"), maxSnippet);
-                        if (card != null) {
-                            cards.add(card);
+                        if (properties.isModalCardsEnabled()) {
+                            WebModalCard card = toModalCard(contentType, msg.path("content"), maxSnippet);
+                            if (card != null) {
+                                cards.add(card);
+                            }
                         }
                         continue;
                     }
