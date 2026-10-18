@@ -162,6 +162,16 @@ helloai:
     auto-assign-on-create: false
     prefer-external: false
     require-idle: true
+    # 选人策略（2026-10-18）：
+    #   SCORE_DESC       —— 按 score 降序取最高（原行为，默认；灰度期先用它）
+    #   WEIGHTED_RANDOM  —— 分层内加权随机：先按「值班/接入类型/质量档/成本档」划最优层级，
+    #                       层内按 权重(score) 抽签 ⇒ 长期分配比例 ∝ 权重，高分模型拿更多但非全部
+    # 为什么不用「最少连接」：require-idle=true 会把非空闲 Agent 直接过滤掉，
+    # 候选池在飞数恒为 0，最少连接退化为纯 score 排序（等于没改）。
+    selection-strategy: SCORE_DESC
+    # 加权随机权重区间（score 最差 → 最好）。下限保证差模型不被永久饿死。
+    weight-min: 1.0
+    weight-max: 5.0
     # E2：并发额度强制开关——有值班租约/显式声明 maxConcurrentTasks 的 Agent
     # 满额时选人链跳过、落库前拒派（false 关闭即 E2 前行为）
     enforce-max-concurrent: true

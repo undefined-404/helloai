@@ -26,12 +26,15 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.OffsetDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.HashSet;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -74,14 +77,20 @@ class AgentSelectorTest {
 
     private AgentSelector agentSelector;
 
+    /** 选人配置（用例可改策略/权重后再构建 selector）。 */
+    private AgentDispatchProperties props;
+
+    /** 健康度配置（心跳新鲜度阈值）。 */
+    private AgentHealthProperties healthProps;
+
     @BeforeEach
     void setUp() {
-        AgentDispatchProperties props = new AgentDispatchProperties();
+        props = new AgentDispatchProperties();
         props.setPreferExternal(false);
         props.setRequireIdle(false);
-        AgentHealthProperties health = new AgentHealthProperties();
+        healthProps = new AgentHealthProperties();
         // 默认 5 分钟，对齐 Redis TTL；保留构造函数以便用例按需覆盖
-        health.setOfflineMinutes(5);
+        healthProps.setOfflineMinutes(5);
         // 防御式默认 stub：仅在多候选 comparator 排序时被 dutyRank 调用，
         // 单候选用例不会走到，用 lenient() 避开 STRICT_STUBS 下的 UnnecessaryStubbing。
         lenient().when(agentDutyLeaseService.isOnDuty(anyLong())).thenReturn(false);
@@ -94,7 +103,7 @@ class AgentSelectorTest {
         // qualityRank 相关用例请单独 stub 返回具体分数
         lenient().when(agentQualityProfileService.computeQualityScore(anyLong())).thenReturn(null);
         agentSelector = new AgentSelector(
-                agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService,
+                agentService, circuitBreakerRegistry, props, healthProps, agentDutyLeaseService,
                 agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService,
                 agentExecutionRecordService);
     }
@@ -138,6 +147,102 @@ class AgentSelectorTest {
     // ════════════════════════════════════════════════════════════
     //  Tests
     // ════════════════════════════════════════════════════════════
+
+    // ════════════════════════════════════════════════════════════
+    //  选人策略（2026-10-18）
+    // ════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("选人策略 WEIGHTED_RANDOM")
+    class WeightedRandomStrategy {
+
+        /** 切换为加权随机策略：重建 selector（配置在构造期读取）。 */
+        private void useWeightedRandom(double min, double max) {
+            props.setSelectionStrategy(AgentDispatchProperties.SelectionStrategy.WEIGHTED_RANDOM);
+            props.setWeightMin(min);
+            props.setWeightMax(max);
+            agentSelector = new AgentSelector(
+                    agentService, circuitBreakerRegistry, props, healthProps,
+                    agentDutyLeaseService, agentLlmCredentialResolver, concurrencyQuotaService,
+                    agentQualityProfileService, agentExecutionRecordService);
+        }
+
+        @Test
+        @DisplayName("默认策略 SCORE_DESC：仍选最高分（原行为零变化）")
+        void scoreDescKeepsOriginalBehavior() {
+            Agent low = agent(1L, 10, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent high = agent(2L, 99, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(low, high));
+            when(circuitBreakerRegistry.find(anyString())).thenReturn(Optional.empty());
+
+            for (int i = 0; i < 20; i++) {
+                assertThat(agentSelector.pickAlternative(null, AgentRole.EXECUTOR).getId())
+                        .as("第 %s 次抽选", i + 1)
+                        .isEqualTo(2L);
+            }
+        }
+
+        @Test
+        @DisplayName("加权随机：高分被选中次数更多，且低分不被永久饿死")
+        void weightedRandomSpreadsButFavorsHighScore() {
+            useWeightedRandom(1.0, 5.0);
+            Agent low = agent(1L, 10, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent high = agent(2L, 90, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(low, high));
+            when(circuitBreakerRegistry.find(anyString())).thenReturn(Optional.empty());
+
+            int highWins = 0;
+            int lowWins = 0;
+            // 300 次抽样：weight(high)=5, weight(low)=1 ⇒ 期望高:低 ≈ 5:1，方差足够小
+            for (int i = 0; i < 300; i++) {
+                Long id = agentSelector.pickAlternative(null, AgentRole.EXECUTOR).getId();
+                if (id == 2L) highWins++;
+                else lowWins++;
+            }
+
+            assertThat(highWins).as("高分档应占多数（实际 high=%s low=%s）", highWins, lowWins)
+                    .isGreaterThan(lowWins);
+            assertThat(lowWins).as("低分档不应被永久饿死（实际 low=%s/300）", lowWins)
+                    .isGreaterThan(0);
+        }
+
+        @Test
+        @DisplayName("★层级优先：低质量档即使权重更高，也不会被抽上来（分类语义不被洗牌破坏）")
+        void weightedRandomNeverCrossesTier() {
+            useWeightedRandom(1.0, 5.0);
+            Agent lowQualityButHighScore = agent(1L, 100, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent highQualityButLowScore = agent(2L, 1, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(lowQualityButHighScore, highQualityButLowScore));
+            when(circuitBreakerRegistry.find(anyString())).thenReturn(Optional.empty());
+            // 质量档：agent-2 高（100 分→5 档），agent-1 低（0 档）
+            props.setQualityWeight(1.0);
+            when(agentQualityProfileService.computeQualityScore(1L)).thenReturn(0);
+            when(agentQualityProfileService.computeQualityScore(2L)).thenReturn(100);
+
+            for (int i = 0; i < 50; i++) {
+                assertThat(agentSelector.pickAlternative(null, AgentRole.EXECUTOR).getId())
+                        .as("同分类优先级才允许抽签，第 %s 次仍应选高质量档", i + 1)
+                        .isEqualTo(2L);
+            }
+        }
+
+        @Test
+        @DisplayName("全部同分 ⇒ 退化均匀随机（不被 ID 顺序固定垄断）")
+        void equalScoresDegradeToUniform() {
+            useWeightedRandom(1.0, 5.0);
+            when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(
+                    agent(1L, 50, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE),
+                    agent(2L, 50, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE)));
+            when(circuitBreakerRegistry.find(anyString())).thenReturn(Optional.empty());
+
+            Set<Long> seen = new HashSet<>();
+            for (int i = 0; i < 200; i++) {
+                seen.add(agentSelector.pickAlternative(null, AgentRole.EXECUTOR).getId());
+            }
+            assertThat(seen).as("同分候选都应有机会，实际只有 %s", seen).containsExactlyInAnyOrder(1L, 2L);
+        }
+    }
 
     @Nested
     @DisplayName("正常场景")

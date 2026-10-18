@@ -23,6 +23,42 @@ public class AgentDispatchProperties {
     private boolean preferExternal = false;
 
     /**
+     * 选人策略（2026-10-18）。
+     *
+     * <p><b>为什么加</b>：原实现是「按 score 降序取最高」——只要最高分 Agent 还可用，
+     * 它就会一直中标，其余长期闲置，且高分模型的高负载会反噬自己的评分（超时拉低 timeScore）。
+     * 这是 {@code max()} 型选人的必然结果，不是配置问题。</p>
+     *
+     * <p><b>为什么不采用「最少连接（WLC）」</b>（本批实测结论）：本系统
+     * {@code require-idle=true} 会把非空闲 Agent 直接过滤掉，候选池内「在飞任务数」恒为 0，
+     * WLC 退化为纯权重比较 —— 等于没改。串行分配的公平性必须靠「按权重轮换」而非「按瞬时负载」。</p>
+     *
+     * <ul>
+     *   <li>{@link SelectionStrategy#SCORE_DESC}：保持原行为（默认，零风险；灰度期用它）</li>
+     *   <li>{@link SelectionStrategy#WEIGHTED_RANDOM}：<b>加权随机</b>——先按分类优先级
+     *       （值班/接入类型/质量/成本）分出最优层级，再在该层级内按
+     *       {@code 权重(score) / (1 + 在飞数)} 做加权抽签。
+     *       长期分配比例 ∝ 权重（高分模型拿更多但非全部）；无状态 ⇒ 分布式安全；
+     *       并发开启时自动叠加负载惩罚。</li>
+     * </ul>
+     */
+    private SelectionStrategy selectionStrategy = SelectionStrategy.SCORE_DESC;
+
+    /** 加权随机权重下限（score 最差的候选）：保证差模型仍有相对机会，不被永久饿死。 */
+    private double weightMin = 1.0;
+
+    /** 加权随机权重上限（score 最好的候选）。 */
+    private double weightMax = 5.0;
+
+    /** 选人策略枚举。 */
+    public enum SelectionStrategy {
+        /** 按 score 降序取最高（原行为）。 */
+        SCORE_DESC,
+        /** 加权随机（按 score 权重抽签，含在飞负载惩罚；无状态、分布式安全）。 */
+        WEIGHTED_RANDOM
+    }
+
+    /**
      * 是否要求候选 Agent 当前无执行中任务。
      *
      * <p>默认 true。执行中任务以 {@code sub_task.status=IN_PROGRESS} 统计。</p>

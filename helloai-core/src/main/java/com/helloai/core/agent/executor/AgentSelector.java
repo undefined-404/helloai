@@ -174,7 +174,8 @@ public class AgentSelector {
                                      AgentSelectionConstraints constraints) {
         Map<Long, Integer> qualityRanks = resolveQualityRanks(candidates);
         Map<Long, Integer> costRanks = resolveCostRanks(candidates);
-        return candidates.stream()
+        Map<Long, Integer> inFlight = resolveInFlightCounts(candidates);
+        List<Agent> pool = candidates.stream()
                 .filter(a -> excludeAgentId == null || !a.getId().equals(excludeAgentId))
                 .filter(a -> constraints == null || constraints.allows(a))
                 .filter(a -> agentDispatchProperties.getForceAccessType() == null
@@ -190,9 +191,147 @@ public class AgentSelector {
                 .filter(this::hasUsableCredential)
                 .filter(a -> !isOnStrictDuty(a.getId()))
                 .filter(this::isCircuitClosed)
-                .max(resolveComparator(qualityRanks, costRanks))
-                .orElse(null);
+                .toList();
+        if (pool.isEmpty()) {
+            return null;
+        }
+        if (!isWeightedRandom()) {
+            // 原路径逐字不变：分类优先级 + score 降序取最高
+            return pool.stream()
+                    .max(resolveComparator(qualityRanks, costRanks))
+                    .orElse(null);
+        }
+        // 加权随机：先分「最优层级」（值班/接入类型/质量/成本 全等），再在层内抽签。
+        // 分层不可跳过——否则会把低质量档的 Agent 抽上来，违反既有分类优先级语义。
+        Comparator<Agent> tierComparator = resolveTierComparator(qualityRanks, costRanks);
+        Agent tierBest = pool.stream().max(tierComparator).orElse(null);
+        if (tierBest == null) {
+            return null;
+        }
+        List<Agent> tier = pool.stream()
+                .filter(a -> tierComparator.compare(a, tierBest) == 0)
+                .toList();
+        Agent chosen = weightedDraw(tier, inFlight, scoreRange(pool));
+        if (chosen != null) {
+            // 可观测（2026-10-18）：不记这行，切换策略后无法证明它生效，也无法核对权重与在飞读数
+            log.info("选人策略 WEIGHTED_RANDOM: agentId={}, weight={}, inFlight={}, score={}, tierSize={}",
+                    chosen.getId(), weightOf(chosen, scoreRange(pool)),
+                    inFlight.getOrDefault(chosen.getId(), 0), chosen.getScore(), tier.size());
+        }
+        return chosen;
     }
+
+    /** 是否走加权随机策略。 */
+    private boolean isWeightedRandom() {
+        return agentDispatchProperties.getSelectionStrategy()
+                == AgentDispatchProperties.SelectionStrategy.WEIGHTED_RANDOM;
+    }
+
+    /**
+     * 加权抽签：{@code P(agent) ∝ 权重(score) / (1 + 在飞数)}。
+     *
+     * <p><b>无状态设计</b>：不依赖 Redis 计数器或 JVM 内 currentWeight，故分布式多实例下
+     * 分配比例依然正确（V1→V2「禁单实例假设」）。代价是短窗口内可能不均，长期公平。</p>
+     *
+     * <p>权重全为 0 / 空列表时退化为均匀随机（防御：绝不返回 null 当池非空）。</p>
+     */
+    private Agent weightedDraw(List<Agent> tier, Map<Long, Integer> inFlight, double[] scoreRange) {
+        if (tier.isEmpty()) {
+            return null;
+        }
+        double[] weights = new double[tier.size()];
+        double total = 0.0;
+        for (int i = 0; i < tier.size(); i++) {
+            weights[i] = effectiveWeight(tier.get(i), scoreRange, inFlight);
+            total += weights[i];
+        }
+        if (total <= 0.0) {
+            return tier.get(java.util.concurrent.ThreadLocalRandom.current().nextInt(tier.size()));
+        }
+        double r = java.util.concurrent.ThreadLocalRandom.current().nextDouble() * total;
+        for (int i = 0; i < weights.length; i++) {
+            r -= weights[i];
+            if (r <= 0.0) {
+                return tier.get(i);
+            }
+        }
+        return tier.get(tier.size() - 1);
+    }
+
+    /** 有效权重：{@code 权重(score) / (1 + 在飞数)}。 */
+    private double effectiveWeight(Agent agent, double[] range, Map<Long, Integer> inFlight) {
+        int load = agent != null && agent.getId() != null
+                ? inFlight.getOrDefault(agent.getId(), 0) : 0;
+        return weightOf(agent, range) / (load + 1.0);
+    }
+
+    /**
+     * 候选内预计算「在飞任务数」（{@code sub_task.status=IN_PROGRESS} 计数）。
+     *
+     * <p>一次选人只查一轮：抽签前需要权重，逐次查库会放大 DB 压力。
+     * 注意：{@code require-idle=true} 时池内该值恒为 0（非空闲已被过滤）——
+     * 因此公平性主要来自权重抽签，负载项只在并发开启时起作用。</p>
+     */
+    private Map<Long, Integer> resolveInFlightCounts(List<Agent> candidates) {
+        if (!isWeightedRandom()) {
+            return Map.of();
+        }
+        Map<Long, Integer> counts = new HashMap<>();
+        for (Agent a : candidates) {
+            if (a == null || a.getId() == null) {
+                continue;
+            }
+            try {
+                counts.put(a.getId(), Math.max(0, agentService.inProgressCount(a.getId())));
+            } catch (Exception e) {
+                log.debug("在飞任务数查询异常，按 0 处理: agentId={}, err={}", a.getId(), e.getMessage());
+                counts.put(a.getId(), 0);
+            }
+        }
+        return counts;
+    }
+
+    /** 候选内 score 的 [min, max]（权重归一用；全部无 score 时返回 null ⇒ 权重取中值）。 */
+    private double[] scoreRange(List<Agent> candidates) {
+        Integer min = null;
+        Integer max = null;
+        for (Agent a : candidates) {
+            Integer sc = a != null ? a.getScore() : null;
+            if (sc == null) {
+                continue;
+            }
+            min = min == null ? sc : Math.min(min, sc);
+            max = max == null ? sc : Math.max(max, sc);
+        }
+        return min == null ? null : new double[]{min, max};
+    }
+
+    /**
+     * score → 权重（{@code [weightMin, weightMax]} 线性映射）。
+     *
+     * <p>无 score / 区间退化（全部同分）时取<b>中值权重</b>：此时退化为均匀随机，
+     * 正好实现「同分候选机会均等」，不会被 ID 顺序固定垄断。</p>
+     */
+    private double weightOf(Agent agent, double[] range) {
+        double lo = agentDispatchProperties.getWeightMin();
+        double hi = agentDispatchProperties.getWeightMax();
+        if (hi < lo) {
+            double t = lo;
+            lo = hi;
+            hi = t;
+        }
+        if (lo <= 0.0 && hi <= 0.0) {
+            return 1.0;   // 配置极端（全 0）：退回等权，避免 total=0 分支
+        }
+        Integer sc = agent != null ? agent.getScore() : null;
+        if (sc == null || range == null || range[1] <= range[0]) {
+            return (lo + hi) / 2.0;
+        }
+        double ratio = (sc - range[0]) / (range[1] - range[0]);
+        ratio = Math.max(0.0, Math.min(1.0, ratio));
+        return lo + (hi - lo) * ratio;
+    }
+
 
     /**
      * 心跳新鲜度检查。
@@ -260,6 +399,16 @@ public class AgentSelector {
         }
     }
 
+    /**
+     * 组装比较器：软优先级（字典序）→ 末位策略键。
+     *
+     * <p><b>末位为什么可替换</b>：{@code dutyRank → accessTypeRank → qualityRank → costRank}
+     * 是「分类优先级」，必须保持字典序；而「同档内选谁」才是负载均衡的战场。
+     * 切换末位键即可在不动分类语义的前提下改变分配均衡性。</p>
+     *
+     * <p>仅用于 {@code SCORE_DESC} 策略（末位 = score，原行为逐字不变）；
+     * 加权随机策略改走 {@link #resolveTierComparator} + 层内抽签。</p>
+     */
     private Comparator<Agent> resolveComparator(Map<Long, Integer> qualityRanks,
                                                 Map<Long, Integer> costRanks) {
         // AgentHub P0-B：“当前是否处于值班”作为软优先级最高一档。
@@ -289,6 +438,31 @@ public class AgentSelector {
         }
         return dutyFirst.thenComparing(Agent::getScore,
                 Comparator.nullsFirst(Comparator.naturalOrder()));
+    }
+
+    /**
+     * 层级比较器（**不含 score**）：只表达「分类优先级」——值班 → 接入类型 → 质量档 → 成本档。
+     *
+     * <p>加权随机策略用它先划出「最优层级」，层内再按权重抽签：
+     * 这样既不打乱既有分类语义（低质量档不会被抽上来），又能在同档内实现按权重分散。</p>
+     */
+    private Comparator<Agent> resolveTierComparator(Map<Long, Integer> qualityRanks,
+                                                    Map<Long, Integer> costRanks) {
+        Comparator<Agent> tier = Comparator.comparingInt(this::dutyRank);
+        if (agentDispatchProperties.isPreferExternal()) {
+            tier = tier.thenComparingInt(this::accessTypeRank);
+        }
+        double qualityWeight = agentDispatchProperties.getQualityWeight();
+        if (qualityWeight > 0) {
+            tier = tier.thenComparingDouble(
+                    a -> qualityRanks.getOrDefault(a.getId(), 0) * qualityWeight);
+        }
+        double costWeight = agentDispatchProperties.getCostWeight();
+        if (costWeight > 0) {
+            tier = tier.thenComparingDouble(
+                    a -> costRanks.getOrDefault(a.getId(), COST_RANK_NEUTRAL) * costWeight);
+        }
+        return tier;
     }
 
     /**
