@@ -181,6 +181,19 @@
         :description="emptyText"
         :image-size="70"
       />
+      <!-- 分页（2026-10-18）：原实现写死 limit，53 条只显示前 20 条且无法翻页 -->
+      <el-pagination
+        v-if="total > 0"
+        layout="total, sizes, prev, pager, next, jumper"
+        background
+        :total="total"
+        :page-size="pageSize"
+        :current-page="page"
+        :page-sizes="[20, 50, 100]"
+        style="margin-top:12px;justify-content:center"
+        @current-change="onPageChange"
+        @size-change="onSizeChange"
+      />
     </el-card>
   </div>
 </template>
@@ -250,6 +263,18 @@ async function load() {
 }
 
 function onFilterChange() {
+  page.value = 1
+  load()
+}
+
+function onPageChange(p: number) {
+  page.value = p
+  load()
+}
+
+// 切换每页条数：回到第一页，避免新 pageSize 下越界
+function onSizeChange(sz: number) {
+  pageSize.value = sz
   page.value = 1
   load()
 }
