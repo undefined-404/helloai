@@ -160,4 +160,46 @@ public class WebSearchProperties {
      * 保留段由 {@code OutboundUrlGuard} 无条件拒绝，本开关**不能**放行它们。</p>
      */
     private boolean urlFetchAllowInsecureHttp = false;
+
+    // ---------------------------------------------------------------- W-5 语义重排（Rerank）
+
+    /**
+     * 语义重排总开关（W-5，默认 {@code false} 灰度）。
+     *
+     * <p>开启后对合并后的网页检索结果调用博查 Semantic Reranker（{@code gte-rerank}，
+     * 80M 参数）按「与用户意图的语义相关度」精排，替代供应商原始顺序（原始顺序是
+     * BM25/热度混合，长尾查询相关性差）。<b>默认关</b>：rerank 是额外计费调用
+     * （约 0.005 元/次，官方定价），且失败虽有降级但仍增一处外部依赖——
+     * 由管理员显式开启。用户直取页面不参与重排（第一手资料固定置顶）。</p>
+     *
+     * <p>判据：开启后真实日志出现 {@code rerank} 相关行；结果顺序与原始顺序不同即生效。</p>
+     */
+    private boolean rerankEnabled = false;
+
+    /** 博查 Semantic Reranker API 端点（与搜索同域，路径 {@code /v1/rerank}）。 */
+    private String rerankBaseUrl = "https://api.bochaai.com/v1/rerank";
+
+    /**
+     * 重排模型（官方可用：{@code gte-rerank}；{@code bocha-semantic-reranker-cn/-en}
+     * 需申请邀测）。默认 {@code gte-rerank}。
+     */
+    private String rerankModel = "gte-rerank";
+
+    /** 重排请求超时（毫秒，默认 5 秒）：80M 模型推理快；超时降级原顺序，不拖慢澄清轮。 */
+    private long rerankTimeoutMs = 5_000L;
+
+    /**
+     * 送重排的最大文档数（API 上限 50）。超出只取前 N 条送排，其余按原顺序附在尾部
+     * ——既控制单次成本，也不丢弃已有结果。
+     */
+    private int rerankMaxDocuments = 50;
+
+    /**
+     * 相关性下限（0~1，默认 0 不过滤）：重排后丢弃 {@code relevance_score} 低于该值的条目。
+     *
+     * <p>官方分档参考：0.75~1 高度相关 / 0.5~0.75 相关但缺细节 / 0.2~0.5 部分相关 /
+     * 0.1~0.2 仅小部分相关 / 0~0.1 无关。<b>默认 0 = 只重排不过滤</b>（最保守）：
+     * 阈值需要按真实语料调，先观察再开；设 0.1~0.2 可滤掉明确无关条目。</p>
+     */
+    private double rerankMinScore = 0.0;
 }
