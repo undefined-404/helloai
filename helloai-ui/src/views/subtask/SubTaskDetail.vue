@@ -504,7 +504,7 @@
         <div class="card-header">
           <span>执行时间线</span>
           <span class="tl-head-right">
-            <span style="font-size:12px;color:var(--ha-muted)">{{ timelinePolling ? '轮询中（5s）' : '已停止' }} · 共 {{ timeline.length }} 条</span>
+            <span style="font-size:12px;color:var(--ha-muted)">{{ timelinePolling ? '轮询中（5s，异常退避）' : '已停止' }} · 共 {{ timeline.length }} 条</span>
             <el-button
               v-if="hiddenEventCount > 0"
               size="small"
@@ -637,7 +637,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -659,6 +659,7 @@ import { fmtTime } from '@/utils/tableConfig'
 import { eventCategory, eventLabel, eventTypeColor } from '@/utils/eventMeta'
 import { useToolCatalogStore } from '@/stores/toolCatalog'
 import { orderByDependency } from '@/utils/subTaskDag'
+import { nextPollDelay } from '@/utils/pollBackoff'
 import { useEventCatalogStore } from '@/stores/eventCatalog'
 import { useSkillCatalogStore } from '@/stores/skillCatalog'
 import { resolvePendingWait, usePendingCountdown } from '@/composables/usePendingCountdown'
@@ -1574,28 +1575,47 @@ async function downloadAttachment(att: Attachment) {
   finally { downloadingAttId.value = null }
 }
 
+const POLL_INTERVAL = 5000
+// 连续失败次数：整轮失败才累加，整轮成功即复位（见 utils/pollBackoff）
+let pollFailStreak = 0
+
 async function pollOnce() {
-  const id = String(route.params.id)
-  const fresh = await loadDetail(id)
-  await loadTaskMembers(fresh?.taskId)
-  await loadSiblings(fresh?.taskId)
-  await loadTimeline(id)
-  await loadConversation(id)
-  await loadAttachments(id)
-  if (fresh && TERMINAL_STATUSES.includes(fresh.status)) {
-    stopPolling()
+  pollTimer = null
+  try {
+    const id = String(route.params.id)
+    const fresh = await loadDetail(id)
+    await loadTaskMembers(fresh?.taskId)
+    await loadSiblings(fresh?.taskId)
+    await loadTimeline(id)
+    await loadConversation(id)
+    await loadAttachments(id)
+    pollFailStreak = 0
+    if (fresh && TERMINAL_STATUSES.includes(fresh.status)) {
+      stopPolling()
+      return
+    }
+  } catch {
+    // 单轮失败不终止轮询：按退避重试（后端重启 / 网关 502 时，固定 5s 会变成持续打点）
+    pollFailStreak += 1
   }
+  scheduleNextPoll()
+}
+
+function scheduleNextPoll() {
+  if (!timelinePolling.value) return
+  pollTimer = window.setTimeout(pollOnce, nextPollDelay(POLL_INTERVAL, pollFailStreak))
 }
 
 function startPolling() {
   if (pollTimer !== null) return
   timelinePolling.value = true
-  pollTimer = window.setInterval(pollOnce, 5000)
+  pollFailStreak = 0
+  scheduleNextPoll()
 }
 
 function stopPolling() {
   if (pollTimer !== null) {
-    window.clearInterval(pollTimer)
+    window.clearTimeout(pollTimer)
     pollTimer = null
   }
   timelinePolling.value = false
@@ -1638,6 +1658,14 @@ watch(() => route.params.id, (nv, ov) => {
 
 onBeforeUnmount(() => {
   stopPolling()
+})
+// keep-alive 缓存：切走页面时组件不卸载（onBeforeUnmount 不触发），必须用 onDeactivated 停表；
+// 切回时若仍未到终态则恢复轮询。菜单 keep_alive=0 时这两个钩子不触发，属零成本前置防御。
+onDeactivated(() => {
+  stopPolling()
+})
+onActivated(() => {
+  if (item.value && !TERMINAL_STATUSES.includes(item.value.status)) startPolling()
 })
 </script>
 

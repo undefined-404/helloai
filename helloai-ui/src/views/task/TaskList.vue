@@ -343,7 +343,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
@@ -351,6 +351,7 @@ import { taskApi, taskMemberApi, type TaskMemberView } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
 import { stripMarkdown } from '@/utils/markdown'
 import { queryString } from '@/utils/queryParam'
+import { nextPollDelay } from '@/utils/pollBackoff'
 import MarkdownView from '@/components/MarkdownView.vue'
 import TaskDeleteDialog from './components/TaskDeleteDialog.vue'
 import PlanReviewDialog from './components/PlanReviewDialog.vue'
@@ -632,35 +633,60 @@ function onReportStatusChange(status: string) {
 // 这里在列表层兜底：只要存在在途报告行，就每 5s 拉一次这些行的报告状态并 patch，全部收敛后自动停表。
 // 只轮询在途行（通常 0~1 行），走轻量 GET，不重拉整个列表、不打断用户操作。
 const REPORT_POLL_INTERVAL = 5000
-let reportPollTimer: ReturnType<typeof setInterval> | null = null
+let reportPollTimer: ReturnType<typeof setTimeout> | null = null
+// 连续失败次数：整轮全部失败才累加，任一行拿到响应即复位（见 utils/pollBackoff）
+let reportPollFailStreak = 0
+// 起表开关：递归 setTimeout 时「本轮结束」与「被停表」可能交错（请求在飞时被 onDeactivated 停表），
+// 仅有 timer 句柄不足以表达「要不要继续」——否则在飞请求回来后会把已停的表重新拉起。
+let reportPollEnabled = false
 
 function inFlightReportRows() {
   return list.value.filter((t: any) => reportInFlight(t.finalReportStatus))
 }
 function stopReportPolling() {
-  if (reportPollTimer) { clearInterval(reportPollTimer); reportPollTimer = null }
+  reportPollEnabled = false
+  if (reportPollTimer) { clearTimeout(reportPollTimer); reportPollTimer = null }
+}
+// 递归 setTimeout 排下一轮：固定间隔用不了退避（setInterval 改不了已排定的节奏）
+function scheduleReportPoll() {
+  if (!reportPollEnabled) return
+  if (!inFlightReportRows().length) { stopReportPolling(); return }
+  reportPollTimer = setTimeout(pollInFlightReports, nextPollDelay(REPORT_POLL_INTERVAL, reportPollFailStreak))
 }
 async function pollInFlightReports() {
+  reportPollTimer = null
+  if (!reportPollEnabled) return
   const rows = inFlightReportRows()
   if (!rows.length) { stopReportPolling(); return }
+  let anyRowOk = false
   await Promise.all(rows.map(async (row: any) => {
     try {
       const r = await taskApi.getFinalReport(String(row.id))
+      anyRowOk = true
       if (r.status && row.finalReportStatus !== r.status) row.finalReportStatus = r.status
-    } catch { /* 单行异常不中断整体轮询，下轮重试 */ }
+    } catch { /* 单行异常不中断整体轮询，下轮按退避重试 */ }
   }))
+  // 请求在飞期间可能已被停表（切走页面 / 在途行收敛）：此时不再续表
+  if (!reportPollEnabled) return
+  reportPollFailStreak = anyRowOk ? 0 : reportPollFailStreak + 1
   // 本轮拉取后若已全部收敛则停表
-  if (!inFlightReportRows().length) stopReportPolling()
+  if (!inFlightReportRows().length) { stopReportPolling(); return }
+  scheduleReportPoll()
 }
 // 幂等起表：有在途行且未起表才新建；无在途行则确保停表
 function ensureReportPolling() {
   if (inFlightReportRows().length) {
-    if (!reportPollTimer) reportPollTimer = setInterval(pollInFlightReports, REPORT_POLL_INTERVAL)
+    if (!reportPollTimer) { reportPollEnabled = true; reportPollFailStreak = 0; scheduleReportPoll() }
   } else {
     stopReportPolling()
   }
 }
 onBeforeUnmount(stopReportPolling)
+// keep-alive 缓存：页面被切走时组件不卸载（onBeforeUnmount 不触发），必须用 onDeactivated 停表，
+// 否则后台页会持续按间隔打接口；切回时按当前在途行重新起表。
+// 注意：菜单 keep_alive=0 时这两个钩子不会触发，属零成本的前置防御。
+onDeactivated(stopReportPolling)
+onActivated(() => { ensureReportPolling() })
 
 // ── V26 AI 拆解 + 草案审阅 ──
 const planningId = ref<LongId | null>(null)

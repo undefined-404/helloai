@@ -74,6 +74,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
 import { saveBlobResponse } from '@/utils/download'
+import { nextPollDelay } from '@/utils/pollBackoff'
 import MarkdownView from '@/components/MarkdownView.vue'
 import type { Task, TaskFinalReport } from '@/types'
 
@@ -121,23 +122,40 @@ const emptyDesc = computed(() => {
 })
 
 // 生成中/审查中轮询：弹窗打开且状态为 GENERATING/REVIEWING 时每 5s 拉取一次，直到收敛（非处理中）
-let pollTimer: ReturnType<typeof setInterval> | null = null
+// 连续失败按退避放大间隔（见 utils/pollBackoff）：后端异常时不要把 5s 变成持续打点
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+let pollFailStreak = 0
+// 起表开关：递归 setTimeout 下「本轮结束」与「被停表」可能交错（弹窗关闭时请求在飞），
+// 只有 timer 句柄无法表达「要不要继续」——否则在飞请求回来会把已停的表重新拉起。
+let pollingActive = false
+
+async function pollOnce() {
+  pollTimer = null
+  if (!pollingActive || !props.task) { stopPolling(); return }
+  try {
+    const r = await taskApi.getFinalReport(String(props.task.id))
+    report.value = r
+    pollFailStreak = 0
+    // 每轮广播状态：收敛（非 GENERATING/REVIEWING）时必须让父组件同步，否则列表行永久停在
+    // 被 patch 的 REVIEWING —— 显示「报告审查中」且「审查中」按钮禁用，而库里其实早已 DONE
+    if (r.status) emit('status-change', r.status)
+    if (!isInFlight(r.status)) { stopPolling(); return }
+  } catch {
+    pollFailStreak += 1
+  }
+  // 请求在飞期间可能已被停表（弹窗关闭）：此时不再续表
+  if (!pollingActive) return
+  pollTimer = setTimeout(pollOnce, nextPollDelay(5000, pollFailStreak))
+}
 function startPolling() {
   stopPolling()
-  pollTimer = setInterval(async () => {
-    if (!props.task) return
-    try {
-      const r = await taskApi.getFinalReport(String(props.task.id))
-      report.value = r
-      // 每轮广播状态：收敛（非 GENERATING/REVIEWING）时必须让父组件同步，否则列表行永久停在
-      // 被 patch 的 REVIEWING —— 显示「报告审查中」且「审查中」按钮禁用，而库里其实早已 DONE
-      if (r.status) emit('status-change', r.status)
-      if (!isInFlight(r.status)) stopPolling()
-    } catch { /* 网络异常不中断轮询 */ }
-  }, 5000)
+  pollingActive = true
+  pollFailStreak = 0
+  pollTimer = setTimeout(pollOnce, nextPollDelay(5000, 0))
 }
 function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  pollingActive = false
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null }
 }
 onBeforeUnmount(stopPolling)
 
