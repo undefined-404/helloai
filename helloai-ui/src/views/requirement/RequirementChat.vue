@@ -1837,10 +1837,10 @@ onMounted(() => {
   flex-direction: column;
   gap: 6px;
 }
-/* 用户/助手气泡统一 75% 限宽对齐；
-   气泡自身 width:100% 始终填满 col，所以两边视觉同宽 */
+/* 用户消息限宽 75%（气泡形态，太宽会失去「一句话」的视觉重量）；
+   助手回复放开到 100%（文档流，长文每行字数太少会显著拖慢中文阅读） */
 .msg-row.from-assistant .msg-col {
-  max-width: 75%;
+  max-width: 100%;
 }
 .msg-row.from-user .msg-col {
   max-width: 75%;
@@ -1848,7 +1848,6 @@ onMounted(() => {
 }
 
 .msg-bubble {
-  padding: 10px 14px;
   border-radius: var(--ha-radius-lg);
   font-size: 14px;
   line-height: 1.65;
@@ -1856,75 +1855,49 @@ onMounted(() => {
   overflow-wrap: anywhere;
   word-break: break-word;
   /* 气泡始终填满 col，保证用户/助手气泡视觉同宽；
-     col 上限 75% 由 .msg-col 控制 */
+     col 上限由 .msg-col 控制 */
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
 }
+/*
+ * 助手回复 = **文档流**，不是卡片（2026-10-18 对齐 DeepSeek / Kimi）
+ *
+ * 原实现：消息外面套「浅底 + 1px 描边 + 10/14 内边距」的卡片，正文字号 14px。
+ * 两个后果：① 长文被边框切成一格一格，越读越像「卡片列表」而不是「一篇文章」；
+ * ② 卡片内边距 + 75% 限宽叠加后，中文每行只剩十几个字，折行极密。
+ * 现改为：气泡透明、无内边距、无边框，正文完全交给 MarkdownView 的排版体系
+ * （15px / 1.75 / 标题 22-19-17 / 段距 14px），列宽放开到 100%。
+ */
 .msg-row.from-assistant .msg-bubble {
-  background: var(--ha-surface-elevated);
-  border: 1px solid var(--ha-border-light);
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
   color: var(--ha-ink);
-  border-top-left-radius: 6px;
 }
+
+/* 用户消息保留气泡形态（右侧、紫底白字）：它是「一句话」，用气泡区分说话人 */
 .msg-row.from-user .msg-bubble {
+  padding: 10px 14px;
   background: var(--ha-primary);
   color: #fff;
   border-top-right-radius: 6px;
 }
 
-/* Markdown 溢出三件套（针对 MarkdownView 渲染内容） */
-.msg-bubble :deep(pre) {
-  overflow-x: auto;
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--ha-ink);
-  padding: 10px 12px;
-  border-radius: var(--ha-radius-sm);
-  font-size: 13px;
-  margin: 8px 0;
-}
+/*
+ * Markdown 内部的 code / table / blockquote / 列表样式统一由 MarkdownView 负责，
+ * 本文件不再覆盖（此前这里有一套 `pre` / `table{display:block}` / `th,td` 覆盖，
+ * 会与 MarkdownView 的「代码块头部」「表格滚动容器」打架）。
+ */
 .msg-row.from-user .msg-bubble :deep(pre) {
   background: rgba(255, 255, 255, 0.18);
   color: #fff;
 }
-.msg-bubble :deep(table) {
-  display: block;
-  overflow-x: auto;
-  max-width: 100%;
-  border-collapse: collapse;
-}
-.msg-bubble :deep(th),
-.msg-bubble :deep(td) {
-  border: 1px solid var(--ha-border-light);
-  padding: 6px 10px;
-}
-.msg-row.from-user .msg-bubble :deep(th),
-.msg-row.from-user .msg-bubble :deep(td) {
-  border-color: rgba(255, 255, 255, 0.2);
-}
-.msg-bubble :deep(img) { max-width: 100%; height: auto; border-radius: var(--ha-radius-sm); }
-.msg-bubble :deep(p:first-child) { margin-top: 0; }
-.msg-bubble :deep(p:last-child) { margin-bottom: 0; }
-.msg-bubble :deep(ul) { padding-left: 1.2em; margin: 6px 0; }
-.msg-bubble :deep(blockquote) {
-  margin: 6px 0;
-  padding: 4px 10px;
-  border-left: 3px solid var(--ha-primary);
-  color: var(--ha-ink-secondary);
-  background: rgba(124, 58, 237, 0.04);
-}
-.msg-row.from-user .msg-bubble :deep(blockquote) {
-  border-left-color: rgba(255, 255, 255, 0.5);
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.85);
-}
-.msg-bubble :deep(a) {
-  color: var(--ha-primary);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
 .msg-row.from-user .msg-bubble :deep(a) {
   color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
   text-decoration-color: rgba(255, 255, 255, 0.6);
 }
 
@@ -1975,10 +1948,11 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
+  padding: 2px 0;
   color: var(--ha-muted);
   font-size: 13px;
 }
-.msg-streaming { font-size: 14px; }
+.msg-streaming { font-size: 15px; }
 
 /* 思考过程区（2026-10-18）：区分于正文气泡——灰底、等宽感、可折叠 */
 .msg-thinking {
