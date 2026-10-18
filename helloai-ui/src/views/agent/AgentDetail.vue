@@ -165,6 +165,33 @@
         <div class="card-subtitle">
           积分明细
         </div>
+        <!-- 评分口径（2026-10-18）：此前只有等级字母和加减分，没有任何说明，
+             用户看不懂 S/A/B/C/D 意味着什么、分是怎么算出来的。此处与服务端
+             ImplicitScoreCalculator 的权重/阈值保持一致（改常量时同改这里）。 -->
+        <el-collapse class="score-rubric">
+          <el-collapse-item
+            name="rubric"
+            title="评分口径说明（子任务完成时自动计算）"
+          >
+            <div class="rubric-body">
+              <p class="rubric-line">
+                <b>五维加权</b>：时间 25% · 质量 30% · 协作 25% · 稳定性 15% · 效率 5%
+              </p>
+              <p class="rubric-line">
+                <b>维度取分</b>：时间＝按时完成得 75~100，超时按超时比例扣减；
+                质量＝核验评分（1~5 分）线性映射到 0~100，无核验记 75；
+                协作＝100 − 返工次数×20；稳定性＝100 − 阻塞×15 − 超时×10；效率＝100。
+              </p>
+              <p class="rubric-line">
+                <b>等级与积分</b>：S ≥90（+5）· A ≥80（+3）· B ≥60（0）· C ≥40（−3）· D &lt;40（−5）
+              </p>
+              <p class="rubric-line rubric-note">
+                说明：评分只在子任务进入 DONE 时写入，因此进行中／已取消的子任务评分为空属预期；
+                未指派执行者的子任务不评分。
+              </p>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
         <el-table
           v-loading="scoreLoading"
           :data="scoreList"
@@ -606,4 +633,18 @@ onMounted(() => loadDetail())
   .workload-grid { grid-template-columns: repeat(3, 1fr); }
   .ops-row { flex-direction: column; }
 }
+.score-rubric { margin-bottom: 12px; }
+.score-rubric :deep(.el-collapse-item__header) {
+  font-size: 12.5px;
+  color: var(--ha-muted);
+  height: 34px;
+}
+.rubric-body { padding: 2px 4px 6px; }
+.rubric-line {
+  margin: 4px 0;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--el-text-color-regular);
+}
+.rubric-note { color: var(--ha-muted); }
 </style>

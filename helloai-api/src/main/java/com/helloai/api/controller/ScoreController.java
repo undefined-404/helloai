@@ -36,8 +36,12 @@ public class ScoreController {
     @GetMapping("/listLogs")
     public R<IPage<RewardLog>> listLogs(
             @RequestParam(value = "page", defaultValue = "1") int page,
-            @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
-        return R.ok(rewardService.listAllLogs(page, pageSize));
+            @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,
+            @RequestParam(value = "agentId", required = false) Long agentId) {
+        // agentId 可选：不传 = 全局流水（旧契约不变）；传 = 该 Agent 的流水（Agent 详情页用）
+        return R.ok(agentId == null
+                ? rewardService.listAllLogs(page, pageSize)
+                : rewardService.listLogsByAgent(agentId, page, pageSize));
     }
 
     @GetMapping("/getLeaderboard")
