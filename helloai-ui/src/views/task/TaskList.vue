@@ -59,6 +59,7 @@
           <template #default="{ row }">
             <span
               class="link-cell"
+              title="点击查看任务详情与参与成员"
               @click="openDesc(row)"
             >{{ stripMarkdown(row.description) || '-' }}</span>
           </template>
@@ -239,10 +240,7 @@
       :show-close="true"
       :close-on-click-modal="false"
     >
-      <div
-        v-if="descMembers.length || membersLoading"
-        class="detail-block"
-      >
+      <div class="detail-block">
         <div class="detail-caption">
           参与成员（{{ descMembers.length }}）
         </div>
@@ -252,6 +250,12 @@
         >
           加载中…
         </div>
+        <p
+          v-else-if="!descMembers.length"
+          class="detail-empty"
+        >
+          暂无参与成员（该任务可能创建于成员表启用之前，或尚未派发执行者）
+        </p>
         <div
           v-else
           class="member-chips"

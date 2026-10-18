@@ -63,6 +63,31 @@
         <span>负责人：{{ item.assignedAgentName || resolveAgentName(item.assignedAgent) || '-' }}</span>
         <span>创建时间：{{ fmtTime(item.createTime) }}</span>
       </div>
+      <!-- 本任务参与成员（2026-10-18）：来自 task_agent_member（实际参与，加入过即成员）。
+           只读展示；当前子任务的负责人高亮，便于看清「这个子任务由谁做、同一任务还有谁参与过」。 -->
+      <div
+        v-if="taskMembers.length"
+        class="member-row"
+      >
+        <span class="member-row-label">本任务参与成员（{{ taskMembers.length }}）</span>
+        <span
+          v-for="m in taskMembers"
+          :key="String(m.agentId)"
+          class="member-chip"
+          :class="{ 'is-current': isCurrentExecutor(m) }"
+          :title="memberTip(m)"
+        >
+          <span class="member-name">{{ m.name || shortAgentId(m.agentId) }}</span>
+          <span
+            v-if="m.role"
+            class="member-role"
+          >{{ roleLabel(m.role) }}</span>
+          <span
+            v-if="isCurrentExecutor(m)"
+            class="member-current-tag"
+          >本子任务</span>
+        </span>
+      </div>
       <!-- V27 依赖编排可视化：前置依赖（全部 DONE 才会分发本任务）与被依赖（本任务完成后解锁的下游） -->
       <div
         v-if="upstreamItems.length || downstreamItems.length"
@@ -618,6 +643,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, Clock } from '@element-plus/icons-vue'
 import { subTaskApi } from '@/api/subTask'
+import { taskMemberApi, type TaskMemberView } from '@/api/task'
 import { agentApi } from '@/api/agent'
 import { reviewApi } from '@/api/review'
 import { attachmentApi } from '@/api/attachment'
@@ -1423,6 +1449,64 @@ async function loadDetail(id: string) {
   }
 }
 
+// ── 本任务参与成员（2026-10-18）：task_agent_member 实际参与，只读展示 ──
+const taskMembers = ref<TaskMemberView[]>([])
+
+/**
+ * 拉「所属任务的参与成员」。
+ *
+ * <p>口径：task_agent_member（加入过即成员），与任务详情弹窗同一数据源。
+ * 失败静默为空——成员是辅助信息，不阻断子任务详情主体。</p>
+ */
+async function loadTaskMembers(taskId: LongId | null | undefined) {
+  taskMembers.value = []
+  if (taskId == null || taskId === '') return
+  try {
+    taskMembers.value = await taskMemberApi.list(taskId)
+  } catch {
+    taskMembers.value = []
+  }
+}
+
+/** 该成员是否为当前子任务的执行者（高亮用；改派过的历史成员不高亮）。 */
+function isCurrentExecutor(m: TaskMemberView): boolean {
+  const cur = item.value?.assignedAgent
+  return cur != null && String(cur) === String(m.agentId)
+}
+
+/** Agent 已删除时后端 name 为 null：回退显示 ID 短尾，绝不显示「未知」。 */
+function shortAgentId(id: string | number | null | undefined): string {
+  const s = String(id ?? '')
+  return s.length > 6 ? '…' + s.slice(-6) : s
+}
+
+const ROLE_LABEL: Record<string, string> = {
+  PLANNER: '规划',
+  EXECUTOR: '执行',
+  REVIEWER: '核验',
+  SYSTEM: '系统'
+}
+function roleLabel(role: string): string {
+  return ROLE_LABEL[role] || role
+}
+
+const JOIN_SOURCE_LABEL: Record<string, string> = {
+  ASSIGNED: '拆解分配',
+  CLAIMED: '自主认领',
+  REASSIGNED: '改派加入',
+  MANUAL: '人工登记',
+  REBUILT: '对账补齐'
+}
+
+/** 成员悬浮说明：入队来源 + 加入时间 + 接入类型。 */
+function memberTip(m: TaskMemberView): string {
+  const parts: string[] = []
+  if (m.joinSource) parts.push('来源：' + (JOIN_SOURCE_LABEL[m.joinSource] || m.joinSource))
+  if (m.joinTime) parts.push('加入：' + new Date(m.joinTime).toLocaleString())
+  if (m.accessType) parts.push('接入：' + m.accessType)
+  return parts.join(' · ')
+}
+
 async function loadTimeline(id: string) {
   try {
     timeline.value = await subTaskApi.timeline(id)
@@ -1493,6 +1577,7 @@ async function downloadAttachment(att: Attachment) {
 async function pollOnce() {
   const id = String(route.params.id)
   const fresh = await loadDetail(id)
+  await loadTaskMembers(fresh?.taskId)
   await loadSiblings(fresh?.taskId)
   await loadTimeline(id)
   await loadConversation(id)
@@ -1524,6 +1609,7 @@ async function initPage() {
     // v1.1 修复：路由参数是 string，不要 Number() 转 LongID（>2^53 会丢精度）
     const id = String(route.params.id)
     await loadDetail(id)
+    await loadTaskMembers(item.value?.taskId)
     await loadSiblings(item.value?.taskId)
     await loadTimeline(id)
     await loadConversation(id)
@@ -2018,5 +2104,40 @@ onBeforeUnmount(() => {
   .page .full-row { grid-column: auto; }
   .page .main-col { grid-column: auto; grid-row: auto; }
   .page .side-card { grid-column: auto; }
+}
+/* 本任务参与成员（2026-10-18）：与任务详情弹窗同一视觉语言 */
+.member-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.member-row-label {
+  font-size: 12px;
+  color: var(--ha-muted);
+  margin-right: 2px;
+}
+.member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 11px;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.member-chip.is-current {
+  background: var(--el-color-primary-light-9);
+  border-color: var(--el-color-primary-light-5);
+}
+.member-name { font-weight: 500; }
+.member-role { color: var(--ha-muted); font-size: 11px; }
+.member-current-tag {
+  color: var(--el-color-primary);
+  font-size: 10.5px;
+  font-weight: 600;
 }
 </style>
