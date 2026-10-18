@@ -71,10 +71,14 @@ class AgentChatClientServiceTest {
         agent.setRole(AgentRole.EXECUTOR);
 
         // 流式路径：分片伪流式（MockChatModel.stream），OnNext 拼接后与同步 call 文本严格相等
+        // ★2026-10-18：流式块已类型化（LlmStreamChunk）——只拼 CONTENT，思考块（REASONING）
+        // 按契约不进正文；mock 模型无 reasoning，故这里同时验证「不会误把正文当思考」
         String joined = service.generateStream(agent, null, "请输出一句最小验证结果")
                 .collectList()
                 .block()
                 .stream()
+                .filter(chunk -> chunk.type() == LlmStreamChunk.Type.CONTENT)
+                .map(LlmStreamChunk::text)
                 .reduce("", String::concat);
         ChatResponse sync = service.generate(agent, null, "请输出一句最小验证结果");
 

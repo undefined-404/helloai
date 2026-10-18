@@ -2428,7 +2428,8 @@ class RequirementClarifyServiceTest {
                 .thenReturn(List.of(message("user", "你好", 1)));
         stubDecisionRound(DECISION_CHAT_NO_SEARCH);
         when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
-                .thenReturn(Flux.just(tokenChunks));
+                .thenReturn(Flux.fromArray(tokenChunks)
+                        .map(com.helloai.core.agent.chat.LlmStreamChunk::content));
     }
 
     @Test
@@ -2465,8 +2466,11 @@ class RequirementClarifyServiceTest {
                 .thenReturn(List.of(message("user", "你好", 1)));
         // CLARIFY 模式绕过意图决策，主回复真流式：正文分片 + 末尾 JSON 块（与 prompt 输出格式一致）
         when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
-                .thenReturn(Flux.just("先确认一下：", "目标规模是？",
-                        " {\"type\":\"question\",\"mode\":\"freeform\",\"progress\":40,\"message\":\"先确认一下：目标规模是？\"}"));
+                .thenReturn(Flux.just(
+                        com.helloai.core.agent.chat.LlmStreamChunk.content("先确认一下："),
+                        com.helloai.core.agent.chat.LlmStreamChunk.content("目标规模是？"),
+                        com.helloai.core.agent.chat.LlmStreamChunk.content(
+                                " {\"type\":\"question\",\"mode\":\"freeform\",\"progress\":40,\"message\":\"先确认一下：目标规模是？\"}")));
 
         List<RequirementClarifyService.ChatStreamEvent> events =
                 clarifyService.streamRound(CONV_ID, "你好", null).collectList().block();
