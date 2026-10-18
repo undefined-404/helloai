@@ -12,6 +12,7 @@ import com.helloai.core.agent.tool.ToolExecutor;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -29,15 +30,18 @@ import org.springframework.ai.chat.prompt.Prompt;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -150,6 +154,27 @@ class ChatModelToolLoopTest {
                 eq(AgentEventType.TOOL_CALL_STARTED), eq(3L), any());
         verify(eventRecorder).record(eq("run-1-1"), eq(1L), eq(10L), eq(1), eq(4),
                 eq(AgentEventType.TOOL_CALL_COMPLETED), eq(3L), any());
+    }
+
+    @Test
+    @DisplayName("TOOL_CALL 事件 payload 带 callId（与模型 tool_call.id 一致，供调用/返回硬关联）")
+    @SuppressWarnings("unchecked")
+    void shouldRecordCallIdInToolCallEvents() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(responseWithToolCall("call-abc-123", "echo", "{\"message\":\"hi\"}"))
+                .enqueue(responseWithText("done"));
+        when(toolExecutor.execute("echo", "{\"message\":\"hi\"}"))
+                .thenReturn(ToolExecutionResult.success("echo", "ok"));
+
+        loop.run(input(model));
+
+        ArgumentCaptor<Map<String, Object>> payloads = ArgumentCaptor.forClass(Map.class);
+        verify(eventRecorder, times(2)).record(eq("run-1-1"), eq(1L), eq(10L), eq(1), anyInt(),
+                any(AgentEventType.class), eq(3L), payloads.capture());
+        // started 与 completed 都必须带同一个 callId（否则前端无法配对耗时）
+        assertThat(payloads.getAllValues()).hasSize(2);
+        assertThat(payloads.getAllValues().get(0)).containsEntry("callId", "call-abc-123");
+        assertThat(payloads.getAllValues().get(1)).containsEntry("callId", "call-abc-123");
     }
 
     @Test

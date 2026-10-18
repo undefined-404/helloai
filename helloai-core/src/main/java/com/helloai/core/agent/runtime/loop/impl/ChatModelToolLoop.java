@@ -222,7 +222,8 @@ public class ChatModelToolLoop implements AgentLoop {
                 if (toolCall == null) {
                     continue;
                 }
-                ToolExecutionResult result = executeToolSafely(input, toolCall.name(), toolCall.arguments());
+                ToolExecutionResult result = executeToolSafely(input, toolCall.id(),
+                        toolCall.name(), toolCall.arguments());
                 toolCallCount++;
                 executedToolNames.add(toolCall.name());
                 toolResponses.add(new ToolResponseMessage.ToolResponse(
@@ -395,14 +396,22 @@ public class ChatModelToolLoop implements AgentLoop {
 
     /**
      * 执行单个工具调用并记录 TOOL_CALL 事件；记录失败仅告警（write-only，不阻断循环）。
+     *
+     * <p><b>为什么带 callId</b>（2026-10-18）：模型返回的 {@code ToolCall.id} 是与 provider
+     * 调用记录一一对应的唯一键。此前只记工具名，导致「调用」与「返回」只能靠
+     * 「同名 + 时间相邻」配对——一旦事件丢一条或将来改为并行执行，配对即失效；
+     * 排查悬挂调用（只有 started 没有 completed）时也无法确定是哪一次。
+     * 该 id 本来就在手边（同一循环里已用于 {@code ToolResponseMessage.ToolResponse}），
+     * 只是没落进事件 payload。</p>
      */
-    private ToolExecutionResult executeToolSafely(AgentLoopInput input, String toolName, String arguments) {
+    private ToolExecutionResult executeToolSafely(AgentLoopInput input, String callId,
+                                                  String toolName, String arguments) {
         recordEvent(input, 3, AgentEventType.TOOL_CALL_STARTED,
-                safeMap("tool", toolName, "arguments", arguments));
+                safeMap("tool", toolName, "arguments", arguments, "callId", callId));
         ToolExecutionResult result = input.toolExecutor().execute(toolName, arguments);
         recordEvent(input, 4, AgentEventType.TOOL_CALL_COMPLETED,
                 safeMap("tool", toolName, "success", result.success(),
-                        "output", truncate(result.output())));
+                        "output", truncate(result.output()), "callId", callId));
         return result;
     }
 
