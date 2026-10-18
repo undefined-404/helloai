@@ -1,6 +1,7 @@
 package com.helloai.core.agent.runtime.cancel;
 
 import com.helloai.core.agent.tool.ToolExecutionResult;
+import com.helloai.core.agent.tool.ToolInvocationContext;
 import com.helloai.core.agent.tool.ToolExecutor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -68,8 +69,15 @@ public class CancellableToolExecutor implements ToolExecutor {
         if (timeoutMillis <= 0) {
             return delegate.execute(toolName, argumentsJson);
         }
+        // ★2026-10-18 修复：本类把工具放到「新线程」跑（TIMEOUT_POOL + agent-tool-timeout-N），
+        // 而 ToolInvocationContext 是 ThreadLocal —— 子线程读不到父线程绑定 ⇒ 所有 internal_*
+        // 工具都被 requireInternalChain() 判为「缺少执行链上下文」而失败（实测 success 全 false）。
+        // 修复：提交前捕获上下文快照，在子线程内装载后执行（工具内部 markCalled 的写入
+        // 通过共享 Set 实例回传父线程，保证「先读详情才许报阻塞」的判据仍成立）。
+        ToolInvocationContext.Scope scope = ToolInvocationContext.capture();
         Future<ToolExecutionResult> future =
-                TIMEOUT_POOL.submit(() -> delegate.execute(toolName, argumentsJson));
+                TIMEOUT_POOL.submit(() ->
+                        ToolInvocationContext.callWith(scope, () -> delegate.execute(toolName, argumentsJson)));
         try {
             return future.get(timeoutMillis, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {

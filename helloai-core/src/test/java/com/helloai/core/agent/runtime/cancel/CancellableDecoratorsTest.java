@@ -151,4 +151,73 @@ class CancellableDecoratorsTest {
                 .isInstanceOf(AgentCancelledException.class)
                 .hasMessage("工具内部取消");
     }
+
+    // ────────────────────────────── 跨线程上下文传递（2026-10-18 缺陷回归） ──────────────────────────────
+    // 缺陷现场：CancellableToolExecutor 把工具提交到 agent-tool-timeout-N 新线程执行，而
+    // ToolInvocationContext 是 ThreadLocal ⇒ 子线程读不到绑定 ⇒ 所有 internal_* 工具被
+    // requireInternalChain() 判为「缺少执行链上下文」（实测 success 全 false，含技能加载与沙箱）。
+
+    @Test
+    @DisplayName("ToolExecutor：父线程绑定的执行链上下文必须传入子线程（internal_* 工具可执行的前提）")
+    void toolExecutorPropagatesInvocationContextToWorkerThread() {
+        java.util.concurrent.atomic.AtomicReference<String> seenThread = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<com.helloai.core.agent.tool.ToolInvocationContext.Ids> seenIds =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        com.helloai.core.agent.tool.ToolExecutor delegate = (name, args) -> {
+            seenThread.set(Thread.currentThread().getName());
+            seenIds.set(com.helloai.core.agent.tool.ToolInvocationContext.current());
+            return ToolExecutionResult.success(name, "ok");
+        };
+        CancellableToolExecutor executor =
+                new CancellableToolExecutor(delegate, CancellationToken.mutable(), 5000L);
+
+        com.helloai.core.agent.tool.ToolInvocationContext.bind(11L, 22L);
+        try {
+            ToolExecutionResult result = executor.execute("internal_run_in_sandbox", "{}");
+            assertThat(result.success()).isTrue();
+        } finally {
+            com.helloai.core.agent.tool.ToolInvocationContext.unbind();
+        }
+
+        // 确实换了线程（证明用例覆盖到「跨线程」路径）
+        assertThat(seenThread.get()).startsWith("agent-tool-timeout-");
+        // 且子线程仍能看到执行链标识
+        assertThat(seenIds.get()).isNotNull();
+        assertThat(seenIds.get().agentId()).isEqualTo(11L);
+        assertThat(seenIds.get().subTaskId()).isEqualTo(22L);
+    }
+
+    @Test
+    @DisplayName("ToolExecutor：子线程 markCalled 的写入必须对父线程可见（报阻塞前置判据依赖）")
+    void toolExecutorSharesCalledSetAcrossThreads() {
+        com.helloai.core.agent.tool.ToolExecutor delegate = (name, args) -> {
+            com.helloai.core.agent.tool.ToolInvocationContext.markCalled("internal_get_sub_task_detail");
+            return ToolExecutionResult.success(name, "ok");
+        };
+        CancellableToolExecutor executor =
+                new CancellableToolExecutor(delegate, CancellationToken.mutable(), 5000L);
+
+        com.helloai.core.agent.tool.ToolInvocationContext.bind(11L, 22L);
+        try {
+            executor.execute("internal_get_sub_task_detail", "{}");
+            // 父线程（执行链线程）必须看到这次调用
+            assertThat(com.helloai.core.agent.tool.ToolInvocationContext
+                    .hasCalled("internal_get_sub_task_detail")).isTrue();
+        } finally {
+            com.helloai.core.agent.tool.ToolInvocationContext.unbind();
+        }
+    }
+
+    @Test
+    @DisplayName("ToolExecutor：未绑定上下文时不装载、不抛错（外部工具路径零影响）")
+    void toolExecutorWithoutContextRunsPlainly() {
+        com.helloai.core.agent.tool.ToolExecutor delegate = (name, args) -> {
+            assertThat(com.helloai.core.agent.tool.ToolInvocationContext.current()).isNull();
+            return ToolExecutionResult.success(name, "ok");
+        };
+        CancellableToolExecutor executor =
+                new CancellableToolExecutor(delegate, CancellationToken.mutable(), 5000L);
+
+        assertThat(executor.execute("web_search", "{}").success()).isTrue();
+    }
 }

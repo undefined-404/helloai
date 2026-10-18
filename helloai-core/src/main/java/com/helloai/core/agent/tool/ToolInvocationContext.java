@@ -121,6 +121,76 @@ public final class ToolInvocationContext {
     }
 
     /**
+     * 执行链上下文的**可跨线程快照**（2026-10-18 修复）。
+     *
+     * <p><b>为什么必须能跨线程</b>：{@code CancellableToolExecutor}（REF-8.6 单工具超时装饰器）
+     * 把工具调用提交到独立线程池（线程名 {@code agent-tool-timeout-N}）后
+     * {@code future.get(timeout)} 等待。而本类的两个状态都是 {@link ThreadLocal}——
+     * 子线程读不到父线程的绑定 ⇒ {@code requireInternalChain()} 判定「缺少执行链上下文」⇒
+     * <b>全部 {@code internal_*} 工具在这条路径上 100% 失败</b>（实测：get_sub_task_detail 6 次 /
+     * get_deps_summary 6 次 / list_skills 2 次 / run_in_sandbox 4 次，success 全为 false）。</p>
+     *
+     * <p>{@code called} 刻意<b>共享同一 Set 实例</b>（不复制）：工具在子线程执行时
+     * {@link #markCalled(String)} 写入的记录，必须对父线程可见——否则
+     * 「internal_report_blocked 要求先读子任务详情」的判据会永远为 false。</p>
+     *
+     * @param ids    执行者标识
+     * @param called 已调用内部工具集（同一实例引用）
+     */
+    public record Scope(Ids ids, Set<String> called) {
+    }
+
+    /**
+     * 捕获当前线程的执行链上下文；未绑定返回 {@code null}
+     * （调用方可据此决定「原样直调」而不必关心细节）。
+     */
+    public static Scope capture() {
+        Ids ids = CURRENT.get();
+        if (ids == null) {
+            return null;
+        }
+        Set<String> called = CALLED.get();
+        if (called == null) {
+            // ★必须写回当前线程：否则子线程 markCalled 写的是「父线程拿不到的临时 Set」，
+            // hasCalled() 在父线程永远为 false（「先读详情才许报阻塞」的判据会失效）
+            called = new HashSet<>();
+            CALLED.set(called);
+        }
+        return new Scope(ids, called);
+    }
+
+    /**
+     * 在指定上下文快照中执行动作（供跨线程工具执行使用）：进入时装载、退出时严格还原，
+     * 不污染宿主线程（线程池线程会被复用，必须还原）。
+     *
+     * @param scope  快照（{@code null} ⇒ 无上下文，直接执行）
+     * @param action 实际动作
+     */
+    public static <T> T callWith(Scope scope, java.util.function.Supplier<T> action) {
+        if (scope == null) {
+            return action.get();
+        }
+        Ids prevIds = CURRENT.get();
+        Set<String> prevCalled = CALLED.get();
+        CURRENT.set(scope.ids());
+        CALLED.set(scope.called());
+        try {
+            return action.get();
+        } finally {
+            if (prevIds == null) {
+                CURRENT.remove();
+            } else {
+                CURRENT.set(prevIds);
+            }
+            if (prevCalled == null) {
+                CALLED.remove();
+            } else {
+                CALLED.set(prevCalled);
+            }
+        }
+    }
+
+    /**
      * 把平台标识注入内部工具的调用参数（两道门控见类 javadoc）。
      *
      * @param toolName      工具名（非 {@link #INTERNAL_TOOL_PREFIX} 前缀则<b>原样返回</b>）
