@@ -22,15 +22,16 @@
                 已读
               </el-radio-button>
             </el-radio-group>
+            <!-- 归档筛选只有两类（2026-10-18 修正）：「含归档」与「已归档」语义重复，
+                 取消该中间态。默认「未归档」= 业务上待处理的消息。
+                 注意：库中历史消息可能已全部过期归档，此时本页为空属预期，
+                 空态会引导切换到「已归档」查看。 -->
             <el-radio-group
               v-model="archiveFilter"
               size="small"
               style="margin-right:8px"
               @change="onFilterChange"
             >
-              <el-radio-button :value="null">
-                含归档
-              </el-radio-button>
               <el-radio-button :value="0">
                 未归档
               </el-radio-button>
@@ -70,8 +71,9 @@
             <el-tag
               size="small"
               :type="eventTypeTag(row.eventType)"
+              :title="eventTypeDesc(row.eventType)"
             >
-              {{ INBOX_EVENT_TYPE_MAP[row.eventType] || row.eventType }}
+              {{ eventTypeLabel(row.eventType) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -176,17 +178,18 @@
       </el-table>
       <el-empty
         v-if="!list.length && !loading"
-        description="收件箱为空"
+        :description="emptyText"
+        :image-size="70"
       />
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { inboxApi, type InboxRow } from '@/api/inbox'
-import { INBOX_EVENT_TYPE_MAP } from '@/types'
+import { useEnumCatalogStore } from '@/stores/enumCatalog'
 import { ACTION } from '@/utils/tableConfig'
 import { fmtTime } from '@/utils/tableConfig'
 
@@ -198,9 +201,29 @@ const page = ref(1)
 const pageSize = ref(20)
 // 未读筛选：null=全部（管理端默认看全部，才符合「admin 能看所有」的预期）
 const readFilter = ref<number | null>(null)
-// 归档筛选：null=含归档（默认）。★实测库中消息全部已被过期归档，
-// 默认排除归档会让页面再次变空——归档与否必须由用户显式筛选。
-const archiveFilter = ref<number | null>(null)
+// 归档筛选：只有两类（未归档 0 / 已归档 1）。默认「未归档」= 待处理消息。
+// ★库中历史消息可能已全部过期归档，此时默认页为空属预期（空态会引导切换）。
+const archiveFilter = ref<number>(0)
+
+// 枚举字典（2026-10-18）：事件类型中文名由后端 /api/enums/catalog 下发，
+// 不再依赖前端硬编码的 INBOX_EVENT_TYPE_MAP（后者只覆盖 8 个键，后端实际发 10 种，
+// 导致 sub_task.approved 等裸露）。
+/** 空态文案：区分「真的没有」与「只是被筛选掉了」（避免又被误判成功能坏了）。 */
+const emptyText = computed(() => {
+  if (archiveFilter.value === 0) {
+    return '当前没有未归档的消息（历史消息已过期归档，切换到「已归档」可查看）'
+  }
+  return readFilter.value === 0 ? '没有未读消息' : '暂无已归档消息'
+})
+
+const enumStore = useEnumCatalogStore()
+function eventTypeLabel(code: string): string {
+  enumStore.ensureLoaded() // fire-and-forget：就绪后重渲染生效
+  return enumStore.labelOf('inboxEventType', code)
+}
+function eventTypeDesc(code: string): string {
+  return enumStore.descOf('inboxEventType', code)
+}
 
 const eventTagMap: Record<string, string> = {
   'sub_task.assigned': '', 'sub_task.submitted': 'warning',

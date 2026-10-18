@@ -21,11 +21,15 @@
         style="width:100%"
       >
         <el-table-column
-          prop="action"
           label="动作"
           min-width="120"
           show-overflow-tooltip
-        />
+        >
+          <template #default="{ row }">
+            <!-- 中文名由后端 /api/enums/catalog 下发（2026-10-18）；未收录回退原码 -->
+            <span :title="actionDesc(row.action)">{{ actionLabel(row.action) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column
           prop="detail"
           label="详情"
@@ -78,7 +82,18 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { activityApi } from '@/api/activity'
+import { useEnumCatalogStore } from '@/stores/enumCatalog'
 import { fmtTime } from '@/utils/tableConfig'
+
+// 枚举字典（2026-10-18）：活动 action 中文名由后端下发，前端不再硬编码
+const enumStore = useEnumCatalogStore()
+function actionLabel(code: string): string {
+  enumStore.ensureLoaded() // fire-and-forget：就绪后重渲染生效
+  return enumStore.labelOf('activityAction', code)
+}
+function actionDesc(code: string): string {
+  return enumStore.descOf('activityAction', code)
+}
 
 const list = ref<any[]>([])
 const loading = ref(false)

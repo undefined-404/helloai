@@ -23,7 +23,10 @@ const ERROR_BY_CALLER_URL_PREFIXES = [
   '/events/catalog',
   // 工具名目录（2026-10-18）：由 toolCatalog store 懒加载并静默降级（未命中回退原始工具名），
   // 失败不弹错——否则每次渲染含工具调用的时间线都会弹错。
-  '/tools/catalog'
+  '/tools/catalog',
+  // 枚举字典（2026-10-18）：由 enumCatalog store 懒加载并静默降级（未命中回退原码），
+  // 失败不弹错。
+  '/enums/catalog'
 ]
 
 function shouldLetCallerHandleError(url: string | undefined): boolean {
