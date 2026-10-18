@@ -96,3 +96,28 @@ export const taskApi = {
     return request.post<any, { backfilledCount: number }>(paths.tasks.backfillIterations)
   }
 }
+
+/**
+ * 任务实际参与成员（2026-10-18）。
+ *
+ * <p>口径：仅 {@code task_agent_member}（实际参与，加入过即成员），不含团队编制成员
+ * （{@code team_member}，后续归入「专家团」概念）。</p>
+ */
+export interface TaskMemberView {
+  agentId: string | number | null
+  /** Agent 名称；Agent 已删除时后端返回 null，前端回退短 ID */
+  name: string | null
+  role: string | null
+  accessType: string | null
+  onlineStatus: string | null
+  /** ASSIGNED / CLAIMED / REASSIGNED / MANUAL / REBUILT */
+  joinSource: string | null
+  status: string | null
+  joinTime: string | null
+}
+
+export const taskMemberApi = {
+  list(taskId: string | number): Promise<TaskMemberView[]> {
+    return request.get<any, TaskMemberView[]>(paths.tasks.members(taskId))
+  }
+}

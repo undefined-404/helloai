@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.task.CreateTaskRequest;
 import com.helloai.api.dto.task.TaskFinalReportResponse;
+import com.helloai.api.dto.task.TaskMemberView;
 import com.helloai.api.dto.task.TaskRelatedCounts;
 import com.helloai.api.dto.task.UpdateTaskStatusRequest;
 import com.helloai.common.base.R;
@@ -18,6 +19,7 @@ import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.TaskIteration;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.task.service.TaskAgentMemberService;
 import com.helloai.core.task.service.TaskDeliverableService;
 import com.helloai.core.task.service.TaskFinalReportService;
 import com.helloai.core.task.service.TaskIterationService;
@@ -43,6 +45,8 @@ import java.util.Map;
 public class TaskController {
 
     private final TaskService taskService;
+    /** 任务实际参与成员（详情页成员区，2026-10-18）。 */
+    private final TaskAgentMemberService taskAgentMemberService;
     private final AgentService agentService;
     private final AgentInboxService agentInboxService;
     private final PlannerAnalysisService plannerAnalysisService;
@@ -94,6 +98,51 @@ public class TaskController {
         Task task = taskService.getById(id);
         if (task == null) return R.fail("任务不存在");
         return R.ok(task);
+    }
+
+    /**
+     * 任务的实际参与成员（2026-10-18）。
+     *
+     * <p><b>为什么单开一个端点而不塞进 getById</b>：成员是列表型附加信息，
+     * 塞进任务主体会让每个任务查询都多一次成员表扫描；且详情页可单独刷新成员
+     * （执行中成员会变化），不必重拉整个任务。</p>
+     *
+     * <p>口径：只返回 {@code task_agent_member}（实际参与，加入过即成员），
+     * 不含团队编制成员（{@code team_member}，后续归入「专家团」）。</p>
+     */
+    @GetMapping("/getById/{id}/members")
+    public R<List<TaskMemberView>> listMembers(@PathVariable("id") Long id) {
+        List<com.helloai.core.task.entity.TaskAgentMember> members =
+                taskAgentMemberService.listMembers(id);
+        if (members.isEmpty()) {
+            return R.ok(List.of());
+        }
+        // 批量补 Agent 展示属性（一次查询；缺失的 Agent 说明已删除，name 置 null 由前端回退短 ID）
+        List<Long> agentIds = members.stream()
+                .map(com.helloai.core.task.entity.TaskAgentMember::getAgentId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<Long, com.helloai.core.agent.port.AgentProfileSnapshot> profiles =
+                agentService.listProfilesByIds(agentIds).stream()
+                        .collect(java.util.stream.Collectors.toMap(
+                                com.helloai.core.agent.port.AgentProfileSnapshot::id,
+                                p -> p, (a, b) -> a));
+        List<TaskMemberView> views = members.stream()
+                .map(m -> {
+                    var p = m.getAgentId() != null ? profiles.get(m.getAgentId()) : null;
+                    return new TaskMemberView(
+                            m.getAgentId(),
+                            p != null ? p.name() : null,
+                            p != null && p.role() != null ? p.role().name() : null,
+                            p != null && p.accessType() != null ? p.accessType().name() : null,
+                            p != null && p.onlineStatus() != null ? p.onlineStatus().name() : null,
+                            m.getJoinSource(),
+                            m.getStatus(),
+                            m.getJoinTime());
+                })
+                .toList();
+        return R.ok(views);
     }
 
     @SaCheckPermission("task:edit")

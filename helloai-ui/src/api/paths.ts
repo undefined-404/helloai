@@ -16,6 +16,8 @@ export const paths = {
   tasks: {
     list: '/tasks/list',
     getById: (id: string | number) => `/tasks/getById/${enc(id)}`,
+    // 实际参与成员（task_agent_member，2026-10-18）
+    members: (id: string | number) => `/tasks/getById/${enc(id)}/members`,
     create: '/tasks',
     update: (id: string | number) => `/tasks/updateById/${enc(id)}`,
     republish: (id: string | number) => `/tasks/republishById/${enc(id)}`,

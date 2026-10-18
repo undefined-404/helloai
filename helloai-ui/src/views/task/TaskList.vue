@@ -239,6 +239,42 @@
       :show-close="true"
       :close-on-click-modal="false"
     >
+      <div
+        v-if="descMembers.length || membersLoading"
+        class="detail-block"
+      >
+        <div class="detail-caption">
+          参与成员（{{ descMembers.length }}）
+        </div>
+        <div
+          v-if="membersLoading"
+          class="detail-empty"
+        >
+          加载中…
+        </div>
+        <div
+          v-else
+          class="member-chips"
+        >
+          <span
+            v-for="m in descMembers"
+            :key="String(m.agentId)"
+            class="member-chip"
+            :title="memberTip(m)"
+          >
+            <span class="member-name">{{ m.name || shortAgentId(m.agentId) }}</span>
+            <span
+              v-if="m.role"
+              class="member-role"
+            >{{ roleLabel(m.role) }}</span>
+            <span
+              v-if="m.onlineStatus"
+              class="member-dot"
+              :class="'is-' + m.onlineStatus.toLowerCase()"
+            />
+          </span>
+        </div>
+      </div>
       <div class="detail-block">
         <div class="detail-caption">
           任务描述
@@ -294,7 +330,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
-import { taskApi } from '@/api/task'
+import { taskApi, taskMemberApi, type TaskMemberView } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
 import { stripMarkdown } from '@/utils/markdown'
 import { queryString } from '@/utils/queryParam'
@@ -432,6 +468,58 @@ function openDesc(row: any) {
   descContent.value = row.description || ''
   descPackage.value = normalizeRequirementPackage(row.context?.requirementPackage)
   descVisible.value = true
+  void loadDescMembers(row.id)
+}
+
+// ── 参与成员（2026-10-18）：只取 task_agent_member「实际参与」，不含团队编制 ──
+const descMembers = ref<TaskMemberView[]>([])
+const membersLoading = ref(false)
+
+/** 拉成员：失败静默为空（不阻断详情弹窗主体，与目录类降级口径一致）。 */
+async function loadDescMembers(taskId: string | number | null | undefined) {
+  descMembers.value = []
+  if (taskId == null) return
+  membersLoading.value = true
+  try {
+    descMembers.value = await taskMemberApi.list(taskId)
+  } catch {
+    descMembers.value = []
+  } finally {
+    membersLoading.value = false
+  }
+}
+
+/** Agent 已删除时后端 name 为 null：回退显示 ID 短尾，绝不显示「未知」。 */
+function shortAgentId(id: string | number | null | undefined): string {
+  const s = String(id ?? '')
+  return s.length > 6 ? '…' + s.slice(-6) : s
+}
+
+const ROLE_LABEL: Record<string, string> = {
+  PLANNER: '规划',
+  EXECUTOR: '执行',
+  REVIEWER: '核验',
+  SYSTEM: '系统'
+}
+function roleLabel(role: string): string {
+  return ROLE_LABEL[role] || role
+}
+
+const JOIN_SOURCE_LABEL: Record<string, string> = {
+  ASSIGNED: '拆解分配',
+  CLAIMED: '自主认领',
+  REASSIGNED: '改派加入',
+  MANUAL: '人工登记',
+  REBUILT: '对账补齐'
+}
+
+/** 成员 chip 悬浮说明：入队来源 + 加入时间（「加入过即成员」，时间帮助判断先后）。 */
+function memberTip(m: TaskMemberView): string {
+  const parts: string[] = []
+  if (m.joinSource) parts.push('来源：' + (JOIN_SOURCE_LABEL[m.joinSource] || m.joinSource))
+  if (m.joinTime) parts.push('加入：' + new Date(m.joinTime).toLocaleString())
+  if (m.accessType) parts.push('接入：' + m.accessType)
+  return parts.join(' · ')
 }
 // V29 对话新建跳转带 ?review=taskId 时，按状态分流：
 // - PLANNING → 打开草案审阅（待用户确认/拒绝）
@@ -596,6 +684,38 @@ async function handlePlan(row: Task) {
 .desc-md :deep(h2),
 .desc-md :deep(h3),
 .desc-md :deep(h4) { margin-bottom: 0; }
+/* 参与成员 chips（2026-10-18）：一行内换行排列，不换行截断 */
+.member-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.member-name { font-weight: 500; }
+.member-role {
+  color: var(--ha-muted);
+  font-size: 11.5px;
+}
+.member-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--el-color-info-light-3);
+}
+.member-dot.is-online { background: var(--ha-success); }
+.member-dot.is-idle { background: var(--el-color-warning); }
+.member-dot.is-offline, .member-dot.is-sleeping { background: var(--el-color-info-light-3); }
+
 /* 任务详情弹窗：描述 / 需求包分区，标签定宽 + 条目列表紧凑行高 */
 .detail-block + .detail-block { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--el-border-color-lighter); }
 .detail-caption { margin-bottom: 8px; font-weight: 600; color: var(--el-text-color-primary); }

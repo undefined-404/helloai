@@ -70,6 +70,25 @@ public class TaskAgentMemberServiceImpl
         return ids != null ? ids : Collections.emptyList();
     }
 
+    /**
+     * 实际参与成员明细（任务详情页展示）：按 join_time 升序（先加入的在前）。
+     *
+     * <p>只查 {@code task_agent_member} 一处 —— 不 JOIN agent 表，避免 task 域
+     * 直捅 agent 实体（架构红线）；名字等展示字段由 api 层用
+     * {@code AgentService.listProfilesByIds} 补齐。</p>
+     */
+    @Override
+    public List<TaskAgentMember> listMembers(Long taskId) {
+        if (taskId == null) {
+            return Collections.emptyList();
+        }
+        List<TaskAgentMember> members = baseMapper.selectList(
+                com.baomidou.mybatisplus.core.toolkit.Wrappers.<TaskAgentMember>lambdaQuery()
+                        .eq(TaskAgentMember::getTaskId, taskId)
+                        .orderByAsc(TaskAgentMember::getJoinTime));
+        return members != null ? members : Collections.emptyList();
+    }
+
     @Override
     public int rebuildFromAuthoritativeAssignments() {
         List<TaskAgentMember> assignments = baseMapper.selectAuthoritativeAssignments();

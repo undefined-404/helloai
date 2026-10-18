@@ -52,6 +52,20 @@ public interface TaskAgentMemberService {
     List<Long> listActiveAgentIds(Long taskId);
 
     /**
+     * 某任务的实际参与成员明细（任务详情页展示用，2026-10-18）。
+     *
+     * <p><b>只返回 {@code task_agent_member}（实际参与），不混编制成员</b>：
+     * 编制来自 {@code team_member}（团队组合），后续会演进为「专家团」概念，
+     * 与「本任务谁真的干过活」是两个语义，不能挤在一个列表里。</p>
+     *
+     * <p>语义提示：本表「加入过即成员」——改派不置 LEFT，故返回的是
+     * <b>历史参与者的并集</b>，前端需展示 {@code joinTime} 与 {@code status} 供用户判断。</p>
+     *
+     * @param taskId 主任务 ID；{@code null} 返回空列表
+     */
+    List<com.helloai.core.task.entity.TaskAgentMember> listMembers(Long taskId);
+
+    /**
      * 重建对账（启动一次性，幂等）：以权威源 {@code sub_task.assigned_agent_id} 补齐成员表。
      *
      * <p><b>为什么只扫 sub_task</b>：跨域直捅 {@code agent_execution_record} 会引入
