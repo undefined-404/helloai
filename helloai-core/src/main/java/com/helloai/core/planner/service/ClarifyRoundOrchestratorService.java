@@ -32,6 +32,19 @@ public interface ClarifyRoundOrchestratorService {
     /** 向会话追加一条用户消息并走一轮 LLM（纯文本，无选项快照）。 */
     ClarifyConversationDetail sendMessage(Long conversationId, String message);
 
+    /**
+     * <b>只新建会话</b>（不跑 LLM 轮次）——同步 {@code create} 与流式 {@code streamCreate} 共用。
+     *
+     * <p>拆分原因（2026-10-18）：{@code create} 原实现是「建会话 + 同步跑首轮」打包在一起，
+     * 导致<b>新会话首条消息只能走同步</b>（用户要等搜索 + 完整 LLM 才见到回复，无打字机、
+     * 无思考过程）。拆出本方法后，流式入口可以先建会话、拿 id 首发 {@code session} 事件，
+     * 再走与老会话完全相同的流式首轮。</p>
+     *
+     * <p>建会话口径保持原样：标题取消息前 50 字（{@code /task} 命令取附加文本）、
+     * 状态 ACTIVE、轮数 0、模式恒为 CHAT、联网开关原样落库（null 兼容老数据语义）。</p>
+     */
+    RequirementConversation createConversation(String firstMessage, Long plannerAgentId,
+                                               Boolean webSearchEnabled);
     /** 向会话追加一条用户消息并走一轮 LLM（可携带结构化选项回答快照）。 */
     ClarifyConversationDetail sendMessage(Long conversationId, String message, List<ClarifySelection> selections);
 

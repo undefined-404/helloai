@@ -70,9 +70,45 @@ public class RequirementConversationController {
         return emitter;
     }
 
+    /**
+     * Chat SSE 流式「新建会话 + 首轮」（2026-10-18）：
+     *
+     * <p><b>为什么需要</b>：前端新会话首条消息此前走同步 {@code POST /requirement-conversations}，
+     * 该接口要跑完「意图决策 + 联网搜索（实测 21.5s）+ 完整 LLM 生成」才一次性返回——用户只看到
+     * 「思考中」占位，没有打字机也没有思考过程。本端点把「建会话」与「跑首轮」解耦后，
+     * 新会话与老会话走同一条流式通道。</p>
+     *
+     * <p>事件序：首帧 {@code session}（data=会话 id，前端据此在 done 后拉 detail）→
+     * {@code reasoning}/{@code token} 增量 → {@code done}/{@code error}。</p>
+     */
+    @SaCheckPermission("conversation:add")
+    @PostMapping(value = "/streamCreate", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamCreate(@Valid @RequestBody ClarifyMessageRequest req,
+                                   HttpServletResponse response) {
+        response.setHeader("X-Accel-Buffering", "no");
+        response.setHeader("Cache-Control", "no-cache");
+        SseEmitter emitter = new SseEmitter(STREAM_EMITTER_TIMEOUT_MS);
+        emitter.onTimeout(() -> {
+            log.warn("流式新建会话连接超时");
+            completeQuietly(emitter);
+        });
+        emitter.onError(e -> log.warn("流式新建会话连接异常: {}", e.toString()));
+        StreamFrameAggregator aggregator = new StreamFrameAggregator(emitter);
+        chatStreamExecutor.execute(() -> {
+            requirementClarifyService.streamCreate(req.getMessage(), req.getPlannerAgentId(),
+                            req.getWebSearchEnabled())
+                    .subscribe(aggregator::onEvent,
+                            error -> aggregator.onEvent(ChatStreamEvent.error(fallbackErrorMessage(error))),
+                            () -> {
+                                aggregator.flush();
+                                completeQuietly(emitter);
+                            });
+        });
+        return emitter;
+    }
+
     /** 订阅侧防御错误文本（正常路径不会触发）：取根因 message，缺失回落类名。 */
-    private static String fallbackErrorMessage(Throwable e) {
-        Throwable root = e;
+    private static String fallbackErrorMessage(Throwable e) {        Throwable root = e;
         while (root.getCause() != null && root.getCause() != root) {
             root = root.getCause();
         }

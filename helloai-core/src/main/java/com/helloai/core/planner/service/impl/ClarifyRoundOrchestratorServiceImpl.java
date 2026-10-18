@@ -50,6 +50,9 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     /** CHAT 自由对话轮数硬上限（独立于 CLARIFY 的 MAX_ROUNDS；达上限引导转方案或新会话）。 */
     static final int MAX_CHAT_ROUNDS = 50;
 
+    /** 会话标题长度上限（原门面 TITLE_LIMIT，随「只建会话」一并迁入）。 */
+    private static final int TITLE_LIMIT = 50;
+
     /** 联合决策 AgentTask 的 scene 标识（测试 stub 与日志可观测区分决策轮/主回复轮）。 */
     private static final String DECISION_SCENE = "requirement_chat_decision";
 
@@ -69,9 +72,49 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     //  对外轮次入口
     // ══════════════════════════════════════════════════════════════
 
+    /**
+     * 只新建会话（不跑 LLM）：同步 create 与流式 streamCreate 共用（2026-10-18 抽取）。
+     *
+     * <p>口径与原门面 {@code create} 的建会话段逐字一致，仅把「跑一轮」留给调用方。</p>
+     */
+    @Override
+    public RequirementConversation createConversation(String firstMessage, Long plannerAgentId,
+                                                     Boolean webSearchEnabled) {
+        if (firstMessage == null || firstMessage.isBlank()) {
+            throw new BizException("首条消息不能为空");
+        }
+        if (plannerAgentId != null) {
+            plannerAgentPicker.validateSelectable(plannerAgentId);
+        }
+        String trimmed = firstMessage.trim();
+        // /task 直达命令的会话标题取附加文本（命令前缀不落标题）
+        String title = trimmed;
+        if (commandSearch.isTaskCommand(trimmed)) {
+            title = commandSearch.taskCommandExtra(trimmed);
+            if (title.isEmpty()) {
+                title = "/task";
+            }
+        }
+        RequirementConversation conversation = new RequirementConversation();
+        conversation.setTitle(title.length() <= TITLE_LIMIT ? title : title.substring(0, TITLE_LIMIT));
+        conversation.setStatus(RequirementClarifyService.STATUS_ACTIVE);
+        conversation.setRoundCount(0);
+        conversation.setPlannerAgentId(plannerAgentId);
+        // NULL 落库为 NULL（兼容老数据默认开启语义由读取侧判定），false/true 严格落库
+        conversation.setWebSearchEnabled(webSearchEnabled);
+        // 新会话始终 CHAT 自由对话（auto 意图路由 + /planner 命令触发转方案）
+        conversation.setMode(RequirementClarifyService.MODE_CHAT);
+        conversationService.save(conversation);
+        log.info("澄清会话创建（仅建会话，轮次由调用方执行）: id={}, title={}, plannerAgentId={}, webSearchEnabled={}, mode={}",
+                conversation.getId(), conversation.getTitle(), plannerAgentId, webSearchEnabled,
+                RequirementClarifyService.MODE_CHAT);
+        return conversation;
+    }
+
     @Override
     public ClarifyConversationDetail sendMessage(Long conversationId, String message) {
         return sendMessage(conversationId, message, null);
+
     }
 
     @Override

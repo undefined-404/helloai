@@ -108,10 +108,26 @@ public interface RequirementClarifyService {
      */
     Flux<ChatStreamEvent> streamRound(Long conversationId, String message, List<ClarifySelection> selections);
 
+    /**
+     * 流式新建会话并跑首轮（新会话首条消息的 SSE 入口）。
+     *
+     * <p>事件序：首帧 {@link ChatStreamEvent.Type#SESSION}（data=会话 id）→ token/reasoning 增量
+     * → done/error。语义与同步 {@link #create(String, Long, Boolean)} 同构（建会话 + 跑首轮），
+     * 仅传输形态不同；斜杠命令仍走同步（命令需要同步返回值驱动后续流转）。</p>
+     */
+    Flux<ChatStreamEvent> streamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled);
+
     /** 流式轮事件：type 决定事件名（token / done / error），data 为载荷文本。 */
     record ChatStreamEvent(Type type, String data) {
 
         public enum Type {
+            /**
+             * 会话首帧（{@code streamCreate} 专用，data = 会话 id）。
+             *
+             * <p>新会话流式时必须先告诉前端「会话已建成、id 是多少」，否则 done 后前端
+             * 无从拉 detail 对齐、也无法把后续消息发到正确会话。</p>
+             */
+            SESSION,
             /** 主回复增量文本块。 */
             TOKEN,
             /**
@@ -129,6 +145,11 @@ public interface RequirementClarifyService {
 
         public static ChatStreamEvent token(String text) {
             return new ChatStreamEvent(Type.TOKEN, text);
+        }
+
+        /** 会话首帧（streamCreate 专用）：data = 会话 id 字符串。 */
+        public static ChatStreamEvent session(String conversationId) {
+            return new ChatStreamEvent(Type.SESSION, conversationId);
         }
 
         /** 思考过程增量帧（前端渲染「思考中…」区域，done 后通常折叠）。 */

@@ -114,35 +114,11 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     @Override
     public ClarifyConversationDetail create(String firstMessage, Long plannerAgentId, Boolean webSearchEnabled,
                                             String initialMode) {
-        if (firstMessage == null || firstMessage.isBlank()) {
-            throw new BizException("首条消息不能为空");
-        }
-        if (plannerAgentId != null) {
-            plannerAgentPicker.validateSelectable(plannerAgentId);
-        }
-        String trimmed = firstMessage.trim();
-        // /task 直达命令的会话标题取附加文本（命令前缀不落标题）
-        String title = trimmed;
-        if (commandSearch.isTaskCommand(trimmed)) {
-            title = commandSearch.taskCommandExtra(trimmed);
-            if (title.isEmpty()) {
-                title = "/task";
-            }
-        }
-        RequirementConversation conversation = new RequirementConversation();
-        conversation.setTitle(title.length() <= TITLE_LIMIT
-                ? title : title.substring(0, TITLE_LIMIT));
-        conversation.setStatus(STATUS_ACTIVE);
-        conversation.setRoundCount(0);
-        conversation.setPlannerAgentId(plannerAgentId);
-        // NULL 落库为 NULL（兼容老数据默认开启语义由读取侧判定），false/true 严格落库
-        conversation.setWebSearchEnabled(webSearchEnabled);
-        // 新会话始终 CHAT 自由对话（auto 意图路由 + /planner 命令触发转方案）
-        conversation.setMode(MODE_CHAT);
-        conversationService.save(conversation);
-        log.info("澄清会话创建: id={}, title={}, plannerAgentId={}, webSearchEnabled={}, mode={}",
-                conversation.getId(), conversation.getTitle(), plannerAgentId, webSearchEnabled, MODE_CHAT);
-        return orchestrator.doRound(conversation, trimmed);
+        // 建会话段已抽到编排服务（createConversation）：同步 create 与流式 streamCreate 共用，
+        // 避免「新会话首条消息只能同步」——此处保持原有「建会话 + 同步跑首轮」语义不变
+        RequirementConversation conversation =
+                orchestrator.createConversation(firstMessage, plannerAgentId, webSearchEnabled);
+        return orchestrator.doRound(conversation, firstMessage.trim());
     }
 
     /** 兼容重载：旧调用方未传开关时默认开启（NULL 代表默认开启，与老数据语义一致）。 */
@@ -194,6 +170,12 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     public Flux<ChatStreamEvent> streamRound(Long conversationId, String message,
                                              List<ClarifySelection> selections) {
         return streamService.streamRound(conversationId, message, selections);
+    }
+
+    /** 流式新建会话并跑首轮（新会话首条消息不走同步 create，避免用户干等完整一轮）。 */
+    @Override
+    public Flux<ChatStreamEvent> streamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled) {
+        return streamService.streamCreate(message, plannerAgentId, webSearchEnabled);
     }
 
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */

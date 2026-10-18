@@ -13,6 +13,8 @@ import type { ClarifySelection, LongId } from '@/types'
 // 流非正常结束（连接断开且未收到 done/error）由本层兜底转 error。
 
 export interface ChatStreamHandlers {
+  /** 会话首帧（仅 streamCreate 会触发）：新会话 id，调用方据此在 done 后拉 detail */
+  onSession?: (conversationId: string) => void
   /** 增量文本块（按序拼接即完整回复，与落库全文一致） */
   onToken: (token: string) => void
   /** 增量思考过程块（可选；推理模型才有，非推理模型永不触发） */
@@ -32,6 +34,40 @@ export async function streamSendConversation(
   id: LongId,
   message: string,
   selectedOptions: ClarifySelection[] | null,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal
+): Promise<void> {
+  return consumeSse(
+    `/api${paths.clarifications.streamSend(id)}`,
+    { message, selectedOptions: selectedOptions?.length ? selectedOptions : null },
+    handlers,
+    signal
+  )
+}
+
+/**
+ * 新建会话 + 首轮流式（2026-10-18）：与 {@link streamSendConversation} 共用同一 SSE 消费内核，
+ * 仅端点与请求体不同。首帧 `session` 事件回传新会话 id（通过 {@code handlers.onSession}）。
+ */
+export async function streamCreateConversation(
+  message: string,
+  plannerAgentId: string | null,
+  webSearchEnabled: boolean | null,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal
+): Promise<void> {
+  return consumeSse(
+    `/api${paths.clarifications.streamCreate}`,
+    { message, plannerAgentId, webSearchEnabled },
+    handlers,
+    signal
+  )
+}
+
+/** SSE 消费内核（两个入口共用）：建连 → 逐帧解析 → 分派到 handlers。 */
+async function consumeSse(
+  url: string,
+  payload: unknown,
   handlers: ChatStreamHandlers,
   signal?: AbortSignal
 ): Promise<void> {
@@ -72,7 +108,9 @@ export async function streamSendConversation(
         data = data ? `${data}\n${line.slice(5)}` : line.slice(5).trimStart()
       }
     }
-    if (event === 'token' && data) {
+    if (event === 'session' && data) {
+      handlers.onSession?.(data)
+    } else if (event === 'token' && data) {
       handlers.onToken(data)
     } else if (event === 'reasoning' && data) {
       handlers.onReasoning?.(data)
@@ -84,10 +122,10 @@ export async function streamSendConversation(
   }
 
   try {
-    const resp = await fetch(`/api${paths.clarifications.streamSend(id)}`, {
+    const resp = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message, selectedOptions: selectedOptions?.length ? selectedOptions : null }),
+      body: JSON.stringify(payload),
       signal
     })
     if (!resp.ok) {

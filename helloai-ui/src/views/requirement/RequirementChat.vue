@@ -678,7 +678,7 @@ import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretB
 import { clarifyApi } from '@/api/clarify'
 import { promptEnhanceApi } from '@/api/promptEnhance'
 import { taskApi } from '@/api/task'
-import { streamSendConversation } from '@/api/chatStream'
+import { streamCreateConversation, streamSendConversation } from '@/api/chatStream'
 import { fmtTime } from '@/utils/tableConfig'
 import StructuredQuestionCard from './StructuredQuestionCard.vue'
 import WebSearchBar from './WebSearchBar.vue'
@@ -979,50 +979,78 @@ async function handleSend() {
   scrollToBottom()
   try {
     const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
-    // S1 流式分流：已有会话（CHAT 自由对话 / CLARIFY 方案澄清老会话）普通消息走 SSE 流式
-    // （token 增量渲染 + 思考过程实时展示 + done 后收敛卡片/终稿）；新会话（create）与
-    // 斜杠命令保持同步链路。结构化卡提交也已改走流式（见 handleStructuredSubmit）。
-    if (activeId.value != null) {
-      await streamSendActiveMessage(activeId.value, text)
+    // §6.169 /task 直达拆解：必须走同步 create —— 后端在这条路径上「建会话 + 直接建任务 +
+    // 终稿直出」，前端要读返回的 FINALIZED/taskId 去联动打开草案审阅；流式通道只吐文本，
+    // 拿不到这个联动信号（服务端也明确拒绝斜杠命令走流式）。
+    if (isTaskCommand(text)) {
+      await sendSyncCreate(text, plannerId)
       return
     }
-    // V34：仅新会话向 create 传联网搜索开关；老会话发送消息接口忽略此值
-    // 新会话始终 CHAT 模式（LLM auto 意图路由 + /planner 命令触发转方案）
-    const result = activeId.value == null
-      ? await clarifyApi.create(text, plannerId, webSearchEnabled.value)
-      : await clarifyApi.send(activeId.value, text)
-    detail.value = result
-    activeId.value = String(result.conversation.id)
-    loadList()
-    scrollToBottom()
-    // §6.169 /task 直达拆解：后端已自动建任务，联动提交拆解并打开草案审阅
-    if (result.conversation.status === 'FINALIZED' && result.conversation.taskId != null) {
-      await triggerTaskReview(String(result.conversation.taskId))
-    }
+    // 流式分流（2026-10-18 补全新会话）：
+    //   已有会话 → streamSend 通道
+    //   新会话  → streamCreate 通道（首帧 session 回传 id，再增量渲染）
+    //   原同步 create 必须等「意图决策 + 联网搜索 + 完整 LLM」才一次性返回，
+    //   用户全程只看到「思考中」占位——这是「1 分钟后一次性刷出」的直接原因。
+    await streamSendOrCreate(text, plannerId)
+    return
   } catch {
-    // 拦截器已弹错；user 消息多半已落库，刷新详情后靠重试按钮续跑
-    if (activeId.value != null) {
-      try { detail.value = await clarifyApi.detail(activeId.value) } catch { /* 拦截器已弹错 */ }
-    } else {
-      // create 失败：会话可能已落库（LLM 失败在建会之后），按标题找回以展示重试按钮
-      await loadList()
-      const title = text.length <= 50 ? text : text.slice(0, 50)
-      const found = conversations.value.find(c => c.status === 'ACTIVE' && c.title === title)
-      if (found) {
-        const fid = String(found.id)
-        activeId.value = fid
-        try { detail.value = await clarifyApi.detail(fid) } catch { /* 拦截器已弹错 */ }
+    // 兜底：流式建连失败（非业务错误，多为网络/鉴权层）时退回同步链路，
+    // 保证「新会话第一句」在任何情况下都能落地，不丢用户文本
+    const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
+    try {
+      if (activeId.value == null) {
+        await sendSyncCreate(text, plannerId)
+      } else {
+        const result = await clarifyApi.send(activeId.value, text)
+        detail.value = result
+        loadList()
+        scrollToBottom()
       }
+    } catch {
+      // 拦截器已弹错；user 消息多半已落库，刷新详情后靠重试按钮续跑
+      if (activeId.value != null) {
+        try { detail.value = await clarifyApi.detail(activeId.value) } catch { /* 拦截器已弹错 */ }
+      } else {
+        // create 失败：会话可能已落库（LLM 失败在建会之后），按标题找回以展示重试按钮
+        await loadList()
+        const title = text.length <= 50 ? text : text.slice(0, 50)
+        const found = conversations.value.find(c => c.status === 'ACTIVE' && c.title === title)
+        if (found) {
+          const fid = String(found.id)
+          activeId.value = fid
+          try { detail.value = await clarifyApi.detail(fid) } catch { /* 拦截器已弹错 */ }
+        }
+      }
+      // 消息未落库（建会前就失败/未找回会话）时回填输入框，避免丢失用户文本
+      const msgs = detail.value?.messages ?? []
+      const lastIsSameUserText = msgs.length > 0
+        && msgs[msgs.length - 1].role === 'user'
+        && msgs[msgs.length - 1].content === text
+      if (!lastIsSameUserText) input.value = text
     }
-    // 消息未落库（建会前就失败/未找回会话）时回填输入框，避免丢失用户文本
-    const msgs = detail.value?.messages ?? []
-    const lastIsSameUserText = msgs.length > 0
-      && msgs[msgs.length - 1].role === 'user'
-      && msgs[msgs.length - 1].content === text
-    if (!lastIsSameUserText) input.value = text
   } finally {
     pendingText.value = ''
     sending.value = false
+  }
+}
+
+/** /task 直达拆解命令判定（与后端 ClarifyCommandSearchServiceImpl.isTaskCommand 同口径）。 */
+function isTaskCommand(text: string): boolean {
+  return /^\/task(?:\s|$)/i.test(text.trim())
+}
+
+/**
+ * 同步「新建会话 + 首轮」（create）：用于 /task 直达命令与流式建连失败兜底。
+ * 成功后按 FINALIZED/taskId 联动打开草案审阅（§6.169）。
+ */
+async function sendSyncCreate(text: string, plannerId: string | null) {
+  const result = await clarifyApi.create(text, plannerId, webSearchEnabled.value)
+  detail.value = result
+  activeId.value = String(result.conversation.id)
+  loadList()
+  scrollToBottom()
+  if (result.conversation.status === 'FINALIZED' && result.conversation.taskId != null) {
+    await triggerTaskReview(String(result.conversation.taskId))
   }
 }
 
@@ -1119,13 +1147,7 @@ async function settleStream(id: LongId, success: boolean) {
 // 通道后可见打字机增量（后端 runStreamRound 早已支持 selections 参数）。
 async function streamSendActiveMessage(id: LongId, text: string,
                                       selections: ClarifySelection[] | null = null) {
-  streamText.value = ''
-  thinkingText.value = ''
-  thinkingExpanded.value = true
-  streamBuffer = ''
-  reasoningBuffer = ''
-  reasoningActive = false
-  jsonFenceSeen = false
+  resetStreamState()
   try {
     await streamSendConversation(id, text, selections, {
       onToken: appendStreamToken,
@@ -1137,17 +1159,79 @@ async function streamSendActiveMessage(id: LongId, text: string,
       }
     })
   } finally {
-    // 兜底清理（正常路径 settleStream 已清空/收敛）
-    if (streamFlushTimer != null) {
-      window.clearTimeout(streamFlushTimer)
-      streamFlushTimer = null
-    }
-    flushReasoningText()
-    streamBuffer = ''
-    reasoningBuffer = ''
-    pendingText.value = ''
-    sending.value = false
+    cleanupStreamState()
   }
+}
+
+/**
+ * 流式发送「自适应」入口（2026-10-18）：activeId 为空走 streamCreate（首帧 session 拿新 id），
+ * 否则走 streamSend。两条通道共用同一套流式状态与收敛逻辑，避免「新会话无流式」的分叉。
+ */
+async function streamSendOrCreate(text: string, plannerId: string | null) {
+  resetStreamState()
+  const existingId = activeId.value
+  // 新会话：id 由首帧 session 事件带回；done 前可能仍为 null，收敛时以 streamCreatedId 为准
+  let streamCreatedId: LongId | null = existingId
+  const settleId = () => streamCreatedId
+  try {
+    if (existingId != null) {
+      await streamSendConversation(existingId, text, null, {
+        onToken: appendStreamToken,
+        onReasoning: appendStreamReasoning,
+        onDone: () => { void settleStream(existingId, true) },
+        onError: (msg) => {
+          ElMessage.error(msg)
+          void settleStream(existingId, false)
+        }
+      })
+    } else {
+      await streamCreateConversation(text, plannerId, webSearchEnabled.value, {
+        onSession: (newId) => {
+          streamCreatedId = newId
+          // 立刻切到新会话（左侧列表随后由 settleStream 的 detail 拉取刷新）
+          activeId.value = newId
+        },
+        onToken: appendStreamToken,
+        onReasoning: appendStreamReasoning,
+        onDone: () => {
+          const id = settleId()
+          if (id == null) { sending.value = false; return }
+          void settleStream(id, true)
+        },
+        onError: (msg) => {
+          ElMessage.error(msg)
+          const id = settleId()
+          if (id != null) void settleStream(id, false)
+        }
+      })
+    }
+  } finally {
+    cleanupStreamState()
+  }
+}
+
+/** 流式状态复位（正文/思考/围栏标记/缓冲）。 */
+function resetStreamState() {
+  streamText.value = ''
+  thinkingText.value = ''
+  thinkingExpanded.value = true
+  streamBuffer = ''
+  reasoningBuffer = ''
+  reasoningActive = false
+  jsonFenceSeen = false
+}
+
+/** 流式状态清理（定时器/缓冲/发送态）。 */
+function cleanupStreamState() {
+  if (streamFlushTimer != null) {
+    window.clearTimeout(streamFlushTimer)
+    streamFlushTimer = null
+  }
+  flushReasoningText()
+  streamBuffer = ''
+  reasoningBuffer = ''
+  pendingText.value = ''
+  sending.value = false
 }
 
 // V40.2 /planner 命令处理：新会话先建 CHAT 会话再调 toClarify；已有会话直接调 toClarifyById

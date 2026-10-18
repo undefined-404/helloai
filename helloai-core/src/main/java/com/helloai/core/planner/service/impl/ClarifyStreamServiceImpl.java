@@ -72,8 +72,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
 
     /** 流式轮实现：同步前置段（校验/落库/决策/搜索）在订阅线程执行，主回复段返回 token 流。 */
     private Flux<ChatStreamEvent> runStreamRound(Long conversationId, String message,
-                                                 List<ClarifySelection> selections) {
-        String trimmed = message == null ? "" : message.trim();
+                                                 List<ClarifySelection> selections) {        String trimmed = message == null ? "" : message.trim();
         if (trimmed.isEmpty()) {
             throw new BizException("消息不能为空");
         }
@@ -104,13 +103,29 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
             return runClarifyStream(conversation, trimmed, userPayload);
         }
 
-        // CHAT 模式：联合决策（intent + 澄清问题 + 搜索决策）
-        RoundDecision roundDecision = orchestrator.makeRoundDecision(conversation, trimmed);
+        // CHAT 模式主回复段（决策 + 三态搜索 + 流式主回复），与 streamCreate 首轮共用
+        return runChatStream(conversation, trimmed, userPayload, rounds + 1);
+    }
+
+    /**
+     * CHAT 模式流式段（决策 → 搜索 → 流式主回复 → 落库 → done）：
+     * 老会话 {@link #runStreamRound} 与 {@link #streamCreate} 首轮<b>共用同一段</b>。
+     *
+     * <p>抽出的意义（2026-10-18）：新会话首条消息此前只能走同步 {@code create}，
+     * 用户要等完整一轮（含搜索）才见到回复且无思考过程。抽出后两条入口行为完全一致。</p>
+     *
+     * @param roundNo 本轮序号（仅日志用：老会话 = round_count+1，新会话 = 1）
+     */
+    private Flux<ChatStreamEvent> runChatStream(RequirementConversation conversation, String userMessage,
+                                                String userPayload, int roundNo) {
+        Long conversationId = conversation.getId();
+        // 联合决策（intent + 澄清问题 + 搜索决策）
+        RoundDecision roundDecision = orchestrator.makeRoundDecision(conversation, userMessage);
         if (roundDecision.decision().isClarify()) {
             // 确认卡流式播放：question 分片打字机 → 落库确认卡 → done（前端 done 后收敛为卡片）
             return playClarifyQuestion(conversation, roundDecision.decision());
         }
-        WebSearchOutcome webSearchOutcome = commandSearch.resolveChatSearchOutcome(conversation, trimmed, userPayload,
+        WebSearchOutcome webSearchOutcome = commandSearch.resolveChatSearchOutcome(conversation, userMessage, userPayload,
                 roundDecision.decision(), roundDecision.degraded());
 
         // 主回复 prompt 构造（与 runLlmRound CHAT 分支同构：固定 CHAT 模板）
@@ -135,10 +150,46 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                 })
                 .concatWith(Flux.defer(() -> {
                     orchestrator.persistChatOutcome(conversation, buffer.toString(), webSearchOutcome);
-                    log.info("流式对话轮完成并落库: conversationId={}, round={}", conversationId, rounds + 1);
+                    log.info("流式对话轮完成并落库: conversationId={}, round={}", conversationId, roundNo);
                     return Flux.just(ChatStreamEvent.done());
                 }));
     }
+
+    /**
+     * 流式新建会话并跑首轮：建会话 → 首帧 SESSION 事件 → 落 user 消息 + round_count=1 →
+     * CHAT 流式段（与老会话完全同一条路径）。
+     */
+    @Override
+    public Flux<ChatStreamEvent> streamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled) {
+        return Flux.defer(() -> runStreamCreate(message, plannerAgentId, webSearchEnabled))
+                .onErrorResume(e -> {
+                    log.warn("流式新建会话失败: err={}", e.getMessage());
+                    return Flux.just(ChatStreamEvent.error(streamErrorMessage(e)));
+                });
+    }
+
+    private Flux<ChatStreamEvent> runStreamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled) {
+        String trimmed = message == null ? "" : message.trim();
+        if (trimmed.isEmpty()) {
+            throw new BizException("首条消息不能为空");
+        }
+        // 斜杠命令（/planner /task）由同步链路处理（命令语义依赖同步返回值触发后续流转）
+        if (commandSearch.isTaskCommand(trimmed) || commandSearch.isPlannerCommand(trimmed)) {
+            throw new BizException("斜杠命令暂不支持流式，请使用普通发送");
+        }
+        RequirementConversation conversation =
+                orchestrator.createConversation(trimmed, plannerAgentId, webSearchEnabled);
+        messageService.addMessage(conversation.getId(), ClarifyCommandSearchServiceImpl.ROLE_USER, trimmed, null);
+        conversation.setRoundCount(1);
+        conversationService.updateById(conversation);
+        log.info("流式会话首轮开始: conversationId={}, mode={}, webSearchEnabled={}",
+                conversation.getId(), conversation.getMode(), webSearchEnabled);
+        // 首帧必须给前端会话 id（否则 done 后无从拉 detail / 后续消息发错会话）
+        return Flux.concat(
+                Flux.just(ChatStreamEvent.session(String.valueOf(conversation.getId()))),
+                runChatStream(conversation, trimmed, null, 1));
+    }
+
 
     /**
      * CLARIFY 模式流式主回复：与同步澄清轮同语义（绕过决策、开关开启则规则搜索），仅 LLM 调用走

@@ -169,6 +169,8 @@ export const paths = {
     send: (id: string | number) => `/requirement-conversations/sendMessageById/${enc(id)}`,
     // S1 Chat SSE 流式发送（fetch 流消费，不走 axios 拦截器）
     streamSend: (id: string | number) => `/requirement-conversations/streamSendById/${enc(id)}`,
+    // 2026-10-18：新建会话 + 首轮的流式入口（首帧 session 事件回传会话 id）
+    streamCreate: '/requirement-conversations/streamCreate',
     retry: (id: string | number) => `/requirement-conversations/retryById/${enc(id)}`,
     toClarify: (id: string | number) => `/requirement-conversations/toClarifyById/${enc(id)}`,
     toChat: (id: string | number) => `/requirement-conversations/toChatById/${enc(id)}`,
