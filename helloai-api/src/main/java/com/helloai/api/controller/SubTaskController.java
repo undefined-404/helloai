@@ -9,6 +9,7 @@ import com.helloai.api.dto.subtask.DraftUpdateRequest;
 import com.helloai.api.dto.subtask.ReassignRequest;
 import com.helloai.api.dto.subtask.ReworkRequest;
 import com.helloai.api.dto.subtask.SubTaskResponse;
+import com.helloai.api.dto.subtask.SubTaskResponseMapper;
 import com.helloai.api.dto.subtask.TaskTimelineItem;
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
@@ -76,7 +77,7 @@ public class SubTaskController {
             subTask = subTaskService.getById(subTask.getId());
         }
 
-        return R.ok(toResponse(subTask));
+        return R.ok(SubTaskResponseMapper.toResponse(subTask));
     }
 
     /**
@@ -99,7 +100,7 @@ public class SubTaskController {
             items.add(it);
         }
         List<SubTask> created = subTaskService.createBatch(items);
-        List<SubTaskResponse> resp = created.stream().map(this::toResponse).toList();
+        List<SubTaskResponse> resp = created.stream().map(SubTaskResponseMapper::toResponse).toList();
         log.info("子任务批量派发: requested={}, created={}", reqs.size(), resp.size());
         return R.ok(resp);
     }
@@ -227,7 +228,7 @@ public class SubTaskController {
         SubTaskStatus statusFilter = (status != null && !status.isBlank()) ? SubTaskStatus.valueOf(status) : null;
         IPage<SubTaskResponse> result = subTaskService
                 .list(taskId, statusFilter, assignedAgent, page, pageSize)
-                .convert(this::toResponse);
+                .convert(SubTaskResponseMapper::toResponse);
         attachTaskTitles(result.getRecords());
         attachAgentNames(result.getRecords());
         if (page == null || page <= 0) {
@@ -245,7 +246,7 @@ public class SubTaskController {
         assertSubTaskReadableByAgent(id, authType, agentId);
         SubTask subTask = subTaskService.getById(id);
         if (subTask == null) return R.fail("子任务不存在");
-        SubTaskResponse response = toResponse(subTask);
+        SubTaskResponse response = SubTaskResponseMapper.toResponse(subTask);
         attachTaskTitles(List.of(response));
         attachAgentNames(List.of(response));
         return R.ok(response);
@@ -448,12 +449,12 @@ public class SubTaskController {
     @GetMapping("/listAvailable")
     public R<List<SubTaskResponse>> listAvailable() {
         List<SubTask> list = subTaskService.listAvailable();
-        return R.ok(list.stream().map(this::toResponse).toList());
+        return R.ok(list.stream().map(SubTaskResponseMapper::toResponse).toList());
     }
 
     @GetMapping("/listMine")
     public R<List<SubTaskResponse>> listMine(@RequestParam("agentId") Long agentId) {
-        List<SubTaskResponse> list = subTaskService.listMine(agentId).stream().map(this::toResponse).toList();
+        List<SubTaskResponse> list = subTaskService.listMine(agentId).stream().map(SubTaskResponseMapper::toResponse).toList();
         attachTaskTitles(list);
         attachAgentNames(list);
         return R.ok(list);
@@ -487,35 +488,5 @@ public class SubTaskController {
         Map<Long, String> nameMap = new HashMap<>();
         agentService.listByIds(agentIds).forEach(a -> nameMap.put(a.getId(), a.getName()));
         responses.forEach(r -> r.setAssignedAgentName(nameMap.get(r.getAssignedAgent())));
-    }
-
-    private SubTaskResponse toResponse(SubTask subTask) {
-        SubTaskResponse response = new SubTaskResponse();
-        response.setId(subTask.getId());
-        response.setTaskId(subTask.getTaskId());
-        response.setModuleId(subTask.getModuleId());
-        response.setTitle(subTask.getTitle());
-        response.setDeliverable(subTask.getDeliverable());
-        response.setAcceptance(subTask.getAcceptance());
-        response.setPriority(subTask.getPriority());
-        response.setStatus(subTask.getStatus());
-        response.setAssignedAgent(subTask.getAssignedAgentId());
-        response.setContent(subTask.getContent());
-        response.setReworkCount(subTask.getReworkCount());
-        response.setRequiredSkills(subTask.getRequiredSkills());
-        response.setConstraints(subTask.getConstraints());
-        response.setUncertainties(subTask.getUncertainties());
-        response.setContext(subTask.getContext());
-        response.setDependsOn(subTask.dependsOnIdList());
-        response.setDeadline(subTask.getDeadline());
-        response.setCompletedAt(subTask.getCompleteTime());
-        // 评分三件套（2026-10-18 补）：实体/库表一直有值，但响应漏映射 ⇒ 列表评分列恒空。
-        // 只在 DONE 时由隐式评分写入，其余状态为 null 属预期（前端有对应空态提示）。
-        response.setCompositeScore(subTask.getCompositeScore());
-        response.setScoreGrade(subTask.getScoreGrade());
-        response.setScoreFactors(subTask.getScoreFactors());
-        response.setCreateTime(subTask.getCreateTime());
-        response.setUpdateTime(subTask.getUpdateTime());
-        return response;
     }
 }
