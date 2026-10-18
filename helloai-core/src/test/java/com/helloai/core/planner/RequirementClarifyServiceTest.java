@@ -73,6 +73,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
@@ -2454,6 +2455,44 @@ class RequirementClarifyServiceTest {
         verify(messageService).addMessage(CONV_ID, "user", "你好", null);
         verify(messageService).addMessage(CONV_ID, "assistant", "你好，自由模式的回答 分片二 分片三", null);
         verify(conversationService).updateById(conversation);
+    }
+
+    @Test
+    @DisplayName("流式新建会话：首帧 SESSION 回传新 id + token 增量 + done（新会话不再走同步 create）")
+    void streamCreate_emitsSessionThenTokensThenDone() {
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        // mock 的 save 不会像 MyBatis-Plus 那样回填自增 id —— 手动模拟，否则会话 id 为 null
+        doAnswer(inv -> {
+            ((RequirementConversation) inv.getArgument(0)).setId(CONV_ID);
+            return true;
+        }).when(conversationService).save(any(RequirementConversation.class));
+        stubDecisionRound(DECISION_CHAT_NO_SEARCH);
+        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
+                .thenReturn(Flux.just(
+                        com.helloai.core.agent.chat.LlmStreamChunk.content("最近 AI 新闻："),
+                        com.helloai.core.agent.chat.LlmStreamChunk.content("模型密集发布")));
+
+        List<RequirementClarifyService.ChatStreamEvent> events =
+                clarifyService.streamCreate("最近的AI技术新闻么？", null, true).collectList().block();
+
+        assertThat(events).isNotNull();
+        // 首帧必须是 SESSION（前端据此在 done 后拉 detail / 发后续消息到正确会话）
+        assertThat(events.get(0).type())
+                .as("事件序列（失败时可据此看 ERROR 载荷）: %s", events)
+                .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.SESSION);
+        assertThat(events.get(0).data()).matches("\\d+");
+        // 末帧 done
+        assertThat(events.get(events.size() - 1).type())
+                .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.DONE);
+        String joined = events.stream()
+                .filter(e -> e.type() == RequirementClarifyService.ChatStreamEvent.Type.TOKEN)
+                .map(RequirementClarifyService.ChatStreamEvent::data)
+                .reduce("", String::concat);
+        assertThat(joined).isEqualTo("最近 AI 新闻：模型密集发布");
+        // 建会话（save）+ user 消息落库 + assistant 回复落库
+        verify(conversationService).save(any(RequirementConversation.class));
+        verify(messageService).addMessage(anyLong(), eq("user"), eq("最近的AI技术新闻么？"), isNull());
+        verify(messageService).addMessage(anyLong(), eq("assistant"), anyString(), any());
     }
 
     @Test
