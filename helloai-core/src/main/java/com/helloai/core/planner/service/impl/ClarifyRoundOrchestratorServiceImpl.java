@@ -102,19 +102,37 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
                         + "，请放弃本会话并在任务管理中手动创建任务");
             }
         }
-        if (pendingConfirm) {
-            if (confirmAccepted) {
-                conversation.setMode(RequirementClarifyService.MODE_CLARIFY);
-                conversation.setPendingClarifyConfirm(false);
-                conversationService.updateById(conversation);
-                log.info("用户确认转方案（确认卡）: conversationId={}", conversationId);
-            } else {
-                conversation.setPendingClarifyConfirm(false);
-                conversationService.updateById(conversation);
-                log.info("用户取消转方案，继续自由对话: conversationId={}", conversationId);
-            }
-        }
+        // 确认卡状态处理（抽为共享方法 resolvePendingClarifyConfirm，与流式同一口径）：
+        // 确认 ⇒ 切 CLARIFY + 清标记；其他消息 ⇒ 清标记继续自由对话
+        resolvePendingClarifyConfirm(conversation, selections);
         return doRound(conversation, trimmed, replyParser.buildSelectionPayload(selections));
+    }
+
+    /**
+     * 确认卡前置处理（同步与流式共用）：确认 ⇒ 切 CLARIFY + 清标记；其他 ⇒ 清标记继续对话。
+     *
+     * <p>从 {@code runLlmRound} 抽出（2026-10-18）：流式路径此前直接拒绝待确认卡场景
+     * （抛「请使用普通发送回答确认卡」），而结构化卡提交改走流式后该守卫会误拦确认操作。
+     * 抽成单一方法后两条路径共用同一口径，不再各写一套。</p>
+     */
+    @Override
+    public boolean resolvePendingClarifyConfirm(RequirementConversation conversation,
+                                                List<RequirementClarifyService.ClarifySelection> selections) {
+        boolean pendingConfirm = commandSearch.isChatMode(conversation)
+                && Boolean.TRUE.equals(conversation.getPendingClarifyConfirm());
+        if (!pendingConfirm) {
+            return false;
+        }
+        boolean confirmAccepted = confirmCardProtocol.isAcceptSelected(selections);
+        if (confirmAccepted) {
+            conversation.setMode(RequirementClarifyService.MODE_CLARIFY);
+            log.info("用户确认转方案（确认卡）: conversationId={}", conversation.getId());
+        } else {
+            log.info("用户取消转方案，继续自由对话: conversationId={}", conversation.getId());
+        }
+        conversation.setPendingClarifyConfirm(false);
+        conversationService.updateById(conversation);
+        return confirmAccepted;
     }
 
     @Override

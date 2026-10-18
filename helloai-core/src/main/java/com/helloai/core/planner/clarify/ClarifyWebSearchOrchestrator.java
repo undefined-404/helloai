@@ -273,7 +273,12 @@ public class ClarifyWebSearchOrchestrator {
                 for (int i = 0; i < futures.size() && searched.size() < maxResults; i++) {
                     WebSearchToolResult out = futures.get(i).getNow(null);
                     if (out == null) {
-                        continue; // 超时未完成 → 丢弃该词（queryList 已入 attempted，结果缺失可接受）
+                        // 可查验：该词是「超时未完成」或「异常被 exceptionally 转 null」，
+                        // 与「搜了但 0 结果」语义不同——原实现静默 continue，日志里只剩
+                        // 「只有第一个词命中」，无法判断另外两个词到底发生了什么
+                        log.info("澄清联网搜索：候选词无结果返回（超时未完成或执行异常），已丢弃: query={}",
+                                queryList.get(i));
+                        continue;
                     }
                     int hits = absorb(out, searched, seenUrls, maxResults, providerRef, answerRef, modalCards);
                     log.info("澄清联网搜索：候选词命中 {} 条: query={}", hits, queryList.get(i));
@@ -281,8 +286,16 @@ public class ClarifyWebSearchOrchestrator {
             }
             int rounds = 1;
             // Deep Research 风格补搜：首轮有结果且配置允许多轮时，LLM 评估缺口 → 补搜 1 轮
-            // （同样受时间预算约束：首轮已耗尽预算则不再补搜）
-            boolean budgetLeft = budgetMs <= 0 || System.currentTimeMillis() - t0 <= budgetMs;
+            //
+            // ★预算闸（2026-10-18 修复）：原判据是「elapsed <= budgetMs」——只要没超预算
+            // 就补搜，哪怕只剩 1ms。实测代价：首轮并行 3 词耗时 21s（预算 30s，剩 9s），
+            // 补搜启动后单次请求仍按 aiSearchTimeoutMs=25s 跑，全部超时 ⇒ 总耗时 47s、
+            // 补搜 0 命中。改为「剩余预算 ≥ 补搜最小预算」才启动：预算不足直接跳过，
+            // 用已有结果出回复（用户等 21s 而非 47s，且结果条数不变）。
+            long remainingMs = budgetMs <= 0 ? Long.MAX_VALUE : budgetMs - (System.currentTimeMillis() - t0);
+            long minGapBudget = Math.min(webSearchProperties.getAiSearchTimeoutMs(),
+                    Math.max(1L, webSearchProperties.getMinGapSearchBudgetMs()));
+            boolean budgetLeft = remainingMs >= minGapBudget;
             if (!searched.isEmpty() && webSearchProperties.getAiSearchMaxRounds() > 1 && budgetLeft) {
                 String gapQuery = searchGapAssessor.assessGap(
                         stripUrls(userMessage), new ArrayList<>(searched), attempted);
@@ -306,6 +319,10 @@ public class ClarifyWebSearchOrchestrator {
                     log.info("澄清联网搜索：缺口补搜完成 gapQuery={}, hits={}, total={}",
                             gapQuery, gap == null ? 0 : gap.results().size(), searched.size());
                 }
+            } else if (!searched.isEmpty() && webSearchProperties.getAiSearchMaxRounds() > 1) {
+                // 可查验：不是「没找到缺口」而是「预算不够补」——两者对排障的意义完全不同
+                log.info("澄清联网搜索：跳过缺口补搜（剩余预算 {}ms < 补搜最小预算 {}ms）: tried={}",
+                        remainingMs, minGapBudget, attempted);
             }
             long costMs = System.currentTimeMillis() - t0;
             // W-5：语义重排只作用于搜索引擎结果——用户直取页面是第一手资料，

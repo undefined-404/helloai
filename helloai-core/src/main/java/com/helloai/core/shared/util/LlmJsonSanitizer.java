@@ -71,4 +71,92 @@ public final class LlmJsonSanitizer {
         }
         return true;
     }
+
+    /**
+     * 修复「字符串内部裸写」导致的 JSON 结构错乱（{@link #fixInvalidEscapes} 的第二级修复）。
+     *
+     * <p><b>要解决的实测故障</b>（2026-10-18）：LLM 在 {@code description} / {@code message}
+     * 里写了未转义的英文双引号（或裸换行），字符串提前结束，Jackson 报
+     * {@code Unexpected character ('下'): was expecting comma to separate Object entries}。
+     * 这类输出**内容是完整的**，只是不符合 JSON 转义规范——直接抛错等于让用户白等一次
+     * 完整 LLM 调用，必须尽量救回来。</p>
+     *
+     * <p><b>启发式判据（只在严格解析失败后才调用，因此可以激进一点）</b>：</p>
+     * <ol>
+     *   <li>字符串内的裸控制字符（{@code \n \r \t} 及 U+0000~U+001F）→ 转义为 {@code \n} 等；</li>
+     *   <li>字符串内遇到 {@code "}：向后跳过空白看第一个字符——
+     *       是 {@code ,} {@code }} {@code ]} {@code :} ⇒ 判定为**结构结束引号**，原样保留；
+     *       否则判定为**内容引号**，转义成 {@code \"}。</li>
+     * </ol>
+     *
+     * <p><b>已知边界</b>：内容里恰好出现 {@code "…",} 形态（引号后紧跟英文逗号）会被误判成
+     * 结构结束引号。该形态在中文技术文本里罕见，且本方法只在严格解析已失败时兜底使用。</p>
+     *
+     * @param json 已过 {@link #fixInvalidEscapes} 的 JSON 文本（可为 null）
+     * @return 修复后的文本；无法改进时原样返回（调用方据「是否变化」决定是否重试）
+     */
+    public static String repairBrokenStrings(String json) {
+        if (json == null || json.isEmpty()) {
+            return json;
+        }
+        StringBuilder out = new StringBuilder(json.length() + 32);
+        boolean inString = false;
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (!inString) {
+                if (c == '"') {
+                    inString = true;
+                }
+                out.append(c);
+                continue;
+            }
+            // ---- 以下为「字符串内部」 ----
+            if (c == '\\') {
+                // 已是转义序列（fixInvalidEscapes 保证合法），整体搬运两字符
+                out.append(c);
+                if (i + 1 < json.length()) {
+                    out.append(json.charAt(++i));
+                }
+                continue;
+            }
+            if (c == '"') {
+                if (isStringTerminator(json, i)) {
+                    inString = false;
+                    out.append(c);
+                } else {
+                    out.append("\\\"");
+                }
+                continue;
+            }
+            switch (c) {
+                case '\n' -> out.append("\\n");
+                case '\r' -> out.append("\\r");
+                case '\t' -> out.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        out.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        out.append(c);
+                    }
+                }
+            }
+        }
+        return out.toString();
+    }
+
+    /**
+     * 判断 {@code quoteIndex} 处的双引号是否为字符串**结束**引号：
+     * 向后跳过空白与（可选的）换行，第一个非空白字符 ∈ {@code , } ] :} 即为结束。
+     */
+    private static boolean isStringTerminator(String json, int quoteIndex) {
+        for (int i = quoteIndex + 1; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+                continue;
+            }
+            return c == ',' || c == '}' || c == ']' || c == ':';
+        }
+        // 到末尾都没内容（截断输出）：当作未结束，转义更安全
+        return false;
+    }
 }

@@ -395,6 +395,31 @@
                   AI
                 </div>
                 <div class="msg-col">
+                  <!-- 思考过程区（2026-10-18）：推理模型的 reasoning 帧实时展示；
+                       正文开始后自动折叠为一行可展开（避免长思考撑满屏） -->
+                  <div
+                    v-if="thinkingText"
+                    class="msg-bubble msg-thinking"
+                  >
+                    <div
+                      class="msg-thinking-head"
+                      @click="thinkingExpanded = !thinkingExpanded"
+                    >
+                      <el-icon class="is-loading" v-if="reasoningActive && !streamText">
+                        <Loading />
+                      </el-icon>
+                      <span>{{ reasoningActive && !streamText ? '思考中…' : '思考过程' }}</span>
+                      <span class="msg-thinking-toggle">
+                        {{ thinkingExpanded || (reasoningActive && !streamText) ? '收起' : '展开' }}
+                      </span>
+                    </div>
+                    <div
+                      v-if="thinkingExpanded || (reasoningActive && !streamText)"
+                      class="msg-thinking-body"
+                    >
+                      {{ thinkingText }}
+                    </div>
+                  </div>
                   <!-- S1 流式回复：token 增量渲染 Markdown；尚未产出 token 时保持思考中占位 -->
                   <div
                     v-if="streamText"
@@ -403,7 +428,7 @@
                     <MarkdownView :content="streamText" />
                   </div>
                   <div
-                    v-else
+                    v-else-if="!thinkingText"
                     class="msg-bubble msg-loading"
                   >
                     <el-icon class="is-loading">
@@ -706,6 +731,14 @@ let streamFlushTimer: number | null = null
 // JSON 结构不裸露，done 后收敛为卡片/终稿）；CHAT 模式不截断（正文可能含用户要求的代码块）
 let jsonFenceSeen = false
 
+// 思考过程流式（2026-10-18）：推理模型的 reasoning 帧独立展示，与正文分区渲染
+// reasoningActive 标记「当前是否仍处于思考阶段」（正文首帧到达即置 false）
+const thinkingText = ref('')
+let reasoningBuffer = ''
+let reasoningFlushTimer: number | null = null
+let reasoningActive = false
+const thinkingExpanded = ref(true)
+
 // Planner 下拉选：'__auto__' = 系统自动选择（等权重，优先空闲）
 const plannerOptions = ref<PlannerOption[]>([])
 const selectedPlanner = ref<string>('__auto__')
@@ -947,8 +980,8 @@ async function handleSend() {
   try {
     const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
     // S1 流式分流：已有会话（CHAT 自由对话 / CLARIFY 方案澄清老会话）普通消息走 SSE 流式
-    // （token 增量渲染 + done 后收敛卡片/终稿）；新会话（create）/ 斜杠命令 /
-    // 结构化卡提交（handleStructuredSubmit）保持同步链路
+    // （token 增量渲染 + 思考过程实时展示 + done 后收敛卡片/终稿）；新会话（create）与
+    // 斜杠命令保持同步链路。结构化卡提交也已改走流式（见 handleStructuredSubmit）。
     if (activeId.value != null) {
       await streamSendActiveMessage(activeId.value, text)
       return
@@ -1006,6 +1039,11 @@ function flushStreamText() {
 }
 
 function appendStreamToken(token: string) {
+  // 思考阶段结束、正文开始：思考区自动折叠（用户仍可点「展开」回看）
+  if (reasoningActive) {
+    reasoningActive = false
+    thinkingExpanded.value = false
+  }
   // CHAT 模式：纯文本正文不截断（正文可能含用户要求的 ``` 代码块）
   if (!isChatMode.value) {
     if (jsonFenceSeen) return
@@ -1031,6 +1069,33 @@ function appendStreamToken(token: string) {
   }
 }
 
+// 思考过程增量（reasoning 帧）：独立缓冲 + 更短节流（思考流高频、用户希望「看到在动」）
+function appendStreamReasoning(text: string) {
+  reasoningActive = true
+  reasoningBuffer += text
+  if (reasoningFlushTimer == null) {
+    reasoningFlushTimer = window.setTimeout(() => {
+      reasoningFlushTimer = null
+      if (reasoningBuffer) {
+        thinkingText.value += reasoningBuffer
+        reasoningBuffer = ''
+        scrollToBottom()
+      }
+    }, 80)
+  }
+}
+
+function flushReasoningText() {
+  if (reasoningFlushTimer != null) {
+    window.clearTimeout(reasoningFlushTimer)
+    reasoningFlushTimer = null
+  }
+  if (reasoningBuffer) {
+    thinkingText.value += reasoningBuffer
+    reasoningBuffer = ''
+  }
+}
+
 // 流收尾：冲残留 buffer → 拉 detail 对齐落库全文（同 tick 内 streamText 清空，无闪烁）；
 // 失败场景刷新详情暴露重试条（user 消息已落库）
 async function settleStream(id: LongId, success: boolean) {
@@ -1048,14 +1113,23 @@ async function settleStream(id: LongId, success: boolean) {
   }
 }
 
-// 已有 CHAT 会话：普通消息走 SSE 流式（token 增量渲染 + done 后收敛）
-async function streamSendActiveMessage(id: LongId, text: string) {
+// 已有会话：普通消息与结构化卡提交统一走 SSE 流式（token 增量渲染 + done 后收敛）
+// ★2026-10-18 修复：结构化卡提交此前走同步 clarifyApi.send —— 而同步链路要先跑完
+// 联网搜索（数秒~数十秒）+ 完整 LLM 输出才一次性返回，用户全程无反馈；改走同一 SSE
+// 通道后可见打字机增量（后端 runStreamRound 早已支持 selections 参数）。
+async function streamSendActiveMessage(id: LongId, text: string,
+                                      selections: ClarifySelection[] | null = null) {
   streamText.value = ''
+  thinkingText.value = ''
+  thinkingExpanded.value = true
   streamBuffer = ''
+  reasoningBuffer = ''
+  reasoningActive = false
   jsonFenceSeen = false
   try {
-    await streamSendConversation(id, text, null, {
+    await streamSendConversation(id, text, selections, {
       onToken: appendStreamToken,
+      onReasoning: appendStreamReasoning,
       onDone: () => { void settleStream(id, true) },
       onError: (msg) => {
         ElMessage.error(msg)
@@ -1068,7 +1142,9 @@ async function streamSendActiveMessage(id: LongId, text: string) {
       window.clearTimeout(streamFlushTimer)
       streamFlushTimer = null
     }
+    flushReasoningText()
     streamBuffer = ''
+    reasoningBuffer = ''
     pendingText.value = ''
     sending.value = false
   }
@@ -1122,6 +1198,8 @@ async function handleRetry() {
 }
 
 // V33 结构化选项提交：可读文本走 content（LLM 上下文），选择快照走 payload（回显）
+// 2026-10-18：改走 SSE 流式（与普通消息同一通道）——原同步链路要等搜索 + 完整 LLM 输出，
+// 用户体感是「卡住很久然后一次性刷出」，且看不到思考过程。
 async function handleStructuredSubmit(payload: { text: string; selections: ClarifySelection[] }) {
   const id = activeId.value
   if (id == null || sending.value) return
@@ -1129,13 +1207,7 @@ async function handleStructuredSubmit(payload: { text: string; selections: Clari
   sending.value = true
   scrollToBottom()
   try {
-    const result = await clarifyApi.send(id, payload.text, payload.selections)
-    detail.value = result
-    activeId.value = String(result.conversation.id)
-    scrollToBottom()
-  } catch {
-    // 拦截器已弹错；user 消息多半已落库，刷新详情后靠重试按钮续跑
-    try { detail.value = await clarifyApi.detail(id) } catch { /* 拦截器已弹错 */ }
+    await streamSendActiveMessage(id, payload.text, payload.selections)
   } finally {
     pendingText.value = ''
     sending.value = false
@@ -1728,6 +1800,38 @@ onMounted(() => {
   font-size: 13px;
 }
 .msg-streaming { font-size: 14px; }
+
+/* 思考过程区（2026-10-18）：区分于正文气泡——灰底、等宽感、可折叠 */
+.msg-thinking {
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--el-color-info-light-5);
+  background: var(--el-fill-color-lighter);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--ha-muted);
+}
+.msg-thinking-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+}
+.msg-thinking-toggle {
+  margin-left: auto;
+  font-size: 12px;
+  opacity: 0.7;
+}
+.msg-thinking-body {
+  margin-top: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
 
 /* 结构化问题卡片 / 联网搜索查验条：与气泡同宽上限 */
 .sq-wrap,

@@ -102,17 +102,36 @@ public class ClarifyReplyParser {
         RequirementClarifyService.ClarifyReply reply;
         try {
             reply = objectMapper.readValue(cleaned, RequirementClarifyService.ClarifyReply.class);
-        } catch (Exception e) {
-            if (!rawOutput.contains("\"type\"")) {
-                log.warn("澄清 LLM 输出非 JSON，降级为 freeform 追问: {}", summarize(rawOutput));
-                RequirementClarifyService.ClarifyReply fallback = new RequirementClarifyService.ClarifyReply();
-                fallback.setType("question");
-                fallback.setMode(MODE_FREEFORM);
-                fallback.setMessage(rawOutput.trim());
-                return fallback;
+        } catch (Exception first) {
+            // 二级修复（2026-10-18）：LLM 在 description/message 里裸写英文引号或换行时，
+            // 字符串提前结束 ⇒ "was expecting comma to separate Object entries"。这类输出
+            // 内容完整，只是不符合 JSON 转义规范，直接抛错等于让用户白等一次完整 LLM 调用。
+            // 先试 repairBrokenStrings；仍失败才走原有降级/抛错分支。
+            String repaired = LlmJsonSanitizer.repairBrokenStrings(cleaned);
+            if (!repaired.equals(cleaned)) {
+                try {
+                    reply = objectMapper.readValue(repaired, RequirementClarifyService.ClarifyReply.class);
+                    log.warn("澄清 LLM 输出 JSON 结构错乱，已通过字符串修复救回: 原始错误={}", first.getMessage());
+                } catch (Exception second) {
+                    reply = null;
+                    log.warn("澄清 LLM 输出 JSON 修复后仍解析失败: first={}, second={}",
+                            first.getMessage(), second.getMessage());
+                }
+            } else {
+                reply = null;
             }
-            throw new BizException("澄清 LLM 输出 JSON 解析失败: " + e.getMessage()
-                    + "; 原始输出摘要: " + summarize(rawOutput));
+            if (reply == null) {
+                if (!rawOutput.contains("\"type\"")) {
+                    log.warn("澄清 LLM 输出非 JSON，降级为 freeform 追问: {}", summarize(rawOutput));
+                    RequirementClarifyService.ClarifyReply fallback = new RequirementClarifyService.ClarifyReply();
+                    fallback.setType("question");
+                    fallback.setMode(MODE_FREEFORM);
+                    fallback.setMessage(rawOutput.trim());
+                    return fallback;
+                }
+                throw new BizException("澄清 LLM 输出 JSON 解析失败: " + first.getMessage()
+                        + "; 原始输出摘要: " + summarize(rawOutput));
+            }
         }
         if (reply == null || reply.getType() == null) {
             throw new BizException("澄清 LLM 输出缺少 type 字段; 原始输出摘要: " + summarize(rawOutput));

@@ -6,14 +6,17 @@ import type { ClarifySelection, LongId } from '@/types'
 // JSON R 包裹体，对流不适用）。鉴权头与 request.ts 同源（X-Admin-Token / Bearer），手动携带。
 //
 // 事件协议（与服务端 RequirementConversationController.streamSendById 对齐）：
-//   event: token -> data: 增量文本块（服务端已按 ≥50 字符或 ≥100ms 聚合，此处不做二次分片）
-//   event: done  -> data: [DONE]（主回复已落库，调用方随后拉 detail 收敛）
-//   event: error -> data: 错误消息（user 消息已落库，可走 retry 重试链路）
+//   event: token     -> data: 增量正文文本块（服务端已按 ≥50 字符或 ≥100ms 聚合）
+//   event: reasoning -> data: 增量思考过程块（推理模型，2026-10-18 新增；只做展示，不并入正文）
+//   event: done      -> data: [DONE]（主回复已落库，调用方随后拉 detail 收敛）
+//   event: error     -> data: 错误消息（user 消息已落库，可走 retry 重试链路）
 // 流非正常结束（连接断开且未收到 done/error）由本层兜底转 error。
 
 export interface ChatStreamHandlers {
   /** 增量文本块（按序拼接即完整回复，与落库全文一致） */
   onToken: (token: string) => void
+  /** 增量思考过程块（可选；推理模型才有，非推理模型永不触发） */
+  onReasoning?: (text: string) => void
   /** 主回复生成完毕并落库（成功语义） */
   onDone: () => void
   /** 流失败（含服务端业务拒绝与连接中断），message 可直接提示 */
@@ -71,6 +74,8 @@ export async function streamSendConversation(
     }
     if (event === 'token' && data) {
       handlers.onToken(data)
+    } else if (event === 'reasoning' && data) {
+      handlers.onReasoning?.(data)
     } else if (event === 'done') {
       finish('done')
     } else if (event === 'error') {

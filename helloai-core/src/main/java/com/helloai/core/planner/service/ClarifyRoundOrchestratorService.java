@@ -66,4 +66,16 @@ public interface ClarifyRoundOrchestratorService {
     /** CHAT 模式主回复落库（结构化追问卡 / 纯文本），同步与流式共用。 */
     void persistChatOutcome(RequirementConversation conversation, String output,
                             WebSearchOutcome webSearchOutcome);
+
+    /**
+     * 确认卡待确认状态的前置处理（同步 {@code sendMessage} 与流式 {@code streamRound} <b>共用</b>）。
+     *
+     * <p>语义（与原同步路径逐字一致）：确认卡点「确认」（selections 快照命中接受项）⇒ 切 CLARIFY
+     * 模式并清标记；其它消息 ⇒ 仅清标记、继续自由对话。两处调用同一方法而非各写一遍——
+     * 「同一事实双写必分叉」，此前流式路径直接抛「存在待确认卡片」，与同步路径行为不一致。</p>
+     *
+     * @return true = 本次确认了转方案（已切 CLARIFY）；false = 无待确认卡，或用户未选择接受
+     */
+    boolean resolvePendingClarifyConfirm(RequirementConversation conversation,
+                                         List<ClarifySelection> selections);
 }
