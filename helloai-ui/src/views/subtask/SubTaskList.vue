@@ -36,6 +36,23 @@
                 :value="k"
               />
             </el-select>
+            <!-- 死信待处理入口（2026-10-18）：原「死信池」独立菜单已隐藏，
+                 改由本页按钮承载——同一页面不再出现两个入口，且数量角标比菜单位置更能提示 -->
+            <el-badge
+              :value="deadLetterCount"
+              :hidden="deadLetterCount === 0"
+              type="warning"
+              class="deadletter-badge"
+            >
+              <el-button
+                size="small"
+                :type="statusFilter === 'DEAD_LETTER' ? 'warning' : 'default'"
+                style="margin-right:8px"
+                @click="toggleDeadLetterFilter"
+              >
+                死信待处理
+              </el-button>
+            </el-badge>
             <el-button
               v-auth="'subtask:add'"
               size="small"
@@ -191,14 +208,27 @@
             width="80"
           >
             <template #default="{ row }">
-              <el-tag
+              <el-tooltip
                 v-if="row.scoreGrade"
-                :type="SCORE_GRADE_MAP[row.scoreGrade]?.type || 'info'"
-                size="small"
+                :content="scoreTooltip(row)"
+                placement="top"
               >
-                {{ SCORE_GRADE_MAP[row.scoreGrade]?.label || row.scoreGrade }}
-              </el-tag>
-              <span v-else>-</span>
+                <el-tag
+                  :type="SCORE_GRADE_MAP[row.scoreGrade]?.type || 'info'"
+                  size="small"
+                >
+                  {{ SCORE_GRADE_MAP[row.scoreGrade]?.label || row.scoreGrade }}
+                </el-tag>
+              </el-tooltip>
+              <!-- 空值不是「没算出来」而是「还没到算的时机」：评分只在 DONE 时写入，
+                   不说明会让人以为功能坏了（2026-10-18 用户反馈） -->
+              <el-tooltip
+                v-else
+                content="评分在子任务完成（DONE）时自动计算；进行中/已取消/未指派执行者时为空属预期"
+                placement="top"
+              >
+                <span class="score-empty">-</span>
+              </el-tooltip>
             </template>
           </el-table-column>
           <el-table-column
@@ -605,7 +635,47 @@ async function load(page = 1) {
     if (taskId.value) { loadFullList(); loadIterations() }
   } finally { loading.value = false }
 }
+
+/**
+ * 死信待处理数量（2026-10-18：原「死信池」独立菜单已隐藏，改由本页按钮承载）。
+ *
+ * <p>用 size=1 的分页 total 取数量：后端 SQL 只查 COUNT + LIMIT 1，代价可忽略；
+ * 失败静默为 0（角标缺失不影响列表主流程，与 eventCatalog 的降级口径一致）。</p>
+ */
+const deadLetterCount = ref(0)
+async function loadDeadLetterCount() {
+  try {
+    const res = await subTaskApi.list({ status: 'DEAD_LETTER', page: 1, pageSize: 1 })
+    deadLetterCount.value = Number(res.total) || 0
+  } catch {
+    deadLetterCount.value = 0
+  }
+}
+
+// 任何来源的筛选变化（下拉/按钮/路由 query）都刷新角标，保证数量与列表口径一致
+watch(statusFilter, () => { loadDeadLetterCount() })
+
+/** 切到死信筛选（等价于原「死信池」菜单入口）；再次点击可清除筛选回到全部。 */
+function toggleDeadLetterFilter() {
+  statusFilter.value = statusFilter.value === 'DEAD_LETTER' ? '' : 'DEAD_LETTER'
+  load(1)
+}
 function loadPage(page: number) { load(page) }
+
+/** 评分悬浮说明：等级 + 复合分 + 五维明细（有则显示，缺项省略）。 */
+function scoreTooltip(row: SubTask): string {
+  const parts: string[] = []
+  if (row.compositeScore != null) parts.push('综合 ' + row.compositeScore + ' 分')
+  const f = (row as any).scoreFactors as Record<string, number> | undefined
+  if (f) {
+    const dims = [
+      ['时间', f.timeScore], ['质量', f.qualityScore], ['协作', f.coopScore],
+      ['稳定', f.stabilityScore], ['效率', f.efficiencyScore],
+    ].filter(([, v]) => v != null).map(([k, v]) => `${k} ${v}`)
+    if (dims.length) parts.push(dims.join(' · '))
+  }
+  return parts.length ? parts.join('\n') : '评分在子任务完成时自动计算'
+}
 
 // 切换每页条数：回到第一页避免新 pageSize 下越界
 function onSizeChange(s: number) {
@@ -631,6 +701,7 @@ watch(taskId, () => {
   if (!taskId.value) { viewMode.value = 'list'; fullList.value = []; iterations.value = [] }
   loadParentTask()
   load()
+  loadDeadLetterCount()
 })
 // 同页面内 status query 变化（子任务菜单 ↔ 死信池菜单切换）时同步筛选并刷新
 watch(statusQuery, (v) => {
@@ -792,11 +863,13 @@ onMounted(() => {
   statusFilter.value = (validStatuses as string[]).includes(initStatus) ? (initStatus as SubTaskStatus) : ''
   loadParentTask()
   load()
+  loadDeadLetterCount()
 })
 </script>
 
 <style scoped>
 .page { max-width: var(--ha-content-width); }
+.score-empty { color: var(--ha-muted); cursor: help; }
 .header-actions { display: flex; align-items: center; }
 .parent-task-bar { margin-bottom: 12px; }
 .parent-task-bar :deep(.el-alert__title) { display: flex; align-items: center; justify-content: space-between; width: 100%; }
