@@ -40,7 +40,7 @@ const citeContent = ref('')
 
 const html = computed(() => {
   // 剥离 HTML 注释（模板脚手架/元信息）：正常 Markdown 中注释不可见，但 html:false 下 <!-- --> 会作为纯文本露出
-  const raw = (props.content || '').replace(/<!--[\s\S]*?-->/g, '')
+  const raw = normalizeHeadings((props.content || '').replace(/<!--[\s\S]*?-->/g, ''))
   if (!raw.trim()) return '<span class="md-empty">-</span>'
 
   // 1) 收集并屏蔽引用 token → ASCII 占位符（@@ 无 markdown 语义，DOMPurify 视作文本）
@@ -62,6 +62,40 @@ const html = computed(() => {
 
 function escapeAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/**
+ * 标题规范化（2026-10-18）：把 `##标题` / `###1. xxx` 这类**缺空格**的 ATX 标题修正为合法 Markdown。
+ *
+ * <p><b>为什么必须做</b>：CommonMark 规定 ATX 标题的 `#` 系列后<b>必须</b>跟一个空格或行尾，
+ * 否则整行按普通文本输出。而中文大模型输出极常见 `##先说结论`、`###1. 项目名` 这种写法
+ * ⇒ 用户看到裸露的 `##`，以为渲染坏了（实测库中 8 条 assistant 消息有此问题）。</p>
+ *
+ * <p><b>两类修正</b>：
+ * <ol>
+ *   <li>行首（允许前导空白）`#{1,6}` 紧跟非空白 ⇒ 补空格；</li>
+ *   <li>中文/中文标点后<b>直接接</b> `#{1,6}` ⇒ 先断行再补空格
+ *       （LLM 常在句末直接续写下一个标题，如 `##几个项目###1. xxx`）。</li>
+ * </ol>
+ * <b>跳过 fenced code block</b>（``` 或 ~~~）内的内容——那里 `#` 是代码/注释，不能改。</p>
+ */
+function normalizeHeadings(src: string): string {
+  const lines = src.split('\n')
+  let inFence = false
+  return lines
+    .map((line) => {
+      if (/^\s*(```|~~~)/.test(line)) {
+        inFence = !inFence
+        return line
+      }
+      if (inFence) return line
+      return line
+        // ① 行首标题缺空格：`##标题` → `## 标题`（`#{1,6}` 后紧跟非空白、非 #）
+        .replace(/^(\s*)(#{1,6})(?=[^\s#])/, '$1$2 ')
+        // ② 中文/中文标点后直接接标题：断行 + 补空格
+        .replace(/([\u4e00-\u9fa5）】》」』。！？；：、，])\s*(#{1,6})(?=[^\s#])/g, '$1\n$2 ')
+    })
+    .join('\n')
 }
 
 /** 点击引用卡片 → 取分片正文 → 弹层展示原文（懒加载，仅在点击时取）。 */
@@ -96,25 +130,48 @@ async function onCiteClick(e: MouseEvent): Promise<void> {
 }
 .md-view :deep(.md-empty) { color: var(--ha-muted); }
 
-/* 标题 */
+/* 标题：对齐 DeepSeek / Kimi 的层级感——
+   一级最重（18px）、二级带下边距分隔、三级以上与正文同族但加粗，
+   段前距 > 段后距（16/6），让「标题领起下文」的视觉关系成立 */
 .md-view :deep(h1),
 .md-view :deep(h2),
 .md-view :deep(h3),
-.md-view :deep(h4) { margin: 16px 0 8px; font-weight: 600; line-height: 1.3; }
-.md-view :deep(h1) { font-size: 20px; }
-.md-view :deep(h2) { font-size: 18px; }
-.md-view :deep(h3) { font-size: 16px; }
-.md-view :deep(h4) { font-size: 14px; }
+.md-view :deep(h4),
+.md-view :deep(h5),
+.md-view :deep(h6) {
+  margin: 18px 0 8px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ha-text, inherit);
+}
+.md-view :deep(h1) { font-size: 18px; }
+.md-view :deep(h2) {
+  font-size: 16px;
+  /* 二级标题加一条极淡下边框：多章节长文里比单纯加大字号更好扫读（Kimi 同类做法） */
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--ha-border, rgba(127,127,127,0.14));
+}
+.md-view :deep(h3) { font-size: 15px; }
+.md-view :deep(h4),
+.md-view :deep(h5),
+.md-view :deep(h6) { font-size: 14px; }
 .md-view :deep(h1:first-child),
 .md-view :deep(h2:first-child),
 .md-view :deep(h3:first-child),
+.md-view :deep(h4:first-child),
 .md-view :deep(p:first-child) { margin-top: 0; }
 
-/* 段落 / 列表 */
-.md-view :deep(p) { margin: 8px 0; }
+/* 段落 / 列表：首行不顶格、列表左缩进足够，避免多级列表糊成一片 */
+.md-view :deep(p) { margin: 10px 0; }
 .md-view :deep(ul),
-.md-view :deep(ol) { margin: 8px 0; padding-left: 22px; }
+.md-view :deep(ol) { margin: 8px 0; padding-left: 24px; }
 .md-view :deep(li) { margin: 4px 0; }
+.md-view :deep(li > p) { margin: 4px 0; }
+/* 嵌套列表：层级间加一点纵向余量，否则深层项与父项同距，读不出从属 */
+.md-view :deep(li > ul),
+.md-view :deep(li > ol) { margin: 4px 0; }
+/* 任务列表（- [x] 形式）去掉多余项目符号缩进 */
+.md-view :deep(li > input[type='checkbox']) { margin-right: 6px; }
 
 /* 引用 */
 .md-view :deep(blockquote) {

@@ -234,7 +234,7 @@
     <el-dialog
       v-model="descVisible"
       :title="descTitle"
-      width="600px"
+      width="760px"
       top="5vh"
       append-to-body
       :show-close="true"
@@ -314,7 +314,10 @@
           :key="group.label"
           class="detail-row"
         >
-          <span class="detail-label">{{ group.label }}</span>
+          <span
+            class="detail-label"
+            :title="group.label"
+          >{{ group.label }}</span>
           <ul class="detail-list">
             <li
               v-for="(item, idx) in group.items"
@@ -722,11 +725,48 @@ async function handlePlan(row: Task) {
 
 /* 任务详情弹窗：描述 / 需求包分区，标签定宽 + 条目列表紧凑行高 */
 .detail-block + .detail-block { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--el-border-color-lighter); }
-.detail-caption { margin-bottom: 8px; font-weight: 600; color: var(--el-text-color-primary); }
-.detail-row { display: flex; gap: 8px; margin-bottom: 6px; }
-.detail-label { flex: none; min-width: 72px; color: var(--el-text-color-secondary); }
-.detail-value { flex: 1; word-break: break-word; }
-.detail-list { flex: 1; margin: 0; padding-left: 16px; }
-.detail-list li { line-height: 1.6; }
+/* 任务详情弹窗排版（2026-10-18 重做）
+   原实现问题：①标签 min-width 72px 装不下「任务级验收标准（acceptanceCriteria）」，
+   被强制折成两行并把右侧内容压窄；②各分区之间只有 6px 间距，长列表糊成一片；
+   ③标签与内容行高不一致，长内容首行与标签对不齐。 */
+.detail-block + .detail-block {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+.detail-caption {
+  margin-bottom: 10px;
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--el-text-color-primary);
+}
+/* 标签列固定宽度且不换行：超长标签省略号 + 原生 title 提示（避免两行折行挤压正文） */
+.detail-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 8px;
+  line-height: 1.7;
+}
+.detail-label {
+  flex: none;
+  width: 132px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.detail-value { flex: 1; min-width: 0; word-break: break-word; }
+.detail-list {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-left: 18px;
+}
+.detail-list li { line-height: 1.75; }
+.detail-list li + li { margin-top: 3px; }
+/* 长描述正文：限制阅读宽度并给足行距（Markdown 渲染块） */
+.desc-md { line-height: 1.75; }
 .detail-empty { margin: 0; color: var(--el-text-color-placeholder); }
 </style>
