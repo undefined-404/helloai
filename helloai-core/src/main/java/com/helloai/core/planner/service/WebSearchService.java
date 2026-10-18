@@ -1,5 +1,6 @@
 package com.helloai.core.planner.service;
 
+import com.helloai.core.planner.search.WebModalCard;
 import com.helloai.core.planner.search.WebSearchResult;
 
 import java.util.List;
@@ -45,6 +46,24 @@ public interface WebSearchService {
      */
     default String answerSummary(String query) {
         return null;
+    }
+
+    /**
+     * 获取最近一次 {@link #search} 附带的结构化模态卡（供应商能力扩展，W-7）。
+     *
+     * <p>仅支持模态卡的供应商（博查 AI Search）覆盖返回：天气 / 百科 / 股票 / 汇率 /
+     * 金价 / 油价 等垂域结构化卡，数据来自垂域数据源而非网页抽取，比摘要更精确。
+     * 不支持返回空列表。</p>
+     *
+     * <p><b>语义约束与 {@link #answerSummary} 同款</b>：与 {@link #search} 配对使用
+     * （search 先行），实现侧按 query 取槽——并行搜索下各词互不干扰；非配对调用返回空列表。
+     * 独立成本为 0：卡数据随 search 的同一次 HTTP 响应返回，本方法只读解析后的槽。</p>
+     *
+     * @param query 与最近一次 {@link #search} 相同的查询词
+     * @return 本轮该查询词的结构化卡；供应商不支持/无卡返回空列表
+     */
+    default List<WebModalCard> modalCards(String query) {
+        return List.of();
     }
 
     /**

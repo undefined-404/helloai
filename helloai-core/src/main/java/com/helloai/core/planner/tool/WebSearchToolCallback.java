@@ -2,6 +2,7 @@ package com.helloai.core.planner.tool;
 
 import com.helloai.core.agent.tool.ToolCallbackContributor;
 import com.helloai.core.agent.tool.ToolContext;
+import com.helloai.core.planner.search.WebModalCard;
 import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.WebSearchService;
 import lombok.extern.slf4j.Slf4j;
@@ -104,10 +105,14 @@ public class WebSearchToolCallback implements ToolCallbackContributor {
             if (Boolean.TRUE.equals(withAnswer)) {
                 answer = webSearchService.answerSummary(query);
             }
-            log.info("web_search 工具调用完成: query={}, maxResults={}, hits={}, withAnswer={}",
-                    query, limit, results == null ? 0 : results.size(), withAnswer);
+            // W-7：结构化模态卡随同一次搜索响应返回，读槽零额外成本（无卡返回空列表）
+            List<WebModalCard> modalCards = webSearchService.modalCards(query);
+            log.info("web_search 工具调用完成: query={}, maxResults={}, hits={}, withAnswer={}, modalCards={}",
+                    query, limit, results == null ? 0 : results.size(), withAnswer,
+                    modalCards == null ? 0 : modalCards.size());
             return new WebSearchToolResult(provider,
-                    results == null ? List.of() : results, answer);
+                    results == null ? List.of() : results, answer,
+                    modalCards == null ? List.of() : modalCards);
         } catch (Exception e) {
             // 契约：搜索失败绝不抛（消费方按空列表降级）；防御性兜底
             log.warn("web_search 工具调用异常，降级空结果: query={}, err={}", query, e.getMessage());

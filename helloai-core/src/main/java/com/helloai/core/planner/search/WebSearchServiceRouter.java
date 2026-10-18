@@ -72,6 +72,18 @@ public class WebSearchServiceRouter implements WebSearchService {
     }
 
     /**
+     * 委托当前激活供应商的结构化模态卡（W-7，博查 AI Search 的天气/百科/股票等垂域卡）。
+     *
+     * <p>与 {@link #search} 配对使用（search 先行）：Router 不缓存，直接转发到 delegate，
+     * 由实现侧按其 per-query 槽返回。无候选实现时返回空列表（不抛异常）。</p>
+     */
+    @Override
+    public List<WebModalCard> modalCards(String query) {
+        WebSearchService delegate = resolve();
+        return delegate == null ? List.of() : delegate.modalCards(query);
+    }
+
+    /**
      * 委托当前激活的供应商实现验证 API Key。
      *
      * <p>不受总开关 {@code enabled} 短路：验证是管理员显式操作，即使搜索开关关闭

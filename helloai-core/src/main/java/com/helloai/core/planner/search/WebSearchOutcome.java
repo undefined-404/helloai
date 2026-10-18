@@ -68,6 +68,15 @@ public class WebSearchOutcome {
      */
     private String answer;
 
+    /**
+     * 结构化模态卡（W-7，供应商能力：博查 AI Search 的天气 / 百科 / 股票 / 汇率 /
+     * 金价 / 油价 等垂域卡）。数据来自垂域数据源而非网页抽取，比摘要更精确；
+     * 注入 Prompt 时紧跟总结节、置于网页结果之前（精确事实优先）。
+     * 落 payload 的 {@code modalCards} 键供前端可查验。
+     */
+    @Builder.Default
+    private List<WebModalCard> modalCards = Collections.emptyList();
+
     /** 本轮实际搜索轮数（含 Deep Research 风格补搜；1=单轮，>1=发生过补搜）。 */
     @Builder.Default
     private int rounds = 1;
@@ -81,13 +90,24 @@ public class WebSearchOutcome {
         boolean hasPages = fetchedPages != null && fetchedPages.stream().anyMatch(WebPageContent::isOk);
         boolean hasResults = results != null && !results.isEmpty();
         boolean hasAnswer = answer != null && !answer.isBlank();
-        if (!hasPages && !hasResults && !hasAnswer) {
+        boolean hasCards = modalCards != null && !modalCards.isEmpty();
+        if (!hasPages && !hasResults && !hasAnswer && !hasCards) {
             return "（无可用联网资料）";
         }
         StringBuilder sb = new StringBuilder();
         if (hasAnswer) {
             sb.append("以下是联网检索结果的大模型总结（供参考，引用细节请以下方来源为准）：\n")
                     .append(answer.strip()).append("\n\n");
+        }
+        if (hasCards) {
+            // W-7：垂域结构化数据（天气/金价/股票…）是精确事实，优先于网页摘要注入
+            sb.append("以下是检索到的结构化数据（来自垂直领域数据源，数字与字段比网页摘要更精确）：\n");
+            for (WebModalCard c : modalCards) {
+                sb.append("- 【").append(c.getTitle() == null ? c.getType() : c.getTitle()).append("】")
+                        .append(c.getSummary() == null ? "" : c.getSummary())
+                        .append('\n');
+            }
+            sb.append('\n');
         }
         if (hasPages) {
             long okCount = fetchedPages.stream().filter(WebPageContent::isOk).count();

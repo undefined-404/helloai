@@ -4,14 +4,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
 import com.helloai.core.agent.tool.ToolExecutionResult;
 import com.helloai.core.agent.tool.ToolExecutor;
+import com.helloai.core.planner.search.BochaRerankService;
 import com.helloai.core.planner.search.WebPageContent;
+import com.helloai.core.planner.search.WebModalCard;
 import com.helloai.core.planner.search.WebSearchOutcome;
 import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.SearchQueryPlannerService;
 import com.helloai.core.planner.service.WebPageFetchService;
 import com.helloai.core.planner.tool.WebSearchToolResult;
 
-import java.time.LocalDate;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -52,6 +53,9 @@ public class ClarifyWebSearchOrchestrator {
     private static final Pattern URL_IN_TEXT_PATTERN = Pattern.compile(
             "https?://[^\\s<>\"'，。；、（）()【】\\[\\]{}]+");
 
+    /** W-5 重排语义锚的最大字符数（rerank 模型按 512 token 评分，长文本无增益）。 */
+    private static final int RERANK_ANCHOR_MAX_CHARS = 200;
+
     /**
      * W-2 并行搜索共享线程池：多候选词并行调 web_search 工具。
      * 池大小 = 2×CPU 核数（搜索是 IO 密集，略超核数容忍长尾），最小 4。
@@ -83,6 +87,8 @@ public class ClarifyWebSearchOrchestrator {
     private final SearchQueryPlannerService searchQueryPlannerService;
     private final RelativeTimeNormalizer relativeTimeNormalizer;
     private final SearchGapAssessor searchGapAssessor;
+    /** W-5 语义重排（默认关；只排搜索引擎结果，直取页面固定置顶）。 */
+    private final BochaRerankService bochaRerankService;
     /** web_search 工具输出 JSON 解析。 */
     private final ObjectMapper objectMapper;
 
@@ -96,6 +102,7 @@ public class ClarifyWebSearchOrchestrator {
                                         SearchQueryPlannerService searchQueryPlannerService,
                                         RelativeTimeNormalizer relativeTimeNormalizer,
                                         SearchGapAssessor searchGapAssessor,
+                                        BochaRerankService bochaRerankService,
                                         ObjectMapper objectMapper) {
         this.toolExecutor = toolExecutor;
         this.webSearchProperties = webSearchProperties;
@@ -103,6 +110,7 @@ public class ClarifyWebSearchOrchestrator {
         this.searchQueryPlannerService = searchQueryPlannerService;
         this.relativeTimeNormalizer = relativeTimeNormalizer;
         this.searchGapAssessor = searchGapAssessor;
+        this.bochaRerankService = bochaRerankService;
         this.objectMapper = objectMapper;
     }
 
@@ -200,6 +208,8 @@ public class ClarifyWebSearchOrchestrator {
         // provider 初始 null = 未解析到真实供应商，outcome 构建时兜底 "web_search_tool"
         Holder<String> providerRef = new Holder<>();
         Holder<String> answerRef = new Holder<>();
+        // W-7：模态卡跨词收集（按 type+title 去重），最终落 outcome.modalCards
+        List<WebModalCard> modalCards = new ArrayList<>();
         try {            // 多查询词合并（对齐 Kimi/DeepSeek 网页版 query expansion）：
             // 对全部候选词都搜索、按 URL 去重合并，总条数 cap 到 maxResults；
             // 每词条数 = ceil(maxResults / 候选词数)，避免单次吃满上限、多词覆盖不全。
@@ -224,7 +234,7 @@ public class ClarifyWebSearchOrchestrator {
                     }
                     attempted.add(q);
                     WebSearchToolResult out = callWebSearchTool(q, perQuery, withAnswer);
-                    int hits = absorb(out, searched, seenUrls, maxResults, providerRef, answerRef);
+                    int hits = absorb(out, searched, seenUrls, maxResults, providerRef, answerRef, modalCards);
                     log.info("澄清联网搜索：候选词命中 {} 条: query={}", hits, q);
                     if (searched.size() >= maxResults) {
                         break;
@@ -265,7 +275,7 @@ public class ClarifyWebSearchOrchestrator {
                     if (out == null) {
                         continue; // 超时未完成 → 丢弃该词（queryList 已入 attempted，结果缺失可接受）
                     }
-                    int hits = absorb(out, searched, seenUrls, maxResults, providerRef, answerRef);
+                    int hits = absorb(out, searched, seenUrls, maxResults, providerRef, answerRef, modalCards);
                     log.info("澄清联网搜索：候选词命中 {} 条: query={}", hits, queryList.get(i));
                 }
             }
@@ -298,11 +308,16 @@ public class ClarifyWebSearchOrchestrator {
                 }
             }
             long costMs = System.currentTimeMillis() - t0;
-            List<WebSearchResult> merged = mergeFetchedIntoResults(pages, searched);
+            // W-5：语义重排只作用于搜索引擎结果——用户直取页面是第一手资料，
+            // 在 mergeFetchedIntoResults 里固定置顶，不参与重排（否则会被语义分挤下去）。
+            // 语义锚用用户原始意图文本（而非拆出的候选词）：rerank 是语义模型，
+            // 天然意图比关键词组合更能代表「用户到底想找什么」。
+            List<WebSearchResult> ranked = bochaRerankService.rerank(rerankAnchor(userMessage), searched);
+            List<WebSearchResult> merged = mergeFetchedIntoResults(pages, ranked);
             String provider = providerRef.value == null ? "web_search_tool" : providerRef.value;
-            log.info("澄清联网搜索结束: provider={}, queries={}, rounds={}, answer={}, pages={}, results={}, costMs={}",
+            log.info("澄清联网搜索结束: provider={}, queries={}, rounds={}, answer={}, modalCards={}, pages={}, results={}, costMs={}",
                     provider, attempted, rounds,
-                    answerRef.value != null ? "有" : "无", pages.size(), merged.size(), costMs);
+                    answerRef.value != null ? "有" : "无", modalCards.size(), pages.size(), merged.size(), costMs);
             return WebSearchOutcome.builder()
                     .provider(provider)
                     .query(attempted.isEmpty() ? "" : attempted.get(0))
@@ -312,6 +327,7 @@ public class ClarifyWebSearchOrchestrator {
                     .results(merged)
                     .fetchedPages(pages)
                     .answer(answerRef.value)
+                    .modalCards(modalCards)
                     .rounds(rounds)
                     .build();
         } catch (Exception e) {
@@ -330,12 +346,14 @@ public class ClarifyWebSearchOrchestrator {
 
     /**
      * 吸收一次工具调用的结果：provider 取首个真实供应商（非占位）、answer 取首个成功词、
-     * 结果按 URL 去重并入 searched（cap 在 maxResults 内）。
+     * 结果按 URL 去重并入 searched（cap 在 maxResults 内）、模态卡按 (type+title) 去重并入（W-7）。
      *
+     * @param modalCards 模态卡收集容器（并行/串行两分支共用；多词同卡去重，保持候选词顺序）
      * @return 本次命中条数（去重后实际并入数）
      */
     private int absorb(WebSearchToolResult out, List<WebSearchResult> searched, Set<String> seenUrls,
-                       int maxResults, Holder<String> providerRef, Holder<String> answerRef) {
+                       int maxResults, Holder<String> providerRef, Holder<String> answerRef,
+                       List<WebModalCard> modalCards) {
         if (out == null) {
             return 0;
         }
@@ -346,6 +364,18 @@ public class ClarifyWebSearchOrchestrator {
         // 大模型总结取首个成功候选词的（withAnswer=true 且供应商支持才返回）
         if (answerRef.value == null && out.answer() != null && !out.answer().isBlank()) {
             answerRef.value = out.answer();
+        }
+        // W-7：模态卡按「卡类型 + 标题」去重（多词常命中同一张卡，如两个词都问金价）
+        if (modalCards != null && out.modalCards() != null) {
+            for (WebModalCard card : out.modalCards()) {
+                if (card == null || card.getType() == null) continue;
+                boolean dup = modalCards.stream().anyMatch(c ->
+                        card.getType().equals(c.getType())
+                                && java.util.Objects.equals(card.getTitle(), c.getTitle()));
+                if (!dup) {
+                    modalCards.add(card);
+                }
+            }
         }
         int hits = 0;
         for (WebSearchResult r : out.results()) {
@@ -518,5 +548,18 @@ public class ClarifyWebSearchOrchestrator {
         int limit = webSearchProperties.getQueryKeywordLimit();
         if (trimmed.length() <= limit) return trimmed;
         return trimmed.substring(0, limit);
+    }
+
+    /**
+     * W-5 重排的语义锚：剥离 URL 后的用户原始意图文本（截断到 200 字控 token）。
+     *
+     * <p>为什么不用候选词：候选词已经是「为搜索引擎优化过的关键词组合」，而 rerank 是
+     * 语义模型——喂它的应该是用户真实问句，这样「这条结果是否回答了用户的问题」才判得准。
+     * 纯 URL 消息（语义文本为空）返回空串 ⇒ 重排侧跳过，保持原顺序，不误排。</p>
+     */
+    private String rerankAnchor(String userMessage) {
+        String text = stripUrls(userMessage);
+        return text.length() <= RERANK_ANCHOR_MAX_CHARS
+                ? text : text.substring(0, RERANK_ANCHOR_MAX_CHARS);
     }
 }
