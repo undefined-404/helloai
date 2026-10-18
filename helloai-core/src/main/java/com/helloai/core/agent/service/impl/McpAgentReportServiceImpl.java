@@ -17,6 +17,7 @@ import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
+import com.helloai.core.agent.service.ActivityLogService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.McpAgentReportService;
@@ -41,7 +42,9 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * MCP 工具上报簇：Agent 心跳 / 值班打卡 / 自身状态 / 产物登记 / 结果提交 / 阻塞上报。
@@ -65,6 +68,8 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
     private final AgentDutyLeaseService agentDutyLeaseService;
     private final AttachmentPort attachmentPort;
     private final ExecutionResultHandler executionResultHandler;
+    /** 活动日志（2026-10-18：外部 Agent 提交结果时由平台兜底补写，不依赖 Agent 主动上报）。 */
+    private final ActivityLogService activityLogService;
     private final SubTaskQueryPort subTaskQueryPort;
     private final SubTaskCommandPort subTaskCommandPort;
     /**
@@ -218,6 +223,14 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
 
         heartbeatService.active(agentId);
 
+        // 平台兜底补写活动日志（2026-10-18）
+        // 背景：MCP 工具集没有「写活动」的工具，接入手册又把活动日志归为「低频、按需、不展开」
+        //     ⇒ 外部 Agent 执行完从不产生 activity_log（实测 TeleAgent-executor 历史 0 条）。
+        // 口径：只记「已被接受」的提交（isApplied），幂等重放不重复记；
+        //     失败的提交也记（level=WARN），便于在活动流里看到「提交了但被拒」的情形。
+        // best-effort：写失败只告警，绝不影响提交流程本身。
+        recordSubmissionActivity(agentId, subTaskId, resultId, success, output, error, applyResult);
+
         SubmitResultResult r = new SubmitResultResult();
         r.setOk(true);
         r.setAccepted(applyResult != null && applyResult.isApplied());
@@ -226,6 +239,69 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
         r.setSubTaskId(subTaskId);
         r.setResultId(resultId);
         return r;
+    }
+
+    /**
+     * 平台兜底写「提交产出」活动日志（2026-10-18）。
+     *
+     * <p><b>为什么由平台写而不是等 Agent 写</b>：MCP 工具集没有「写活动」的工具，
+     * 接入手册（{@code onboarding/executor/guide.md:566}）又把活动日志归为
+     * 「低频、按需、此处不展开」⇒ 外部 Agent 执行完从不产生 {@code activity_log}
+     * （实测 {@code TeleAgent-executor} 历史 0 条，含已完成子任务）。
+     * 由提交入口兜底写，才能保证「活动流」在任何 Agent 实现下都有事实可看。</p>
+     *
+     * <p><b>写什么</b>：{@code action=delivery}（与全局规则里的活动日志规范一致），
+     * {@code detail} 带 resultId / 是否被接受 / 输出摘要 / 失败原因，长度受控。</p>
+     *
+     * <p><b>不写什么</b>：幂等重放（{@code idempotent=true}）不重复记录，避免活动流被刷屏。</p>
+     */
+    private void recordSubmissionActivity(Long agentId, Long subTaskId, String resultId,
+                                          Boolean success, String output, String error,
+                                          ExecutionResultHandler.ExecutionResultApplyResult applyResult) {
+        try {
+            boolean idempotent = applyResult != null && applyResult.isIdempotent();
+            if (idempotent) {
+                return;
+            }
+            boolean accepted = applyResult != null && applyResult.isApplied();
+            boolean ok = Boolean.TRUE.equals(success) && accepted;
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("resultId", resultId);
+            detail.put("accepted", accepted);
+            detail.put("status", applyResult != null ? applyResult.getStatus() : null);
+            detail.put("source", "platform_auto");
+            if (output != null && !output.isBlank()) {
+                detail.put("outputPreview", abbreviate(output, ACTIVITY_OUTPUT_PREVIEW_MAX));
+            }
+            if (error != null && !error.isBlank()) {
+                detail.put("error", abbreviate(error, ACTIVITY_OUTPUT_PREVIEW_MAX));
+            }
+            activityLogService.record(agentId,
+                    ACTIVITY_ACTION_DELIVERY,
+                    ok ? "INFO" : "WARN",
+                    "platform",
+                    subTaskId,
+                    detail);
+        } catch (Exception e) {
+            // best-effort：活动日志写失败绝不影响提交结果（write-only 旁路口径）
+            log.warn("提交结果后补写活动日志失败（不影响提交）: agentId={}, subTaskId={}, err={}",
+                    agentId, subTaskId, e.getMessage());
+        }
+    }
+
+    /** 活动日志 action：提交交付物（与全局规则的活动日志规范对齐）。 */
+    private static final String ACTIVITY_ACTION_DELIVERY = "delivery";
+
+    /** 活动日志里输出摘要的长度上限（活动流是列表视图，长文只留片段）。 */
+    private static final int ACTIVITY_OUTPUT_PREVIEW_MAX = 300;
+
+    /** 文本截断（保留头部语义）。 */
+    private static String abbreviate(String text, int limit) {
+        if (text == null) {
+            return null;
+        }
+        String s = text.strip();
+        return s.length() <= limit ? s : s.substring(0, limit) + "…";
     }
 
     /**

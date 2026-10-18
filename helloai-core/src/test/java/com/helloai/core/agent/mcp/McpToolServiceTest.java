@@ -36,6 +36,7 @@ import com.helloai.core.agent.skill.SkillPackageCatalog;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentMcpServerService;
+import com.helloai.core.agent.service.ActivityLogService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import org.junit.jupiter.api.BeforeEach;
@@ -55,6 +56,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -103,6 +105,10 @@ class McpToolServiceTest {
     @Mock private SkillPackageCatalog skillPackageCatalog;
     @Mock private LlmProviderModelQueryService llmProviderModelQueryService;
 
+    /** 活动日志（2026-10-18：提交结果后平台兜底补写，构造器新增依赖）。 */
+    @Mock
+    private ActivityLogService activityLogService;
+
     private McpToolService mcpToolService;
 
     @BeforeEach
@@ -113,7 +119,7 @@ class McpToolServiceTest {
                 subTaskQueryPort, taskRunningSpecPort, attachmentPort, agentExecutionRecordService);
         McpAgentReportService agentReportService = new McpAgentReportServiceImpl(
                 agentService, heartbeatService, agentDutyLeaseService, attachmentPort,
-                executionResultHandler, subTaskQueryPort, subTaskCommandPort,
+                executionResultHandler, activityLogService, subTaskQueryPort, subTaskCommandPort,
                 skillPackageCatalog, llmProviderModelQueryService);
         McpTaskClaimService taskClaimService = new McpTaskClaimServiceImpl(
                 agentService, agentInboxService, agentMcpServerService, subTaskQueryPort,
@@ -1307,6 +1313,67 @@ class McpToolServiceTest {
         assertThat(report.getTokenUsage()).isEqualTo(12345);
         assertThat(report.getSource()).isEqualTo("EXTERNAL");
         assertThat(report.getExecutorName()).isEqualTo("cli_client");
+    }
+
+    @Test
+    @DisplayName("submitResult：被接受后平台自动补写 delivery 活动日志（不依赖 Agent 主动上报）")
+    void shouldAutoRecordDeliveryActivityAfterAcceptedSubmission() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("submitResult"))).thenReturn(true);
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(inProgressSubTask());
+        ExecutionResultHandler.ExecutionResultApplyResult applied =
+                new ExecutionResultHandler.ExecutionResultApplyResult();
+        applied.setApplied(true);
+        applied.setStatus("REVIEW");
+        when(executionResultHandler.handleReport(any())).thenReturn(applied);
+
+        mcpToolService.submitResult(
+                AGENT_ID, SUB_TASK_ID, "rid-auto", true, "交付正文内容", null, "stop", null);
+
+        ArgumentCaptor<Map<String, Object>> detail = ArgumentCaptor.forClass(Map.class);
+        verify(activityLogService).record(eq(AGENT_ID), eq("delivery"), eq("INFO"), eq("platform"),
+                eq(SUB_TASK_ID), detail.capture());
+        assertThat(detail.getValue()).containsEntry("accepted", true);
+        assertThat(detail.getValue()).containsEntry("resultId", "rid-auto");
+        // 输出摘要截断入库（活动流是列表视图，不塞全文）
+        assertThat(String.valueOf(detail.getValue().get("outputPreview"))).contains("交付正文内容");
+    }
+
+    @Test
+    @DisplayName("submitResult：幂等重放不重复写活动日志（防活动流刷屏）")
+    void shouldSkipActivityOnIdempotentReplay() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("submitResult"))).thenReturn(true);
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(inProgressSubTask());
+        ExecutionResultHandler.ExecutionResultApplyResult idem =
+                new ExecutionResultHandler.ExecutionResultApplyResult();
+        idem.setApplied(false);
+        idem.setIdempotent(true);
+        when(executionResultHandler.handleReport(any())).thenReturn(idem);
+
+        mcpToolService.submitResult(
+                AGENT_ID, SUB_TASK_ID, "rid-dup", true, "重复提交", null, "stop", null);
+
+        verify(activityLogService, never()).record(anyLong(), anyString(), anyString(), anyString(),
+                any(), any());
+    }
+
+    @Test
+    @DisplayName("submitResult：活动日志写失败不影响提交结果（best-effort 旁路）")
+    void shouldNotFailSubmissionWhenActivityWriteFails() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("submitResult"))).thenReturn(true);
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(inProgressSubTask());
+        ExecutionResultHandler.ExecutionResultApplyResult applied =
+                new ExecutionResultHandler.ExecutionResultApplyResult();
+        applied.setApplied(true);
+        applied.setStatus("REVIEW");
+        when(executionResultHandler.handleReport(any())).thenReturn(applied);
+        when(activityLogService.record(anyLong(), anyString(), anyString(), anyString(), any(), any()))
+                .thenThrow(new RuntimeException("db down"));
+
+        McpToolService.SubmitResultResult result = mcpToolService.submitResult(
+                AGENT_ID, SUB_TASK_ID, "rid-err", true, "正文", null, "stop", null);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.isAccepted()).isTrue();
     }
 
     @Test
