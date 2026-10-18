@@ -46,4 +46,19 @@ public class SubTaskResponse {
     private OffsetDateTime completedAt;
     private OffsetDateTime createTime;
     private OffsetDateTime updateTime;
+    /**
+     * 复合评分（五因子加权，0~100）。
+     *
+     * <p><b>只在子任务完成（DONE）时写入</b>（{@code ReviewServiceImpl.complete} 触发
+     * {@code SubTaskServiceImpl} 的隐式评分），未完成 / 已取消 / 未指派执行者时为空
+     * <b>属预期</b>，不是「没算出来」。前端据此区分「空态」与「待评分」。</p>
+     *
+     * <p>2026-10-18 补：此前该字段<b>只存在于实体与库表</b>，响应 DTO 未携带 ⇒
+     * 子任务列表「评分」列恒空，而详情页（走 review 接口）有分，形成对不上的观感。</p>
+     */
+    private Integer compositeScore;
+    /** 评分等级（S/A/B/C/D，由 compositeScore 映射；null 语义同上）。 */
+    private String scoreGrade;
+    /** 五维度明细：timeScore / qualityScore / coopScore / stabilityScore / efficiencyScore。 */
+    private Map<String, Object> scoreFactors;
 }

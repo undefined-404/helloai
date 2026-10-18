@@ -509,6 +509,11 @@ public class SubTaskController {
         response.setDependsOn(subTask.dependsOnIdList());
         response.setDeadline(subTask.getDeadline());
         response.setCompletedAt(subTask.getCompleteTime());
+        // 评分三件套（2026-10-18 补）：实体/库表一直有值，但响应漏映射 ⇒ 列表评分列恒空。
+        // 只在 DONE 时由隐式评分写入，其余状态为 null 属预期（前端有对应空态提示）。
+        response.setCompositeScore(subTask.getCompositeScore());
+        response.setScoreGrade(subTask.getScoreGrade());
+        response.setScoreFactors(subTask.getScoreFactors());
         response.setCreateTime(subTask.getCreateTime());
         response.setUpdateTime(subTask.getUpdateTime());
         return response;
