@@ -16,6 +16,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
@@ -41,6 +42,8 @@ class AiSearchWebSearchServiceImplTest {
 
     private AiSearchWebSearchServiceImpl newService() {
         when(properties.getAiSearchTimeoutMs()).thenReturn(25_000L); // HttpClient.connectTimeout 需 >0
+        // W-7：模态卡开关默认 true（properties 类默认值），mock 需显式给；lenient 避免无用例消费时报错
+        lenient().when(properties.isModalCardsEnabled()).thenReturn(true);
         return new AiSearchWebSearchServiceImpl(properties, credentialKeyStore,
                 new RelativeTimeNormalizer(), new ObjectMapper());
     }
@@ -367,5 +370,26 @@ class AiSearchWebSearchServiceImplTest {
         AiSearchWebSearchServiceImpl service = parseOn(newService(), body, 15, "q");
 
         assertThat(service.modalCards("q")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("W-7 kill switch：modal-cards-enabled=false → 完全不收集模态卡")
+    void parseModalCard_disabledBySwitch_noCards() throws Exception {
+        when(properties.getMaxSnippetChars()).thenReturn(200);
+        when(properties.getAiSearchTimeoutMs()).thenReturn(25_000L);
+        when(properties.isModalCardsEnabled()).thenReturn(false);
+        AiSearchWebSearchServiceImpl service = new AiSearchWebSearchServiceImpl(properties,
+                credentialKeyStore, new RelativeTimeNormalizer(), new ObjectMapper());
+        String body = """
+                {
+                  "messages": [
+                    {"role": "assistant", "type": "source", "content_type": "gold_price",
+                     "content": "{\\"title\\":\\"今日金价\\",\\"summary\\":\\"612 元/克\\"}"}
+                  ]
+                }
+                """;
+        parseOn(service, body, 15, "今日金价");
+
+        assertThat(service.modalCards("今日金价")).isEmpty();
     }
 }
