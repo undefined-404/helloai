@@ -20,6 +20,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import reactor.core.Disposable;
 
 /**
  * 对话式需求澄清（薄转发，编排收口在 {@link RequirementClarifyService}）。
@@ -37,7 +39,13 @@ public class RequirementConversationController {
     private static final long STREAM_EMITTER_TIMEOUT_MS = 120_000L;
 
     /** Chat SSE 流式发送（S1 最小闭环）：快速建立连接 → 线程池内执行
-     *  「决策/搜索同步前置 + 主回复 token 流」，事件协议 token/done/error。 */
+     *  「决策/搜索同步前置 + 主回复 token 流」，事件协议 token/done/error。
+     *
+     *  <p><b>停止生成（2026-10-19）</b>：客户端主动中断（前端「停止」按钮 abort 连接）时，
+     *  SseEmitter 触发 onCompletion/onError → dispose LLM 流订阅。Reactor 取消沿 Flux 链向上游
+     *  传播（executeStream → generateStream → Spring AI stream），真实 LLM 调用被中断、
+     *  未完成的回复<b>不落库</b>（user 消息已在前置段落库，前端刷新详情后走重试条续跑）。</p>
+     */
     @SaCheckPermission("conversation:send")
     @PostMapping(value = "/streamSendById/{id}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamSendById(@PathVariable("id") Long id,
@@ -47,18 +55,41 @@ public class RequirementConversationController {
         response.setHeader("X-Accel-Buffering", "no");
         response.setHeader("Cache-Control", "no-cache");
         SseEmitter emitter = new SseEmitter(STREAM_EMITTER_TIMEOUT_MS);
+        // ★停止生成核心：保存订阅句柄，连接断开（客户端 abort / 超时 / 异常）时 dispose 取消 LLM 流。
+        // 正常 done 完成路径 completeQuietly 后 onCompletion 也会触发 dispose——此时订阅已结束，
+        // dispose 为幂等 no-op，无副作用。
+        // cancelled 标记覆盖「连接在订阅创建前就断开」的竞态（chatStreamExecutor 异步执行）：
+        // 断开已发生则不再启动订阅，避免拉起一条注定无人接收的 LLM 流。
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        Disposable[] subscription = new Disposable[1];
+        Runnable cancelStream = () -> {
+            cancelled.set(true);
+            Disposable d = subscription[0];
+            if (d != null) {
+                d.dispose();
+            }
+        };
+        emitter.onCompletion(cancelStream);
         emitter.onTimeout(() -> {
             log.warn("流式对话连接超时: conversationId={}", id);
+            cancelStream.run();
             try {
                 emitter.complete();
             } catch (Exception ignore) {
                 // 连接可能已断，忽略二次异常
             }
         });
-        emitter.onError(e -> log.warn("流式对话连接异常: conversationId={}, err={}", id, e.toString()));
+        emitter.onError(e -> {
+            log.warn("流式对话连接异常: conversationId={}, err={}", id, e.toString());
+            cancelStream.run();
+        });
         StreamFrameAggregator aggregator = new StreamFrameAggregator(emitter);
         chatStreamExecutor.execute(() -> {
-            requirementClarifyService.streamRound(id, req.getMessage(), req.getSelectedOptions())
+            if (cancelled.get()) {
+                // 连接已在订阅启动前断开：不再启动流（user 消息未落库，前端重发即可）
+                return;
+            }
+            subscription[0] = requirementClarifyService.streamRound(id, req.getMessage(), req.getSelectedOptions())
                     .subscribe(aggregator::onEvent,
                             // 服务层已将异常转 error 事件（onErrorResume），此处为订阅侧防御
                             error -> aggregator.onEvent(ChatStreamEvent.error(fallbackErrorMessage(error))),
@@ -79,7 +110,10 @@ public class RequirementConversationController {
      * 新会话与老会话走同一条流式通道。</p>
      *
      * <p>事件序：首帧 {@code session}（data=会话 id，前端据此在 done 后拉 detail）→
-     * {@code reasoning}/{@code token} 增量 → {@code done}/{@code error}。</p>
+     * {@code reasoning}/{@code token} 增量 → {@code done}/{@code error}。
+     *
+     * <p>与 {@link #streamSendById} 同支持「停止生成」：客户端中断连接时 dispose 订阅，
+     * 取消 LLM 流且不落库（建会话与 user 消息已落库，前端可用重试条续跑）。</p>
      */
     @SaCheckPermission("conversation:add")
     @PostMapping(value = "/streamCreate", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -88,14 +122,33 @@ public class RequirementConversationController {
         response.setHeader("X-Accel-Buffering", "no");
         response.setHeader("Cache-Control", "no-cache");
         SseEmitter emitter = new SseEmitter(STREAM_EMITTER_TIMEOUT_MS);
+        // 停止生成 + 订阅前断开竞态守卫（语义与 streamSendById 一致）
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        Disposable[] subscription = new Disposable[1];
+        Runnable cancelStream = () -> {
+            cancelled.set(true);
+            Disposable d = subscription[0];
+            if (d != null) {
+                d.dispose();
+            }
+        };
+        emitter.onCompletion(cancelStream);
         emitter.onTimeout(() -> {
             log.warn("流式新建会话连接超时");
+            cancelStream.run();
             completeQuietly(emitter);
         });
-        emitter.onError(e -> log.warn("流式新建会话连接异常: {}", e.toString()));
+        emitter.onError(e -> {
+            log.warn("流式新建会话连接异常: {}", e.toString());
+            cancelStream.run();
+        });
         StreamFrameAggregator aggregator = new StreamFrameAggregator(emitter);
         chatStreamExecutor.execute(() -> {
-            requirementClarifyService.streamCreate(req.getMessage(), req.getPlannerAgentId(),
+            if (cancelled.get()) {
+                // 连接已在订阅启动前断开：不再启动流（会话与消息未落库，前端重发即可）
+                return;
+            }
+            subscription[0] = requirementClarifyService.streamCreate(req.getMessage(), req.getPlannerAgentId(),
                             req.getWebSearchEnabled())
                     .subscribe(aggregator::onEvent,
                             error -> aggregator.onEvent(ChatStreamEvent.error(fallbackErrorMessage(error))),
@@ -127,7 +180,8 @@ public class RequirementConversationController {
     /**
      * SseEmitter 帧聚合器：token 增量按「长度 ≥ 50 字符或距上次发送 ≥ 100ms」聚合发射，
      * 防止真实 provider 高频小帧打爆连接；done/error 终帧前先 flush 剩余 token。
-     * 连接断开后置 dead 静默停止发送（LLM 流照常跑完并落库，前端刷新后可见）。
+     * 连接断开后置 dead 静默停止发送（2026-10-19 起连接断开由外层 dispose 订阅，
+     * LLM 流被取消不再跑完、不落库）。
      */
     private static final class StreamFrameAggregator {
 
@@ -230,6 +284,22 @@ public class RequirementConversationController {
     @PostMapping("/retryById/{id}")
     public R<ClarifyConversationDetail> retryById(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.retryRound(id));
+    }
+
+    /**
+     * 编辑已发送的用户消息并重跑（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）。
+     *
+     * <p>事务内：物理删除目标消息之后的旧回复 → 更新内容 → 从该点重跑一轮 LLM。
+     * 仅支持编辑最后一条 user 消息；更早消息返回业务错误。
+     * 权限复用 {@code conversation:retry}（编辑=改消息+重跑，与重试同权，避免新增 RBAC 码）。</p>
+     */
+    @SaCheckPermission("conversation:retry")
+    @PostMapping("/editMessageById/{id}/{messageId}")
+    public R<ClarifyConversationDetail> editMessage(@PathVariable("id") Long id,
+                                                    @PathVariable("messageId") Long messageId,
+                                                    @RequestBody ClarifyMessageRequest req) {
+        String newContent = req != null ? req.getMessage() : null;
+        return R.ok(requirementClarifyService.editMessage(id, messageId, newContent));
     }
 
     /** 切换到方案澄清模式：置位落库 + 一轮 LLM 基于全量历史产终稿草案/结构化追问；

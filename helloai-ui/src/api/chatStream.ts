@@ -25,12 +25,14 @@ export interface ChatStreamHandlers {
   onDone: () => void
   /** 流失败（含服务端业务拒绝与连接中断），message 可直接提示 */
   onError: (message: string) => void
+  /** 主动停止（2026-10-19）：AbortSignal 触发中断，静默结束（不弹错误），调用方据此刷新详情 */
+  onAbort?: () => void
 }
 
 /**
- * 发送 CHAT 流式消息并消费 SSE 帧。Promise 在流收尾（done/error/断开）后 resolve，
+ * 发送 CHAT 流式消息并消费 SSE 帧。Promise 在流收尾（done/error/主动停止/断开）后 resolve，
  * 不会 reject——所有失败路径都收敛到 onError，调用方 await 后统一清理发送态。
- * @param signal 可选 AbortSignal（调用方主动中断，如切换会话）
+ * @param signal 可选 AbortSignal（调用方主动中断，如「停止生成」按钮/切换会话）
  */
 export async function streamSendConversation(
   id: LongId,
@@ -88,11 +90,13 @@ async function consumeSse(
   }
 
   let settled = false
-  const finish = (kind: 'done' | 'error', message?: string) => {
+  const finish = (kind: 'done' | 'error' | 'abort', message?: string) => {
     if (settled) return
     settled = true
     if (kind === 'done') {
       handlers.onDone()
+    } else if (kind === 'abort') {
+      handlers.onAbort?.()
     } else {
       handlers.onError(message || '回复连接中断，请重试')
     }
@@ -169,7 +173,12 @@ async function consumeSse(
     }
   } catch (e) {
     if (!settled) {
-      finish('error', e instanceof Error ? e.message.replace(/^Failed to fetch[: ]*/i, '') : '网络错误')
+      // 主动停止（AbortController.abort）→ 静默结束，不当作网络错误弹给用户
+      if (signal?.aborted || (e instanceof DOMException && e.name === 'AbortError')) {
+        finish('abort')
+      } else {
+        finish('error', e instanceof Error ? e.message.replace(/^Failed to fetch[: ]*/i, '') : '网络错误')
+      }
     }
   }
 }

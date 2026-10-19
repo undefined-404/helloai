@@ -278,14 +278,61 @@
                         </div>
                       </div>
                       <div class="msg-bubble">
-                        <!-- 用户消息原样展示；assistant 回复渲染 Markdown（标题/表格/列表/引用，流式与历史回显统一） -->
+                        <!-- 用户消息：编辑态显示 textarea（对齐 ChatGPT/DeepSeek 行内编辑），
+                             展示态原样渲染；assistant 回复渲染 Markdown -->
                         <template v-if="row.msg.role === 'user'">
-                          {{ row.intro }}
+                          <el-input
+                            v-if="editingMsgId === String(row.msg.id)"
+                            v-model="editingDraft"
+                            type="textarea"
+                            :rows="3"
+                            resize="none"
+                            placeholder="编辑消息…"
+                            class="msg-edit-input"
+                            @keydown.enter.exact.prevent="submitEdit(row.msg)"
+                            @keydown.esc="cancelEdit"
+                          />
+                          <span v-else class="msg-user-text">{{ row.intro }}</span>
                         </template>
                         <MarkdownView
                           v-else
                           :content="row.intro"
                         />
+                        <!-- 用户消息展示态：hover 出现编辑铅笔（对齐 ChatGPT/DeepSeek 交互） -->
+                        <button
+                          v-if="row.msg.role === 'user' && editingMsgId !== String(row.msg.id)"
+                          type="button"
+                          class="msg-action-btn msg-edit-hover"
+                          title="编辑消息"
+                          :disabled="sending || finalizing || editingSaving"
+                          @click="startEdit(row.msg)"
+                        >
+                          <el-icon><EditPen /></el-icon>
+                        </button>
+                      </div>
+                      <!-- 用户消息：编辑操作条（仅编辑态显示；展示态操作条在 msg-actions） -->
+                      <div
+                        v-if="row.msg.role === 'user' && editingMsgId === String(row.msg.id)"
+                        class="msg-actions msg-edit-actions"
+                      >
+                        <button
+                          type="button"
+                          class="msg-action-btn msg-edit-cancel"
+                          title="取消编辑 (Esc)"
+                          :disabled="editingSaving"
+                          @click="cancelEdit"
+                        >
+                          取消
+                        </button>
+                        <el-button
+                          size="small"
+                          type="primary"
+                          :loading="editingSaving"
+                          :disabled="!editingDraft.trim()"
+                          @click="submitEdit(row.msg)"
+                        >
+                          重新发送
+                        </el-button>
                       </div>
                       <!-- 助手消息下的轻量操作工具条 -->
                       <div
@@ -685,10 +732,24 @@
                       >
                         放弃会话
                       </el-button>
+                      <!-- 发送 / 停止 复用同一按钮（DeepSeek/Kimi 风格，2026-10-19）：
+                           流式生成中按钮变红色「停止生成」态，点击中止生成；
+                           同步路径（/task 等）无法中止 → 显示「发送中」loading 态 -->
                       <el-button
+                        v-if="sending"
+                        :type="streamAbort ? 'danger' : 'primary'"
+                        :loading="!streamAbort"
+                        :disabled="finalizing"
+                        title="停止生成，当前回复将不会保存"
+                        @click="streamAbort && stopGenerating()"
+                      >
+                        <el-icon v-if="streamAbort" style="margin-right: 4px"><CircleClose /></el-icon>
+                        {{ streamAbort ? '停止生成' : '发送中' }}
+                      </el-button>
+                      <el-button
+                        v-else
                         v-auth="'conversation:send'"
                         type="primary"
-                        :loading="sending"
                         :disabled="!input.trim() || finalizing"
                         @click="handleSend"
                       >
@@ -720,7 +781,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document } from '@element-plus/icons-vue'
+import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { promptEnhanceApi } from '@/api/promptEnhance'
 import { taskApi } from '@/api/task'
@@ -763,6 +824,14 @@ const pendingText = ref('')
 const sending = ref(false)
 const finalizing = ref(false)
 const streamEl = ref<HTMLElement | null>(null)
+// 停止生成（2026-10-19）：当前流式发送的 AbortController 句柄；非空 = 流在跑，展示「停止生成」按钮
+const streamAbort = ref<AbortController | null>(null)
+
+// 编辑已发送消息（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）：
+// editingMsgId 非空 = 该消息气泡处于行内编辑态；editingDraft 为 textarea 草稿；editingSaving 防重复提交
+const editingMsgId = ref<string>('')
+const editingDraft = ref('')
+const editingSaving = ref(false)
 
 // 输入优化（PromptEnhancer）：先预览、用户自行回填；不自动发送、不自动覆盖原文本输入框
 const enhancing = ref(false)
@@ -1217,6 +1286,8 @@ async function settleStream(id: LongId, success: boolean) {
 async function streamSendActiveMessage(id: LongId, text: string,
                                       selections: ClarifySelection[] | null = null) {
   resetStreamState()
+  const abort = new AbortController()
+  streamAbort.value = abort
   try {
     await streamSendConversation(id, text, selections, {
       onToken: appendStreamToken,
@@ -1226,9 +1297,11 @@ async function streamSendActiveMessage(id: LongId, text: string,
       onError: (msg) => {
         ElMessage.error(msg)
         void settleStream(id, false)
-      }
-    })
+      },
+      onAbort: () => { void settleStream(id, false) }
+    }, abort.signal)
   } finally {
+    streamAbort.value = null
     cleanupStreamState()
   }
 }
@@ -1243,6 +1316,9 @@ async function streamSendOrCreate(text: string, plannerId: string | null) {
   // 新会话：id 由首帧 session 事件带回；done 前可能仍为 null，收敛时以 streamCreatedId 为准
   let streamCreatedId: LongId | null = existingId
   const settleId = () => streamCreatedId
+  // 停止生成：新建会话与老会话共用同一个 AbortController（streamCreate 首帧回 id 后仍可中止）
+  const abort = new AbortController()
+  streamAbort.value = abort
   try {
     if (existingId != null) {
       await streamSendConversation(existingId, text, null, {
@@ -1253,8 +1329,9 @@ async function streamSendOrCreate(text: string, plannerId: string | null) {
         onError: (msg) => {
           ElMessage.error(msg)
           void settleStream(existingId, false)
-        }
-      })
+        },
+        onAbort: () => { void settleStream(existingId, false) }
+      }, abort.signal)
     } else {
       await streamCreateConversation(text, plannerId, webSearchEnabled.value, {
         onSession: (newId) => {
@@ -1274,10 +1351,21 @@ async function streamSendOrCreate(text: string, plannerId: string | null) {
           ElMessage.error(msg)
           const id = settleId()
           if (id != null) void settleStream(id, false)
+        },
+        onAbort: () => {
+          const id = settleId()
+          if (id != null) {
+            void settleStream(id, false)
+            return
+          }
+          // 极端时序：session 事件尚未到达即被中止——会话已落库（含 user 消息），
+          // 按标题找回并打开，靠重试条续跑；找不回则回填输入框保留用户文本
+          void recoverAbortedNewConversation(text)
         }
-      })
+      }, abort.signal)
     }
   } finally {
+    streamAbort.value = null
     cleanupStreamState()
   }
 }
@@ -1327,6 +1415,77 @@ function cleanupStreamState() {
   reasoningBuffer = ''
   pendingText.value = ''
   sending.value = false
+}
+
+/**
+ * 停止生成（2026-10-19）：abort 当前流式连接。前端中断 SSE → 后端 dispose LLM 订阅，
+ * 生成立即停止且未完成回复不落库；随后 settleStream 拉详情（user 消息已落库 → 出现重试条）。
+ */
+function stopGenerating() {
+  if (!streamAbort.value) return
+  streamAbort.value.abort()
+  ElMessage.info('已停止生成')
+}
+
+// ── 编辑已发送消息（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi）──
+
+/** 进入编辑态：预填原文。发送中/终稿中/已放弃不可编辑。 */
+function startEdit(msg: { id: string | number; content?: string }) {
+  if (sending.value || finalizing.value) return
+  editingMsgId.value = String(msg.id)
+  editingDraft.value = msg.content ?? ''
+}
+
+/** 取消编辑：清空编辑态，原文不动。 */
+function cancelEdit() {
+  if (editingSaving.value) return
+  editingMsgId.value = ''
+  editingDraft.value = ''
+}
+
+/**
+ * 保存并重新生成：调后端「编辑消息 + 截断重跑」。编辑期间禁用（防重复提交），
+ * 完成后收起编辑态并用后端返回的完整详情刷新界面。失败保留编辑态让用户重试。
+ */
+async function submitEdit(msg: { id: string | number }) {
+  const text = editingDraft.value.trim()
+  if (!text || editingSaving.value) return
+  if (activeId.value == null) { cancelEdit(); return }
+  editingSaving.value = true
+  try {
+    const result = await clarifyApi.editMessage(activeId.value, String(msg.id), text)
+    detail.value = result
+    editingMsgId.value = ''
+    editingDraft.value = ''
+    loadList()
+    scrollToBottom()
+  } catch {
+    // 拦截器已弹错；保留编辑态与草稿，用户可修正后重试
+  } finally {
+    editingSaving.value = false
+  }
+}
+
+/** 新会话在 session 首帧到达前被中止：按标题找回已落库的会话并打开（无 id 无法拉详情）。 */
+async function recoverAbortedNewConversation(text: string) {
+  try {
+    await loadList()
+    const title = text.length <= 50 ? text : text.slice(0, 50)
+    const found = conversations.value.find(c => c.status === 'ACTIVE' && c.title === title)
+    if (found) {
+      const fid = String(found.id)
+      activeId.value = fid
+      detail.value = await clarifyApi.detail(fid)
+      scrollToBottom()
+      return
+    }
+  } catch { /* 拦截器已弹错 */ }
+  // 找不回会话：回填输入框，避免用户文本丢失
+  const msgs = detail.value?.messages ?? []
+  const lastIsSameUserText = msgs.length > 0
+    && msgs[msgs.length - 1].role === 'user'
+    && msgs[msgs.length - 1].content === text
+  if (!lastIsSameUserText) input.value = text
 }
 
 // V40.2 /planner 命令处理：新会话先建 CHAT 会话再调 toClarify；已有会话直接调 toClarifyById
@@ -1848,6 +2007,7 @@ onMounted(() => {
 }
 
 .msg-bubble {
+  position: relative;
   border-radius: var(--ha-radius-lg);
   font-size: 14px;
   line-height: 1.65;
@@ -1943,6 +2103,40 @@ onMounted(() => {
   gap: 2px;
 }
 .msg-actions .final-shortcut:hover { background: var(--ha-primary-muted); }
+
+/* 编辑消息（2026-10-19，对齐 ChatGPT/DeepSeek）：
+   用户消息行是 row-reverse 镜像（气泡靠右），铅笔放气泡左侧外缘 */
+.msg-edit-hover {
+  position: absolute;
+  left: -30px;
+  top: 4px;
+  opacity: 0;
+  transition: opacity var(--ha-duration-fast) var(--ha-ease-out);
+}
+.msg-row:hover .msg-edit-hover {
+  opacity: 1;
+}
+.msg-edit-hover:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.msg-edit-input .el-textarea__inner {
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.msg-edit-actions {
+  gap: 8px;
+  padding-top: 6px;
+}
+.msg-edit-cancel {
+  width: auto;
+  padding: 0 8px;
+  font-size: 13px;
+  color: var(--ha-muted);
+}
+.msg-edit-cancel:hover { color: var(--ha-danger); }
+.msg-edit-cancel:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .msg-loading {
   display: flex;

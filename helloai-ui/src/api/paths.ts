@@ -174,6 +174,9 @@ export const paths = {
     // 2026-10-18：新建会话 + 首轮的流式入口（首帧 session 事件回传会话 id）
     streamCreate: '/requirement-conversations/streamCreate',
     retry: (id: string | number) => `/requirement-conversations/retryById/${enc(id)}`,
+    // 2026-10-19：编辑已发送的用户消息并重跑（对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）
+    editMessage: (id: string | number, messageId: string | number) =>
+      `/requirement-conversations/editMessageById/${enc(id)}/${enc(messageId)}`,
     toClarify: (id: string | number) => `/requirement-conversations/toClarifyById/${enc(id)}`,
     toChat: (id: string | number) => `/requirement-conversations/toChatById/${enc(id)}`,
     plannerOptions: '/requirement-conversations/listPlannerOptions',

@@ -26,6 +26,12 @@ export const clarifyApi = {
     return request.post<any, ClarifyConversationDetail>(
       paths.clarifications.retry(id), null, { timeout: 120_000 })
   },
+  // V50 编辑已发送的用户消息并重跑（对齐 ChatGPT/DeepSeek/Kimi：编辑 → 截断 → 从该点重答）
+  editMessage(id: LongId, messageId: LongId, newContent: string) {
+    return request.post<any, ClarifyConversationDetail>(
+      paths.clarifications.editMessage(id, messageId),
+      { message: newContent }, { timeout: 120_000 })
+  },
   // V39 切换到方案澄清模式：置位 + 一轮 LLM 基于全量历史产终稿草案/结构化追问（V40 起前端无按钮入口，保留供内部/测试）
   // V40.2 /planner 斜杠命令入口：message 为命令后附加文本（落库进上下文后再切，不传则为纯切换）
   toClarify(id: LongId, message?: string | null) {

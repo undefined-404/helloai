@@ -90,6 +90,25 @@ public interface RequirementClarifyService {
     ClarifyConversationDetail retryRound(Long conversationId);
 
     /**
+     * 编辑已发送的用户消息并重新生成回复（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi 的
+     * 「编辑消息 → 回溯截断 → 从该点重答」语义）。
+     *
+     * <p>实现：校验会话 ACTIVE + 目标消息存在且为 user 角色 → 物理删除该消息<b>之后</b>
+     * 的所有消息（含旧回复与后续追问，避免旧上下文污染重跑）→ 更新该消息 content →
+     * 走 {@link #retryRound} 同语义的重跑（不新增 user 消息、不加轮数）。</p>
+     *
+     * <p>仅支持编辑「消息列表里最后一条 user 消息」：更早的中间消息编辑涉及分支语义
+     * （Open WebUI 的 parentId/childrenIds 树），本项目会话线性结构暂不支持，编辑更早
+     * 消息直接抛 BizException 拒绝（防误删后续对话）。</p>
+     *
+     * @param conversationId 会话 ID
+     * @param messageId      目标 user 消息 ID
+     * @param newContent     编辑后的消息正文（非空）
+     * @return 会话 + 全部消息（含重跑后的新回复）
+     */
+    ClarifyConversationDetail editMessage(Long conversationId, Long messageId, String newContent);
+
+    /**
      * 流式对话轮（S1 最小闭环，Chat SSE）：以事件流返回一轮 CHAT 主回复。
      *
      * <p>与 {@link #sendMessage(Long, String, List)} 同语义的前置：校验会话、落 user 消息

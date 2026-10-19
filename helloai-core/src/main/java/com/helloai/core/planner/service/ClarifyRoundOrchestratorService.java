@@ -51,6 +51,13 @@ public interface ClarifyRoundOrchestratorService {
     /** 重试上一轮 LLM（仅当最后一条消息是 user；不新增 user 消息、不加轮数）。 */
     ClarifyConversationDetail retryRound(Long conversationId);
 
+    /**
+     * 编辑已发送的用户消息并重跑（2026-10-19）：物理删除目标消息<b>之后</b>的所有消息
+     * （旧回复与后续追问）→ 更新该消息 content → 重跑该消息（同 {@link #retryRound}，
+     * 不新增 user 消息、不加轮数）。仅支持「最后一条 user 消息」，更早消息抛 BizException。
+     */
+    ClarifyConversationDetail editMessage(Long conversationId, Long messageId, String newContent);
+
     /** 一轮澄清：存 user 消息 + round_count+1 → LLM 一轮（选人/渲染/解析/落库）。 */
     ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage);
 

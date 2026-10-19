@@ -194,6 +194,67 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
                 lastUser.getPayload());
     }
 
+    /**
+     * 编辑已发送的用户消息并重跑（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi「编辑 → 回溯 → 重答」）：
+     *
+     * <p>三步走：① 校验会话 ACTIVE、目标消息存在且为 user、且是<b>最后一条</b> user 消息
+     * （更早消息是「中间编辑」，涉及分支语义，本项目线性会话结构暂不支持，拒绝防误删）；
+     * ② 删除该消息之后的所有消息（旧回复 + 后续追问，避免旧上下文污染重跑）——
+     * 走 MyBatis-Plus {@code removeByIds} 逻辑删除（BaseEntity.deleted 带 @TableLogic），
+     * 查询侧全局过滤 deleted=0，重跑上下文天然不含旧回复；
+     * ③ 更新该消息 content → 走 {@link #retryRound} 同语义重跑（不新增消息、不加轮数）。</p>
+     *
+     * <p>删除语义说明：用逻辑删除而非物理删除，与本项目所有删除路径口径一致
+     * （会话/消息删除均软删），避免破坏「可恢复/审计」的既有约定。</p>
+     */
+    @Override
+    public ClarifyConversationDetail editMessage(Long conversationId, Long messageId, String newContent) {
+        String trimmed = newContent == null ? "" : newContent.trim();
+        if (trimmed.isEmpty()) {
+            throw new BizException("编辑后的消息不能为空");
+        }
+        RequirementConversation conversation = commandSearch.requireActive(conversationId);
+        List<RequirementMessage> messages = messageService.listByConversation(conversationId);
+        // 定位目标消息（按 id；找不到时尝试按 seq 兜底，防御前端传错 id）
+        RequirementMessage target = messages.stream()
+                .filter(m -> m.getId().equals(messageId))
+                .findFirst().orElse(null);
+        if (target == null) {
+            throw new BizException("目标消息不存在: messageId=" + messageId);
+        }
+        if (!ClarifyCommandSearchServiceImpl.ROLE_USER.equals(target.getRole())) {
+            throw new BizException("只能编辑自己发送的消息");
+        }
+        // 仅支持编辑「最后一条 user 消息」：其后若还有 user 消息（中间编辑），拒绝
+        // （编辑中间消息会删掉后续用户追问，语义不可控；分支能力留待未来树形会话）
+        int targetIndex = messages.indexOf(target);
+        boolean lastUserMessage = true;
+        for (int i = targetIndex + 1; i < messages.size(); i++) {
+            if (ClarifyCommandSearchServiceImpl.ROLE_USER.equals(messages.get(i).getRole())) {
+                lastUserMessage = false;
+                break;
+            }
+        }
+        if (!lastUserMessage) {
+            throw new BizException("只能编辑最后一条自己发送的消息，编辑更早的消息会丢失后续对话");
+        }
+        // 物理删除目标之后的所有消息（旧回复 + 后续追问）
+        List<Long> truncateIds = messages.stream()
+                .skip(targetIndex + 1)
+                .map(RequirementMessage::getId)
+                .toList();
+        if (!truncateIds.isEmpty()) {
+            messageService.removeByIds(truncateIds);
+        }
+        // 更新编辑后的内容（payload 保留——纯文本 user 消息无 payload，选择快照等结构化数据不动）
+        target.setContent(trimmed);
+        messageService.updateById(target);
+        log.info("澄清会话编辑消息并重跑: conversationId={}, messageId={}, truncated={}, newLen={}",
+                conversationId, messageId, truncateIds.size(), trimmed.length());
+        // 重跑该消息（与 retryRound 同语义：不新增消息、不加轮数）
+        return runRoundCore(conversation, trimmed, target.getPayload());
+    }
+
     @Override
     public ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage) {
         return doRound(conversation, userMessage, null);

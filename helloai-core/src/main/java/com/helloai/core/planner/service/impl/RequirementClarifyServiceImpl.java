@@ -162,6 +162,11 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         return orchestrator.retryRound(conversationId);
     }
 
+    @Override
+    public ClarifyConversationDetail editMessage(Long conversationId, Long messageId, String newContent) {
+        return orchestrator.editMessage(conversationId, messageId, newContent);
+    }
+
     /**
      * 流式对话轮（S1 最小闭环，Chat SSE）：与 {@link #sendMessage(Long, String, List)}
      * 同语义的同步前置，仅主回复 LLM 调用走 token 增量流；主回复完成后一次性落库并发出 {@code done}。
