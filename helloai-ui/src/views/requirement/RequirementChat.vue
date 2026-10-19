@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-header chat-header">
           <div class="chat-header-title">
-            <span class="chat-header-main">对话新建（AI 助手）</span>
+            <span class="chat-header-main">新建对话（AI 助手）</span>
             <span class="chat-header-sub">与 AI 助手自由对话；输入 /planner 进入方案整理，/task 直达拆解</span>
           </div>
           <div class="header-actions">
