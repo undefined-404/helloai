@@ -305,7 +305,8 @@ Diagnosis  ：.tmp/diag-skill-scan.*（仅诊断，不得作为正式验证）
 > ① **恢复侧闸门不可省**：这是备份功能里风险最高的一段（上游 `system_archive.py` 中约 650 行）。无闸门的「可恢复」= 可把生产库恢复成不一致状态。
 > ② **`listObjects` 为空必须显式失败**：`ArtifactStorage.listObjects` 是 **fail-safe 默认返回 `List.of()`**（`:145-147`）；「枚举为空」既可能是**真空桶**，也可能是**实现不支持**。静默通过 ⇒ 产出「完整备份」但没有对象，**故障直到恢复时才暴露**。
 > ③ **单飞锁用 Redisson，不用上游形态**：上游是**进程内 `asyncio.Lock`**（其项目默认单进程）。helloai 已有 Redisson 4.0.0 `RLock`（`SubTaskReviewServiceImpl:233-249` 范式）与 ShedLock 6.6.0 `@SchedulerLock`，直接用前者。
-> **可复用资产**：`deploy/middleware/scripts/migrate.sh:67-81` 已有 `pg_dump -Fc` 与 `pg_restore --no-owner --no-privileges -j 4` 的现成写法。
+> **可复用资产**：~~`deploy/middleware/scripts/migrate.sh:67-81` 已有 `pg_dump -Fc` 与 `pg_restore --no-owner --no-privileges -j 4` 的现成写法。~~
+> **（2026-10-19）`deploy/middleware/` 已整体删除**；同参数写法已落在 `PgDumpRunner`（`--no-owner` / `--no-privileges` / `-j 4`），以代码为准。
 
 **Return 部分**：REWORK→驳回→改派→重开工闭环已完整，**不新做**。原「建议加一条断言：改派时 `task_timeline` 保留」
 **已落地**（`verify-subtask-redispatch-auto-execution.ps1` 改派前后取时间线 id 快照，blocked 场景实测 `retained=1/1`）。
