@@ -132,3 +132,9 @@ doc/diagrams/html/*.finalize.json
 doc/diagrams/html/*.finalize-summary.json
 doc/diagrams/html/*.browser-check.json
 doc/diagrams/html/*.delivery.json
+
+# --- 服务器离线镜像包（docker save 产物，单批约 1.1GB，2026-10-19）---
+# 服务器拉不动 Docker Hub，改由本机 `docker save` 打包 → scp → 服务器 `docker load`。
+# 这批 tar.gz 是传输中间产物（含 README/load-all.sh/checksums.txt，随包走不随仓走），
+# 一旦提交会把仓库撑到 GB 级，故整目录不入仓。
+deploy/images/

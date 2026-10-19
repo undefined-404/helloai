@@ -36,14 +36,16 @@ logs/
 .env.local
 executor-config*.json
 application-local.yml
+# application-dev.yml in the working tree is skip-worktree and carries REAL
+# credentials (cloud IP, RabbitMQ/MinIO passwords, AES key). Excluding it means
+# a revived image build fails fast on a missing dev profile instead of shipping
+# those secrets. See the SECURITY NOTE in Dockerfile.
+**/application-dev.yml
 
 # Docs / misc (not needed for the image)
 doc/
 scripts/
 *.md
 
-# Deploy artifacts (not needed in the image), except the public dev-yml template
-# that the Dockerfile copies to replace the working-tree (secret-bearing) one.
+# Deploy artifacts (not needed in the image)
 deploy/*
-!deploy/templates/
-!deploy/templates/application-dev.yml

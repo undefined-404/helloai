@@ -47,13 +47,18 @@ COPY helloai-core helloai-core/
 COPY helloai-api helloai-api/
 COPY helloai-start helloai-start/
 
-# SECURITY: overwrite the working-tree application-dev.yml with the PUBLIC
-# placeholder template. The local working tree carries a skip-worktree
-# application-dev.yml with REAL credentials (cloud IP, RabbitMQ password);
-# baking that into the image would leak production secrets. The template's
-# defaults point at localhost and are fully overridden at runtime by the
-# compose SPRING_* / RABBITMQ_* / MINIO_* env vars, so behaviour is unchanged.
-COPY deploy/templates/application-dev.yml helloai-start/src/main/resources/application-dev.yml
+# SECURITY NOTE (2026-10-19) -- THE IMAGE-BUILD PATH IS RETIRED.
+#   Server releases are jar + dist bind mounts (deploy/app/docker-compose.yml);
+#   nothing builds this image any more. What used to be here was:
+#     COPY deploy/templates/application-dev.yml helloai-start/src/main/resources/application-dev.yml
+#   because the working tree carries a skip-worktree application-dev.yml with REAL
+#   credentials, and baking that into an image would leak them.
+#   deploy/templates/ and deploy/middleware/ were both deleted on 2026-10-19.
+#   If the image path is ever revived you MUST restore a public placeholder
+#   application-dev.yml and copy it over the working-tree one BEFORE `mvn package`
+#   below, otherwise the real secrets get baked into the image.
+#   Second guard: .dockerignore now excludes **/application-dev.yml, so a revived
+#   build fails fast (no dev profile) instead of silently shipping secrets.
 
 # ARG defaults mirror the local CI memory guidance (4C8GB host).
 ARG MAVEN_OPTS="-Xmx1024m -XX:+UseSerialGC"

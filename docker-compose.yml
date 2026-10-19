@@ -20,7 +20,7 @@
 #   2) RabbitMQ 用 guest/guest + 默认 vhost "/"，【不需要】rabbitmq-init / 管理员账号。
 #      判据：guest 官方限制「仅允许回环登录」；本地 app 跑宿主机走回环 → 可用；
 #      服务器 app 是兄弟容器（非回环）→ 用不了 guest，才必须由 rabbitmq-init 建
-#      helloai 用户 + /helloai vhost（见 deploy/middleware/README.md §10）。
+#      helloai 用户 + /helloai vhost（实现见 deploy/init-rabbitmq.sh）。
 #   3) MinIO 不需要 minio-init：bucket helloai-artifacts 由
 #      MinioArtifactStorage.ensureBucket() 在首次写入时自动创建。
 #   4) 系统管理员账号由 Flyway V1 播种（admin / admin123），无需手工建。
@@ -84,7 +84,7 @@ services:
       # 本地用官方默认 guest/guest + 默认 vhost "/" 即可，无需 rabbitmq-init / 管理员账号：
       # app 在宿主机跑、连 localhost:25672 走【回环】，而 guest 的官方限制正是「仅允许回环登录」。
       # 服务器版（docker-compose.server.yml）才需要 init，因为那里 app 是兄弟容器（非回环），
-      # 连不上 guest，必须由 rabbitmq-init 建 helloai 用户 + /helloai vhost。详见 deploy/middleware/README.md §10。
+      # 连不上 guest，必须由 rabbitmq-init 建 helloai 用户 + /helloai vhost（实现见 deploy/init-rabbitmq.sh）。
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
       TZ: Asia/Shanghai

@@ -192,7 +192,7 @@ public class PgDumpRunner {
                 "-p", String.valueOf(target.port()),
                 "-U", target.username(),
                 "-d", target.database(),
-                "--no-owner",                 // 与 deploy/middleware/scripts/migrate.sh 同参
+                "--no-owner",                 // 不导出属主，恢复时不受目标库用户差异影响
                 "--no-privileges",
                 "-j", "4",
                 dump.toAbsolutePath().toString());

@@ -1,0 +1,466 @@
+# ============================================================
+# HelloAI - Server Deployment Docker Compose (middleware + app)
+# Deploy path: /home/admin/helloai/docker-compose.yml
+# Prerequisite: helloai-start-1.0.0-SNAPSHOT.jar in same directory
+# Usage: docker compose up -d
+# ------------------------------------------------------------
+# NOTE: this file is intentionally ASCII-only (no CJK characters).
+#   Reason: it is consumed by `docker compose` on the server, and its comments /
+#   `${VAR:?message}` texts / `command:` strings are echoed to a terminal or
+#   container log that may not run a UTF-8 locale (the curlimages/curl and
+#   eclipse-temurin base images default to C/POSIX), which would garble them.
+#   Keep every line ASCII. Use English for comments and runtime messages.
+# ------------------------------------------------------------
+# Differences from local dev version:
+#   1. Added app service running jar directly with eclipse-temurin:17-jre
+#   2. App connects to middleware via compose internal network (service names),
+#      overridden by SPRING_* / RABBITMQ_* env vars, no jar repackaging needed
+#   3. Middleware ports bound to all interfaces (incl. public IP) for remote IDE debugging;
+#      MUST whitelist 15432/26379/25672/25673 in Alibaba Cloud security group to your IP
+#   4. Added web service (nginx): serves frontend dist + proxies /api, /mcp to app,
+#      only port 80 exposed publicly; 6565 bound to 127.0.0.1 for local troubleshooting
+#   5. Added rabbitmq-init one-shot service: creates vhost /helloai + business user,
+#      because the official `guest` account is loopback-only and cannot be used from
+#      a sibling container.
+#   6. (2026-10-19) postgres image -> pgvector; added opensandbox-server plus a
+#      python:3.12 pre-warm declaration. The `app` and `web` blocks are UNCHANGED.
+# Prerequisite files (same dir as this file, relative paths preserved):
+#   helloai-start-1.0.0-SNAPSHOT.jar   # jar executed inside the app container
+#   dist/                              # frontend static files (mounted by the web service)
+#   nginx.conf                         # reverse proxy config for the web service
+#   deploy/init-rabbitmq.sh            # init script executed by the rabbitmq-init container
+#     WARNING: this file must exist, otherwise rabbitmq-init "silently succeeds"
+#     (see the fail-open notes on the rabbitmq-init service below) and the app
+#     starts normally while vhost /helloai was never created -- exactly the
+#     silent-failure shape of the 2026-10-07 production incident.
+#
+# REQUIRED PRE-STEP BEFORE `docker compose up -d` (do not skip):
+#   The rabbitmq-init container authenticates with RABBITMQ_ADMIN_USER /
+#   RABBITMQ_ADMIN_PASSWORD. That account MUST already exist on the broker with the
+#   administrator tag, and it MUST NOT be `guest` (loopback-only).
+#   `RABBITMQ_DEFAULT_USER/PASS` below only take effect on a broker's FIRST boot;
+#   on a broker that already has a data volume they are ignored, so you must create
+#   the admin once by hand:
+#     docker exec helloai-rabbitmq rabbitmqctl add_user <admin> <password>
+#     docker exec helloai-rabbitmq rabbitmqctl set_user_tags <admin> administrator
+#   Without it, rabbitmq-init exits non-zero and -- by design -- the app is blocked
+#   by `service_completed_successfully` (stuck in `created`, no logs). Fail-loud by
+#   intent: an explicit failure beats a silent half-working stack.
+#
+# Required .env variables (in the deploy dir; .env is gitignored):
+#   RABBITMQ_ADMIN_USER              # non-guest admin, created manually (see above)
+#   RABBITMQ_ADMIN_PASSWORD
+#   HELLOAI_RABBIT_USER          # optional, defaults to helloai
+#   HELLOAI_RABBIT_PASSWORD      # REQUIRED (`:?`); rabbitmq-init and the app share it
+#   HELLOAI_CREDENTIAL_AES_KEY_BASE64  # REQUIRED (`:?`); must match existing ciphertext
+#   HELLOAI_AGENT_REGISTRATION_TOKEN   # REQUIRED (`:?`); without it the app silently
+#                                      #   falls back to the token baked into the jar
+#   OPEN_SANDBOX_API_KEY         # REQUIRED (`:?`) only when opensandbox-server is used
+# ============================================================
+
+services:
+
+  # --- PostgreSQL 16 + pgvector 0.8.0 (V106 needs the vector extension) ---
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg16
+    container_name: helloai-postgres
+    restart: unless-stopped
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_DB: helloai
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      TZ: Asia/Shanghai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d helloai"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # --- Redis 7.2.5 ---
+  redis:
+    image: redis:7.2.5-alpine
+    container_name: helloai-redis
+    restart: unless-stopped
+    ports:
+      - "26379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # --- RabbitMQ 3.12.14 (with management plugin) ---
+  rabbitmq:
+    image: rabbitmq:3.12.14-management-alpine
+    container_name: helloai-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "25672:5672"    # AMQP
+      - "25673:15672"   # Management UI
+    environment:
+      # Admin account made overridable; the default stays `guest` to keep existing
+      # behaviour unchanged for first-boot brokers.
+      # NOTE: default_user/default_pass are only applied on the node's FIRST boot.
+      #       On a node that already has a data volume these two variables have NO
+      #       effect at all, and the admin must be created once by hand via
+      #       `rabbitmqctl add_user` (see the pre-step note in the file header).
+      # NOTE: RabbitMQ restricts `guest` to loopback logins (protocol-independent),
+      #       so sibling containers such as rabbitmq-init CANNOT use it; a dedicated
+      #       non-guest admin is required.
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD:-guest}
+      TZ: Asia/Shanghai
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- RabbitMQ isolation bootstrap (one-shot, idempotent, safe to re-run) ---
+  # Duty: create vhost /helloai + business user helloai + permissions
+  #       (script reused from deploy/init-rabbitmq.sh).
+  # Missing this service is the institutional root cause of the production incident:
+  # vhost /helloai was never created, so MQ was silently unusable.
+  # The admin must be a non-guest account: guest is loopback-only, so a sibling
+  # container using it gets 403 / ACCESS_REFUSED.
+  #
+  # WARNING - fail-open protection (BOTH parts are required; measured, do not simplify):
+  #   When the bind source file is missing, Docker CREATES AN EMPTY DIRECTORY of the
+  #   same name on the host instead of erroring out -- true for both the short and
+  #   the long bind syntax (measured with docker compose 29.2.1 / compose v5.1.0:
+  #   both forms `up` successfully and both create an empty dir, neither reports an
+  #   error). Then `/bin/sh /init/init.sh` becomes `/bin/sh <an empty directory>`,
+  #   which was measured to return rc=0 with zero output -- so compose considers the
+  #   init "successful", the app is started, and no vhost/user/permission was ever
+  #   created: a silent MQ failure identical in shape to the incident.
+  #   Guard 1: long bind syntax (clearer semantics; it does NOT prevent the empty
+  #            directory, so it cannot be relied on alone).
+  #   Guard 2: the explicit `test -f` guard -- this is the one that actually catches
+  #            the fail-open case. Measured: with an empty directory mounted, the
+  #            guard makes the container exit with code 1, which in turn blocks the
+  #            app via `service_completed_successfully` (app stays in `created` with
+  #            empty logs) and makes `docker compose up -d` return non-zero.
+  rabbitmq-init:
+    # Image choice: reuse the MinIO image instead of a dedicated curl image.
+    #   The script only needs a POSIX shell + curl (plus optional base64/tr that it no
+    #   longer uses). minio/minio already ships curl and is already present on the
+    #   server because the `minio` service below pulls the very same tag -- so this
+    #   service starts with NO additional image pull.
+    #   Why it matters: curlimages/curl lives on Docker Hub, and pulling it was measured
+    #   to hang indefinitely in this environment (145s+ with no layer progress), which
+    #   blocked the whole `docker compose up -d`. Add a dedicated curl image back only
+    #   if a working registry mirror is configured.
+    #   Verified locally: `docker exec <minio container> sh /init-rabbitmq.sh` against a
+    #   real broker created vhost /helloai + user + permissions (HTTP 201 x3, exit 0),
+    #   was idempotent on re-run (HTTP 204), and the created account authenticated (200).
+    image: minio/minio:latest
+    container_name: helloai-rabbitmq-init
+    restart: "no"
+    # Guard: /init/init.sh must be an EXISTING REGULAR FILE, otherwise fail loudly
+    # with a non-zero exit. `exec` replaces the shell process so that compose sees
+    # the script's exit code faithfully.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["test -f /init/init.sh || { echo '[rabbitmq-init] ERROR: /init/init.sh not found (bind-mount source missing, or Docker created an empty directory because the source was absent). Make sure the deploy dir contains deploy/init-rabbitmq.sh.' >&2; exit 1; }; exec /bin/sh /init/init.sh"]
+    volumes:
+      - type: bind
+        source: ./deploy/init-rabbitmq.sh
+        target: /init/init.sh
+        read_only: true
+    environment:
+      # Deliberately use the `:-` empty default: with no .env, compose rendering
+      # does not emit a "variable is not set" warning; an empty value is then
+      # rejected by the guard at the top of init.sh (which fails loudly with a
+      # non-zero exit and never continues silently).
+      RABBITMQ_ADMIN_USER: ${RABBITMQ_ADMIN_USER:-}
+      RABBITMQ_ADMIN_PASSWORD: ${RABBITMQ_ADMIN_PASSWORD:-}
+      HELLOAI_RABBIT_USER: ${HELLOAI_RABBIT_USER:-helloai}
+      HELLOAI_RABBIT_PASSWORD: ${HELLOAI_RABBIT_PASSWORD:-}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  # --- MinIO Object Storage ---
+  minio:
+    image: minio/minio:latest
+    container_name: helloai-minio
+    restart: unless-stopped
+    ports:
+      - "29000:9000"   # S3 API
+      - "29001:9001"   # Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+      TZ: Asia/Shanghai
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ':9001'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # --- OpenSandbox lifecycle server (added 2026-10-19) ---
+  # MANUAL PULL ONLY. Two independent guards, both required in this environment:
+  #   1. profiles: ["sandbox"]  -> a plain `docker compose up -d` does NOT touch this
+  #      service at all, so an unreachable registry cannot block the release.
+  #   2. pull_policy: never     -> even when started explicitly, compose never pulls;
+  #      a missing image fails in <1s instead of hanging (measured: 657s and counting
+  #      on this host, because Docker Hub is unreachable there).
+  # Get the image on the host BEFORE starting it, either way:
+  #   a) docker pull opensandbox/server:release-1.1.0
+  #   b) docker save opensandbox/server:release-1.1.0 | gzip -1 > os-server.tgz
+  #      scp os-server.tgz ... && docker load -i os-server.tgz
+  # Then start it alone (the rest of the stack is already up):
+  #   docker compose --profile sandbox up -d opensandbox-server
+  #
+  # Why it mounts /var/run/docker.sock: this server creates and destroys one container
+  #   per task, and it does so on the HOST daemon. CONSEQUENCE: root inside this
+  #   container is effectively root on the host (it can start privileged containers
+  #   and read the host filesystem). Remove this service and opensandbox-images below
+  #   if that trade-off is not acceptable.
+  # The app does NOT join opensandbox-net, on purpose (plan 4.6): keeping the app and
+  #   the sandbox containers on separate networks shrinks the attack surface. The app
+  #   reaches this server over the published port, and only when
+  #   helloai.sandbox.opensandbox.enabled=true together with url/api-key is set.
+  opensandbox-server:
+    image: opensandbox/server:release-1.1.0
+    profiles: ["sandbox"]
+    pull_policy: never
+    container_name: opensandbox-server
+    restart: unless-stopped
+    networks:
+      - opensandbox-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      # LOOPBACK ONLY, deliberately. This container mounts /var/run/docker.sock, so
+      #   anyone who can reach :8090 and knows the api_key can create containers on
+      #   the HOST -- i.e. host root. Binding 0.0.0.0 would put that behind nothing
+      #   but the api_key and the cloud security group.
+      # When the app finally needs to call this server (helloai.sandbox.opensandbox
+      #   .enabled=true), publish it to the compose network instead of the world:
+      #     - add `extra_hosts: ["host.docker.internal:host-gateway"]` to the app
+      #       service and set url=http://host.docker.internal:8090, OR
+      #     - switch this line to "8090:8090" and rely on the security group.
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    configs:
+      - source: opensandbox-config
+        target: /etc/opensandbox/config.toml
+    environment:
+      - SANDBOX_CONFIG_PATH=/etc/opensandbox/config.toml
+      # `:?` never `:-`: a placeholder key would let anyone who can reach :8090
+      #   drive container creation on this host.
+      - OPEN_SANDBOX_API_KEY=${OPEN_SANDBOX_API_KEY:?OPEN_SANDBOX_API_KEY is required}
+
+  # --- Sandbox business image pre-warm: declaration only, it never runs ---
+  # Carries the image referenced by helloai.sandbox.opensandbox.spec.image so that
+  #   `docker compose --profile prewarm pull opensandbox-images` can fetch it ahead of
+  #   time: the sandbox server needs that image on the HOST daemon to create a sandbox.
+  # pull_policy is "missing", NOT "always". "always" attempts a Docker Hub pull on
+  #   every `up` and hangs on a server without Docker Hub access, even when the image
+  #   has already been loaded with `docker load`.
+  # profiles: ["prewarm"] keeps it OUT of a plain `docker compose up`, so an absent
+  #   python:3.12 never blocks a release. Fetch it explicitly:
+  #     docker compose --profile prewarm pull opensandbox-images
+  # restart "no" + sleep infinity: there is nothing to run.
+  opensandbox-images:
+    image: python:3.12
+    pull_policy: missing
+    profiles: ["prewarm"]
+    restart: "no"
+    command: ["sleep", "infinity"]
+
+  # --- HelloAI Application (jar, no image build needed) ---
+  app:
+    image: eclipse-temurin:17-jre
+    container_name: helloai-app
+    restart: unless-stopped
+    working_dir: /app
+    # To update jar: replace jar file then run docker compose restart app
+    volumes:
+      - ./helloai-start-1.0.0-SNAPSHOT.jar:/app/helloai-start.jar:ro
+      - ./logs:/app/logs              # persistent logs on host
+    command: java -Xms512m -Xmx2g -jar helloai-start.jar
+    ports:
+      - "127.0.0.1:6565:6565"   # localhost only; public traffic goes through web(nginx):80
+    environment:
+      TZ: Asia/Shanghai
+      # === UTF-8 locale (added 2026-10-07) ===
+      # Inside the container, java derives file.encoding from the OS locale
+      # (default UTF-8 only since Java 18; this project runs JDK 17).
+      # With a C/POSIX image locale, file.encoding degrades to ANSI_X3.4-1968
+      # (ASCII), which garbles every non-ASCII character:
+      #   1) non-English log/exception text becomes unreadable;
+      #   2) Spring reading application*.yml, and Flyway reading V*.sql that contain
+      #      non-ASCII comments, may hit decoding errors.
+      # Pinning the locale + file.encoding fixes all of it at the root, rather than
+      # translating every file by hand.
+      # C.UTF-8 is built into glibc and needs no generated locale, unlike
+      # en_US.UTF-8 which requires the image to ship `locales`.
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8
+      # Activate dev profile, using Docker internal network config from application-dev.yml
+      SPRING_PROFILES_ACTIVE: dev
+      # SPRING_* env vars below override application-dev.yml fields,
+      # ensuring compose internal network (service-name:container-port) without repackaging
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/helloai?currentSchema=public&reWriteBatchedInserts=true
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      # RabbitMQ is consolidated onto ONE mechanism: the RABBITMQ_* placeholders
+      # consumed by application-dev.yml. SPRING_RABBITMQ_* is no longer mixed in
+      # (it has no username/virtual-host counterpart, which would leave user/vhost
+      # uncontrolled).
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USERNAME: ${HELLOAI_RABBIT_USER:-helloai}
+      # vhost is pinned to /helloai and deliberately not parameterised:
+      #   init.sh also hardcodes creating this vhost (URL-encoded as %2Fhelloai on
+      #   the Management API). The two MUST agree, so this is not exposed as a knob --
+      #   otherwise changing .env would fork the app from init.sh, producing the silent
+      #   failure "app can reach the broker but the vhost does not exist".
+      RABBITMQ_VHOST: /helloai
+      # The password is SINGLE-SOURCED with the one rabbitmq-init uses to create the
+      #   user: both read .env's HELLOAI_RABBIT_PASSWORD.
+      #   Only this one variable name is kept, to prevent the fork "init.sh creates the
+      #   user with a new password while the app connects with another one" -- which is
+      #   exactly how the incident could repeat.
+      # `:?` gives fail-fast behaviour: with no .env, compose errors out immediately and
+      #   names the missing variable, instead of silently injecting an empty string.
+      #   An empty string would be treated by Spring as "set", overriding the default
+      #   password in application-dev.yml and turning a working service into a broken one.
+      # Trade-off: this makes `docker compose config` FAIL (rather than pass) when .env
+      #   is absent. That is intended, per the project's fail-fast-when-missing rule:
+      #   an explicit failure beats a silent half-working state.
+      RABBITMQ_PASSWORD: ${HELLOAI_RABBIT_PASSWORD:?.env in the deploy dir must define HELLOAI_RABBIT_PASSWORD, and it must equal the value rabbitmq-init used to create the user (same variable, do not fork)}
+      # MinIO goes over the compose internal network (inside the app container
+      # "localhost" is the container itself, so the localhost:29000 default is unreachable).
+      # If this is not configured, artifact materialization and direct attachment reads
+      # all fail (review reports "attachment content unreadable").
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MINIO_BUCKET: helloai-artifacts
+      # Credential encryption key entry point: the default in application.yml has been
+      # randomized for the public repo, so production MUST write
+      # HELLOAI_CREDENTIAL_AES_KEY_BASE64=<original key> into the deploy dir's .env
+      # (.env is excluded by .gitignore).
+      #
+      # WARNING - must use `:?` (fail-fast), never `:-` (corrected 2026-10-07):
+      #   Written as `${HELLOAI_CREDENTIAL_AES_KEY_BASE64:-}`, a missing .env variable
+      #   makes compose inject an EMPTY STRING, and Spring's "is set" check counts an
+      #   empty string as set -- so the empty value outranks both the real default key
+      #   in application-dev.yml (${HELLOAI_CREDENTIAL_AES_KEY_BASE64:<key>}) and the
+      #   no-default placeholder in application.yml.
+      #   CredentialCryptoService then throws "missing credential encryption key",
+      #   i.e. ALL credentials fail to decrypt. That is the silent failure
+      #   "the app starts but cannot obtain any LLM/Agent credential" -- the same
+      #   failure mode as the MQ incident, so it gets the same fail-fast treatment:
+      #   an explicit compose error is preferable to a silent half-working state.
+      HELLOAI_CREDENTIAL_AES_KEY_BASE64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:?.env in the deploy dir must define HELLOAI_CREDENTIAL_AES_KEY_BASE64 (the original key matching the ciphertext already in the database); without it every credential fails to decrypt}
+      # Added 2026-10-19. Without this line the app IGNORES .env's value and keeps the
+      #   registration-token baked into the jar's application-dev.yml -- so rotating
+      #   the token in .env alone has NO effect, and the endpoint keeps accepting a
+      #   value that was never meant for production. Measured: before this line,
+      #   POST /api/agents/registerWithToken with the old .env value returned 403
+      #   (i.e. the app was using a THIRD value), which is why the rotation looked
+      #   like it worked. `:?` for the same reason as the key above: an empty string
+      #   counts as "set" in Spring and would silently override the default.
+      HELLOAI_AGENT_REGISTRATION_TOKEN: ${HELLOAI_AGENT_REGISTRATION_TOKEN:?.env in the deploy dir must define HELLOAI_AGENT_REGISTRATION_TOKEN (agent self-registration shared secret)}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      # Start the app only after rabbitmq-init has exited successfully. Reason: on the
+      # first `up -d` the app and init run concurrently, and the app would fail auth
+      # because the vhost/user are not created yet, entering a reconnect window during
+      # which all three MQ paths (outbox relay / execution-command consumption /
+      # review) are unavailable.
+      # Trade-off: this makes "init fails => app does not start". That is intended --
+      # an explicit failure that surfaces the problem is preferable to a silent
+      # half-working state.
+      rabbitmq-init:
+        condition: service_completed_successfully
+
+  # --- Nginx: frontend static hosting + API reverse proxy (only public entry) ---
+  web:
+    image: nginx:1.27-alpine
+    container_name: helloai-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "5173:80"
+    volumes:
+      - ./dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+
+configs:
+  # OpenSandbox server config.toml, trimmed from the official example. ASCII-only.
+  # execd / egress are runtime helper images that the server pulls when it creates a
+  #   sandbox; they are NOT declared as services, so a plain `docker compose up` does
+  #   not fetch them. Pre-pull them on the host if the registry is reachable:
+  #     docker pull sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:v1.1.0
+  #     docker pull sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:v1.1.7
+  opensandbox-config:
+    content: |
+      [server]
+      host = "0.0.0.0"
+      port = 8090
+      api_key = "${OPEN_SANDBOX_API_KEY:?OPEN_SANDBOX_API_KEY is required}"
+
+      [proxy]
+      # The lifecycle server sits on opensandbox-net while the sandboxes it creates run
+      # on the Docker bridge network: route through the published host port instead of
+      # an unreachable sandbox IP.
+      resolve_internal = false
+
+      [log]
+      level = "INFO"
+
+      [runtime]
+      type = "docker"
+      # execd: in-sandbox execution daemon, injected into every sandbox container.
+      execd_image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:v1.1.0"
+
+      [egress]
+      # egress: network egress sidecar (allowlist + credential vault sidecar).
+      image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:v1.1.7"
+      readiness_timeout_seconds = 30.0
+
+      [docker]
+      network_mode = "bridge"
+      host_ip = "host.docker.internal"
+      port_range_min = 40000
+      port_range_max = 60000
+      drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
+      no_new_privileges = true
+      pids_limit = 4096
+
+      [ingress]
+      mode = "direct"
+
+networks:
+  opensandbox-net:
+    driver: bridge
