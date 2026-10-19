@@ -647,11 +647,20 @@ p, .el-descriptions__title, .card-header span {
   -webkit-overflow-scrolling: touch;
 }
 
-/* ---- Action cell: wrap buttons on small screens ---- */
+/* ---- Action cell: 操作列按钮横排（见「List Page Template」） ---- */
 .action-cell {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  flex-wrap: nowrap;
   gap: 6px;
+}
+.action-cell .el-button {
+  flex: none;
+}
+/* Element Plus 默认给相邻按钮 12px margin-left，叠加 flex gap 后间距变成 18px，
+   既浪费窄操作列的宽度，也和 gap 的节奏不一致；统一只留 gap */
+.action-cell .el-button + .el-button {
+  margin-left: 0;
 }
 
 /* ========================================
@@ -970,10 +979,12 @@ img {
   color: var(--ha-muted);
   line-height: 1.5;
 }
-.page-head-actions {
+/* 页头操作区；.page-actions 为早期页面的等价别名（保留以免存量页面丢样式） */
+.page-head-actions,
+.page-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 .dash-icon-block {
@@ -1005,6 +1016,199 @@ img {
 .dash-icon-block.danger {
   background: var(--ha-danger-bg);
   color: var(--ha-danger);
+}
+
+/* ========================================
+   List Page Template（列表页通用模板）
+   ------------------------------------------------------------
+   全站列表页共用同一副骨架，页面只套类名、不再各写 scoped 样式：
+
+   <div class="page list-page ha-entrance-up">
+     <div class="page-head">
+       <div class="page-head-title">
+         <div class="dash-icon-block primary"><el-icon><Tickets /></el-icon></div>
+         <div>
+           <h2 class="page-heading">
+             任务管理
+             <span v-if="total" class="query-stats">共 {{ total }} 条</span>
+           </h2>
+           <p class="page-subheading">一句话说明本页职责</p>
+         </div>
+       </div>
+       <div class="page-head-actions">
+         筛选（.filter-select / .filter-search）→ 刷新（默认按钮）→ 主操作（type="primary"，全页至多一个）
+       </div>
+     </div>
+
+     <el-card class="list-card">
+       <el-table border stripe style="width:100%">…</el-table>
+       <el-empty v-if="!list.length && !loading" description="暂无数据" />
+       <el-pagination class="list-pager" background layout="total, sizes, prev, pager, next, jumper" />
+     </el-card>
+   </div>
+
+   单元格约定：可点击标题 .link-cell；空值 .cell-muted；操作列 .action-cell；
+   下拉危险项 .dropdown-danger；单元格内多标签 .cell-tags；
+   时间两行 .time-cell（<div class="time-cell"><span>日期</span><span class="time-sub">时分秒</span></div>）。
+
+   行内操作统一为「主操作外置 + 其余收进更多」：
+     <div class="action-cell">
+       <el-button size="small" @click="edit(row)">编辑</el-button>
+       <el-dropdown trigger="click" @command="onMore">
+         <el-button size="small">更多<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+         <template #dropdown><el-dropdown-menu>…<span class="dropdown-danger">删除</span></el-dropdown-menu></template>
+       </el-dropdown>
+     </div>
+   行内按钮一律用默认 small 按钮（不用 link 文字按钮，与页面头部的主/次按钮层级一致）；
+   操作列宽：「单按钮」110、「主按钮 + 更多」172、「两个长文案按钮」180。
+   下拉项不能用 v-auth（ElDropdownItem 根节点是 fragment，指令会被静默忽略），
+   改用 v-if="auth.hasPermission('xxx')"，无可用项时整个 el-dropdown 不渲染。
+
+   加 .list-page--fill 后列表卡吸收可视区剩余高度（数据少时也撑到底），
+   页面无需再写 flex 撑高样式。
+   ======================================== */
+.list-page {
+  min-width: 0;
+}
+
+/* 撑满高度（可选）：页 → 列表卡 → 卡体 → 表格逐层传递剩余高度 */
+.list-page--fill {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.list-page--fill > .list-card {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.list-page--fill > .list-card > .el-card__body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* el-table 内部同为 flex 列：不把 100% 高度传下去，表格只会在顶部长一条，
+   空数据时下方留大片空白 */
+.list-page--fill .table-wrapper > .el-table > .el-table__inner-wrapper {
+  height: 100%;
+}
+.list-page--fill .table-wrapper {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+.list-page--fill .table-wrapper > .el-table {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 列表卡：表格 + 分页的统一容器（卡内不放 header，标题归页头） */
+.list-card {
+  min-width: 0;
+}
+.list-card > .el-card__body {
+  padding: 16px 20px;
+}
+
+/* 单元格排版：只在词边界换行。
+   Element Plus 默认 word-break: break-all，会把 19 位 ID、OfficeBuilding 这类
+   无空格长串从中间劈开，行高忽高忽低；改成 break-word 后短词不断、长词换行。 */
+.list-card .el-table .cell {
+  word-break: break-word;
+}
+/* 空数据：占满表体高度，让「暂无数据」在卡片中垂直居中 */
+.list-card .el-table__empty-block {
+  height: 100%;
+  min-height: 180px;
+}
+
+/* 卡内工具条（表格上方的筛选/说明行） */
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.list-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 分页：固定在表格下方居中（替代各页内联 style="margin-top:16px;text-align:center"） */
+.list-pager {
+  margin-top: 16px;
+  justify-content: center;
+  flex: none;
+}
+.list-card .el-empty {
+  padding: 24px 0 8px;
+}
+
+/* 单元格：可点击跳转的文本 */
+.link-cell {
+  color: var(--ha-link);
+  cursor: pointer;
+  transition: color var(--ha-duration-fast) var(--ha-ease-out);
+}
+.link-cell:hover {
+  color: var(--ha-link-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 单元格：空值占位 */
+.cell-muted {
+  color: var(--ha-muted);
+}
+
+/* 单元格：多枚标签横排（状态 + 等待倒计时等），不撑破行高 */
+.cell-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 单元格：日期 / 时分秒两行。窄列（110-120px）下比单行 "YYYY-MM-DD HH:mm:ss"
+   省宽，也不至于把时间挤到折行。两行都必须 nowrap：
+   日期串会在连字符处被 break-word 拆开（2026- / 10-19），
+   再叠一行时分秒就变成三行，整表行高从 40px 涨到 68px。 */
+.time-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.time-cell > span {
+  white-space: nowrap;
+}
+/* 次级行用透明度而非固定灰色：父级有 danger / warning 语义色时继续继承色相 */
+.time-sub {
+  font-size: 12px;
+  line-height: 18px;
+  opacity: 0.72;
+}
+
+/* 下拉项危险语义（ElDropdownItem 无 danger 变体） */
+.dropdown-danger {
+  color: var(--ha-danger);
+}
+
+/* 页头筛选控件统一宽度（.query-row 内的同名控件仍按其自身宽度生效） */
+.filter-search {
+  width: 260px;
+}
+.filter-select {
+  width: 160px;
 }
 
 /* ========================================

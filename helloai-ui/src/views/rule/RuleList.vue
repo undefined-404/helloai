@@ -1,19 +1,41 @@
 <template>
-  <div class="page ha-entrance-up">
-    <el-card>
-      <template #header>
-        <div class="card-header">
-          <span>规则配置</span>
-          <el-button
-            v-auth="'rule:add'"
-            size="small"
-            type="primary"
-            @click="openCreate"
-          >
-            新建规则
-          </el-button>
+  <div class="page list-page ha-entrance-up">
+    <div class="page-head">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><SetUp /></el-icon>
         </div>
-      </template>
+        <div>
+          <h2 class="page-heading">
+            规则配置
+            <span
+              v-if="list.length"
+              class="query-stats"
+            >共 {{ list.length }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            派单、评分与熔断规则的统一配置
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
+        <el-button
+          size="small"
+          @click="load"
+        >
+          刷新
+        </el-button>
+        <el-button
+          v-auth="'rule:add'"
+          size="small"
+          type="primary"
+          @click="openCreate"
+        >
+          新建规则
+        </el-button>
+      </div>
+    </div>
+    <el-card class="list-card">
       <el-table
         v-loading="loading"
         :data="list"
@@ -43,11 +65,11 @@
         <el-table-column
           prop="priority"
           label="优先级"
-          width="80"
+          width="88"
         />
         <el-table-column
           label="更新时间"
-          width="170"
+          width="180"
         >
           <template #default="{ row }">
             {{ fmtTime(row.updateTime) }}
@@ -59,28 +81,31 @@
           fixed="right"
         >
           <template #default="{ row }">
-            <el-button
-              v-auth="'rule:view'"
-              size="small"
-              @click="openView(row)"
-            >
-              查看
-            </el-button>
-            <el-button
-              v-auth="'rule:edit'"
-              size="small"
-              @click="openEdit(row)"
-            >
-              编辑
-            </el-button>
-            <el-button
-              v-auth="'rule:delete'"
-              size="small"
-              type="danger"
-              @click="handleDelete(row)"
-            >
-              删除
-            </el-button>
+            <div class="action-cell">
+              <el-button
+                v-auth="'rule:view'"
+                size="small"
+                @click="openView(row)"
+              >
+                查看
+              </el-button>
+              <el-button
+                v-auth="'rule:edit'"
+                size="small"
+                @click="openEdit(row)"
+              >
+                编辑
+              </el-button>
+              <el-button
+                v-auth="'rule:delete'"
+                size="small"
+                type="danger"
+                plain
+                @click="handleDelete(row)"
+              >
+                删除
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -224,6 +249,7 @@
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { SetUp } from '@element-plus/icons-vue'
 import { ruleApi } from '@/api/rule'
 import { fmtTime } from '@/utils/tableConfig'
 import MarkdownView from '@/components/MarkdownView.vue'
@@ -291,7 +317,7 @@ onMounted(() => load())
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
+/* 列表页通用外观由 design-system.css 的 List Page Template 统一提供。 */
 
 /* ---- 查看规则弹窗（2026-10-18 排版重整）----
    原问题三处：① 元信息四行 el-form-item 占掉小半屏、长标签被挤成方块；

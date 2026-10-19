@@ -1,10 +1,31 @@
 <template>
-  <div class="page ha-entrance-up">
+  <div class="page list-page list-page--fill ha-entrance-up">
+    <!-- 页头：图标块 + 标题（含条数）+ 副标题，右侧操作区 -->
     <div class="page-head">
-      <h2 class="page-heading">
-        角色管理
-      </h2>
-      <div class="page-actions">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><UserFilled /></el-icon>
+        </div>
+        <div>
+          <h2 class="page-heading">
+            角色管理
+            <span
+              v-if="list.length"
+              class="query-stats"
+            >共 {{ list.length }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            角色定义与权限分配的维护入口
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
+        <el-button
+          size="small"
+          @click="load"
+        >
+          刷新
+        </el-button>
         <el-button
           v-auth="'role:add'"
           size="small"
@@ -13,12 +34,6 @@
         >
           <el-icon><Plus /></el-icon>
           <span>新建角色</span>
-        </el-button>
-        <el-button
-          size="small"
-          @click="load"
-        >
-          刷新
         </el-button>
       </div>
     </div>
@@ -87,34 +102,36 @@
             fixed="right"
           >
             <template #default="{ row }">
-              <el-button
-                v-auth="'role:edit'"
-                size="small"
-                link
-                type="primary"
-                @click="openEdit(row)"
-              >
-                编辑
-              </el-button>
-              <el-button
-                v-auth="'role:assign-perm'"
-                size="small"
-                link
-                type="primary"
-                @click="openAssignPermissions(row)"
-              >
-                分配权限
-              </el-button>
-              <el-button
-                v-auth="'role:delete'"
-                size="small"
-                link
-                type="danger"
-                :disabled="row.code === 'SUPER_ADMIN'"
-                @click="removeRole(row)"
-              >
-                删除
-              </el-button>
+              <div class="action-cell">
+                <el-button
+                  v-auth="'role:edit'"
+                  size="small"
+                  link
+                  type="primary"
+                  @click="openEdit(row)"
+                >
+                  编辑
+                </el-button>
+                <el-button
+                  v-auth="'role:assign-perm'"
+                  size="small"
+                  link
+                  type="primary"
+                  @click="openAssignPermissions(row)"
+                >
+                  分配权限
+                </el-button>
+                <el-button
+                  v-auth="'role:delete'"
+                  size="small"
+                  link
+                  type="danger"
+                  :disabled="row.code === 'SUPER_ADMIN'"
+                  @click="removeRole(row)"
+                >
+                  删除
+                </el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -247,7 +264,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, UserFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { rbacApi } from '@/api/rbac'
 import type { SysPermission, SysRole } from '@/types'
@@ -381,59 +398,8 @@ onMounted(() => load())
 </script>
 
 <style scoped>
-/* Page wrapper: 与外层 .app-content (overflow-y: auto) 协作，
-   用 min-height: 100% 让页面占满 .app-content 的可视区，
-   然后用 flex 列向子级分配高度，确保数据少时 el-card 也能拉伸到底。 */
-.page {
-  max-width: var(--ha-content-width);
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
-}
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  gap: 16px;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-.page-heading {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--ha-primary);
-  letter-spacing: -0.02em;
-  margin: 0;
-}
-.page-actions { display: flex; align-items: center; gap: 8px; }
-
-/* 列表卡片：flex:1 吸收 .page 剩余高度，让数据少时卡片仍撑到底；
-    display:flex 让内部 el-table 也能按卡片高度排版 */
-.list-card {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.list-card :deep(.el-card__body) {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-/* 表格容器：吸收卡片内除分页外的全部高度，
-   让 el-table 即使只有 1~2 行也能撑满卡片底部；空数据时由 el-empty 居中 */
-.table-wrapper {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-}
-.table-wrapper :deep(.el-table) {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
+/* 页头 / 列表卡由 design-system.css 的 List Page Template 统一提供；
+   本页只保留专属单元格与弹窗样式。 */
 .muted { color: var(--ha-muted); font-size: 12px; }
 .perm-group { margin-bottom: 16px; }
 .perm-group-label {

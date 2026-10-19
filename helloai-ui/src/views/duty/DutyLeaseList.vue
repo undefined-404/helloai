@@ -1,11 +1,25 @@
 <template>
-  <div class="page ha-entrance-up">
-    <!-- 页面标题 + 筛选/操作区（与 ReviewList / SubTaskList 共享模式：标题外置，操作区右侧水平排列） -->
+  <div class="page list-page ha-entrance-up">
+    <!-- 页头：与任务管理 / 子任务列表等同构（design-system.css → List Page Template） -->
     <div class="page-head">
-      <h2 class="page-heading">
-        Agent 打卡上班
-      </h2>
-      <div class="page-actions">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><AlarmClock /></el-icon>
+        </div>
+        <div>
+          <h2 class="page-heading">
+            Agent 打卡上班
+            <span
+              v-if="total"
+              class="query-stats"
+            >共 {{ total }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            在岗状态、会话租约与到期时间
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
         <el-select
           v-model="statusFilter"
           placeholder="状态筛选"
@@ -37,7 +51,6 @@
         />
         <el-button
           size="small"
-          type="primary"
           @click="load(currentPage)"
         >
           刷新
@@ -194,59 +207,72 @@
         />
         <el-table-column
           label="上班时间"
-          width="170"
+          width="132"
         >
           <template #default="{ row }">
-            {{ fmtTime(row.startedAt) }}
+            <div class="time-cell">
+              <span>{{ timeParts(row.startedAt).date }}</span>
+              <span class="time-sub">{{ timeParts(row.startedAt).time }}</span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column
           label="续约时间"
-          width="170"
+          width="132"
         >
           <template #default="{ row }">
-            <span
+            <div
+              class="time-cell"
               :class="recentClass(row.lastRenewedAt)"
-            >{{ fmtTime(row.lastRenewedAt) }}</span>
+            >
+              <span>{{ timeParts(row.lastRenewedAt).date }}</span>
+              <span class="time-sub">{{ timeParts(row.lastRenewedAt).time }}</span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column
           label="超时时间"
-          width="170"
+          width="132"
         >
           <template #default="{ row }">
-            <span
+            <div
+              class="time-cell"
               :class="recentClass(row.expiresAt)"
-            >{{ fmtTime(row.expiresAt) }}</span>
+            >
+              <span>{{ timeParts(row.expiresAt).date }}</span>
+              <span class="time-sub">{{ timeParts(row.expiresAt).time }}</span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column
           label="操作"
-          :width="ACTION.ONE"
+          width="110"
           fixed="right"
         >
           <template #default="{ row }">
-            <el-button
-              size="small"
-              link
-              type="primary"
-              @click="openHistory(row)"
-            >
-              更多
-            </el-button>
+            <div class="action-cell">
+              <!-- 单一动作直接用默认按钮（与其它列表页一致），文案点明它打开的是历史记录 -->
+              <el-button
+                size="small"
+                @click="openHistory(row)"
+              >
+                历史
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
 
       <el-pagination
         v-if="total > 0"
-        background
-        layout="prev, pager, next, total"
+        class="list-pager"
+        layout="total, sizes, prev, pager, next, jumper"
         :total="total"
         :page-size="pageSize"
+        :page-sizes="[10, 20, 50, 100]"
         :current-page="currentPage"
-        style="margin-top: 16px; text-align: center"
         @current-change="load"
+        @size-change="onSizeChange"
       />
     </el-card>
 
@@ -268,12 +294,13 @@ import {
   Clock,
   Warning,
   Moon,
-  Files
+  Files,
+  AlarmClock
 } from '@element-plus/icons-vue'
 import { dutyApi } from '@/api/duty'
 import { DUTY_LEASE_STATUS_MAP, type DutyAgentLatestResponse, type DutyLeaseStatus } from '@/types/duty'
 import type { LongId } from '@/types'
-import { fmtTime, ACTION } from '@/utils/tableConfig'
+import { splitDateTime } from '@/utils/tableConfig'
 import DutyLeaseHistoryDialog from './components/DutyLeaseHistoryDialog.vue'
 
 const list = ref<DutyAgentLatestResponse[]>([])
@@ -281,6 +308,11 @@ const total = ref(0)
 const pageSize = ref(20)
 const currentPage = ref(1)
 const loading = ref(false)
+
+/** 时间拆成日期/时间两行（三个时间列均为窄列） */
+function timeParts(t: string | null | undefined) {
+  return splitDateTime(t) ?? { date: '-', time: '' }
+}
 const statusFilter = ref<'' | DutyLeaseStatus>('')
 const keyword = ref('')
 let searchTimer: ReturnType<typeof setTimeout> | null = null
@@ -354,6 +386,12 @@ async function load(page = 1) {
 
 function reload() { load(currentPage.value) }
 
+/** 切每页条数：回到第一页，避免新 pageSize 下页码越界 */
+function onSizeChange(size: number) {
+  pageSize.value = size
+  load(1)
+}
+
 function onKeywordInput() {
   if (searchTimer) clearTimeout(searchTimer)
   searchTimer = setTimeout(() => { /* filteredList 由 computed 自动重算 */ }, 200)
@@ -373,29 +411,8 @@ onMounted(() => load(1))
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.page-heading {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--ha-primary);
-  letter-spacing: -0.02em;
-  margin: 0;
-}
-.page-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.filter-select { width: 140px; }
-.filter-search { width: 260px; }
+/* 页头/卡片/筛选控件由 design-system.css 的 List Page Template 统一提供，
+   本页只保留打卡业务与统计卡片的专属排版。 */
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -449,7 +466,8 @@ onMounted(() => load(1))
   max-width: 120px;
 }
 
-/* 时间热度：即将超时 danger、近期活动 warning，默认 ink-secondary */
+/* 时间列两行（日期/时分秒）由 design-system.css 的 .time-cell / .time-sub 统一提供，
+   本页只需补语义色：即将超时 danger、近期活动 warning，默认 ink-secondary */
 .soon { color: var(--ha-danger); font-weight: 600; font-variant-numeric: tabular-nums; }
 .recent { color: var(--ha-warning); font-weight: 600; font-variant-numeric: tabular-nums; }
 :deep(.el-table td.el-table__cell) .recent,

@@ -1,71 +1,83 @@
 <template>
-  <div class="page ha-entrance-up">
-    <el-card>
-      <template #header>
-        <div class="card-header">
-          <span>Agent 收件箱</span>
-          <div>
-            <!-- 未读筛选（管理端默认「全部」：admin 应能看所有，而不是只看未读） -->
-            <el-radio-group
-              v-model="readFilter"
-              size="small"
-              style="margin-right:8px"
-              @change="onFilterChange"
-            >
-              <el-radio-button :value="null">
-                全部
-              </el-radio-button>
-              <el-radio-button :value="0">
-                未读
-              </el-radio-button>
-              <el-radio-button :value="1">
-                已读
-              </el-radio-button>
-            </el-radio-group>
-            <!-- 归档筛选只有两类（2026-10-18 修正）：「含归档」与「已归档」语义重复，
-                 取消该中间态。默认「未归档」= 业务上待处理的消息。
-                 注意：库中历史消息可能已全部过期归档，此时本页为空属预期，
-                 空态会引导切换到「已归档」查看。 -->
-            <el-radio-group
-              v-model="archiveFilter"
-              size="small"
-              style="margin-right:8px"
-              @change="onFilterChange"
-            >
-              <el-radio-button :value="0">
-                未归档
-              </el-radio-button>
-              <el-radio-button :value="1">
-                已归档
-              </el-radio-button>
-            </el-radio-group>
-            <el-tag
-              v-if="unreadCount > 0"
-              type="danger"
-              size="small"
-            >
-              未读 {{ unreadCount }}
-            </el-tag>
-            <el-button
-              size="small"
-              class="ml-sm"
-              @click="load"
-            >
-              刷新
-            </el-button>
-          </div>
+  <div class="page list-page ha-entrance-up">
+    <div class="page-head">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><Message /></el-icon>
         </div>
-      </template>
+        <div>
+          <h2 class="page-heading">
+            Agent 收件箱
+            <span
+              v-if="total"
+              class="query-stats"
+            >共 {{ total }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            派单、通知与回执消息
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
+        <!-- 未读筛选（管理端默认「全部」：admin 应能看所有，而不是只看未读） -->
+        <el-radio-group
+          v-model="readFilter"
+          size="small"
+          @change="onFilterChange"
+        >
+          <el-radio-button :value="null">
+            全部
+          </el-radio-button>
+          <el-radio-button :value="0">
+            未读
+          </el-radio-button>
+          <el-radio-button :value="1">
+            已读
+          </el-radio-button>
+        </el-radio-group>
+        <!-- 归档筛选只有两类（2026-10-18 修正）：「含归档」与「已归档」语义重复，
+             取消该中间态。默认「未归档」= 业务上待处理的消息。
+             注意：库中历史消息可能已全部过期归档，此时本页为空属预期，
+             空态会引导切换到「已归档」查看。 -->
+        <el-radio-group
+          v-model="archiveFilter"
+          size="small"
+          @change="onFilterChange"
+        >
+          <el-radio-button :value="0">
+            未归档
+          </el-radio-button>
+          <el-radio-button :value="1">
+            已归档
+          </el-radio-button>
+        </el-radio-group>
+        <el-tag
+          v-if="unreadCount > 0"
+          type="danger"
+          size="small"
+        >
+          未读 {{ unreadCount }}
+        </el-tag>
+        <el-button
+          size="small"
+          @click="load"
+        >
+          刷新
+        </el-button>
+      </div>
+    </div>
+    <el-card class="list-card">
       <el-table
         v-loading="loading"
         :data="list"
+        :empty-text="emptyText"
         border
         stripe
         style="width:100%"
       >
         <el-table-column
           label="类型"
-          width="120"
+          width="116"
         >
           <template #default="{ row }">
             <el-tag
@@ -79,7 +91,7 @@
         </el-table-column>
         <el-table-column
           label="所属 Agent"
-          width="180"
+          width="150"
           show-overflow-tooltip
         >
           <template #default="{ row }">
@@ -113,7 +125,7 @@
         </el-table-column>
         <el-table-column
           label="归档"
-          width="96"
+          width="104"
         >
           <template #default="{ row }">
             <el-tag
@@ -128,12 +140,12 @@
         <el-table-column
           prop="title"
           label="标题"
-          min-width="240"
+          min-width="190"
           show-overflow-tooltip
         />
         <el-table-column
           label="优先级"
-          width="80"
+          width="88"
         >
           <template #default="{ row }">
             <el-tag
@@ -155,15 +167,20 @@
         </el-table-column>
         <el-table-column
           label="时间"
-          width="170"
+          width="132"
         >
           <template #default="{ row }">
-            {{ fmtTime(row.createTime) }}
+            <div class="time-cell">
+              <span>{{ timeParts(row.createTime).date }}</span>
+              <span class="time-sub">{{ timeParts(row.createTime).time }}</span>
+            </div>
           </template>
         </el-table-column>
+        <!-- 两个按钮文案偏长（标为已读 / 归档），比 ACTION.TWO 的 150px 更宽：
+             留出按钮组右侧呼吸间距，避免单元格贴边 -->
         <el-table-column
           label="操作"
-          :width="ACTION.TWO"
+          width="180"
           fixed="right"
         >
           <template #default="{ row }">
@@ -189,21 +206,17 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty
-        v-if="!list.length && !loading"
-        :description="emptyText"
-        :image-size="70"
-      />
+      <!-- 空态交给 el-table 的 empty-text，避免「表格内暂无数据 + 卡片下插画」两套空态同时出现 -->
       <!-- 分页（2026-10-18）：原实现写死 limit，53 条只显示前 20 条且无法翻页 -->
       <el-pagination
         v-if="total > 0"
+        class="list-pager"
         layout="total, sizes, prev, pager, next, jumper"
         background
         :total="total"
         :page-size="pageSize"
         :current-page="page"
         :page-sizes="[20, 50, 100]"
-        style="margin-top:12px;justify-content:center"
         @current-change="onPageChange"
         @size-change="onSizeChange"
       />
@@ -214,10 +227,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Message } from '@element-plus/icons-vue'
 import { inboxApi, type InboxRow } from '@/api/inbox'
 import { useEnumCatalogStore } from '@/stores/enumCatalog'
-import { ACTION } from '@/utils/tableConfig'
-import { fmtTime } from '@/utils/tableConfig'
+import { splitDateTime } from '@/utils/tableConfig'
 
 const list = ref<InboxRow[]>([])
 const loading = ref(false)
@@ -243,6 +256,11 @@ const emptyText = computed(() => {
 })
 
 const enumStore = useEnumCatalogStore()
+
+/** 时间拆成日期/时间两行（窄列展示） */
+function timeParts(t: string | null | undefined) {
+  return splitDateTime(t) ?? { date: '-', time: '' }
+}
 function eventTypeLabel(code: string): string {
   enumStore.ensureLoaded() // fire-and-forget：就绪后重渲染生效
   return enumStore.labelOf('inboxEventType', code)
@@ -256,7 +274,7 @@ const eventTagMap: Record<string, string> = {
   'sub_task.rejected': 'danger', 'sub_task.blocked': 'danger',
   'sub_task.paused': 'info', 'sub_task.resumed': 'success', 'sub_task.cancelled': 'info'
 }
-function eventTypeTag(type: string) { return eventTagMap[type] || '' }
+function eventTypeTag(type: string) { return eventTagMap[type] || undefined }
 
 async function load() {
   loading.value = true
@@ -329,8 +347,8 @@ onMounted(() => load())
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
-.ml-sm { margin-left: var(--ha-space-sm); }
+/* 列表页通用外观由 design-system.css 的 List Page Template 统一提供。 */
 .agent-name { color: var(--el-text-color-primary); }
 .agent-name.is-missing { color: var(--ha-muted); }
+/* 时间两行（日期/时分秒）由 design-system.css 的 .time-cell / .time-sub 统一提供 */
 </style>

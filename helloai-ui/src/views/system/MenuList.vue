@@ -1,10 +1,25 @@
 <template>
-  <div class="page ha-entrance-up">
+  <div class="page list-page list-page--fill ha-entrance-up">
+    <!-- 页头：图标块 + 标题（含条数）+ 副标题，右侧操作区 -->
     <div class="page-head">
-      <h2 class="page-heading">
-        菜单管理
-      </h2>
-      <div class="page-actions">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><Menu /></el-icon>
+        </div>
+        <div>
+          <h2 class="page-heading">
+            菜单管理
+            <span
+              v-if="menuCount"
+              class="query-stats"
+            >共 {{ menuCount }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            侧边栏菜单、目录层级与路由注册的统一维护
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
         <el-input
           v-model="keyword"
           placeholder="搜索菜单名/权限码"
@@ -13,6 +28,12 @@
           :prefix-icon="Search"
         />
         <el-button
+          size="small"
+          @click="load"
+        >
+          刷新
+        </el-button>
+        <el-button
           v-auth="'permission:add'"
           size="small"
           type="primary"
@@ -20,12 +41,6 @@
         >
           <el-icon><Plus /></el-icon>
           <span>新增菜单</span>
-        </el-button>
-        <el-button
-          size="small"
-          @click="load"
-        >
-          刷新
         </el-button>
       </div>
     </div>
@@ -45,12 +60,13 @@
           <el-table-column
             prop="name"
             label="菜单名称"
-            min-width="180"
+            min-width="190"
           />
           <el-table-column
             prop="code"
             label="权限码"
-            min-width="180"
+            min-width="145"
+            show-overflow-tooltip
           >
             <template #default="{ row }">
               <code class="perm-code">{{ row.code }}</code>
@@ -59,7 +75,7 @@
           <el-table-column
             prop="path"
             label="路由路径"
-            min-width="180"
+            min-width="140"
             show-overflow-tooltip
           >
             <template #default="{ row }">
@@ -76,7 +92,7 @@
           <el-table-column
             prop="component"
             label="组件"
-            min-width="180"
+            min-width="140"
             show-overflow-tooltip
           >
             <template #default="{ row }">
@@ -91,9 +107,13 @@
             prop="icon"
             label="图标"
             width="110"
+            show-overflow-tooltip
           >
             <template #default="{ row }">
-              <span v-if="row.icon">{{ row.icon }}</span>
+              <span
+                v-if="row.icon"
+                class="icon-name"
+              >{{ row.icon }}</span>
               <span
                 v-else
                 class="muted"
@@ -101,13 +121,8 @@
             </template>
           </el-table-column>
           <el-table-column
-            prop="sort"
-            label="排序"
-            width="70"
-          />
-          <el-table-column
             label="渲染"
-            width="130"
+            width="125"
           >
             <template #default="{ row }">
               <el-tag
@@ -142,39 +157,55 @@
               >—</span>
             </template>
           </el-table-column>
+          <!-- 操作列：172px = 「编辑 + 更多」两个 small 按钮 + 单元格 24px 内边距 + 12px 呼吸 -->
           <el-table-column
             label="操作"
-            :width="ACTION.THREE"
+            width="172"
             fixed="right"
           >
             <template #default="{ row }">
-              <el-button
-                v-auth="'permission:add'"
-                size="small"
-                link
-                type="primary"
-                @click="openCreate(row)"
-              >
-                新增子菜单
-              </el-button>
-              <el-button
-                v-auth="'permission:edit'"
-                size="small"
-                link
-                type="primary"
-                @click="openEdit(row)"
-              >
-                编辑
-              </el-button>
-              <el-button
-                v-auth="'permission:delete'"
-                size="small"
-                link
-                type="danger"
-                @click="removeMenu(row)"
-              >
-                删除
-              </el-button>
+              <div class="action-cell">
+                <!-- 与用户/任务等列表页同一布局：主操作外置，次级与危险操作收进「更多」 -->
+                <el-button
+                  v-auth="'permission:edit'"
+                  size="small"
+                  @click="openEdit(row)"
+                >
+                  编辑
+                </el-button>
+                <el-dropdown
+                  v-if="hasMoreActions()"
+                  trigger="click"
+                  @command="(cmd: string) => handleMoreCommand(cmd, row)"
+                >
+                  <el-button
+                    size="small"
+                    :aria-label="`菜单「${row.name}」更多操作`"
+                  >
+                    更多
+                    <el-icon class="el-icon--right">
+                      <ArrowDown />
+                    </el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <!-- 下拉项不用 v-auth（ElDropdownItem 根节点是 fragment，指令会被静默忽略） -->
+                      <el-dropdown-item
+                        v-if="auth.hasPermission('permission:add')"
+                        command="child"
+                      >
+                        新增子菜单
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="auth.hasPermission('permission:delete')"
+                        command="remove"
+                      >
+                        <span class="dropdown-danger">删除</span>
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -299,15 +330,17 @@
 //   permission:add / permission:edit / permission:delete（后端 /api/admin/permissions 不变）
 // ============================================================
 import { ref, computed, onMounted } from 'vue'
-import { Plus, Search } from '@element-plus/icons-vue'
+import { Plus, Search, Menu, ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { rbacApi } from '@/api/rbac'
+import { useAuthStore } from '@/stores/auth'
 import type { SysPermission, SysPermissionSaveRequest, LongId } from '@/types'
-import { ACTION } from '@/utils/tableConfig'
 
 const list = ref<SysPermission[]>([])
 const loading = ref(false)
 const keyword = ref('')
+// 下拉项不能用 v-auth（ElDropdownItem 根节点是 fragment），改用 hasPermission 过滤
+const auth = useAuthStore()
 
 /** 仅保留 MENU 节点（API 动作码为平铺根级，直接剔除） */
 const menuTree = computed(() => list.value.filter((n) => n.type === 'MENU'))
@@ -323,6 +356,13 @@ const filteredTree = computed(() => {
       return children.length ? [{ ...n, children }] : []
     })
   return filter(menuTree.value)
+})
+
+/** 当前展示的菜单节点总数（含子级，随搜索联动） */
+const menuCount = computed(() => {
+  const count = (nodes: SysPermission[]): number =>
+    nodes.reduce((sum, n) => sum + 1 + count(n.children ?? []), 0)
+  return count(filteredTree.value)
 })
 
 async function load() {
@@ -463,64 +503,22 @@ async function removeMenu(row: SysPermission) {
   load()
 }
 
+/** 「更多」下拉是否至少有一项：无权限时整个下拉不渲染 */
+function hasMoreActions() {
+  return auth.hasPermission('permission:add') || auth.hasPermission('permission:delete')
+}
+
+function handleMoreCommand(cmd: string, row: SysPermission) {
+  if (cmd === 'child') openCreate(row)
+  else if (cmd === 'remove') removeMenu(row)
+}
+
 onMounted(() => load())
 </script>
 
 <style scoped>
-/* Page wrapper: 与外层 .app-content (overflow-y: auto) 协作，
-   用 min-height: 100% 让页面占满 .app-content 的可视区，
-   然后用 flex 列向子级分配高度，确保数据少时 el-card 也能拉伸到底。 */
-.page {
-  max-width: var(--ha-content-width);
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
-}
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  gap: 16px;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-.page-heading {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--ha-primary);
-  letter-spacing: -0.02em;
-  margin: 0;
-}
-.page-actions { display: flex; align-items: center; gap: 8px; }
-.filter-search { width: 260px; }
-
-/* 列表卡片：flex:1 吸收 .page 剩余高度，让数据少时卡片仍撑到底；
-    display:flex 让内部 el-table 也能按卡片高度排版 */
-.list-card {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.list-card :deep(.el-card__body) {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-/* 表格容器：吸收卡片内全部高度，
-   让 el-table 即使只有 1~2 行也能撑满卡片底部；空数据时由 el-empty 居中 */
-.table-wrapper {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-}
-.table-wrapper :deep(.el-table) {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
+/* 页头 / 列表卡由 design-system.css 的 List Page Template 统一提供；
+   本页只保留专属单元格与弹窗样式。 */
 .perm-code {
   font-family: var(--ha-font-mono);
   font-size: 12px;
@@ -530,6 +528,11 @@ onMounted(() => load())
   border-radius: var(--ha-radius-sm);
 }
 .muted { color: var(--ha-muted); font-size: 12px; }
+.icon-name {
+  font-family: var(--ha-font-mono);
+  font-size: 12px;
+  color: var(--ha-ink-secondary);
+}
 .hint { margin-left: 8px; }
 .tag-gap { margin-left: 4px; }
 </style>

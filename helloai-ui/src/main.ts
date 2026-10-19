@@ -3,6 +3,7 @@ import App from './App.vue'
 import router from './router'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import 'element-plus/dist/index.css'
 /* Element Plus 官方暗色变量：兜底 message/notification/popper 等 append-to-body 弹层 */
 import 'element-plus/theme-chalk/dark/css-vars.css'
@@ -36,5 +37,5 @@ app.directive('auth', auth)
 
 app.use(createPinia())
 app.use(router)
-app.use(ElementPlus)
+app.use(ElementPlus, { locale: zhCn })
 app.mount('#app')

@@ -1,17 +1,25 @@
 <template>
-  <div class="page ha-entrance-up">
-    <!-- 页面标题 + 计数徽标 + 筛选/操作区 -->
+  <div class="page list-page ha-entrance-up">
+    <!-- 页头：图标块 + 标题（含条数）+ 副标题，右侧操作区 -->
     <div class="page-head">
       <div class="page-head-title">
-        <h2 class="page-heading">
-          Browser 会话
-          <span class="page-heading-count">{{ total }} 个</span>
-        </h2>
-        <p class="page-subheading">
-          实时监控 Agent 的浏览器会话状态，追踪任务执行过程与访问记录
-        </p>
+        <div class="dash-icon-block primary">
+          <el-icon><Monitor /></el-icon>
+        </div>
+        <div>
+          <h2 class="page-heading">
+            Browser 会话
+            <span
+              v-if="total"
+              class="query-stats"
+            >共 {{ total }} 个</span>
+          </h2>
+          <p class="page-subheading">
+            实时监控 Agent 的浏览器会话状态，追踪任务执行过程与访问记录
+          </p>
+        </div>
       </div>
-      <div class="page-actions">
+      <div class="page-head-actions">
         <el-button
           size="small"
           @click="reload"
@@ -322,14 +330,14 @@
             fixed="right"
           >
             <template #default="{ row }">
-              <el-button
-                size="small"
-                link
-                type="primary"
-                @click="onView(row)"
-              >
-                详情
-              </el-button>
+              <div class="action-cell">
+                <el-button
+                  size="small"
+                  @click="onView(row)"
+                >
+                  详情
+                </el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -377,12 +385,14 @@
       <el-pagination
         v-if="filteredList.length > 0 && rows.length > 0"
         background
-        layout="prev, pager, next, total"
+        layout="total, sizes, prev, pager, next, jumper"
         :total="filteredList.length"
         :page-size="pageSize"
+        :page-sizes="[10, 20, 50, 100]"
         :current-page="currentPage"
-        class="list-pagination"
+        class="list-pager"
         @current-change="onPageChange"
+        @size-change="onSizeChange"
       />
     </el-card>
 
@@ -605,6 +615,12 @@ function onPageChange(p: number) {
   currentPage.value = p
 }
 
+/** 切每页条数（客户端分页）：回到第一页，避免页码越界后白屏 */
+function onSizeChange(size: number) {
+  pageSize.value = size
+  currentPage.value = 1
+}
+
 async function loadAgents() {
   try {
     agents.value = await agentApi.list()
@@ -693,56 +709,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* ── Page wrapper: 与 TeamList 同构，flex 列向 + min-height: 100% ── */
+/* 页头/列表卡/筛选控件由 design-system.css 的 List Page Template 统一提供；
+   本页保留「撑满高度 + 快速入门卡组」的专属排版。 */
 .page {
-  max-width: var(--ha-content-width);
   display: flex;
   flex-direction: column;
   min-height: 100%;
-}
-.page-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  gap: 16px;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-.page-head-title {
-  min-width: 0;
-}
-.page-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--ha-primary);
-  letter-spacing: -0.02em;
-  margin: 0;
-}
-.page-heading-count {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--ha-primary);
-  background: var(--ha-primary-muted);
-  padding: 2px 10px;
-  border-radius: 999px;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-.page-subheading {
-  margin: 6px 0 0;
-  font-size: 13px;
-  color: var(--ha-muted);
-  letter-spacing: 0;
-  line-height: 1.5;
-}
-.page-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 .stats-grid {
   display: grid;
@@ -777,13 +749,6 @@ onMounted(() => {
   flex-wrap: wrap;
   flex-shrink: 0;
 }
-.filter-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.filter-select { width: 140px; }
 .filter-agent { width: 200px; }
 .toolbar-actions {
   display: flex;
@@ -803,11 +768,6 @@ onMounted(() => {
 .table-wrapper :deep(.el-table) {
   flex: 1 1 auto;
   min-height: 0;
-}
-.list-pagination {
-  margin-top: 16px;
-  justify-content: center;
-  flex-shrink: 0;
 }
 
 /* ── Agent 列：方形头像 + 名称 / ID，与 DutyLeaseList 同构 ── */

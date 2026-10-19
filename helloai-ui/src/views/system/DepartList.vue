@@ -1,10 +1,31 @@
 <template>
-  <div class="page ha-entrance-up">
+  <div class="page list-page list-page--fill ha-entrance-up">
+    <!-- 页头：图标块 + 标题（含条数）+ 副标题，右侧操作区 -->
     <div class="page-head">
-      <h2 class="page-heading">
-        部门管理
-      </h2>
-      <div class="page-actions">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><OfficeBuilding /></el-icon>
+        </div>
+        <div>
+          <h2 class="page-heading">
+            部门管理
+            <span
+              v-if="departCount"
+              class="query-stats"
+            >共 {{ departCount }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            组织树层级与部门状态的统一维护
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
+        <el-button
+          size="small"
+          @click="load"
+        >
+          刷新
+        </el-button>
         <el-button
           v-auth="'depart:add'"
           size="small"
@@ -13,12 +34,6 @@
         >
           <el-icon><Plus /></el-icon>
           <span>新增部门</span>
-        </el-button>
-        <el-button
-          size="small"
-          @click="load"
-        >
-          刷新
         </el-button>
       </div>
     </div>
@@ -71,37 +86,51 @@
           </el-table-column>
           <el-table-column
             label="操作"
-            :width="ACTION.FOUR"
+            width="172"
             fixed="right"
           >
             <template #default="{ row }">
-              <el-button
-                v-auth="'depart:add'"
-                size="small"
-                link
-                type="primary"
-                @click="openCreate(row)"
-              >
-                新增子
-              </el-button>
-              <el-button
-                v-auth="'depart:edit'"
-                size="small"
-                link
-                type="primary"
-                @click="openEdit(row)"
-              >
-                编辑
-              </el-button>
-              <el-button
-                v-auth="'depart:delete'"
-                size="small"
-                link
-                type="danger"
-                @click="removeDepart(row)"
-              >
-                删除
-              </el-button>
+              <div class="action-cell">
+                <!-- 与菜单/权限/用户管理同一布局：主操作外置，次级与危险操作收进「更多」 -->
+                <el-button
+                  v-auth="'depart:edit'"
+                  size="small"
+                  @click="openEdit(row)"
+                >
+                  编辑
+                </el-button>
+                <el-dropdown
+                  v-if="hasMoreActions()"
+                  trigger="click"
+                  @command="(cmd: string) => handleMoreCommand(cmd, row)"
+                >
+                  <el-button
+                    size="small"
+                    :aria-label="`部门「${row.name}」更多操作`"
+                  >
+                    更多
+                    <el-icon class="el-icon--right">
+                      <ArrowDown />
+                    </el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item
+                        v-if="auth.hasPermission('depart:add')"
+                        command="child"
+                      >
+                        新增子部门
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="auth.hasPermission('depart:delete')"
+                        command="remove"
+                      >
+                        <span class="dropdown-danger">删除</span>
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -187,14 +216,23 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, OfficeBuilding, ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { rbacApi } from '@/api/rbac'
+import { useAuthStore } from '@/stores/auth'
 import type { SysDepart, SysDepartSaveRequest, LongId } from '@/types'
-import { ACTION } from '@/utils/tableConfig'
 
 const list = ref<SysDepart[]>([])
 const loading = ref(false)
+// 下拉项不能用 v-auth（ElDropdownItem 根节点是 fragment）
+const auth = useAuthStore()
+
+/** 部门节点总数（含子级） */
+const departCount = computed(() => {
+  const count = (nodes: SysDepart[]): number =>
+    nodes.reduce((sum, n) => sum + 1 + count(n.children ?? []), 0)
+  return count(list.value)
+})
 
 async function load() {
   loading.value = true
@@ -309,60 +347,20 @@ async function removeDepart(row: SysDepart) {
   load()
 }
 
+/** 「更多」下拉是否至少有一项：无权限时整个下拉不渲染 */
+function hasMoreActions() {
+  return auth.hasPermission('depart:add') || auth.hasPermission('depart:delete')
+}
+
+function handleMoreCommand(cmd: string, row: SysDepart) {
+  if (cmd === 'child') openCreate(row)
+  else if (cmd === 'remove') removeDepart(row)
+}
+
 onMounted(() => load())
 </script>
 
 <style scoped>
-/* Page wrapper: 与外层 .app-content (overflow-y: auto) 协作，
-   用 min-height: 100% 让页面占满 .app-content 的可视区，
-   然后用 flex 列向子级分配高度，确保数据少时 el-card 也能拉伸到底。 */
-.page {
-  max-width: var(--ha-content-width);
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
-}
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  gap: 16px;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-.page-heading {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--ha-primary);
-  letter-spacing: -0.02em;
-  margin: 0;
-}
-.page-actions { display: flex; align-items: center; gap: 8px; }
-
-/* 列表卡片：flex:1 吸收 .page 剩余高度，让数据少时卡片仍撑到底；
-    display:flex 让内部 el-table 也能按卡片高度排版 */
-.list-card {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.list-card :deep(.el-card__body) {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-/* 表格容器：吸收卡片内全部高度，
-   让 el-table 即使只有 1~2 行也能撑满卡片底部；空数据时由 el-empty 居中 */
-.table-wrapper {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-}
-.table-wrapper :deep(.el-table) {
-  flex: 1 1 auto;
-  min-height: 0;
-}
+/* 页头 / 列表卡由 design-system.css 的 List Page Template 统一提供；
+   本页无额外专属样式。 */
 </style>

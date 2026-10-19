@@ -1,18 +1,25 @@
 <template>
-  <div class="page ha-entrance-up">
+  <div class="page list-page list-page--fill ha-entrance-up">
+    <!-- 页头：图标块 + 标题（含条数）+ 副标题，右侧操作区 -->
     <div class="page-head">
-      <h2 class="page-heading">
-        用户管理
-      </h2>
-      <div class="page-actions">
-        <el-button
-          v-auth="'user:add'"
-          size="small"
-          type="primary"
-          @click="openCreate"
-        >
-          新增用户
-        </el-button>
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><User /></el-icon>
+        </div>
+        <div>
+          <h2 class="page-heading">
+            用户管理
+            <span
+              v-if="total"
+              class="query-stats"
+            >共 {{ total }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            账号、角色与组织归属的统一维护入口
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
         <el-input
           v-model="keyword"
           placeholder="搜索用户名/昵称"
@@ -24,7 +31,6 @@
         />
         <el-button
           size="small"
-          type="primary"
           @click="load(1)"
         >
           查询
@@ -34,6 +40,14 @@
           @click="load(currentPage)"
         >
           刷新
+        </el-button>
+        <el-button
+          v-auth="'user:add'"
+          size="small"
+          type="primary"
+          @click="openCreate"
+        >
+          新增用户
         </el-button>
       </div>
     </div>
@@ -49,31 +63,32 @@
           empty-text="暂无用户"
         >
           <el-table-column
-            prop="id"
-            label="ID"
-            width="90"
-          />
-          <el-table-column
-            label="用户名"
-            min-width="140"
+            label="用户"
+            min-width="170"
           >
             <template #default="{ row }">
-              <span class="user-username">{{ row.username }}</span>
-              <el-tag
-                v-if="row.username === 'admin'"
-                size="small"
-                type="warning"
-                effect="plain"
-                style="margin-left: 6px"
-              >
-                内置
-              </el-tag>
+              <!-- 用户名 + 内置标记为主行，19 位 ID 作副行：比单独一列 ID 省 150px，
+                   也不会因为列宽不足把 ID 竖排成 5 行 -->
+              <div class="user-cell">
+                <span class="user-name-row">
+                  <span class="user-username">{{ row.username }}</span>
+                  <el-tag
+                    v-if="row.username === 'admin'"
+                    size="small"
+                    type="warning"
+                    effect="plain"
+                  >
+                    内置
+                  </el-tag>
+                </span>
+                <span class="user-id">{{ row.id }}</span>
+              </div>
             </template>
           </el-table-column>
           <el-table-column
             prop="nickname"
             label="昵称"
-            min-width="120"
+            min-width="100"
             show-overflow-tooltip
           >
             <template #default="{ row }">
@@ -83,7 +98,7 @@
           <el-table-column
             prop="email"
             label="邮箱"
-            min-width="160"
+            min-width="140"
             show-overflow-tooltip
           >
             <template #default="{ row }">
@@ -92,28 +107,34 @@
           </el-table-column>
           <el-table-column
             label="角色"
-            min-width="160"
+            min-width="150"
           >
             <template #default="{ row }">
-              <el-tag
-                v-for="code in row.roleCodes"
-                :key="code"
-                size="small"
-                :type="code === 'SUPER_ADMIN' ? 'danger' : 'primary'"
-                effect="light"
-                style="margin-right: 4px"
+              <!-- 多个角色必须包在可换行的 flex 里：相邻 inline 标签之间没有空白，
+                   浏览器找不到断行点，SUPER_ADMIN + 第二个角色会被当成一条长串硬裁。 -->
+              <div
+                v-if="row.roleCodes && row.roleCodes.length"
+                class="cell-tags"
               >
-                {{ code }}
-              </el-tag>
+                <el-tag
+                  v-for="code in row.roleCodes"
+                  :key="code"
+                  size="small"
+                  :type="code === 'SUPER_ADMIN' ? 'danger' : 'primary'"
+                  effect="light"
+                >
+                  {{ code }}
+                </el-tag>
+              </div>
               <span
-                v-if="!row.roleCodes || row.roleCodes.length === 0"
+                v-else
                 class="muted"
               >未分配</span>
             </template>
           </el-table-column>
           <el-table-column
             label="部门"
-            min-width="140"
+            min-width="104"
           >
             <template #default="{ row }">
               <el-tag
@@ -147,15 +168,18 @@
           </el-table-column>
           <el-table-column
             label="最近登录"
-            width="170"
+            width="132"
           >
             <template #default="{ row }">
-              {{ fmtTime(row.lastLoginTime) }}
+              <div class="time-cell">
+                <span>{{ timeParts(row.lastLoginTime).date }}</span>
+                <span class="time-sub">{{ timeParts(row.lastLoginTime).time }}</span>
+              </div>
             </template>
           </el-table-column>
           <el-table-column
             label="操作"
-            :width="ACTION.TWO"
+            width="172"
             fixed="right"
           >
             <template #default="{ row }">
@@ -212,13 +236,15 @@
       </div>
       <el-pagination
         v-if="total > 0"
-        class="list-pagination"
+        class="list-pager"
         background
-        layout="prev, pager, next, total"
+        layout="total, sizes, prev, pager, next, jumper"
         :total="total"
         :page-size="pageSize"
+        :page-sizes="[10, 20, 50, 100]"
         :current-page="currentPage"
         @current-change="load"
+        @size-change="onSizeChange"
       />
     </el-card>
 
@@ -485,14 +511,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { Search, ArrowDown } from '@element-plus/icons-vue'
+import { Search, ArrowDown, User } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance } from 'element-plus'
 import { rbacApi } from '@/api/rbac'
 import { useAuthStore } from '@/stores/auth'
 import type { SysDepart, SysRole, SysUserItem } from '@/types'
 import type { LongId } from '@/types'
-import { fmtTime, ACTION } from '@/utils/tableConfig'
+import { splitDateTime } from '@/utils/tableConfig'
 
 const list = ref<SysUserItem[]>([])
 const total = ref(0)
@@ -500,6 +526,11 @@ const pageSize = ref(10)
 const currentPage = ref(1)
 const loading = ref(false)
 const keyword = ref('')
+
+/** 时间拆成日期/时间两行（窄列展示，与子任务列表同构） */
+function timeParts(t: string | null | undefined) {
+  return splitDateTime(t) ?? { date: '-', time: '' }
+}
 // 下拉项不能用 v-auth（ElDropdownItem 根节点是 fragment，指令会被静默忽略），
 // 与子任务列表同一处理：改用 v-if + hasPermission 过滤。
 const auth = useAuthStore()
@@ -514,6 +545,12 @@ async function load(page = 1) {
   } finally {
     loading.value = false
   }
+}
+
+/** 切每页条数：回到第一页，避免新 pageSize 下页码越界 */
+function onSizeChange(size: number) {
+  pageSize.value = size
+  load(1)
 }
 
 /**
@@ -734,67 +771,27 @@ onMounted(() => load(1))
 </script>
 
 <style scoped>
-/* Page wrapper: 与外层 .app-content (overflow-y: auto) 协作，
-   用 min-height: 100% 让页面占满 .app-content 的可视区，
-   然后用 flex 列向子级分配高度，确保数据少时 el-card 也能拉伸到底。 */
-.page {
-  max-width: var(--ha-content-width);
+/* 页头 / 列表卡 / 分页 / 筛选控件由 design-system.css 的 List Page Template 统一提供；
+   本页只保留专属单元格与弹窗样式。 */
+.user-cell {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  gap: 2px;
+  min-width: 0;
 }
-.page-head {
+.user-name-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  gap: 16px;
-  flex-wrap: wrap;
-  flex-shrink: 0;
+  gap: 6px;
+  min-width: 0;
 }
-.page-heading {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--ha-primary);
-  letter-spacing: -0.02em;
-  margin: 0;
-}
-.page-actions { display: flex; align-items: center; gap: 8px; }
-.filter-search { width: 260px; }
-
-/* 列表卡片：flex:1 吸收 .page 剩余高度，让数据少时卡片仍撑到底；
-    display:flex 让内部 el-table 也能按卡片高度排版 */
-.list-card {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.list-card :deep(.el-card__body) {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-/* 表格容器：吸收卡片内除分页外的全部高度，
-   让 el-table 即使只有 1~2 行也能撑满卡片底部；空数据时由 el-empty 居中 */
-.table-wrapper {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-}
-.table-wrapper :deep(.el-table) {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-/* 分页：贴底部、居中；空数据时不渲染，避免无谓占用空间 */
-.list-pagination {
-  margin-top: 16px;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
 .user-username { font-weight: 600; color: var(--ha-ink); }
+.user-id {
+  font-family: var(--ha-font-mono);
+  font-size: 12px;
+  color: var(--ha-muted);
+}
+/* 时间两行（日期/时分秒）由 design-system.css 的 .time-cell / .time-sub 统一提供 */
 /* 危险操作在下拉里的着色：与子任务列表同一约定 */
 :deep(.dropdown-danger) { color: var(--el-color-danger); }
 .muted { color: var(--ha-muted); font-size: 12px; }

@@ -1,25 +1,29 @@
 <template>
-  <div class="page ha-entrance-up">
-    <el-card>
-      <template #header>
-        <div class="card-header">
-          <span>模板管理</span>
-          <el-button
-            size="small"
-            type="primary"
-            @click="openCreate"
-          >
-            新建模板
-          </el-button>
+  <div class="page list-page ha-entrance-up">
+    <div class="page-head">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><Collection /></el-icon>
         </div>
-      </template>
-
-      <div class="filter-bar">
+        <div>
+          <h2 class="page-heading">
+            模板管理
+            <span
+              v-if="list.length"
+              class="query-stats"
+            >共 {{ list.length }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            按角色与分类维护 Planner / Executor / Reviewer 提示词模板
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
         <el-select
           v-model="filterRole"
           placeholder="按角色筛选"
           clearable
-          style="width:160px"
+          class="filter-select"
           @change="load"
         >
           <el-option
@@ -39,7 +43,7 @@
           v-model="filterCategory"
           placeholder="按分类筛选"
           clearable
-          style="width:180px;margin-left:8px"
+          class="filter-select"
           @change="load"
         >
           <el-option
@@ -49,14 +53,29 @@
             :value="k"
           />
         </el-select>
+        <el-button
+          size="small"
+          @click="load"
+        >
+          刷新
+        </el-button>
+        <el-button
+          size="small"
+          type="primary"
+          @click="openCreate"
+        >
+          新建模板
+        </el-button>
       </div>
+    </div>
 
+    <el-card class="list-card">
       <el-table
         v-loading="loading"
         :data="list"
         border
         stripe
-        style="width:100%;margin-top:12px"
+        style="width:100%"
       >
         <el-table-column
           prop="name"
@@ -331,6 +350,7 @@
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Collection } from '@element-plus/icons-vue'
 import { promptApi } from '@/api/prompt'
 import { PROMPT_CATEGORY_MAP } from '@/types'
 import { ACTION, fmtTime } from '@/utils/tableConfig'
@@ -395,6 +415,5 @@ onMounted(() => load())
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
-.filter-bar { display: flex; align-items: center; }
+/* 列表页通用外观由 design-system.css 的 List Page Template 统一提供。 */
 </style>

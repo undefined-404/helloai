@@ -1,36 +1,50 @@
 <template>
-  <div class="page ha-entrance-up">
-    <el-card>
-      <template #header>
-        <div class="card-header">
-          <span>任务管理</span>
-          <div class="header-actions">
-            <!-- A1: 表单直建入口（含 V47 执行策略） -->
-            <el-button
-              v-auth="'task:add'"
-              size="small"
-              type="primary"
-              @click="openCreate"
-            >
-              新建任务
-            </el-button>
-            <el-button
-              v-auth="'task:add'"
-              size="small"
-              type="primary"
-              @click="router.push('/requirement-chat')"
-            >
-              对话新建
-            </el-button>
-            <el-button
-              size="small"
-              @click="load"
-            >
-              刷新
-            </el-button>
-          </div>
+  <div class="page list-page ha-entrance-up">
+    <!-- 页头：与子任务列表 / 审查中心等同构（design-system.css → List Page Template） -->
+    <div class="page-head">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><Tickets /></el-icon>
         </div>
-      </template>
+        <div>
+          <h2 class="page-heading">
+            任务管理
+            <span
+              v-if="list.length"
+              class="query-stats"
+            >共 {{ list.length }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            任务生命周期：拆解、执行、核验与最终交付
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
+        <el-button
+          size="small"
+          @click="load"
+        >
+          刷新
+        </el-button>
+        <!-- A1: 表单直建入口（含 V47 执行策略） -->
+        <el-button
+          v-auth="'task:add'"
+          size="small"
+          @click="router.push('/requirement-chat')"
+        >
+          对话新建
+        </el-button>
+        <el-button
+          v-auth="'task:add'"
+          size="small"
+          type="primary"
+          @click="openCreate"
+        >
+          新建任务
+        </el-button>
+      </div>
+    </div>
+    <el-card class="list-card">
       <el-table
         v-loading="loading"
         :data="pagedList"
@@ -196,13 +210,13 @@
       />
       <el-pagination
         v-if="list.length > 0"
+        class="list-pager"
         background
         layout="total, sizes, prev, pager, next, jumper"
         :total="list.length"
         :page-sizes="[10, 20, 50, 100]"
         :page-size="pageSize"
         :current-page="currentPage"
-        style="margin-top:16px;text-align:center"
         @current-change="onPageChange"
         @size-change="onSizeChange"
       />
@@ -346,7 +360,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown } from '@element-plus/icons-vue'
+import { ArrowDown, Tickets } from '@element-plus/icons-vue'
 import { taskApi, taskMemberApi, type TaskMemberView } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
 import { stripMarkdown } from '@/utils/markdown'
@@ -716,14 +730,8 @@ async function handlePlan(row: Task) {
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
-.header-actions { display: flex; gap: 8px; }
-.link-cell { color: var(--el-color-primary); cursor: pointer; }
-/* 操作列：主按钮 + 更多下拉横排，不换行不压缩（避免单元格裁切「更多」） */
-.action-cell { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
-.action-cell .el-button { flex: none; }
-/* 删除项：危险语义色（dropdown-item 无 danger 变体，用子元素着色） */
-.dropdown-danger { color: var(--ha-danger); }
+/* 列表页通用外观（页头/卡片/表格/分页/单元格）由 design-system.css 的
+   List Page Template 统一提供，本页只保留任务详情弹窗的专属排版。 */
 /* 描述弹窗：标题仅保上方留白，去掉下方多余空行 */
 .desc-md :deep(h2),
 .desc-md :deep(h3),

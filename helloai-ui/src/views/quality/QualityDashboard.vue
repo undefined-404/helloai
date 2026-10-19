@@ -3,29 +3,43 @@
     v-loading="loading"
     class="page ha-entrance-up"
   >
-    <!-- 窗口选择 + 全局概览 -->
-    <div class="dash-toolbar">
-      <div class="dash-title">
-        <el-icon style="color: var(--ha-primary)">
-          <DataAnalysis />
-        </el-icon>
-        <span>质量度量看板</span>
+    <!-- 窗口选择 + 全局概览：页头与事件流工作台同构（design-system.css → Page Head） -->
+    <div class="page-head">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><DataAnalysis /></el-icon>
+        </div>
+        <div>
+          <h2 class="page-heading">
+            质量度量看板
+            <!-- 与列表页的「共 N 条」同构：这里统计的是当前窗口的审查样本量 -->
+            <span
+              v-if="reviewCount"
+              class="query-stats"
+            >共 {{ reviewCount }} 次审查</span>
+          </h2>
+          <p class="page-subheading">
+            审查质量趋势与 Agent 一次通过率（按时间窗口统计）
+          </p>
+        </div>
       </div>
-      <el-radio-group
-        v-model="windowDays"
-        size="small"
-        @change="onWindowChange"
-      >
-        <el-radio-button :value="7">
-          近 7 天
-        </el-radio-button>
-        <el-radio-button :value="30">
-          近 30 天
-        </el-radio-button>
-        <el-radio-button :value="90">
-          近 90 天
-        </el-radio-button>
-      </el-radio-group>
+      <div class="page-head-actions">
+        <el-radio-group
+          v-model="windowDays"
+          size="small"
+          @change="onWindowChange"
+        >
+          <el-radio-button :value="7">
+            近 7 天
+          </el-radio-button>
+          <el-radio-button :value="30">
+            近 30 天
+          </el-radio-button>
+          <el-radio-button :value="90">
+            近 90 天
+          </el-radio-button>
+        </el-radio-group>
+      </div>
     </div>
 
     <el-alert
@@ -191,6 +205,8 @@ const hasRanks = computed(() => ranks.value.length > 0)
 const hasDefects = computed(() => Array.isArray(data.value?.defectDistributions) && data.value!.defectDistributions.length > 0)
 const hasReworks = computed(() => Array.isArray(data.value?.reworkRounds) && data.value!.reworkRounds.length > 0)
 const hasReviewers = computed(() => Array.isArray(data.value?.reviewers) && data.value!.reviewers.length > 0)
+/* 页头「共 N 次审查」：当前时间窗口内的审查样本量（与累计审查卡同一口径） */
+const reviewCount = computed(() => data.value?.overview?.totalReviewed ?? 0)
 
 interface Stat {
   label: string
@@ -520,22 +536,6 @@ onUnmounted(disposeCharts)
 <style scoped>
 .page {
   max-width: var(--ha-content-width);
-}
-
-.dash-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.dash-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--ha-ink);
 }
 
 .dash-error {

@@ -1,26 +1,40 @@
 <template>
-  <div class="page ha-entrance-up">
-    <el-card>
-      <template #header>
-        <div class="card-header">
-          <span>附件管理</span>
-          <el-switch
-            v-model="activeOnly"
-            size="small"
-            inline-prompt
-            active-text="仅有效"
-            inactive-text="全部"
-            style="margin-right:12px"
-          />
-          <el-button
-            size="small"
-            type="primary"
-            @click="load"
-          >
-            刷新
-          </el-button>
+  <div class="page list-page ha-entrance-up">
+    <div class="page-head">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><Paperclip /></el-icon>
         </div>
-      </template>
+        <div>
+          <h2 class="page-heading">
+            附件管理
+            <span
+              v-if="totalCount"
+              class="query-stats"
+            >共 {{ totalCount }} 个</span>
+          </h2>
+          <p class="page-subheading">
+            按存储与目录浏览任务产出附件
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
+        <el-switch
+          v-model="activeOnly"
+          size="small"
+          inline-prompt
+          active-text="仅有效"
+          inactive-text="全部"
+        />
+        <el-button
+          size="small"
+          @click="load"
+        >
+          刷新
+        </el-button>
+      </div>
+    </div>
+    <el-card class="list-card">
       <div
         v-loading="loading"
         class="browser"
@@ -119,7 +133,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Folder, Document } from '@element-plus/icons-vue'
+import { Folder, Document, Paperclip } from '@element-plus/icons-vue'
 import { attachmentApi } from '@/api/attachment'
 import { saveBlobResponse } from '@/utils/download'
 import { isPreviewableAttachment } from '@/utils/filePreview'
@@ -148,6 +162,10 @@ const activeOnly = ref(true)
 const downloadingId = ref<null | string>(null)
 const previewVisible = ref(false)
 const previewAttachment = ref<Attachment | null>(null)
+
+/** 页头条数：与列表同口径（默认只算有效版本，切「全部」后含历史版本） */
+const totalCount = computed(() =>
+  activeOnly.value ? rows.value.filter(a => a.status === 'ACTIVE').length : rows.value.length)
 
 /** 前端估算附件是否能浏览器内联预览；后端 isPreviewable 是权威源。 */
 function isPreviewable(att: Attachment): boolean {
@@ -256,12 +274,14 @@ onMounted(() => load())
 </script>
 
 <style scoped>
+/* 列表页通用外观（页头/卡片/单元格）由 design-system.css 的 List Page Template 统一提供；
+   本页为目录浏览型列表，保留撑满高度的专属排版。 */
 .page {
-  max-width: var(--ha-content-width);
   height: 100%;
   display: flex;
   flex-direction: column;
 }
+.page-head { flex: none; }
 /* 让 el-card 及其 body 在 page 内可拉伸，配合 .browser 撑满剩余高度 */
 .page :deep(.el-card) {
   flex: 1;

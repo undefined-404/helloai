@@ -1,18 +1,33 @@
 <template>
-  <div class="page ha-entrance-up">
-    <el-card>
-      <template #header>
-        <div class="card-header">
-          <span>活动流</span>
-          <el-button
-            size="small"
-            type="primary"
-            @click="load"
-          >
-            刷新
-          </el-button>
+  <div class="page list-page ha-entrance-up">
+    <div class="page-head">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><Bell /></el-icon>
         </div>
-      </template>
+        <div>
+          <h2 class="page-heading">
+            活动流
+            <span
+              v-if="list.length"
+              class="query-stats"
+            >共 {{ list.length }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            平台操作与状态变更审计记录
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
+        <el-button
+          size="small"
+          @click="load"
+        >
+          刷新
+        </el-button>
+      </div>
+    </div>
+    <el-card class="list-card">
       <el-table
         v-loading="loading"
         :data="list"
@@ -64,7 +79,7 @@
         </el-table-column>
         <el-table-column
           label="时间"
-          width="170"
+          width="180"
         >
           <template #default="{ row }">
             {{ fmtTime(row.createTime) }}
@@ -81,6 +96,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { Bell } from '@element-plus/icons-vue'
 import { activityApi } from '@/api/activity'
 import { useEnumCatalogStore } from '@/stores/enumCatalog'
 import { fmtTime } from '@/utils/tableConfig'
@@ -102,5 +118,5 @@ onMounted(() => load())
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
+/* 列表页通用外观由 design-system.css 的 List Page Template 统一提供。 */
 </style>

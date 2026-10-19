@@ -64,7 +64,7 @@ md.renderer.rules.table_close = () => '</table></div>'
  * 渲染前先把 token 换成私有区占位符（避免被 markdown/DOMPurify 改写），
  * 渲染后再替换为可点开的引用链接，满足「人读正文、机器读 marker、点开看原文」。
  */
-const KB_CITE = /\[kb:([^\[\]@+#]+)#(\d+)\]/g
+const KB_CITE = /\[kb:([^[\]@+#]+)#(\d+)\]/g
 
 const citeOpen = ref(false)
 const citeTitle = ref('')

@@ -1,77 +1,88 @@
 <template>
-  <div class="page ha-entrance-up">
-    <el-card>
-      <template #header>
-        <div class="card-header">
-          <span>子任务列表</span>
-          <div class="header-actions">
-            <!-- 按主任务过滤时提供列表/依赖图双视图切换 -->
-            <el-radio-group
-              v-if="taskId"
-              v-model="viewMode"
-              size="small"
-              style="margin-right:8px"
-            >
-              <el-radio-button value="list">
-                列表
-              </el-radio-button>
-              <el-radio-button value="dag">
-                依赖图
-              </el-radio-button>
-              <el-radio-button value="iter">
-                执行迭代
-              </el-radio-button>
-            </el-radio-group>
-            <el-select
-              v-model="statusFilter"
-              placeholder="状态筛选"
-              clearable
-              style="width:140px;margin-right:8px"
-              @change="load(1)"
-            >
-              <el-option
-                v-for="[k,v] in Object.entries(SUB_TASK_STATUS_MAP)"
-                :key="k"
-                :label="v.label"
-                :value="k"
-              />
-            </el-select>
-            <!-- 死信待处理入口（2026-10-18）：原「死信池」独立菜单已隐藏，
-                 改由本页按钮承载——同一页面不再出现两个入口，且数量角标比菜单位置更能提示 -->
-            <el-badge
-              :value="deadLetterCount"
-              :hidden="deadLetterCount === 0"
-              type="warning"
-              class="deadletter-badge"
-            >
-              <el-button
-                size="small"
-                :type="statusFilter === 'DEAD_LETTER' ? 'warning' : 'default'"
-                style="margin-right:8px"
-                @click="toggleDeadLetterFilter"
-              >
-                死信待处理
-              </el-button>
-            </el-badge>
-            <el-button
-              v-auth="'subtask:add'"
-              size="small"
-              type="primary"
-              style="margin-right:8px"
-              @click="dispatchVisible = true"
-            >
-              快速派发
-            </el-button>
-            <el-button
-              size="small"
-              type="primary"
-              @click="load(currentPage)"
-            >
-              刷新
-            </el-button>
-          </div>
+  <div class="page list-page ha-entrance-up">
+    <!-- 页头：与任务管理 / 审查中心等同构（design-system.css → List Page Template） -->
+    <div class="page-head">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><List /></el-icon>
         </div>
-      </template>
+        <div>
+          <h2 class="page-heading">
+            子任务列表
+            <span
+              v-if="total"
+              class="query-stats"
+            >共 {{ total }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            按任务与状态筛选，跟进执行、核验与返工
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
+        <!-- 按主任务过滤时提供列表/依赖图双视图切换 -->
+        <el-radio-group
+          v-if="taskId"
+          v-model="viewMode"
+          size="small"
+        >
+          <el-radio-button value="list">
+            列表
+          </el-radio-button>
+          <el-radio-button value="dag">
+            依赖图
+          </el-radio-button>
+          <el-radio-button value="iter">
+            执行迭代
+          </el-radio-button>
+        </el-radio-group>
+        <el-select
+          v-model="statusFilter"
+          placeholder="状态筛选"
+          clearable
+          class="filter-select"
+          @change="load(1)"
+        >
+          <el-option
+            v-for="[k,v] in Object.entries(SUB_TASK_STATUS_MAP)"
+            :key="k"
+            :label="v.label"
+            :value="k"
+          />
+        </el-select>
+        <!-- 死信待处理入口（2026-10-18）：原「死信池」独立菜单已隐藏，
+             改由本页按钮承载——同一页面不再出现两个入口，且数量角标比菜单位置更能提示 -->
+        <el-badge
+          :value="deadLetterCount"
+          :hidden="deadLetterCount === 0"
+          type="warning"
+          class="deadletter-badge"
+        >
+          <el-button
+            size="small"
+            :type="statusFilter === 'DEAD_LETTER' ? 'warning' : 'default'"
+            @click="toggleDeadLetterFilter"
+          >
+            死信待处理
+          </el-button>
+        </el-badge>
+        <el-button
+          size="small"
+          @click="load(currentPage)"
+        >
+          刷新
+        </el-button>
+        <el-button
+          v-auth="'subtask:add'"
+          size="small"
+          type="primary"
+          @click="dispatchVisible = true"
+        >
+          快速派发
+        </el-button>
+      </div>
+    </div>
+    <el-card class="list-card">
       <!-- 主任务信息条：从任务管理页携带 taskId 跳转时展示归属主任务，并可清除筛选 -->
       <el-alert
         v-if="taskId"
@@ -128,7 +139,7 @@
         >
           <el-table-column
             label="标题"
-            min-width="200"
+            min-width="190"
             show-overflow-tooltip
           >
             <template #default="{ row }">
@@ -148,7 +159,7 @@
           <el-table-column
             v-if="!taskId"
             label="所属任务"
-            min-width="160"
+            min-width="140"
             show-overflow-tooltip
           >
             <template #default="{ row }">
@@ -160,25 +171,27 @@
           </el-table-column>
           <el-table-column
             label="状态"
-            width="190"
+            width="170"
           >
             <template #default="{ row }">
-              <el-tag
-                :type="getSubTaskStatusMeta(row.status)?.type || 'info'"
-                size="small"
-              >
-                {{ getSubTaskStatusMeta(row.status)?.label || row.status }}
-              </el-tag>
-              <!-- 无候选等待可视化（短版）：PENDING 且 context.noCandidate.nextDispatchAt 存在时，
-                   在状态标签旁补一个「约 Ns 后重试」小标签；已转人工则显示「等待人工介入」 -->
-              <el-tag
-                v-if="pendingWaitOf(row)"
-                size="small"
-                :type="pendingWaitOf(row)!.kind === 'manual' ? 'warning' : 'info'"
-                class="wait-tag"
-              >
-                {{ pendingWaitOf(row)!.text }}
-              </el-tag>
+              <div class="cell-tags">
+                <el-tag
+                  :type="getSubTaskStatusMeta(row.status)?.type || 'info'"
+                  size="small"
+                >
+                  {{ getSubTaskStatusMeta(row.status)?.label || row.status }}
+                </el-tag>
+                <!-- 无候选等待可视化（短版）：PENDING 且 context.noCandidate.nextDispatchAt 存在时，
+                     在状态标签旁补一个「约 Ns 后重试」小标签；已转人工则显示「等待人工介入」 -->
+                <el-tag
+                  v-if="pendingWaitOf(row)"
+                  size="small"
+                  :type="pendingWaitOf(row)!.kind === 'manual' ? 'warning' : 'info'"
+                  class="wait-tag"
+                >
+                  {{ pendingWaitOf(row)!.text }}
+                </el-tag>
+              </div>
             </template>
           </el-table-column>
           <!-- 按主任务过滤时展示前置依赖（可点击跳依赖项详情），序号与依赖图/草案审阅一致 -->
@@ -205,7 +218,7 @@
           </el-table-column>
           <el-table-column
             label="评分"
-            width="80"
+            width="84"
           >
             <template #default="{ row }">
               <el-tooltip
@@ -233,7 +246,7 @@
           </el-table-column>
           <el-table-column
             label="负责人"
-            min-width="160"
+            min-width="130"
           >
             <template #default="{ row }">
               <span
@@ -244,15 +257,18 @@
           </el-table-column>
           <el-table-column
             label="创建时间"
-            width="170"
+            width="132"
           >
             <template #default="{ row }">
-              {{ fmtTime(row.createTime) }}
+              <div class="time-cell">
+                <span>{{ timeParts(row.createTime).date }}</span>
+                <span class="time-sub">{{ timeParts(row.createTime).time }}</span>
+              </div>
             </template>
           </el-table-column>
           <el-table-column
             label="操作"
-            width="184"
+            width="150"
             fixed="right"
           >
             <template #default="{ row }">
@@ -344,13 +360,13 @@
         />
         <el-pagination
           v-if="total > 0"
+          class="list-pager"
           background
           layout="total, sizes, prev, pager, next, jumper"
           :total="total"
           :page-sizes="[10, 20, 50, 100]"
           :page-size="pageSize"
           :current-page="currentPage"
-          style="margin-top:16px;text-align:center"
           @current-change="loadPage"
           @size-change="onSizeChange"
         />
@@ -492,7 +508,7 @@
 import { ref, onMounted, reactive, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown } from '@element-plus/icons-vue'
+import { ArrowDown, List } from '@element-plus/icons-vue'
 import { subTaskApi } from '@/api/subTask'
 import { taskApi } from '@/api/task'
 import AgentSelect from '@/components/AgentSelect.vue'
@@ -500,7 +516,7 @@ import QuickDispatchDialog from '@/components/QuickDispatchDialog.vue'
 import SubTaskDagView from '@/components/SubTaskDagView.vue'
 import TaskIterationView from '@/components/TaskIterationView.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
-import { fmtTime } from '@/utils/tableConfig'
+import { fmtTime, splitDateTime } from '@/utils/tableConfig'
 import { orderByDependency } from '@/utils/subTaskDag'
 import { queryString } from '@/utils/queryParam'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
@@ -532,6 +548,11 @@ const fullListLoading = ref(false)
 const iterations = ref<TaskIteration[]>([])
 const iterLoading = ref(false)
 const backfilling = ref(false)
+
+/** 时间拆成日期/时间两行（创建时间列窄列展示） */
+function timeParts(t: string | null | undefined) {
+  return splitDateTime(t) ?? { date: '-', time: '' }
+}
 
 async function loadFullList() {
   if (!taskId.value) { fullList.value = []; return }
@@ -868,17 +889,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
+/* 列表页通用外观（页头/卡片/表格/分页/单元格）由 design-system.css 的
+   List Page Template 统一提供，本页只保留子任务专属排版。 */
 .score-empty { color: var(--ha-muted); cursor: help; }
-.header-actions { display: flex; align-items: center; }
 .parent-task-bar { margin-bottom: 12px; }
 .parent-task-bar :deep(.el-alert__title) { display: flex; align-items: center; justify-content: space-between; width: 100%; }
 .parent-task-title { display: flex; align-items: center; }
-.link-cell { color: var(--el-color-primary); cursor: pointer; }
-.dropdown-danger { color: var(--ha-danger); }
-/* 操作列：详情 + 更多下拉横排，不换行不压缩（参考任务管理，避免单元格折行） */
-.action-cell { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
-.action-cell .el-button { flex: none; }
 .dep-tag { cursor: pointer; margin-right: 4px; }
 /* 标题前拓扑序号小徽标：参考电商 new 角标样式（小号胶囊、实底白字） */
 .seq-badge {

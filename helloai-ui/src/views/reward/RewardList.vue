@@ -1,27 +1,41 @@
 <template>
-  <div class="page ha-entrance-up">
-    <el-card>
-      <template #header>
-        <div class="card-header">
-          <span>积分流水</span>
-          <div>
-            <el-button
-              v-auth="'score:adjust'"
-              size="small"
-              type="primary"
-              @click="adjustDialog=true"
-            >
-              手动调整
-            </el-button>
-            <el-button
-              size="small"
-              @click="load"
-            >
-              刷新
-            </el-button>
-          </div>
+  <div class="page list-page ha-entrance-up">
+    <div class="page-head">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><Coin /></el-icon>
         </div>
-      </template>
+        <div>
+          <h2 class="page-heading">
+            积分流水
+            <span
+              v-if="total"
+              class="query-stats"
+            >共 {{ total }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            Agent 积分变动明细与人工调整
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
+        <el-button
+          size="small"
+          @click="load"
+        >
+          刷新
+        </el-button>
+        <el-button
+          v-auth="'score:adjust'"
+          size="small"
+          type="primary"
+          @click="adjustDialog=true"
+        >
+          手动调整
+        </el-button>
+      </div>
+    </div>
+    <el-card class="list-card">
       <el-table
         v-loading="loading"
         :data="list"
@@ -66,12 +80,15 @@
 
       <el-pagination
         v-if="total > 0"
+        class="list-pager"
         background
-        layout="prev, pager, next"
+        layout="total, sizes, prev, pager, next, jumper"
         :total="total"
+        :page-sizes="[10, 20, 50, 100]"
         :page-size="pageSize"
-        style="margin-top:16px;text-align:center"
+        :current-page="currentPage"
         @current-change="load"
+        @size-change="onSizeChange"
       />
 
       <el-dialog
@@ -130,6 +147,7 @@
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Coin } from '@element-plus/icons-vue'
 import { rewardApi } from '@/api/reward'
 import AgentSelect from '@/components/AgentSelect.vue'
 import { fmtTime } from '@/utils/tableConfig'
@@ -137,6 +155,7 @@ import { fmtTime } from '@/utils/tableConfig'
 const list = ref<any[]>([])
 const total = ref(0)
 const pageSize = ref(20)
+const currentPage = ref(1)
 const loading = ref(false)
 const adjustDialog = ref(false)
 const adjusting = ref(false)
@@ -150,7 +169,14 @@ async function load(page = 1) {
     const res: any = await rewardApi.logs({ page, pageSize: pageSize.value })
     list.value = res.records || []
     total.value = res.total || 0
+    currentPage.value = page
   } finally { loading.value = false }
+}
+
+/** 切每页条数：回到第一页，避免新 pageSize 下页码越界 */
+function onSizeChange(size: number) {
+  pageSize.value = size
+  load(1)
 }
 
 async function handleAdjust() {
@@ -169,5 +195,5 @@ onMounted(() => load())
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
+/* 列表页通用外观由 design-system.css 的 List Page Template 统一提供。 */
 </style>
