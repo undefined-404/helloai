@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # HelloAI - one-shot .env bootstrap for server deployment
-# Generates the 5 variables required by docker-compose.server.yml
+# Generates the 7 variables required by deploy/app/docker-compose.yml
 # into a .env file in the current directory (idempotent / safe to re-run).
 #
 # Generated values:
@@ -10,6 +10,8 @@
 #   HELLOAI_RABBIT_USER=helloai               (fixed)
 #   HELLOAI_RABBIT_PASSWORD=<random hex 16B>
 #   HELLOAI_CREDENTIAL_AES_KEY_BASE64=<random base64 32B>
+#   HELLOAI_AGENT_REGISTRATION_TOKEN=<random hex 32B>   (2026-10-19)
+#   OPEN_SANDBOX_API_KEY=<random hex 32B>               (2026-10-19)
 #
 # IMPORTANT - AES key is NOT regenerated on re-run (it must match the ciphertext
 #   already in the database). If .env already has HELLOAI_CREDENTIAL_AES_KEY_BASE64,
@@ -25,7 +27,11 @@
 #   docker compose up -d rabbitmq
 #   docker exec helloai-rabbitmq rabbitmqctl add_user helloaiadmin '<RABBITMQ_ADMIN_PASSWORD>'
 #   docker exec helloai-rabbitmq rabbitmqctl set_user_tags helloaiadmin administrator
-#   docker compose up -d --build
+#   docker compose up -d
+#
+# NOTE: NO `--build` on the last command. Server releases are jar + dist bind
+#   mounts (deploy/app/docker-compose.yml); the server never builds images and has
+#   no Dockerfile in the deploy dir. `--build` would fail there.
 #
 # NOTE: ASCII-only file (repo convention for deploy artifacts).
 # ============================================================
@@ -74,6 +80,10 @@ BIZ_PW="${HELLOAI_RABBIT_PASSWORD:-$(gen_hex)}"
 AES_KEY="${HELLOAI_CREDENTIAL_AES_KEY_BASE64:-$(gen_b64)}"
 ADMIN_USER="${RABBITMQ_ADMIN_USER:-helloaiadmin}"
 BIZ_USER="${HELLOAI_RABBIT_USER:-helloai}"
+# Both are plain shared secrets with no stored-ciphertext dependency, so
+# regenerating them on a fresh .env is always safe (unlike the AES key).
+AGENT_TOKEN="${HELLOAI_AGENT_REGISTRATION_TOKEN:-$(gen_hex)}"
+SANDBOX_KEY="${OPEN_SANDBOX_API_KEY:-$(gen_hex)}"
 
 # --- Output -------------------------------------------------------------------
 if [ "$PRINT_ONLY" -eq 1 ]; then
@@ -83,6 +93,8 @@ if [ "$PRINT_ONLY" -eq 1 ]; then
   echo "HELLOAI_RABBIT_USER=${BIZ_USER}"
   echo "HELLOAI_RABBIT_PASSWORD=${BIZ_PW}"
   echo "HELLOAI_CREDENTIAL_AES_KEY_BASE64=${AES_KEY}"
+  echo "HELLOAI_AGENT_REGISTRATION_TOKEN=${AGENT_TOKEN}"
+  echo "OPEN_SANDBOX_API_KEY=${SANDBOX_KEY}"
   echo
   echo "# NOTE: values already present in ${ENV_FILE} were kept (idempotent)."
   exit 0
@@ -108,13 +120,21 @@ append_if_missing RABBITMQ_ADMIN_PASSWORD "$ADMIN_PW"
 append_if_missing HELLOAI_RABBIT_USER "$BIZ_USER"
 append_if_missing HELLOAI_RABBIT_PASSWORD "$BIZ_PW"
 append_if_missing HELLOAI_CREDENTIAL_AES_KEY_BASE64 "$AES_KEY"
+append_if_missing HELLOAI_AGENT_REGISTRATION_TOKEN "$AGENT_TOKEN"
+append_if_missing OPEN_SANDBOX_API_KEY "$SANDBOX_KEY"
 
 echo
 echo "DONE. ${ENV_FILE} now contains:"
-grep -E '^[A-Z_]+=' "$ENV_FILE" | sed -E 's/(PASSWORD|AES_KEY_BASE64)=.*/\1=<hidden>/'
+# [A-Z0-9_] not [A-Z_]: HELLOAI_CREDENTIAL_AES_KEY_BASE64 contains digits and was
+# silently dropped from this summary by the narrower class (key was written, just
+# never shown -- looked like it had not been generated).
+grep -E '^[A-Z0-9_]+=' "$ENV_FILE" | sed -E 's/(PASSWORD|AES_KEY_BASE64|TOKEN|API_KEY)=.*/\1=<hidden>/'
 echo
 echo "NEXT (RabbitMQ admin pre-step, required before 'docker compose up -d'):"
 echo "  docker compose up -d rabbitmq"
 echo "  docker exec helloai-rabbitmq rabbitmqctl add_user helloaiadmin \"\${RABBITMQ_ADMIN_PASSWORD}\""
 echo "  docker exec helloai-rabbitmq rabbitmqctl set_user_tags helloaiadmin administrator"
-echo "  docker compose up -d --build"
+echo "  docker compose up -d"
+echo
+echo "REMINDER: no --build. The server runs prebuilt jar + dist (bind mounts);"
+echo "  the deploy dir has no Dockerfile, so --build always fails."
