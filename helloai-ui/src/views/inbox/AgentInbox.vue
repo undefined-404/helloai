@@ -94,24 +94,34 @@
             >…{{ String(row.agentId || '').slice(-6) }}</span>
           </template>
         </el-table-column>
+        <!-- 阅读状态与归档状态拆成两列（2026-10-19）：原实现是二选一互斥标签，
+             归档行永远只显示「已归档」，点「标为已读」后界面毫无变化 ⇒ 看起来像按钮失效。
+             两个维度本就正交（已归档但未读是真实存在的状态），必须分开显示。 -->
         <el-table-column
-          label="状态"
-          width="100"
+          label="阅读"
+          width="88"
         >
           <template #default="{ row }">
             <el-tag
-              v-if="row.isArchived === 1"
               size="small"
-              type="info"
-            >
-              已归档
-            </el-tag>
-            <el-tag
-              v-else
-              size="small"
+              effect="light"
               :type="row.isRead === 1 ? 'info' : 'danger'"
             >
               {{ row.isRead === 1 ? '已读' : '未读' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="归档"
+          width="96"
+        >
+          <template #default="{ row }">
+            <el-tag
+              size="small"
+              effect="light"
+              :type="row.isArchived === 1 ? 'info' : 'success'"
+            >
+              {{ row.isArchived === 1 ? '已归档' : '未归档' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -158,16 +168,19 @@
         >
           <template #default="{ row }">
             <div class="action-cell">
+              <!-- 置灰而非隐藏（2026-10-19）：隐藏会让每行按钮位置随状态跳动，
+                   实测「点了没反应」的一半原因就是按钮直接消失、用户以为没点中。
+                   禁用态保留占位，状态一目了然。 -->
               <el-button
-                v-if="row.isRead===0"
                 size="small"
-                type="primary"
+                :disabled="row.isRead === 1 || !!acting[String(row.id)]"
                 @click="markRead(row)"
               >
                 标为已读
               </el-button>
               <el-button
                 size="small"
+                :disabled="row.isArchived === 1 || !!acting[String(row.id)]"
                 @click="markArchived(row)"
               >
                 归档
@@ -278,13 +291,39 @@ function onSizeChange(sz: number) {
   page.value = 1
   load()
 }
-async function markRead(row: any) {
-  await inboxApi.markRead(row.id); row.isRead = 1
-  unreadCount.value = Math.max(0, unreadCount.value - 1)
-  ElMessage.success('已标记为已读')
+// 正在提交的行 id → true：按行独立防连点，跨行可并发。
+// 用对象而不是单个字符串，否则两行同时操作时先完成的 finally 会清掉另一行的禁用态。
+const acting = ref<Record<string, boolean>>({})
+
+async function markRead(row: InboxRow) {
+  const key = String(row.id)
+  if (row.isRead === 1 || acting.value[key]) return
+  acting.value[key] = true
+  try {
+    await inboxApi.markRead(row.id)
+    // 只改本地行状态，不 reload：当前筛选若为「未读」，reload 会让整行消失，
+    // 用户反而看不出「已读」这个结果。让标签就地变灰更能证明操作生效。
+    row.isRead = 1
+    unreadCount.value = Math.max(0, unreadCount.value - 1)
+    ElMessage.success('已标记为已读')
+  } finally {
+    delete acting.value[key]
+  }
 }
-async function markArchived(row: any) {
-  await inboxApi.markArchived(row.id); ElMessage.success('已归档'); load()
+
+async function markArchived(row: InboxRow) {
+  const key = String(row.id)
+  if (row.isArchived === 1 || acting.value[key]) return
+  acting.value[key] = true
+  try {
+    await inboxApi.markArchived(row.id)
+    ElMessage.success('已归档')
+    // 归档必须 reload：筛选「未归档」时该行本就应该离开列表。
+    // 筛选「已归档」时不会调用本按钮（已置灰），故不存在无谓刷新。
+    await load()
+  } finally {
+    delete acting.value[key]
+  }
 }
 onMounted(() => load())
 </script>

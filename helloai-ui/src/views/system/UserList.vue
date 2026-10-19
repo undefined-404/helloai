@@ -155,46 +155,57 @@
           </el-table-column>
           <el-table-column
             label="操作"
-            :width="ACTION.FOUR"
+            :width="ACTION.TWO"
             fixed="right"
           >
             <template #default="{ row }">
-              <el-button
-                v-auth="'user:edit'"
-                size="small"
-                link
-                type="primary"
-                @click="openEdit(row)"
-              >
-                编辑
-              </el-button>
-              <el-button
-                v-auth="'user:assign-role'"
-                size="small"
-                link
-                type="primary"
-                @click="openAssignRoles(row)"
-              >
-                分配角色
-              </el-button>
-              <el-button
-                v-auth="'user:edit'"
-                size="small"
-                link
-                type="primary"
-                @click="openAssignOrg(row)"
-              >
-                组织归属
-              </el-button>
-              <el-button
-                v-auth="'user:reset-pwd'"
-                size="small"
-                link
-                type="warning"
-                @click="openResetPassword(row)"
-              >
-                重置密码
-              </el-button>
+              <div class="action-cell">
+                <el-button
+                  v-auth="'user:edit'"
+                  size="small"
+                  @click="openEdit(row)"
+                >
+                  编辑
+                </el-button>
+                <!-- 与子任务列表同一布局：主操作外置，其余收进「更多」下拉 -->
+                <el-dropdown
+                  v-if="hasMoreActions()"
+                  trigger="click"
+                  @command="(cmd: string) => handleMoreCommand(cmd, row)"
+                >
+                  <el-button
+                    size="small"
+                    :aria-label="`用户「${row.username}」更多操作`"
+                  >
+                    更多
+                    <el-icon class="el-icon--right">
+                      <ArrowDown />
+                    </el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item
+                        v-if="auth.hasPermission('user:assign-role')"
+                        command="roles"
+                      >
+                        分配角色
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="auth.hasPermission('user:edit')"
+                        command="org"
+                      >
+                        组织归属
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="auth.hasPermission('user:reset-pwd')"
+                        command="password"
+                      >
+                        <span class="dropdown-danger">重置密码</span>
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -474,9 +485,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { Search } from '@element-plus/icons-vue'
+import { Search, ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import type { FormInstance } from 'element-plus'
 import { rbacApi } from '@/api/rbac'
+import { useAuthStore } from '@/stores/auth'
 import type { SysDepart, SysRole, SysUserItem } from '@/types'
 import type { LongId } from '@/types'
 import { fmtTime, ACTION } from '@/utils/tableConfig'
@@ -487,6 +500,9 @@ const pageSize = ref(10)
 const currentPage = ref(1)
 const loading = ref(false)
 const keyword = ref('')
+// 下拉项不能用 v-auth（ElDropdownItem 根节点是 fragment，指令会被静默忽略），
+// 与子任务列表同一处理：改用 v-if + hasPermission 过滤。
+const auth = useAuthStore()
 
 async function load(page = 1) {
   loading.value = true
@@ -498,6 +514,38 @@ async function load(page = 1) {
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * 校验表单，失败时给出可见反馈。
+ *
+ * <p>2026-10-19 修复：Element Plus 的 `validate()` 在校验失败时是 **reject**（不是
+ * resolve(false)）。原写法 `.catch(() => false)` 之后直接 `return`，等于完全静默——
+ * 用户只看到「点保存没反应、F12 里一个请求都没有」，误判成按钮坏了。
+ * 现在统一在 catch 里弹一条提示，把「哪里没填」说出来。</p>
+ */
+async function validateOrWarn(formRef: FormInstance | undefined, hint: string): Promise<boolean> {
+  if (!formRef) return false
+  try {
+    await formRef.validate()
+    return true
+  } catch {
+    ElMessage.warning(hint)
+    return false
+  }
+}
+
+/** 该行是否有「更多」里的操作可展示（无权限时不渲染下拉，避免空菜单） */
+function hasMoreActions(): boolean {
+  return auth.hasPermission('user:assign-role')
+    || auth.hasPermission('user:edit')
+    || auth.hasPermission('user:reset-pwd')
+}
+
+function handleMoreCommand(cmd: string, row: SysUserItem) {
+  if (cmd === 'roles') openAssignRoles(row)
+  else if (cmd === 'org') openAssignOrg(row)
+  else if (cmd === 'password') openResetPassword(row)
 }
 
 // ── 编辑用户 ──
@@ -523,7 +571,7 @@ function openEdit(row: SysUserItem) {
 }
 
 async function submitEdit() {
-  const valid = await editFormRef.value?.validate().catch(() => false)
+  const valid = await validateOrWarn(editFormRef.value, '请先选择用户状态')
   if (!valid || !editTarget.value) return
   saving.value = true
   try {
@@ -567,8 +615,16 @@ async function openCreate() {
 }
 
 async function submitCreate() {
-  const valid = await createFormRef.value?.validate().catch(() => false)
+  const valid = await validateOrWarn(
+    createFormRef.value,
+    '请先补全必填项：用户名（2-64 位）、初始密码（6-64 位）、初始角色'
+  )
   if (!valid) return
+  // 再兜一层：trim 后为空说明只敲了空格，表单 min 校验能过但后端会拒
+  if (!createForm.value.username.trim()) {
+    ElMessage.warning('用户名不能为空白')
+    return
+  }
   saving.value = true
   try {
     await rbacApi.createUser({
@@ -662,7 +718,7 @@ function openResetPassword(row: SysUserItem) {
 }
 
 async function submitResetPassword() {
-  const valid = await passwordFormRef.value?.validate().catch(() => false)
+  const valid = await validateOrWarn(passwordFormRef.value, '请输入 6-64 位的新密码')
   if (!valid || !passwordTarget.value) return
   saving.value = true
   try {
@@ -739,6 +795,8 @@ onMounted(() => load(1))
 }
 
 .user-username { font-weight: 600; color: var(--ha-ink); }
+/* 危险操作在下拉里的着色：与子任务列表同一约定 */
+:deep(.dropdown-danger) { color: var(--el-color-danger); }
 .muted { color: var(--ha-muted); font-size: 12px; }
 .org-section { margin-bottom: 16px; }
 .org-label {
