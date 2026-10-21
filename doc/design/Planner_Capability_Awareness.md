@@ -2,13 +2,13 @@
 
 > **Status: `Implemented`** · **Scope: Planner 拆解侧能力感知与自适应粒度（技能目录注入 / 子任务级 requiredSkills+constraints / FINE·STANDARD·COARSE 三档）；不含技能回流 DB 化（D5-3）** · **差距锚点：`G-010`**
 >
-> 最后更新：2026-09-30（**Document V2.1 治理**：补 Status / Scope 头。状态事实源 = [`../HelloAI 实现差距表.md`](../HelloAI%20实现差距表.md)，本文件只声明设计边界，不复述进度）
+> 最后更新：2026-10-21（**状态句订正**：原写「③④已由 G-011 清偿」与代码不符——G-011 D7 只渲染了 `constraints`，`requiredSkills` 从未进核验 Prompt；本日补齐后该句才成立。状态事实源 = [`../HelloAI 实现差距表.md`](../HelloAI%20实现差距表.md)，本文件只声明设计边界，不复述进度）
 
 > 主轴：让 Planner 拆解从「能力真空中的通用常识拆解」升级为「能力感知的专业拆解」——拆解侧注入技能目录、指派子任务级技能、按执行者画像与任务难度自适应调节 Plan 粒度。
 >
 > 定位：G-004 增量 A/B（requiredTools 联动 + 任务级技能透传）之后的拆解侧深化批次。设计依据 2026-09-09 代码事实核查（见 §0.2）。
 >
-> **状态：S1~S4 已落地（含实测，2026-09-10 口径）**——S4 双场景实测 PASS：平台内链（2026-09-09，与 G-011 S5 合并）+ 外部执行链（2026-09-10 双轮全链闭环，Round2/Round3）。实测粒度覆盖：外部白名单全 CLI_CLIENT = COARSE（外部任务共 4 个带数据样本）；平台内链未设白名单 = STANDARD 档；**FINE 档（内部执行者白名单）无真实场景样本，仅矩阵单测覆盖（登记待补）**。后置缺口：①技能回流贡献规范（D5-3）；②`verify-skill-packages.ps1`（D5-2）已交付（2026-09-10，见 `scripts/powershell/verify-skill-packages.ps1`）；③④已由 G-011 清偿（见差距表 G-010）。拍板记录：2026-09-09 ①登记=新 G-010 ②粒度=rule-based ③装箱=并集 ④目录注入=常驻 ⑤constraints=显式列 ⑥回流=classpath ⑦混合粒度=FINE（白名单为空=STANDARD）。实施记录见 `doc/log/2026-09.md` 同日及 2026-09-10 条目。
+> **状态：S1~S4 已落地（含实测，2026-09-10 口径）**——S4 双场景实测 PASS：平台内链（2026-09-09，与 G-011 S5 合并）+ 外部执行链（2026-09-10 双轮全链闭环，Round2/Round3）。实测粒度覆盖：外部白名单全 CLI_CLIENT = COARSE（外部任务共 4 个带数据样本）；平台内链未设白名单 = STANDARD 档；**FINE 档（内部执行者白名单）无真实场景样本，仅矩阵单测覆盖（登记待补）**。后置缺口：①技能回流贡献规范（D5-3）；②`verify-skill-packages.ps1`（D5-2）已交付（2026-09-10，见 `scripts/powershell/verify-skill-packages.ps1`）；③已由 G-011 D7 清偿（审查侧 `constraints` 渲染）；④（审查侧 `requiredSkills` 注入核验）由 G-010 收口补齐（`{{REQUIRED_SKILLS}}` 占位 + 技能要求覆盖核验条款，见差距表 G-010）。拍板记录：2026-09-09 ①登记=新 G-010 ②粒度=rule-based ③装箱=并集 ④目录注入=常驻 ⑤constraints=显式列 ⑥回流=classpath ⑦混合粒度=FINE（白名单为空=STANDARD）。实施记录见 `doc/log/2026-09.md` 同日及 2026-09-10 条目。
 
 ---
 

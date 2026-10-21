@@ -2,7 +2,7 @@
 <!--
   由 SubTaskReviewService 加载渲染（classpath:prompts/subtask-review.md）。
   占位符：{SUB_TASK_TITLE} / {SUB_TASK_CONTENT} / {DELIVERABLE} /
-         {ACCEPTANCE} / {CONSTRAINTS} / {UNCERTAINTIES} / {EXECUTION_OUTPUT} / {ATTACHMENT_LIST} /
+         {ACCEPTANCE} / {CONSTRAINTS} / {REQUIRED_SKILLS} / {UNCERTAINTIES} / {EXECUTION_OUTPUT} / {ATTACHMENT_LIST} /
          {ATTACHMENT_CONTENT} / {VERIFICATION_SIGNAL} 由服务端替换。
   核验模型为双轨纪律制：轨道 A（验收标准）+ 轨道 B（工程纪律，按交付物类型条件激活）。
   工程纪律维度提炼自 DeepSeek Harness dsh-code-review / dsh-prose-standard / dsh-trim-cot-leakage，
@@ -18,6 +18,7 @@
 - 交付物要求：{{DELIVERABLE}}
 - 验收标准：{{ACCEPTANCE}}
 - 执行约束：{{CONSTRAINTS}}
+- 技能要求：{{REQUIRED_SKILLS}}
 - 不确定性申报：{{UNCERTAINTIES}}
 
 ## 执行产出
@@ -57,6 +58,8 @@
 7. 声称的交付物必须与**物化附件清单**对应：交付物声明为文件（如 .ps1/.sh/.jar/.py 等脚本或程序）但附件清单无对应文件时，即使产出文本声称"已创建/已运行/203 行 errors=0"，也判 pass=false 并在 issues 中指出缺失；附件清单仅含产出文本物化（.md）而交付物声明为可执行文件时同样不通过；附件标注"外部存储（平台不可直读）"的不可作为平台可验证的证据。
 8. 必须基于**物化附件内容**核对交付物："声称交付物 ↔ 文件正文 ↔ 验收标准"三者一致性是判定依据——附件正文与声称结论矛盾（如声称"main.py 含错误处理"但正文无对应代码）、正文明显残缺或与验收标准不符的，判 pass=false 并在 issues 中指出差异；附件标注"内容不可读/为空"或"无平台可直读附件"时，不得臆断文件内容，仅凭文件名与产出文本从严判定。
 9. **执行约束遵守核验（G-011 D7，清偿 G-010 缺口③）**："执行约束"非"（无）"时，逐条核验产出是否违反约束中列出的"不许改 / 不许越界"事项，违反即按不达标处理（pass=false）；无法确认是否触碰边界时从严核验。
+   - **技能要求覆盖核验（G-010）**："技能要求"非"（无）"时，逐项核验产出是否具备该技能对应的**交付形态**（如要求 `mermaid-diagram` 则产出须含可渲染的图表定义、要求 `mermaid` 以外的绘图类技能则须含对应图形产物、要求 `code-review` 则须含可执行的审查结论而非泛泛评价）。产出完全缺少某项技能对应的交付形态且这一点影响验收标准落地时，判 pass=false 并在 issues 中**点名缺失的技能名**。
+   - 技能要求只用于判断**交付形态是否缺失**，不用于比较实现手段：等价实现（用别的工具/库达成同一形态）同样算达标，不得因"没用指定的那个技能"驳回；产出中看不出任何对应形态时才按缺失处理。
 10. **不确定性分级核验（G-011 D7）**："不确定性申报"非"（无）"时——ASSUMPTION 类申报不构成驳回理由（按"假设是否被产出尊重"核验，而非"假设是否存在"）；UNCONFIRMED 类申报的产出中须含验证结论或 BLOCKED 上报痕迹，既未验证也未上报的按不达标处理。
 
 11. **缺失证据清单（P2-4，返工可执行性）**：判定不通过（pass=false）且缺陷与验收标准相关时，必须在 missingEvidence 中逐条给出结构化返工线索——acceptanceRef 引用被驳回验收标准的**原文子串**（必须是验收标准文本中真实存在的片段，便于机械核对）、missing 说明缺什么证据、howTo 说明怎样补齐；判定通过、或缺陷仅属工程纪律条款而非验收标准时，missingEvidence 为空数组。missingEvidence 只作返工指引，不参与 pass 判定。

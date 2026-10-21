@@ -77,7 +77,7 @@ class RequirementPromptTemplateContractTest {
     }
 
     @Test
-    @DisplayName("subtask-review.md：G-011 D7 双占位符 + 轨道 A 约束核验/不确定性分级语义 + P2-4 缺失证据清单")
+    @DisplayName("subtask-review.md：G-011 D7 双占位符 + 轨道 A 约束核验/不确定性分级语义 + P2-4 缺失证据清单 + G-010 技能覆盖")
     void reviewTemplateCarriesConstraintsAndUncertaintiesContract() throws IOException {
         String template = loadTemplate("subtask-review.md");
         assertThat(template)
@@ -92,7 +92,12 @@ class RequirementPromptTemplateContractTest {
                 // P2-4 缺失证据清单（返工可执行性）：轨道 A 第 10 条 + 输出 schema 键
                 .contains("缺失证据清单")
                 .contains("missingEvidence")
-                .contains("acceptanceRef");
+                .contains("acceptanceRef")
+                // G-010 收口：技能要求下行 + 覆盖核验条款（防模板回退致审查侧不再看技能要求）
+                .contains("{{REQUIRED_SKILLS}}")
+                .contains("技能要求覆盖核验")
+                .contains("点名缺失的技能名")
+                .contains("等价实现");
     }
 
     /** W-6 Grounding 契约：答案必须锚定检索资料、标注来源编号、区分资料与己见。 */

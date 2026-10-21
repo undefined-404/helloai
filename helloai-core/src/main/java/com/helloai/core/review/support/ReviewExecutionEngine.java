@@ -20,6 +20,7 @@ import org.springframework.stereotype.Component;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 单次核验执行引擎（§7.8 拆分：核验执行与编排分离，SubTaskReviewServiceImpl 迁出）。
@@ -146,8 +147,14 @@ public class ReviewExecutionEngine {
      * 加载核验 Prompt 模板并替换占位符（证据/附件占位由装配器产出）。
      * G-011 D7：增 {{CONSTRAINTS}} + {{UNCERTAINTIES}} 渲染（空时「（无）」），
      * 清偿 G-010 后置缺口③（审查侧 constraints 此前未消费）。
+     * G-010 收口：增 {{REQUIRED_SKILLS}} 渲染——审查侧此前只拿到合并后的技能<b>能力</b>
+     * （{@code mergeSkills} 注入 AgentTask.skills），看不到子任务<b>要求</b>哪些技能，
+     * 因而无法核验「要求的交付形态是否出现」。
+     *
+     * <p>包可见：供 {@code ReviewPromptRenderTest} 断言「模板占位符 ↔ 渲染实现」零漂移
+     * （模板新增占位符而实现未替换时，残留的 {@code {{…}}} 会被被测出）。</p>
      */
-    private String renderPrompt(SubTaskView subTask) {
+    String renderPrompt(SubTaskView subTask) {
         ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
         String template;
         try (InputStream in = resource.getInputStream()) {
@@ -161,6 +168,7 @@ public class ReviewExecutionEngine {
                 .replace("{{DELIVERABLE}}", VerdictParser.nullToEmpty(subTask.deliverable()))
                 .replace("{{ACCEPTANCE}}", VerdictParser.nullToEmpty(subTask.acceptance()))
                 .replace("{{CONSTRAINTS}}", renderConstraints(subTask))
+                .replace("{{REQUIRED_SKILLS}}", renderRequiredSkills(subTask))
                 .replace("{{UNCERTAINTIES}}", renderUncertainties(subTask))
                 .replace("{{EXECUTION_OUTPUT}}", reviewEvidenceAssembler.extractExecutionOutput(subTask))
                 .replace("{{ATTACHMENT_LIST}}", reviewEvidenceAssembler.buildAttachmentList(subTask))
@@ -173,6 +181,22 @@ public class ReviewExecutionEngine {
     private String renderConstraints(SubTaskView subTask) {
         return subTask.constraints() != null && !subTask.constraints().isBlank()
                 ? subTask.constraints() : "（无）";
+    }
+
+    /**
+     * G-010：技能要求渲染——非空逐项以「、」连接（过滤空白项），空时「（无）」。
+     *
+     * <p>只渲染<b>要求</b>（{@code sub_task.required_skills}），不渲染 Agent 实际持有的技能集：
+     * 后者已由 {@code mergeSkills} 作为能力注入，审查侧需要的是「本该交付什么形态」的判据。</p>
+     */
+    private String renderRequiredSkills(SubTaskView subTask) {
+        if (subTask.requiredSkills() == null || subTask.requiredSkills().isEmpty()) {
+            return "（无）";
+        }
+        String joined = subTask.requiredSkills().stream()
+                .filter(s -> s != null && !s.isBlank())
+                .collect(Collectors.joining("、"));
+        return joined.isEmpty() ? "（无）" : joined;
     }
 
     /** D7：不确定性申报渲染——逐条「[kind] note」，空时「（无）」（空白 note 条目跳过）。 */
