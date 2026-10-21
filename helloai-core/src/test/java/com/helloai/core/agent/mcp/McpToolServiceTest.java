@@ -29,6 +29,7 @@ import com.helloai.core.agent.service.McpAgentReportService;
 import com.helloai.core.agent.service.McpReadModelService;
 import com.helloai.core.agent.service.McpTaskClaimService;
 import com.helloai.core.agent.service.impl.McpAgentReportServiceImpl;
+import com.helloai.core.agent.service.impl.SubmissionActivityRecorder;
 import com.helloai.core.agent.service.impl.McpReadModelServiceImpl;
 import com.helloai.core.agent.service.impl.McpTaskClaimServiceImpl;
 import com.helloai.core.agent.service.impl.McpToolServiceImpl;
@@ -109,6 +110,10 @@ class McpToolServiceTest {
     @Mock
     private ActivityLogService activityLogService;
 
+    /** 活动日志独立事务写入器（2026-10-21：REQUIRES_NEW，避免写失败污染提交事务）。 */
+    @Mock
+    private SubmissionActivityRecorder submissionActivityRecorder;
+
     private McpToolService mcpToolService;
 
     @BeforeEach
@@ -119,7 +124,8 @@ class McpToolServiceTest {
                 subTaskQueryPort, taskRunningSpecPort, attachmentPort, agentExecutionRecordService);
         McpAgentReportService agentReportService = new McpAgentReportServiceImpl(
                 agentService, heartbeatService, agentDutyLeaseService, attachmentPort,
-                executionResultHandler, activityLogService, subTaskQueryPort, subTaskCommandPort,
+                executionResultHandler, activityLogService, submissionActivityRecorder,
+                subTaskQueryPort, subTaskCommandPort,
                 skillPackageCatalog, llmProviderModelQueryService);
         McpTaskClaimService taskClaimService = new McpTaskClaimServiceImpl(
                 agentService, agentInboxService, agentMcpServerService, subTaskQueryPort,
@@ -1330,8 +1336,10 @@ class McpToolServiceTest {
                 AGENT_ID, SUB_TASK_ID, "rid-auto", true, "交付正文内容", null, "stop", null);
 
         ArgumentCaptor<Map<String, Object>> detail = ArgumentCaptor.forClass(Map.class);
-        verify(activityLogService).record(eq(AGENT_ID), eq("delivery"), eq("INFO"), eq("platform"),
-                eq(SUB_TASK_ID), detail.capture());
+        // 2026-10-21：活动日志改为独立事务写入（REQUIRES_NEW），断言点随之下移到 Recorder
+        verify(submissionActivityRecorder).recordInNewTx(eq(AGENT_ID), eq("delivery"), eq("INFO"),
+                eq("platform"), eq(SUB_TASK_ID), detail.capture());
+        verifyNoInteractions(activityLogService);
         assertThat(detail.getValue()).containsEntry("accepted", true);
         assertThat(detail.getValue()).containsEntry("resultId", "rid-auto");
         // 输出摘要截断入库（活动流是列表视图，不塞全文）
@@ -1352,8 +1360,9 @@ class McpToolServiceTest {
         mcpToolService.submitResult(
                 AGENT_ID, SUB_TASK_ID, "rid-dup", true, "重复提交", null, "stop", null);
 
-        verify(activityLogService, never()).record(anyLong(), anyString(), anyString(), anyString(),
-                any(), any());
+        // 2026-10-21：断言点随独立事务写入器下移——否则该断言恒真（假绿）
+        verify(submissionActivityRecorder, never()).recordInNewTx(anyLong(), anyString(), anyString(),
+                anyString(), any(), any());
     }
 
     @Test
@@ -1366,8 +1375,9 @@ class McpToolServiceTest {
         applied.setApplied(true);
         applied.setStatus("REVIEW");
         when(executionResultHandler.handleReport(any())).thenReturn(applied);
-        when(activityLogService.record(anyLong(), anyString(), anyString(), anyString(), any(), any()))
-                .thenThrow(new RuntimeException("db down"));
+        // void 方法不能用 when(...).thenThrow(...)，须用 doThrow(...).when(mock).xxx(...)
+        doThrow(new RuntimeException("db down")).when(submissionActivityRecorder)
+                .recordInNewTx(anyLong(), anyString(), anyString(), anyString(), any(), any());
 
         McpToolService.SubmitResultResult result = mcpToolService.submitResult(
                 AGENT_ID, SUB_TASK_ID, "rid-err", true, "正文", null, "stop", null);

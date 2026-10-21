@@ -70,6 +70,12 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
     private final ExecutionResultHandler executionResultHandler;
     /** 活动日志（2026-10-18：外部 Agent 提交结果时由平台兜底补写，不依赖 Agent 主动上报）。 */
     private final ActivityLogService activityLogService;
+    /**
+     * 活动日志独立事务写入器（2026-10-21）：{@code submitResult} 处于外层事务中，
+     * 活动日志若以 REQUIRED 加入，一旦写失败会把 PG 事务标记 aborted，
+     * 导致「best-effort 不影响提交」变成假象（实测抛 UnexpectedRollbackException 整体回滚）。
+     */
+    private final SubmissionActivityRecorder submissionActivityRecorder;
     private final SubTaskQueryPort subTaskQueryPort;
     private final SubTaskCommandPort subTaskCommandPort;
     /**
@@ -276,7 +282,7 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
             if (error != null && !error.isBlank()) {
                 detail.put("error", abbreviate(error, ACTIVITY_OUTPUT_PREVIEW_MAX));
             }
-            activityLogService.record(agentId,
+            submissionActivityRecorder.recordInNewTx(agentId,
                     ACTIVITY_ACTION_DELIVERY,
                     ok ? "INFO" : "WARN",
                     "platform",
