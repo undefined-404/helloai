@@ -1,7 +1,7 @@
 package com.helloai.start.config;
 
 import com.baomidou.mybatisplus.annotation.DbType;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 // 注意：mybatis-plus 3.5.9 的 namespace 是 'mybatisplus'（不带连字符）
 import com.baomidou.mybatisplus.extension.plugins.inner.OptimisticLockerInnerInterceptor;
@@ -18,7 +18,7 @@ import org.springframework.context.annotation.Configuration;
  *   （表现为 BindingException: Parameter 'MP_OPTLOCK_VERSION_ORIGINAL' not found）
  * - 分页插件不随 starter 自动注册，需显式加 PaginationInnerInterceptor，
  *   否则 IPage.page() 不执行 COUNT、total 恒为 0 且不分页（G-012 用户分页 API 实测暴露）
- * - 通过 ConfigurationCustomizer 显式注册 JacksonTypeHandler，
+ * - 通过 ConfigurationCustomizer 显式注册 PgJsonbTypeHandler（继承 JacksonTypeHandler，仅覆写写侧），
  *   解决 agent_outbox_event.payload 等 JSONB 列 SELECT 读出为 null 的问题
  */
 @Configuration
@@ -38,8 +38,8 @@ public class MyBatisPlusConfig {
     }
 
     /**
-     * 显式注册 JacksonTypeHandler 到 MyBatis TypeHandlerRegistry，
-     * 确保 @TableField(typeHandler=JacksonTypeHandler.class) 在 BaseMapper.selectList 中生效。
+     * 显式注册 PgJsonbTypeHandler（JSONB 写入用 PGobject）到 MyBatis TypeHandlerRegistry，
+     * 确保 @TableField(typeHandler=PgJsonbTypeHandler.class) 在 BaseMapper.selectList 中生效。
      *
      * <p>⚠ 副作用（真实环境已踩坑，迭代记录 §6.132）：Map 与 List 是按类型全局注册，
      * 任何返回值被推断为 Map.class 的自定义查询（如 {@code List<Map<String, Object>>}），
@@ -51,11 +51,11 @@ public class MyBatisPlusConfig {
     public com.baomidou.mybatisplus.autoconfigure.ConfigurationCustomizer mybatisPlusConfigurationCustomizer() {
         return configuration -> {
             TypeHandlerRegistry registry = configuration.getTypeHandlerRegistry();
-            registry.register(java.util.Map.class, JacksonTypeHandler.class);
-            registry.register(java.util.HashMap.class, JacksonTypeHandler.class);
+            registry.register(java.util.Map.class, PgJsonbTypeHandler.class);
+            registry.register(java.util.HashMap.class, PgJsonbTypeHandler.class);
             // sub_task.depends_on 是 List<Long> JSONB 列，SELECT 读出同样需要显式注册
-            registry.register(java.util.List.class, JacksonTypeHandler.class);
-            registry.register(java.util.ArrayList.class, JacksonTypeHandler.class);
+            registry.register(java.util.List.class, PgJsonbTypeHandler.class);
+            registry.register(java.util.ArrayList.class, PgJsonbTypeHandler.class);
         };
     }
 }

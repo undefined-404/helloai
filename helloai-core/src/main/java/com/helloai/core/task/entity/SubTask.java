@@ -1,7 +1,7 @@
 package com.helloai.core.task.entity;
 
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import com.baomidou.mybatisplus.annotation.*;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.helloai.common.base.BaseEntity;
 import com.helloai.common.constant.SubTaskStatus;
 import lombok.Data;
@@ -32,10 +32,10 @@ public class SubTask extends BaseEntity {
     private Long assignedAgentId;
     private String content;
 
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> context;
 
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> scoreFactors;
 
     private Integer compositeScore;
@@ -135,7 +135,7 @@ public class SubTask extends BaseEntity {
      * 读取依赖 id 时必须走 {@link #dependsOnIdList()} 做 Long 归一化，
      * 不要直接遍历本字段强转 Long。</p>
      */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private List<Long> dependsOn;
 
     /**
@@ -145,7 +145,7 @@ public class SubTask extends BaseEntity {
      * 与 task.required_skills 取并集（子任务级在前，去重保序），保持
      * 任务级全局约束语义不变。空数组=无子任务级指派，行为与现状一致。</p>
      */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private List<String> requiredSkills;
 
     /**

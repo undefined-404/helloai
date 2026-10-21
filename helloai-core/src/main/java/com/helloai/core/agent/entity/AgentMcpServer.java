@@ -1,8 +1,8 @@
 package com.helloai.core.agent.entity;
 
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.helloai.common.base.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -31,10 +31,10 @@ public class AgentMcpServer extends BaseEntity {
     private Integer rateLimit;
 
     /** 参数约束 JSONB，如 {"max":50} */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> paramConstraints;
 
     /** 扩展配置 JSONB，如 {"pullIntervalSec":60} */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> config;
 }

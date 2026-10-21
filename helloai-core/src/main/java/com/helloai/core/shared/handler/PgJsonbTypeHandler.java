@@ -23,6 +23,11 @@ public class PgJsonbTypeHandler extends JacksonTypeHandler {
         super(type);
     }
 
+    /** 与父类构造面保持一致：MyBatis 反射实例化的另一条路径（带 Field 时可拿到真实泛型）。 */
+    public PgJsonbTypeHandler(Class<?> type, java.lang.reflect.Field field) {
+        super(type, field);
+    }
+
     @Override
     public void setNonNullParameter(PreparedStatement ps, int i, Object parameter, JdbcType jdbcType)
             throws SQLException {

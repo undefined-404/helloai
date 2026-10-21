@@ -1,8 +1,8 @@
 package com.helloai.core.agent.entity;
 
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.helloai.common.base.BaseEntity;
 import com.helloai.common.constant.AgentCommandOutboxStatus;
 import lombok.Data;
@@ -55,7 +55,7 @@ public class AgentCommandOutboxEvent extends BaseEntity {
     private String aggregateId;
 
     /** 序列化后的 MQ 消息体（与 {@code ExecutionCommandMqMessage} 字段对齐）。 */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> payload;
 
     /** 投递状态。 */

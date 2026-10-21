@@ -2,7 +2,6 @@ package com.helloai.core.agent.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.helloai.common.base.BaseEntity;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
@@ -62,7 +61,7 @@ public class Agent extends BaseEntity {
 
     private String modelType;
 
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> modelConfig;
 
     private String specializationSlug;
@@ -77,11 +76,11 @@ public class Agent extends BaseEntity {
     private AgentAccessType accessType;
 
     /** 能力画像（JSONB，Map 形式）。注册时按 accessType 默认值填充，可独立覆盖。 */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> capabilities;
 
     /** 标签（specialty / runtime / region 等，调度标签过滤用） */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> labels;
 
     /**

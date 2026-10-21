@@ -1,8 +1,8 @@
 package com.helloai.core.agent.entity;
 
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.helloai.common.base.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -18,7 +18,7 @@ public class ActivityLog extends BaseEntity {
     private Long subTaskId;
     private String action;
 
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> detail;
 
     private String level;

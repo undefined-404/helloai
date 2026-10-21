@@ -1,8 +1,8 @@
 package com.helloai.core.task.entity;
 
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.helloai.common.base.BaseEntity;
 import com.helloai.common.constant.AgentRole;
 import lombok.Data;
@@ -45,6 +45,6 @@ public class TaskTimeline extends BaseEntity {
     private Long agentId;
 
     /** 事件负载（JSONB，Map 形式）：结构化记录 reason / offline_time / metadata 等 */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> payload;
 }

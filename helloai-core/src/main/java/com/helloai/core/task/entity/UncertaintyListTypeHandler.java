@@ -1,6 +1,6 @@
 package com.helloai.core.task.entity;
 
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import com.fasterxml.jackson.core.type.TypeReference;
 
 import java.lang.reflect.Field;
@@ -11,7 +11,7 @@ import java.util.List;
  * sub_task.uncertainties（JSONB → {@code List<Uncertainty>}）强类型 TypeHandler。
  *
  * <p>背景（2026-09-10 派单死锁根因修复）：MyBatisPlusConfig 为兼容 JSONB 列把
- * {@code List.class} 全局注册为 {@link JacksonTypeHandler}，MyBatis 自动映射按
+ * {@code List.class} 全局注册为 {@link PgJsonbTypeHandler}，MyBatis 自动映射按
  * getter 擦除后的 {@code List.class} 命中该全局注册；Jackson 没有具体泛型目标，
  * 把 JSON 数组反序列化为 {@code List<LinkedHashMap>}。强类型消费点（如
  * sendInboxNotification 统计 UNCONFIRMED 缺口做 {@code u.getKind()}）随即抛
@@ -23,7 +23,7 @@ import java.util.List;
  * 强类型列表；空白 JSON 返回空列表。写侧沿用父类 toJson 实现，序列化行为与
  * 修复前一致。</p>
  */
-public class UncertaintyListTypeHandler extends JacksonTypeHandler {
+public class UncertaintyListTypeHandler extends PgJsonbTypeHandler {
 
     private static final TypeReference<List<Uncertainty>> UNCERTAINTY_LIST =
             new TypeReference<List<Uncertainty>>() {};
