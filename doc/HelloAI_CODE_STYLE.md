@@ -4,8 +4,8 @@
 > 生效范围：后端单体服务 + 前端管理后台\
 > 当前架构：Spring Boot 单体 + DDD 业务域 + RabbitMQ + PostgreSQL + Redis + Vue 3\
 > 文档定位：**当前有效的代码与架构工程规范**\
-> 版本：V2.0\
-> 最后更新：2026-10-09
+> 版本：V2.1\
+> 最后更新：2026-10-21
 >
 > **重要：本文件只描述“当前有效规则”，不记录历史迭代过程。**
 >
@@ -1339,6 +1339,36 @@ public void querySomething() {
 
 ***
 
+## 14.5 独立事务（REQUIRES_NEW）的唯一正当用途：旁路写入
+
+```java
+@Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+```
+
+**只允许**用于「**观测 / 旁路数据**」—— 写失败不应影响主业务结果的那类写入
+（活动日志、审计快照、埋点、指标投递）。
+
+**理由（2026-10-21 实测）**：`REQUIRED`（默认）传播下，旁路写入的失败会让
+PostgreSQL 把整个事务标记为 aborted；外层即便 `catch` 掉异常并打印「不影响主流程」，
+提交时仍抛：
+
+```text
+UnexpectedRollbackException: Transaction rolled back because it has been marked as rollback-only
+```
+
+即 **「best-effort 旁路」在 `REQUIRED` 下是假象**。
+
+**禁止**把业务日志改成 `REQUIRES_NEW`（如注册 / 状态变更的审计）—— 那会出现
+「业务已回滚、日志却说成功」的假记录。这类日志必须与业务同事务。
+
+**落地约束**：
+
+1. 调用点若在**同类内部**（`private` 方法），`@Transactional` **不生效**（Spring AOP 代理边界）
+   ⇒ 抽成独立 Bean（范例：`SubmissionActivityRecorder`），**不要**用 self-injection。
+2. 该 Bean 的 Javadoc 必须写明「为何不直接改被调用服务的传播行为」（CODE_STYLE §2.3）。
+
+***
+
 # 15. 乐观锁
 
 使用：
@@ -1426,19 +1456,40 @@ review_record
 
 ## 16.3 JSONB
 
-JSONB 映射：
+JSONB 映射**必须**使用项目自带的 `PgJsonbTypeHandler`：
 
 ```java
-@TableField(typeHandler = JacksonTypeHandler.class)
+@TableField(typeHandler = PgJsonbTypeHandler.class)
 private Map<String, Object> context;
 ```
 
 或者：
 
 ```java
-@TableField(typeHandler = JacksonTypeHandler.class)
+@TableField(typeHandler = PgJsonbTypeHandler.class)
 private XxxContext context;
 ```
+
+**禁止使用 MyBatis-Plus 内置的 `JacksonTypeHandler`**（2026-10-21 实测修订）：
+
+`JacksonTypeHandler` 写侧调用 `PreparedStatement#setString`，参数以 `varchar` 发出，
+PostgreSQL **拒绝**将 varchar 隐式转为 jsonb：
+
+```text
+ERROR: column "detail" is of type jsonb but expression is of type character varying
+```
+
+`PgJsonbTypeHandler`（`helloai-core/.../shared/handler/`）继承前者、仅覆写写侧的
+`setNonNullParameter`，用 `PGobject(type="jsonb")` 包装，读侧行为完全一致。
+它同时兼顾「避免 `stringtype=unspecified` 连接串参数」——那是绕过手段，不得进生产。
+
+> **★显式声明优先于全局注册**：`MyBatisPlusConfig` 已把 `Map` / `HashMap` / `List` / `ArrayList`
+> 全局注册为 `PgJsonbTypeHandler`，但 `@TableField(typeHandler = ...)` 的显式声明会覆盖它。
+> **改一处不够，必须逐个实体核对**（实测漏改 17 处显式声明，见 `LOG-20261021-001`）。
+>
+> **例外**：列类型实为 `text` 的字段（如 `task_iteration.depends_on` / `rejection_history`）
+> 保持 `JacksonTypeHandler`——写 `PGobject(jsonb)` 到 text 列会引入类型不匹配。
+> 判定口径：以 `information_schema.columns` 的 `data_type='jsonb'` 为准，**不以注释为准**。
 
 优先使用：
 
