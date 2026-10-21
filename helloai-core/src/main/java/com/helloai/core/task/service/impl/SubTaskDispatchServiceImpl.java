@@ -14,6 +14,7 @@ import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.executor.AgentSelector.AgentSelectionConstraints;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.CircuitBreakerAlertService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.SubTaskMapper;
@@ -50,6 +51,8 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     private final SubTaskMapper subTaskMapper;
     private final AgentDispatchProperties agentDispatchProperties;
     private final TaskService taskService;
+    /** 运行告警（熔断 / 无候选共用 webhook 通道；G-015 收口接入无候选告警）。 */
+    private final CircuitBreakerAlertService alertService;
 
     /**
      * 重派退避序列（秒）：按已消耗的 {@code attempt_total} 逐级放大（G-015 B2.2）。
@@ -271,6 +274,11 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         var preferred = agentSelector.pickPreferred(role, toSelectorConstraints(constraints));
         if (preferred == null) {
             // 无候选属可自愈等待态：抛专用异常且**不消耗**重派预算（见方法 javadoc）
+            // ★ G-015 收口（2026-10-21）：无候选此前只有 log + 时间线事件，无告警出口；
+            // 接入运行告警（异步 webhook，不阻塞本线程），让运维感知「长时间无 Agent 可接活」。
+            alertService.onNoEligibleAgent(subTaskId, subTask.getTaskId(),
+                    role != null ? role.name() : "null",
+                    "无在线候选满足角色与技能约束");
             throw new NoCandidateAgentException("无可用候选 Agent: role=" + role);
         }
 

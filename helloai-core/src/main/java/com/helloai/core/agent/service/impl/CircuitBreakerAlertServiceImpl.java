@@ -94,6 +94,31 @@ public class CircuitBreakerAlertServiceImpl implements CircuitBreakerAlertServic
                 OffsetDateTime.now().toString());
     }
 
+    /**
+     * 调度「无可执行候选 Agent」告警（G-015 收口，2026-10-21）。
+     *
+     * <p>复用熔断器告警的 webhook 通道与发送核心；标题/正文独立，
+     * 便于运维在告警流中区分「熔断」与「无候选」两类事件。</p>
+     */
+    @Async
+    public void onNoEligibleAgent(Long subTaskId, Long taskId, String role, String reason) {
+        String title = String.format("🟠 [HelloAI] 调度无可用候选 Agent: subTaskId=%d", subTaskId);
+        String text = String.format(
+                "子任务: %d\n所属任务: %s\n期望角色: %s\n原因: %s\n时间: %s",
+                subTaskId,
+                taskId != null ? String.valueOf(taskId) : "null",
+                role != null ? role : "null",
+                reason != null ? reason : "未说明",
+                OffsetDateTime.now().toString());
+
+        if (dingtalkUrl != null && !dingtalkUrl.isBlank()) {
+            sendDingTalk(title, text);
+        }
+        if (feishuUrl != null && !feishuUrl.isBlank()) {
+            sendFeishu(title, text);
+        }
+    }
+
     // ──── 钉钉 Markdown 消息 ────
 
     private void sendDingTalk(String title, String text) {
