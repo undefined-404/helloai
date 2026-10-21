@@ -86,6 +86,47 @@ http_request() {
   rm -f "$body_file"
 }
 
+# multipart/form-data 上传（-F 表单字段），用法：
+#   http_multipart <url> <field...> -- <header...>
+# 说明：/api/artifacts/upload 只接受 multipart，不能复用 http_request（它固定发 JSON）。
+http_multipart() {
+  local url="$1"
+  shift
+
+  local -a fields headers
+  local mode="fields"
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" == "--" ]]; then
+      mode="headers"
+      continue
+    fi
+    if [[ "$mode" == "fields" ]]; then
+      fields+=(-F "$arg")
+    else
+      headers+=(-H "$arg")
+    fi
+  done
+
+  local body_file
+  body_file="$(mktemp "$RUN_DIR/http-body.XXXXXX")"
+
+  local -a curl_args
+  curl_args=(-sS -X POST "$url" -o "$body_file" -w "%{http_code}" -H "Accept: application/json" "${fields[@]}")
+  if (( ${#headers[@]} > 0 )); then
+    curl_args+=("${headers[@]}")
+  fi
+
+  if ! HTTP_CODE="$(curl "${curl_args[@]}")"; then
+    HTTP_BODY="$(cat "$body_file" 2>/dev/null || true)"
+    rm -f "$body_file"
+    fail "POST $url 请求失败"
+  fi
+
+  HTTP_BODY="$(cat "$body_file")"
+  rm -f "$body_file"
+}
+
 assert_eq() {
   local expected="$1"
   local actual="$2"
@@ -209,7 +250,7 @@ log "adminToken = ${ADMIN_TOKEN[1,16]}..."
 log ""
 
 log "=== [B] create or reuse test agent ==="
-http_request GET "$BASE_URL/api/admin/agents?pageSize=50" "" "X-Admin-Token: $ADMIN_TOKEN"
+http_request GET "$BASE_URL/api/admin/agents/list?pageSize=50" "" "X-Admin-Token: $ADMIN_TOKEN"
 assert_eq "200" "$HTTP_CODE" "查询 admin agents 失败"
 
 existing_agent="$(print -r -- "$HTTP_BODY" | jq -c --arg name "$AGENT_NAME" '.data.list[]? | select(.name == $name)' | head -n 1 || true)"
@@ -285,8 +326,12 @@ i_body="$(jq -cn --argjson agentId "$AGENT_ID" --arg sid "$SID" '{jsonrpc:"2.0",
 send_mcp "[I] tools/call pullTasks (agent apiKey)" "$i_body" "Authorization: Bearer $AGENT_API_KEY"
 assert_eq "200" "$LAST_MCP_CODE" "I pullTasks 失败"
 PULL_TASKS_JSON="$(extract_result_text_json "$LAST_SSE_NEW_CONTENT")"
-pull_subtask_id="$(print -r -- "$PULL_TASKS_JSON" | jq -r '.messages[0].subTaskId // empty')"
-assert_eq "$SUB_TASK_ID" "$pull_subtask_id" "I pullTasks 结果里应包含目标 subTaskId"
+# 不取 messages[0]：inbox 里可能残留历史未读（如上一轮 sub_task.approved），
+# 顺序不保证本轮的 assigned 排第一 → 按 subTaskId 精确挑选目标消息。
+pull_message_id="$(print -r -- "$PULL_TASKS_JSON" | jq -r --argjson sid "$SUB_TASK_ID" '[.messages[]? | select(.subTaskId == $sid)][0].messageId // empty')"
+[[ -n "$pull_message_id" ]] || fail "I pullTasks 结果里应包含目标 subTaskId=$SUB_TASK_ID，实际: $PULL_TASKS_JSON"
+log "pullTasks 命中目标消息: $pull_message_id"
+log ""
 
 j_body="$(jq -cn --argjson agentId "$AGENT_ID" --argjson subTaskId "$SUB_TASK_ID" --arg sid "$SID" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"claimSubTask",arguments:{agentId:$agentId,subTaskId:$subTaskId,sessionId:$sid}}}')"
 send_mcp "[J] tools/call claimSubTask (agent apiKey)" "$j_body" "Authorization: Bearer $AGENT_API_KEY"
@@ -294,10 +339,10 @@ assert_eq "200" "$LAST_MCP_CODE" "J claimSubTask 失败"
 assert_contains "$LAST_SSE_NEW_CONTENT" '"id":4' "J SSE 应包含 id=4"
 assert_contains "$LAST_SSE_NEW_CONTENT" '"isError":false' "J SSE 应包含 isError=false"
 
-log "=== [K] REST start subTask -> IN_PROGRESS ==="
-http_request POST "$BASE_URL/api/sub-tasks/start/$SUB_TASK_ID" "" "X-Admin-Token: $ADMIN_TOKEN"
-assert_eq "200" "$HTTP_CODE" "K start 子任务失败"
-log "start Body: $HTTP_BODY"
+log "=== [K] claim 即开工（无需再 start）==="
+# claimSubTask([J]) 已把子任务置为 IN_PROGRESS（MCP 认领即开工），
+# 无需再调 startById（否则 IN_PROGRESS -> IN_PROGRESS 非法转换 500）。
+log "subTask 已由 claimSubTask 置为 IN_PROGRESS: subTaskId=$SUB_TASK_ID"
 log ""
 
 l_body="$(jq -cn --argjson agentId "$AGENT_ID" --arg sid "$SID" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"heartbeat",arguments:{agentId:$agentId,sessionId:$sid}}}')"
@@ -305,53 +350,78 @@ send_mcp "[L] tools/call heartbeat 2nd (agent apiKey)" "$l_body" "Authorization:
 assert_eq "200" "$LAST_MCP_CODE" "L 第二次 heartbeat 失败"
 assert_contains "$LAST_SSE_NEW_CONTENT" '"isError":false' "L SSE 应包含 isError=false"
 
-m_body="$(jq -cn --argjson agentId "$AGENT_ID" --argjson subTaskId "$SUB_TASK_ID" --arg sid "$SID" --arg storageUrl "minio://helloai-test/M5-test/$SUB_TASK_ID/result.txt" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"uploadArtifact",arguments:{agentId:$agentId,subTaskId:$subTaskId,fileName:"M5-result.txt",mimeType:"text/plain",fileSize:1024,storageUrl:$storageUrl,sessionId:$sid}}}')"
-send_mcp "[M] tools/call uploadArtifact (agent apiKey)" "$m_body" "Authorization: Bearer $AGENT_API_KEY"
-assert_eq "200" "$LAST_MCP_CODE" "M uploadArtifact 失败"
-upload_artifact_json="$(extract_result_text_json "$LAST_SSE_NEW_CONTENT")"
-attachment_id="$(print -r -- "$upload_artifact_json" | jq -r '.attachmentId // empty')"
-[[ -n "$attachment_id" ]] || fail "M 结果里应包含 attachmentId"
+log "=== [M] REST 上传产物文件内容（POST /api/artifacts/upload）==="
+# 服务器版 MinIO 仅绑内网，脚本无法直连 PUT，也就造不出「已在桶中的对象」；
+# 因此文件内容场景走平台代理上传（multipart 一步完成 store→register）。
+# 这也正是 McpMcpServer 工具描述里给外部 Agent 的口径。
+artifact_file="$RUN_DIR/M5-result.txt"
+print -r -- "M5 e2e artifact: subTaskId=$SUB_TASK_ID generated at $(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$artifact_file"
+http_multipart "$BASE_URL/api/artifacts/upload" \
+  "file=@$artifact_file;filename=M5-result.txt;type=text/plain" \
+  "subTaskId=$SUB_TASK_ID" \
+  "mimeType=text/plain" \
+  -- "Authorization: Bearer $AGENT_API_KEY"
+assert_eq "200" "$HTTP_CODE" "M 产物文件上传失败: $HTTP_BODY"
+RESULT_STORAGE_URL="$(print -r -- "$HTTP_BODY" | jq -r '.data.storageUrl // empty')"
+attachment_id="$(print -r -- "$HTTP_BODY" | jq -r '.data.attachmentId // empty')"
+[[ -n "$attachment_id" ]] || fail "M 结果里应包含 attachmentId: $HTTP_BODY"
+[[ -n "$RESULT_STORAGE_URL" ]] || fail "M 结果里应包含 storageUrl: $HTTP_BODY"
+log "attachmentId = $attachment_id"
+log "storageUrl = $RESULT_STORAGE_URL"
+log ""
+
+log "=== [M2] tools/call uploadArtifact（登记已在桶中的对象）==="
+# 承 [M]：此时对象真实存在，才能通过 AttachmentService.register 的
+# artifactStorage.exists(storageUrl) 僵尸附件守卫（G-017）。
+m2_body="$(jq -cn --argjson agentId "$AGENT_ID" --argjson subTaskId "$SUB_TASK_ID" --arg sid "$SID" --arg storageUrl "$RESULT_STORAGE_URL" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"uploadArtifact",arguments:{agentId:$agentId,subTaskId:$subTaskId,fileName:"M5-result-mcp.txt",mimeType:"text/plain",fileSize:64,storageUrl:$storageUrl,sessionId:$sid}}}')"
+send_mcp "[M2] tools/call uploadArtifact (agent apiKey)" "$m2_body" "Authorization: Bearer $AGENT_API_KEY"
+assert_eq "200" "$LAST_MCP_CODE" "M2 uploadArtifact 失败"
+assert_contains "$LAST_SSE_NEW_CONTENT" '"isError":false' "M2 SSE 应包含 isError=false"
+m2_json="$(extract_result_text_json "$LAST_SSE_NEW_CONTENT")" || fail "M2 未解析到结果 JSON: $LAST_SSE_NEW_CONTENT"
+m2_attachment_id="$(print -r -- "$m2_json" | jq -r '.attachmentId // empty')"
+[[ -n "$m2_attachment_id" ]] || fail "M2 结果里应包含 attachmentId: $m2_json"
+log "mcp attachmentId = $m2_attachment_id"
+log ""
 
 log "=== [N] tools/call ack (mark inbox as read) ==="
-inbox_id="$(print -r -- "$PULL_TASKS_JSON" | jq -r '.messages[0].messageId // empty' | sed 's/^inbox-//')"
-[[ -n "$inbox_id" ]] || fail "未能从 SSE 日志中解析 inboxId"
-n_body="$(jq -cn --argjson agentId "$AGENT_ID" --arg messageId "inbox-$inbox_id" --arg sid "$SID" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"ack",arguments:{agentId:$agentId,messageId:$messageId,sessionId:$sid}}}')"
+# 复用 [I] 按 subTaskId 挑出的目标消息，避免误 ack 历史未读
+n_body="$(jq -cn --argjson agentId "$AGENT_ID" --arg messageId "$pull_message_id" --arg sid "$SID" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"ack",arguments:{agentId:$agentId,messageId:$messageId,sessionId:$sid}}}')"
 send_mcp "[N] tools/call ack (agent apiKey)" "$n_body" "Authorization: Bearer $AGENT_API_KEY"
 assert_eq "200" "$LAST_MCP_CODE" "N ack 失败"
 assert_contains "$LAST_SSE_NEW_CONTENT" '"isError":false' "N SSE 应包含 isError=false"
 
 log "=== [O] REST submit subTask -> REVIEW ==="
-http_request POST "$BASE_URL/api/sub-tasks/submit/$SUB_TASK_ID" "" "X-Admin-Token: $ADMIN_TOKEN"
+http_request POST "$BASE_URL/api/sub-tasks/submitById/$SUB_TASK_ID" "" "X-Admin-Token: $ADMIN_TOKEN"
 assert_eq "200" "$HTTP_CODE" "O submit 子任务失败"
 log "submit Body: $HTTP_BODY"
 log ""
 
 log "=== [P] REST complete subTask -> DONE ==="
-http_request POST "$BASE_URL/api/sub-tasks/complete/$SUB_TASK_ID" "" "X-Admin-Token: $ADMIN_TOKEN"
+http_request POST "$BASE_URL/api/sub-tasks/completeById/$SUB_TASK_ID" "" "X-Admin-Token: $ADMIN_TOKEN"
 assert_eq "200" "$HTTP_CODE" "P complete 子任务失败"
 log "complete Body: $HTTP_BODY"
 log ""
 
 log "=== [Q] admin GET agent detail ==="
-http_request GET "$BASE_URL/api/admin/agents/$AGENT_ID" "" "X-Admin-Token: $ADMIN_TOKEN"
+http_request GET "$BASE_URL/api/admin/agents/getById/$AGENT_ID" "" "X-Admin-Token: $ADMIN_TOKEN"
 assert_eq "200" "$HTTP_CODE" "Q 查询 agent 详情失败"
-last_activity="$(print -r -- "$HTTP_BODY" | jq -r '.data.lastActivityAt // .data.lastActiveAt // empty')"
+last_activity="$(print -r -- "$HTTP_BODY" | jq -r '.data.lastActivityAt // .data.lastRequestAt // empty')"
 [[ -n "$last_activity" ]] || fail "Q 未看到 lastActivityAt/lastActiveAt 被刷新"
 log "lastActivityAt = $last_activity"
 log ""
 
 log "=== [R] admin GET subTask status ==="
-http_request GET "$BASE_URL/api/sub-tasks/$SUB_TASK_ID" "" "X-Admin-Token: $ADMIN_TOKEN"
+http_request GET "$BASE_URL/api/sub-tasks/getById/$SUB_TASK_ID" "" "X-Admin-Token: $ADMIN_TOKEN"
 assert_eq "200" "$HTTP_CODE" "R 查询 subTask 详情失败"
 subtask_status="$(print -r -- "$HTTP_BODY" | jq -r '.data.status // empty')"
 assert_eq "DONE" "$subtask_status" "R subTask 最终状态应为 DONE"
 log "subTask status = $subtask_status"
 log ""
 
-log "=== [S] HTTP GET /api/agent/inbox/count ==="
-http_request GET "$BASE_URL/api/agent/inbox/count" "" "Authorization: Bearer $AGENT_API_KEY"
-assert_eq "200" "$HTTP_CODE" "S inbox/count 查询失败"
-log "inbox/count Body: $HTTP_BODY"
+log "=== [S] HTTP GET /api/agent/inbox/getUnreadCount ==="
+http_request GET "$BASE_URL/api/agent/inbox/getUnreadCount" "" "Authorization: Bearer $AGENT_API_KEY"
+assert_eq "200" "$HTTP_CODE" "S inbox 未读数查询失败"
+log "inbox unread Body: $HTTP_BODY"
 log ""
 
 cat >"$PSQL_SNAPSHOT_FILE" <<EOF
