@@ -2,6 +2,7 @@ package com.helloai.core.task.service;
 
 import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.agent.event.AgentEventRecorder;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
@@ -89,6 +90,8 @@ class SubTaskServiceHandoverTest {
     // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（换派用例不触达，防 NPE）
     @Mock private ObjectProvider<TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
+    /** G-006：外部执行 attempt 收口（状态退出时懒取；mock 默认返回 null ⇒ 静默跳过）。 */
+    @Mock private ObjectProvider<AgentExecutionRecordService> agentExecutionRecordServiceProvider;
     // 共享预算原子累加 mapper（rework 预算消费 / reworkFresh 清零）
     @Mock private SubTaskMapper subTaskMapper;
     // 执行会话服务（换派用例不触达，仅防 NPE）
@@ -110,7 +113,7 @@ class SubTaskServiceHandoverTest {
                 // 租约看门狗配置（changeStatus 进 IN_PROGRESS 时会读，默认值即可）
                 new WatchdogProperties(), taskTimelineService, agentServiceProvider,
                 attachmentServiceProvider, agentEventRecorder, implicitScoreCalculator,
-                rewardService, reviewPort, applicationEventPublisher);
+                rewardService, reviewPort, applicationEventPublisher, agentExecutionRecordServiceProvider);
         SubTaskLeaseService leaseService = mock(SubTaskLeaseService.class);
         subTaskService = new SubTaskServiceImpl(
                 subTaskMapper, queryService, stateMachineService, leaseService);

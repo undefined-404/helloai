@@ -6,6 +6,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.WatchdogProperties;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.RetryPolicy;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TimelineEventCode;
@@ -15,6 +16,7 @@ import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.service.AgentOutboxService;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.agent.service.HeartbeatService;
@@ -40,6 +42,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.OffsetDateTime;
 import java.util.HashMap;
@@ -98,6 +102,8 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
     private final RewardService rewardService;
     private final ReviewPort reviewPort;
     private final ApplicationEventPublisher applicationEventPublisher;
+    /** G-006：外部执行 attempt 收口（懒解析，审计旁路，不得参与状态机构造依赖图）。 */
+    private final ObjectProvider<AgentExecutionRecordService> agentExecutionRecordServiceProvider;
 
     // ══════════════════════════════════════════════════════════════
     //  状态迁移唯一入口
@@ -148,6 +154,10 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
             throw new BizException("并发修改，请重试");
         }
 
+        // G-006：子任务离开「执行中」时收口外部执行 attempt（审计面，AFTER_COMMIT 执行、失败仅告警）。
+        // 位置在落库成功后、事件序之前——收口属旁路审计，不参与 outbox/inbox/交接通知的事件序契约。
+        closeExternalAttemptOnExit(subTaskId, newStatus);
+
         agentOutboxService.createEvent(toSnapshot(subTask), newStatus);
 
         // 投递收件箱通知
@@ -162,6 +172,87 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
 
         log.info("子任务状态变更: subTaskId={}, from={}, to={}, agentId={}",
                 subTaskId, oldStatus, newStatus, agentId);
+    }
+
+    /**
+     * G-006：状态退出 → 外部执行 attempt 终态映射（纯函数，单测直接覆盖）。
+     *
+     * <p><b>为什么由状态机兜底而不是只在提交入口收口</b>：外部 attempt 的「非正常结束」
+     * 有至少四条互不相通的路径——2 小时无更新转 BLOCKED、租约过期收回 PENDING、
+     * 人工取消、死信。逐条埋点会漏；统一挂在「状态已离开执行中」这个唯一写入口，
+     * 才能保证不漏行。</p>
+     *
+     * <p><b>为什么 PAUSED 不收口</b>：暂停是「可原地续跑」的中间态，attempt 语义上仍然开着；
+     * 续跑（resume → IN_PROGRESS）不应被当成一次新的执行尝试。</p>
+     *
+     * @return 终态；{@code null} = 该状态不需要收口
+     */
+    static ExecutionStatus externalExitStatus(SubTaskStatus newStatus) {
+        if (newStatus == null) {
+            return null;
+        }
+        return switch (newStatus) {
+            // 提交核验 / 直接完成：执行侧确实交付了
+            case REVIEW, DONE -> ExecutionStatus.SUCCESS;
+            // 超时转阻塞 / 租约收回：执行者没交付也没上报 ⇒ attempt 超时
+            case BLOCKED, PENDING -> ExecutionStatus.TIMEOUT;
+            // 人工取消 / 死信：执行被终止，不是时间问题
+            case CANCELLED, DEAD_LETTER -> ExecutionStatus.FAILED;
+            // IN_PROGRESS（开工/续跑）、PAUSED（可续）以及其余中间态不收口
+            default -> null;
+        };
+    }
+
+    /** 收口原因码（写进 {@code agent_execution_record.error_msg}，便于按原因聚合排查）。 */
+    private static String externalExitReason(SubTaskStatus newStatus) {
+        return switch (newStatus) {
+            case BLOCKED -> "blocked_before_submit";
+            case PENDING -> "reclaimed_lease_expired";
+            case CANCELLED -> "cancelled";
+            case DEAD_LETTER -> "dead_letter";
+            default -> "external_exit";
+        };
+    }
+
+    /**
+     * G-006：外部执行 attempt 收口（AFTER_COMMIT + best-effort）。
+     *
+     * <p><b>为什么 AFTER_COMMIT</b>：收口写在状态迁移事务内，若这条审计 UPDATE 失败，
+     * PostgreSQL 会 aborted 整个事务——状态迁移本身被一条观测写拖回滚，代价远大于收益。
+     * 提交后再写，状态才是唯一事实源，审计失败只丢一行。</p>
+     */
+    private void closeExternalAttemptOnExit(Long subTaskId, SubTaskStatus newStatus) {
+        ExecutionStatus terminal = externalExitStatus(newStatus);
+        if (terminal == null) {
+            return;
+        }
+        final String reason = externalExitReason(newStatus);
+        Runnable close = () -> {
+            try {
+                AgentExecutionRecordService service = agentExecutionRecordServiceProvider.getIfAvailable();
+                if (service == null) {
+                    return;
+                }
+                int closed = service.closeExternalAttempt(subTaskId, terminal, reason, null);
+                if (closed > 0) {
+                    log.debug("外部执行 attempt 随状态退出收口: subTaskId={}, to={}, terminal={}",
+                            subTaskId, newStatus, terminal);
+                }
+            } catch (Exception e) {
+                log.warn("外部执行 attempt 收口失败（审计 write-only，不影响状态流转）: subTaskId={}, to={}, err={}",
+                        subTaskId, newStatus, e.getMessage());
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    close.run();
+                }
+            });
+        } else {
+            close.run();
+        }
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -233,7 +324,12 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
         subTask.setAssignedAgentId(null);
         subTask.setOwner(null);
         subTask.setLeaseUntil(null);
-        return subTaskMapper.updateById(subTask) > 0;
+        boolean updated = subTaskMapper.updateById(subTask) > 0;
+        if (updated) {
+            // G-006：租约过期回收 = 外部执行被平台收回，attempt 不得停在 RUNNING
+            closeExternalAttemptOnExit(subTask.getId(), SubTaskStatus.PENDING);
+        }
+        return updated;
     }
 
     @Transactional(rollbackFor = Exception.class)

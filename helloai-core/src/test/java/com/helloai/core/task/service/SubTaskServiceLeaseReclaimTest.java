@@ -5,6 +5,7 @@ import com.helloai.common.config.WatchdogProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.event.AgentEventRecorder;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
@@ -73,6 +74,8 @@ class SubTaskServiceLeaseReclaimTest {
     @Mock private ObjectProvider<com.helloai.core.task.service.AttachmentService> attachmentServiceProvider;
     @Mock private ObjectProvider<com.helloai.core.task.service.TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
+    /** G-006：外部执行 attempt 收口（状态退出时懒取；mock 默认返回 null ⇒ 静默跳过）。 */
+    @Mock private ObjectProvider<AgentExecutionRecordService> agentExecutionRecordServiceProvider;
     @Mock private SubTaskMapper subTaskMapper;
     @Mock private AgentSessionService agentSessionService;
 
@@ -89,7 +92,7 @@ class SubTaskServiceLeaseReclaimTest {
                 concurrencyQuotaService, new AgentDispatchProperties(), new WatchdogProperties(),
                 taskTimelineService, agentServiceProvider, attachmentServiceProvider,
                 agentEventRecorder, implicitScoreCalculator, rewardService, reviewPort,
-                applicationEventPublisher);
+                applicationEventPublisher, agentExecutionRecordServiceProvider);
         SubTaskLeaseService leaseService = new SubTaskLeaseServiceImpl(
                 subTaskMapper, taskTimelineService, agentSessionService, stateMachineService);
         subTaskService = new SubTaskServiceImpl(

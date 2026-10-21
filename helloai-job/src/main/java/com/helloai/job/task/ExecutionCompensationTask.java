@@ -62,6 +62,15 @@ public class ExecutionCompensationTask {
                 .listByStatusStartedBefore(ExecutionStatus.RUNNING, now.minus(runningTimeout));
 
         for (AgentExecutionRecord record : runningStuck) {
+            // G-006：外部路径的 RUNNING 行由「租约回收 / 2 小时超时 / 状态退出」收口，
+            // 不走本补偿。原因：本任务的判定是「平台内执行命令超过 runningTimeoutMinutes」，
+            // 而外部 Agent 的合法执行时长由租约与人工节奏决定；一旦在这里按 10 分钟判超时，
+            // 会直接把仍在外部执行的子任务打成 BLOCKED（外部执行者毫不知情）。
+            if (!isPlatformExecution(record)) {
+                log.debug("跳过外部执行记录的 RUNNING 超时补偿: subTaskId={}, accessType={}",
+                        record.getSubTaskId(), record.getAccessType());
+                continue;
+            }
             log.error("Execution RUNNING timeout: eventId={}, subTaskId={}",
                     record.getEventId(), record.getSubTaskId());
             compensateRecordAtomically(
@@ -74,6 +83,16 @@ public class ExecutionCompensationTask {
             log.info("执行记录补偿: PENDING超时={}, RUNNING超时={}",
                     pendingStuck.size(), runningStuck.size());
         }
+    }
+
+    /**
+     * 是否为平台内执行（{@code API_KEY_LLM}）。
+     *
+     * <p>{@code access_type} 为空的历史行按平台内处理——保持引入 G-006 外部 attempt 之前的行为，
+     * 避免把存量行误判成外部执行而永久跳过补偿。</p>
+     */
+    private static boolean isPlatformExecution(AgentExecutionRecord record) {
+        return record.getAccessType() == null || record.getAccessType() == AgentAccessType.API_KEY_LLM;
     }
 
     private void compensateRecordAtomically(AgentExecutionRecord record, String errorMessage) {

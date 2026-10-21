@@ -3,6 +3,7 @@ package com.helloai.core.agent.service.impl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
+import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.WorkMode;
 import com.helloai.core.agent.AgentSkillDeriver;
@@ -18,6 +19,7 @@ import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.ActivityLogService;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.McpAgentReportService;
@@ -37,6 +39,8 @@ import com.helloai.core.system.service.LlmProviderModelQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -78,6 +82,8 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
     private final SubmissionActivityRecorder submissionActivityRecorder;
     private final SubTaskQueryPort subTaskQueryPort;
     private final SubTaskCommandPort subTaskCommandPort;
+    /** G-006：外部执行 attempt 收口（agent_execution_record 外部路径对齐）。 */
+    private final AgentExecutionRecordService agentExecutionRecordService;
     /**
      * `QA-M9-03`（2026-10-15）：checkIn 自报技能的能力校验依赖。
      *
@@ -225,6 +231,12 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
         report.setOutput(output);
         report.setError(error);
 
+        // G-006：外部执行 attempt 收口（AFTER_COMMIT，见 closeAttemptAfterCommit 说明）。
+        // 必须在 handleReport 之前注册：子任务状态迁移自身也注册了「退出即收口」兜底回调，
+        // 而后注册者后执行 —— 本处注册在前，才能在「提交成功/失败」与「状态退出」两条
+        // 收口路径同时命中时，让**语义更准确**的这一条（SUCCESS / FAILED + 原因 + token）先生效。
+        registerExternalAttemptClose(subTaskId, success, error, tokenUsage);
+
         ExecutionResultHandler.ExecutionResultApplyResult applyResult = executionResultHandler.handleReport(report);
 
         heartbeatService.active(agentId);
@@ -245,6 +257,44 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
         r.setSubTaskId(subTaskId);
         r.setResultId(resultId);
         return r;
+    }
+
+    /**
+     * G-006：外部执行 attempt 收口（成功 → SUCCESS，失败 → FAILED）。
+     *
+     * <p><b>为什么挂在 AFTER_COMMIT</b>：{@code McpToolServiceImpl.submitResult} 带
+     * {@code @Transactional}，整条链共用一个事务——收口若以 {@code REQUIRED} 直接写入，
+     * 一旦这条审计写失败，PostgreSQL 会把事务标记 aborted，外层 catch 也拦不住整体回滚
+     * （{@code SubmissionActivityRecorder} 已踩过同款坑）。提交后再写则：
+     * 业务结果已定，审计失败只损失一行观测数据。</p>
+     *
+     * <p><b>失败只告警</b>：执行记录属观测面，不得因它让 Agent 的提交失败。</p>
+     */
+    private void registerExternalAttemptClose(Long subTaskId, Boolean success, String error, Integer tokenUsage) {
+        final ExecutionStatus terminal =
+                Boolean.TRUE.equals(success) ? ExecutionStatus.SUCCESS : ExecutionStatus.FAILED;
+        final String reason = (error != null && !error.isBlank()) ? error : "submit_failed";
+        final Runnable close = () -> {
+            try {
+                int closed = agentExecutionRecordService.closeExternalAttempt(subTaskId, terminal, reason, tokenUsage);
+                if (closed > 0) {
+                    log.debug("外部执行 attempt 收口: subTaskId={}, terminal={}", subTaskId, terminal);
+                }
+            } catch (Exception e) {
+                log.warn("外部执行 attempt 收口失败（审计 write-only，不影响提交）: subTaskId={}, terminal={}, err={}",
+                        subTaskId, terminal, e.getMessage());
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    close.run();
+                }
+            });
+        } else {
+            close.run();
+        }
     }
 
     /**

@@ -142,11 +142,23 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
                 .in(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING, ExecutionStatus.RUNNING));
     }
 
+    /**
+     * 子任务是否存在<b>平台内</b>的 PENDING/RUNNING 记录（防重复发命令）。
+     *
+     * <p><b>G-006 口径收窄</b>：本方法的原始语义是「这条子任务是否已有一条<b>待消费/执行中的执行命令</b>」，
+     * 用来挡住 {@code ExecutionCommandService} / 管理端 {@code execute} 的重复派发。
+     * 外部路径的 attempt 行由认领动作顺带落库（{@code McpTaskClaimServiceImpl}），
+     * <b>它不对应任何平台命令</b>——若把它算进来，外部 Agent 领了任务就再也无法被
+     * 「阈值回退 / 人工改派」重新派给平台 LLM，也会让暂停后的管理端重跑被误挡。
+     * 故只统计 {@code access_type} 为空（历史行）或 {@code API_KEY_LLM} 的记录。</p>
+     */
     @Override
     public boolean hasPendingOrRunning(Long subTaskId) {
         return lambdaQuery()
                 .eq(AgentExecutionRecord::getSubTaskId, subTaskId)
                 .in(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING, ExecutionStatus.RUNNING)
+                .and(w -> w.isNull(AgentExecutionRecord::getAccessType)
+                        .or().eq(AgentExecutionRecord::getAccessType, AgentAccessType.API_KEY_LLM))
                 .count() > 0;
     }
 
@@ -245,5 +257,99 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
             log.debug("成本画像查询异常（按无成本数据处理）: agentId={}, err={}", agentId, e.getMessage());
             return null;
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  G-006 外部执行轨迹对齐：外部 attempt 生命周期
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 开启外部执行 attempt（RUNNING，幂等）。见接口 javadoc 的语义说明。
+     *
+     * <p>并发下的「重复开行」由调用侧顺序兜住：认领/开工均为单次调用路径，
+     * 且本方法先查 open 记录再插入；即便极端并发插入两行，收口时也会一并关闭
+     * （{@link #closeExternalAttempt} 关闭<b>全部</b> open 行），不会留下永久 RUNNING 行。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AgentExecutionRecord openExternalAttempt(Long subTaskId, Long agentId,
+                                                    AgentAccessType accessType, String trigger, String workerNode) {
+        if (subTaskId == null) {
+            return null;
+        }
+        // 平台内执行（API_KEY_LLM）由派发链 createPending/markRunning 建行；此处不越界
+        if (accessType == AgentAccessType.API_KEY_LLM) {
+            return null;
+        }
+        AgentExecutionRecord open = findOpenAttempt(subTaskId);
+        if (open != null) {
+            return open;
+        }
+        AgentExecutionRecord record = new AgentExecutionRecord();
+        // eventId 语义：外部路径无 MQ event，用「子任务 + 时间戳」保证同子任务多轮 attempt 互异
+        record.setEventId("ext-" + subTaskId + "-" + System.currentTimeMillis());
+        record.setSubTaskId(subTaskId);
+        record.setAgentId(agentId);
+        record.setAccessType(accessType);
+        record.setTriggerType(trigger);
+        record.setStatus(ExecutionStatus.RUNNING);
+        record.setStartTime(OffsetDateTime.now());
+        record.setRetryCount(0);
+        // worker_node 为 varchar(64)：外部执行者名来自 Agent 名（用户可改），先截断再落库，
+        // 否则超长名称会让整条审计写入失败
+        String node = (workerNode != null && !workerNode.isBlank())
+                ? workerNode : HostNameUtils.getHostName();
+        record.setWorkerNode(node.length() > 64 ? node.substring(0, 64) : node);
+        save(record);
+        log.debug("外部执行 attempt 开启: subTaskId={}, agentId={}, accessType={}, trigger={}",
+                subTaskId, agentId, accessType, trigger);
+        return record;
+    }
+
+    /**
+     * 收口外部路径 open attempt。逐条走既有 CAS（{@code markSuccess/markFailed/markTimeout}），
+     * 因此与补偿任务/派发链并发时不会双写终态。
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int closeExternalAttempt(Long subTaskId, ExecutionStatus terminal, String errorMsg, Integer tokenUsage) {
+        if (subTaskId == null || terminal == null
+                || terminal == ExecutionStatus.PENDING || terminal == ExecutionStatus.RUNNING) {
+            return 0;
+        }
+        List<AgentExecutionRecord> open = lambdaQuery()
+                .eq(AgentExecutionRecord::getSubTaskId, subTaskId)
+                .in(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING, ExecutionStatus.RUNNING)
+                // 只收口外部路径：平台内记录由派发链/补偿任务自己收尾（access_type 历史行可能为 NULL）
+                .and(w -> w.ne(AgentExecutionRecord::getAccessType, AgentAccessType.API_KEY_LLM)
+                        .or().isNull(AgentExecutionRecord::getAccessType))
+                .list();
+        int closed = 0;
+        for (AgentExecutionRecord record : open) {
+            boolean ok = switch (terminal) {
+                case SUCCESS -> markSuccess(record.getId(), tokenUsage);
+                case FAILED -> markFailed(record.getId(),
+                        errorMsg != null && !errorMsg.isBlank() ? errorMsg : "external_attempt_failed", tokenUsage);
+                case TIMEOUT -> markTimeout(record.getId());
+                default -> false;
+            };
+            if (ok) {
+                closed++;
+            }
+        }
+        if (closed > 0) {
+            log.debug("外部执行 attempt 收口: subTaskId={}, terminal={}, closed={}", subTaskId, terminal, closed);
+        }
+        return closed;
+    }
+
+    /** 查该子任务当前的 open attempt（PENDING/RUNNING，任一路径）。 */
+    private AgentExecutionRecord findOpenAttempt(Long subTaskId) {
+        return lambdaQuery()
+                .eq(AgentExecutionRecord::getSubTaskId, subTaskId)
+                .in(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING, ExecutionStatus.RUNNING)
+                .orderByDesc(AgentExecutionRecord::getId)
+                .last("LIMIT 1")
+                .one();
     }
 }

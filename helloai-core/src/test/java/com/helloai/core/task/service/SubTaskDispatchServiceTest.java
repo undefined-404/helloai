@@ -75,6 +75,10 @@ class SubTaskDispatchServiceTest {
     @Mock
     private TaskService taskService;
 
+    /** G-015：无可用候选时推送独立告警（mock 后不影响「不消耗重派预算」的断言）。 */
+    @Mock
+    private com.helloai.core.agent.service.CircuitBreakerAlertService alertService;
+
     @InjectMocks
     private SubTaskDispatchServiceImpl subTaskDispatchService;
 

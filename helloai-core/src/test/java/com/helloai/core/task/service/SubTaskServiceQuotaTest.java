@@ -7,6 +7,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.WatchdogProperties;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.event.AgentEventRecorder;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
@@ -30,6 +31,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -83,6 +85,8 @@ class SubTaskServiceQuotaTest {
     // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（quota 用例不触达，防 NPE）
     @Mock private org.springframework.beans.factory.ObjectProvider<TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
+    /** G-006：外部执行 attempt 收口（状态退出时懒取；mock 默认返回 null ⇒ 静默跳过）。 */
+    @Mock private ObjectProvider<AgentExecutionRecordService> agentExecutionRecordServiceProvider;
     // 共享预算原子累加 mapper（状态机行读写谓词，quota 用例经状态机触达）
     @Mock private SubTaskMapper subTaskMapper;
     // 执行会话服务（quota 用例不触达，仅防 NPE）
@@ -106,7 +110,7 @@ class SubTaskServiceQuotaTest {
                 // 租约看门狗配置（assignNext 不涉及租约，默认值即可）
                 new WatchdogProperties(), taskTimelineService, agentServiceProvider,
                 attachmentServiceProvider, agentEventRecorder, implicitScoreCalculator,
-                rewardService, reviewPort, applicationEventPublisher));
+                rewardService, reviewPort, applicationEventPublisher, agentExecutionRecordServiceProvider));
         SubTaskLeaseService leaseService = mock(SubTaskLeaseService.class);
         subTaskService = new SubTaskServiceImpl(
                 subTaskMapper, queryService, stateMachineService, leaseService);

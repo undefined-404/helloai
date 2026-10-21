@@ -51,7 +51,11 @@ public interface AgentExecutionRecordService extends IService<AgentExecutionReco
     boolean markTimeout(Long id);
 
     /**
-     * 子任务是否存在 PENDING/RUNNING 记录（防重复消费）。
+     * 子任务是否存在<b>平台内</b>的 PENDING/RUNNING 记录（防重复消费）。
+     *
+     * <p>只统计 {@code access_type} 为空或 {@link AgentAccessType#API_KEY_LLM} 的行：
+     * 外部路径的 attempt 记录由认领动作写入，不对应任何平台执行命令，
+     * 不应参与「重复发命令」与「重复执行」的防重判定（详见实现类注释）。</p>
      */
     boolean hasPendingOrRunning(Long subTaskId);
 
@@ -123,4 +127,50 @@ public interface AgentExecutionRecordService extends IService<AgentExecutionReco
      * @param limit   取样条数（最近 N 次成功执行）；&le; 0 时按默认 1 处理
      */
     Integer averageRecentSuccessTokens(Long agentId, int limit);
+
+    // ══════════════════════════════════════════════════════════════
+    //  G-006 外部执行轨迹对齐：外部路径 attempt 生命周期
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 开启一次<b>外部</b>执行 attempt（直接落 {@code RUNNING}），幂等。
+     *
+     * <p><b>为什么要这个方法</b>：{@code agent_execution_record} 此前只由平台内 MQ 派发链
+     * （{@link #createPending} → {@link #markRunning}）写入，外部 Agent（CLI_CLIENT /
+     * WEB_BROWSER）认领后本地执行、平台侧无对应行 ⇒ 成本画像、执行审计、
+     * 「同子任务是否仍有人在跑」三类判断对外部路径全部为空白。</p>
+     *
+     * <p><b>为什么直接 RUNNING 而不是 PENDING</b>：外部路径没有「命令投递 → 消费」两段，
+     * 认领成功那一刻就是执行起点；落 PENDING 会被 {@code ExecutionCommandPoller} 当成
+     * 待投递命令重复派发。</p>
+     *
+     * <p><b>幂等</b>：同一子任务已有 {@code PENDING}/{@code RUNNING} 记录时直接返回既有行
+     * （Agent 重连、重复认领、返工后重新开工都不重复计数）。{@code accessType} 为
+     * {@link AgentAccessType#API_KEY_LLM} 时不开启（平台内 attempt 由派发链自己建行）。</p>
+     *
+     * @param subTaskId  子任务
+     * @param agentId    执行者
+     * @param accessType 执行者接入类型（决定是否属于「外部路径」）
+     * @param trigger    触发标记（如 {@code mcp-claim} / {@code mcp-start}）
+     * @param workerNode 执行节点标识（外部执行者无平台主机名，传 {@code external:<agentName>}）
+     * @return 开启（或已存在）的记录；{@code subTaskId} 为空或不属外部路径时返回 {@code null}
+     */
+    AgentExecutionRecord openExternalAttempt(Long subTaskId, Long agentId,
+                                             AgentAccessType accessType, String trigger, String workerNode);
+
+    /**
+     * 收口外部路径的 open attempt（{@code PENDING}/{@code RUNNING} → 终态），只作用于
+     * <b>非</b> {@link AgentAccessType#API_KEY_LLM} 的记录。
+     *
+     * <p>平台内记录由派发链自己的 CAS（{@code applyResultAtomically} /
+     * {@code ExecutionCompensationTask}）收尾，本方法不得越界改写它们。</p>
+     *
+     * @param subTaskId  子任务
+     * @param terminal   终态（{@code SUCCESS} / {@code FAILED} / {@code TIMEOUT}）；
+     *                   传 {@code PENDING}/{@code RUNNING}/null 视为无效，返回 0
+     * @param errorMsg   失败/超时原因（{@code SUCCESS} 时可空）
+     * @param tokenUsage 外部执行者回报的 token 用量（可为 null）
+     * @return 实际收口条数（0 表示无 open attempt，属正常幂等结果）
+     */
+    int closeExternalAttempt(Long subTaskId, ExecutionStatus terminal, String errorMsg, Integer tokenUsage);
 }

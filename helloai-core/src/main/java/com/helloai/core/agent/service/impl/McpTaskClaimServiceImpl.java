@@ -16,6 +16,7 @@ import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.service.AgentInboxService;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.HeartbeatService;
@@ -62,6 +63,11 @@ public class McpTaskClaimServiceImpl implements McpTaskClaimService {
     private final TaskTimelinePort taskTimelinePort;
     /** 认领成功路径复用只读簇的详情组装（跨类唯一依赖，单向无环）。 */
     private final McpReadModelService readModelService;
+    /**
+     * G-006：外部执行轨迹对齐 —— 认领/开工即开启 {@code agent_execution_record} 的 attempt。
+     * 此前该表只由平台内 MQ 派发链写入，外部 Agent 执行在审计/成本画像里完全空白。
+     */
+    private final AgentExecutionRecordService agentExecutionRecordService;
 
     /**
      * 拉取 Agent 的收件箱消息。
@@ -181,6 +187,8 @@ public class McpTaskClaimServiceImpl implements McpTaskClaimService {
             // startSubTask 同款路径），刷新 update_time，让超时巡检不再扫到它。
             if (subTask.status() == SubTaskStatus.ASSIGNED) {
                 subTaskCommandPort.start(subTaskId);
+                // G-006：认领即开工 = 外部执行 attempt 起点（幂等，重连不重复计数）
+                openExternalAttempt(subTaskId, agentId, "mcp-claim");
                 SubTaskSnapshot started = subTaskQueryPort.findById(subTaskId);
                 ClaimSubTaskResult result = new ClaimSubTaskResult();
                 result.setOk(true);
@@ -198,6 +206,8 @@ public class McpTaskClaimServiceImpl implements McpTaskClaimService {
             result.setAssignedAgent(agentId);
             result.setSubTaskId(subTaskId);
             result.setVersion(subTask.version());
+            // G-006：已在执行中的重复认领 —— attempt 缺失时补开（平台重启/记录丢失后重连仍可对齐）
+            openExternalAttempt(subTaskId, agentId, "mcp-claim-resume");
             // 幂等路径同样下发详情：重连 / 重复认领后执行者仍需拿到验收标准与执行边界
             result.setDetail(readModelService.buildSubTaskDetail(subTask));
             return result;
@@ -270,6 +280,9 @@ public class McpTaskClaimServiceImpl implements McpTaskClaimService {
         }
 
         heartbeatService.active(agentId);
+
+        // G-006：外部执行 attempt 起点（与 AGENT_STARTED 埋点同址，审计面与事件面同时开线）
+        openExternalAttempt(subTaskId, agentId, "mcp-claim");
 
         // 重新读取获取最新 version
         SubTaskSnapshot updated = subTaskQueryPort.findById(subTaskId);
@@ -344,6 +357,8 @@ public class McpTaskClaimServiceImpl implements McpTaskClaimService {
         }
 
         subTaskCommandPort.start(subTaskId);
+        // G-006：返工/暂停后续跑同样是一次外部 attempt 起点（幂等，已有 open 行则复用）
+        openExternalAttempt(subTaskId, agentId, "mcp-start");
         SubTaskSnapshot updated = subTaskQueryPort.findById(subTaskId);
         result.setOk(true);
         result.setStarted(true);
@@ -352,6 +367,30 @@ public class McpTaskClaimServiceImpl implements McpTaskClaimService {
         result.setVersion(updated != null ? updated.version() : subTask.version() + 1);
         log.info("MCP 子任务开工: subTaskId={}, agentId={}, from={}", subTaskId, agentId, subTask.status());
         return result;
+    }
+
+    /**
+     * G-006：开启外部执行 attempt（{@code agent_execution_record} RUNNING，幂等）。
+     *
+     * <p><b>为什么在这里开行</b>：外部 Agent 的「认领/开工」是平台唯一能观测到的执行起点，
+     * 此前该表只由平台内 MQ 派发链写入 ⇒ 外部路径 0 行，成本画像与执行审计双双空白。</p>
+     *
+     * <p><b>失败只告警不阻断</b>：审计面缺行不应让 Agent 领不到任务（与 AGENT_STARTED
+     * 埋点同款降级范式）。但这里不吞异常地静默——记 WARN 且保留 subTaskId/agentId，
+     * 便于按日志补偿。</p>
+     */
+    private void openExternalAttempt(Long subTaskId, Long agentId, String trigger) {
+        try {
+            Agent agent = agentService.getById(agentId);
+            agentExecutionRecordService.openExternalAttempt(
+                    subTaskId, agentId,
+                    agent != null ? agent.getAccessType() : null,
+                    trigger,
+                    agent != null ? "external:" + agent.getName() : null);
+        } catch (Exception e) {
+            log.warn("外部执行 attempt 开启失败（审计 write-only，不影响认领）: subTaskId={}, agentId={}, trigger={}, err={}",
+                    subTaskId, agentId, trigger, e.getMessage());
+        }
     }
 
     /**

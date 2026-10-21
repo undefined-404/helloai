@@ -125,12 +125,12 @@ class McpToolServiceTest {
         McpAgentReportService agentReportService = new McpAgentReportServiceImpl(
                 agentService, heartbeatService, agentDutyLeaseService, attachmentPort,
                 executionResultHandler, activityLogService, submissionActivityRecorder,
-                subTaskQueryPort, subTaskCommandPort,
+                subTaskQueryPort, subTaskCommandPort, agentExecutionRecordService,
                 skillPackageCatalog, llmProviderModelQueryService);
         McpTaskClaimService taskClaimService = new McpTaskClaimServiceImpl(
                 agentService, agentInboxService, agentMcpServerService, subTaskQueryPort,
                 subTaskCommandPort, heartbeatService, agentEventRecorder, taskTimelinePort,
-                readModelService);
+                readModelService, agentExecutionRecordService);
         mcpToolService = new McpToolServiceImpl(
                 agentService, agentMcpServerService, heartbeatService, agentDutyLeaseService,
                 taskClaimService, agentReportService, readModelService);

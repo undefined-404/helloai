@@ -6,6 +6,7 @@ import com.helloai.common.config.WatchdogProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.event.AgentEventRecorder;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
@@ -84,6 +85,8 @@ class SubTaskServiceReworkBudgetTest {
     // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（rework 用例不触达，防 NPE）
     @Mock private ObjectProvider<TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
+    /** G-006：外部执行 attempt 收口（状态退出时懒取；mock 默认返回 null ⇒ 静默跳过）。 */
+    @Mock private ObjectProvider<AgentExecutionRecordService> agentExecutionRecordServiceProvider;
     @Mock private SubTaskMapper subTaskMapper;
     // 执行会话服务（rework 用例不触达，仅防 NPE）
     @Mock private AgentSessionService agentSessionService;
@@ -103,7 +106,7 @@ class SubTaskServiceReworkBudgetTest {
                 subTaskMapper, notificationService, agentOutboxService, heartbeatService,
                 concurrencyQuotaService, dispatchProps, new WatchdogProperties(), taskTimelineService,
                 agentServiceProvider, attachmentServiceProvider, agentEventRecorder,
-                implicitScoreCalculator, rewardService, reviewPort, applicationEventPublisher));
+                implicitScoreCalculator, rewardService, reviewPort, applicationEventPublisher, agentExecutionRecordServiceProvider));
         SubTaskLeaseService leaseService = mock(SubTaskLeaseService.class);
         subTaskService = new SubTaskServiceImpl(
                 subTaskMapper, queryService, stateMachineService, leaseService);
