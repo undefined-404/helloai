@@ -73,11 +73,15 @@ spring:
         # 收紧后消息按各副本实际消费速率被拉走，避免 250 默认值导致的慢消费者囤积、快消费者饿死
         prefetch: 10
   # 产物代理上传（POST /api/artifacts/upload）multipart 上限：
-  # 略高于 storage.max-file-size(5MB)，留出 multipart 边界余量
+  # 略高于 storage.max-file-size(5MB)，留出 multipart 边界余量。
+  # 2026-10-23 上调 8MB → 30MB/120MB：需求对话附件业务上限是「单文件 20MB、单次 5 个」
+  # （ChatAttachmentProperties），容器层若仍按 8MB 拦，用户传 12MB 的 PDF 会收到全局
+  # 「上传文件超过大小上限」而看不到真实的 20MB 口径。30MB = 20MB + multipart 边界余量；
+  # 120MB = 5 × 20MB + 余量（最坏情况一次传 5 个大文件）。
   servlet:
     multipart:
-      max-file-size: 8MB
-      max-request-size: 8MB
+      max-file-size: 30MB
+      max-request-size: 120MB
   flyway:
     enabled: true
     locations: classpath:db/migration
