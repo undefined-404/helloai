@@ -122,6 +122,24 @@ public class Agent extends BaseEntity {
      */
     private Integer consecutiveFailureCount;
 
+    /**
+     * 三配额 · retry（Paperclip 阶段一·4）：显式 retry 指令失败计数。
+     * 与 {@link #recoveryCount} / {@link #continuationCount} 各自独立，互不挤占。
+     */
+    private Integer retryCount;
+
+    /**
+     * 三配额 · continuation（Paperclip 阶段一·4）：空回复 / 续跑类失败计数
+     * （EMPTY_REPLY，可容忍，不触发真失败阈值回退）。
+     */
+    private Integer continuationCount;
+
+    /**
+     * 三配额 · recovery（Paperclip 阶段一·4）：真失败计数
+     * （离线失联 / 执行超时 / 执行报错，严格配额，触发阈值回退）。
+     */
+    private Integer recoveryCount;
+
     /** 最近一次失败时间（与 consecutive_failure_count 同步刷新） */
     private OffsetDateTime lastFailureTime;
 

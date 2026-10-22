@@ -174,12 +174,46 @@
     </update>
 
     <!--
+        三配额累加共享 SQL 片段（Paperclip 阶段一·4）：三个独立配额列 + 总览列同步累加。
+        <property> 替换列名 —— 列名来自固定 XML 定义（非用户输入），无注入面。
+    -->
+    <sql id="quotaIncrement">
+        UPDATE agent
+        SET <property name="quotaColumn"/> = COALESCE(<property name="quotaColumn"/>, 0) + 1,
+            consecutive_failure_count = COALESCE(consecutive_failure_count, 0) + 1,
+            last_failure_time = #{now},
+            update_time = #{now}
+        WHERE id = #{agentId}
+          AND access_type = 'CLI_CLIENT'
+          AND deleted = 0
+    </sql>
+
+    <update id="incrementRetryCount">
+        <property name="quotaColumn">retry_count</property>
+        <include refid="quotaIncrement"/>
+    </update>
+
+    <update id="incrementContinuationCount">
+        <property name="quotaColumn">continuation_count</property>
+        <include refid="quotaIncrement"/>
+    </update>
+
+    <update id="incrementRecoveryCount">
+        <property name="quotaColumn">recovery_count</property>
+        <include refid="quotaIncrement"/>
+    </update>
+
+    <!--
         N11 阈值回退：成功路径上重置失败计数（清零 + 清空 last_failure_time）。
         仅在 access_type = CLI_CLIENT 时生效；API_KEY_LLM / WEB_BROWSER 不参与 N11 闭环。
+        Paperclip 阶段一·4：成功即全部配额归零（retry / continuation / recovery 一并清零）。
     -->
     <update id="resetConsecutiveFailure">
         UPDATE agent
         SET consecutive_failure_count = 0,
+            retry_count = 0,
+            continuation_count = 0,
+            recovery_count = 0,
             last_failure_time = NULL,
             update_time = #{now}
         WHERE id = #{agentId}
@@ -191,10 +225,14 @@
         N11 阈值回退：标记"本次回退已触发"。
         原子写回 last_fallback_time + 同步清零 consecutive_failure_count（一次扫描只触发一次），
         避免后续 cycle 又把它当作候选。
+        Paperclip 阶段一·4：三配额一并清零（回退触发 = 全部计数重置，冷启动）。
     -->
     <update id="markFallbackTriggered">
         UPDATE agent
         SET consecutive_failure_count = 0,
+            retry_count = 0,
+            continuation_count = 0,
+            recovery_count = 0,
             last_failure_time = NULL,
             last_fallback_time = #{now},
             update_time = #{now}

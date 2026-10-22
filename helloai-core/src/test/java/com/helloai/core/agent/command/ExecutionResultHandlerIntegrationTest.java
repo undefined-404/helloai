@@ -17,6 +17,7 @@ import com.helloai.core.agent.service.ExecutionArtifactService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
+import com.helloai.core.agent.observability.FailureCategory;
 import com.helloai.core.agent.output.ExecutionOutputParser;
 import com.helloai.core.agent.quality.ExecutorDoneIssuesBackfiller;
 import com.helloai.core.agent.session.service.AgentSessionService;
@@ -181,7 +182,7 @@ class ExecutionResultHandlerIntegrationTest {
 
         // afterCommit 之后，failureTracker.recordSuccess 应该被调用一次
         verify(failureTracker, times(1)).recordSuccess(11L);
-        verify(failureTracker, never()).recordFailure(11L);
+        verify(failureTracker, never()).recordFailure(anyLong(), any());
     }
 
     @Test
@@ -196,7 +197,7 @@ class ExecutionResultHandlerIntegrationTest {
         handler.handleSuccess(22L, 11L, result);
 
         verify(failureTracker, never()).recordSuccess(anyLong());
-        verify(failureTracker, never()).recordFailure(anyLong());
+        verify(failureTracker, never()).recordFailure(anyLong(), any());
     }
 
     @Test
@@ -208,13 +209,35 @@ class ExecutionResultHandlerIntegrationTest {
         handler.handleFailure(22L, 11L, new RuntimeException("tool timeout"));
 
         // afterCommit 之前不应调用
-        verify(failureTracker, never()).recordFailure(anyLong());
+        verify(failureTracker, never()).recordFailure(anyLong(), any());
 
         // 触发 afterCommit
         TransactionSynchronizationManager.getSynchronizations().forEach(s -> s.afterCommit());
 
-        verify(failureTracker, times(1)).recordFailure(11L);
+        // 非空 error（tool timeout）→ 真失败 recovery 配额
+        verify(failureTracker, times(1)).recordFailure(eq(11L), eq(FailureCategory.RECOVERY));
         verify(failureTracker, never()).recordSuccess(11L);
+    }
+
+    @Test
+    @DisplayName("CLI_CLIENT 空回复失败：归 continuation 配额（可容忍，不触发真失败回退）")
+    void shouldRouteEmptyReplyToContinuationQuota() {
+        when(subTaskQueryPort.findById(22L)).thenReturn(inProgressSnapshot());
+        when(agentService.getById(11L)).thenReturn(cliAgent(11L));
+
+        // 执行者显式回空串（output=""）→ EMPTY_REPLY，归 continuation 配额
+        ExecutionResultReport emptyReply = new ExecutionResultReport();
+        emptyReply.setSubTaskId(22L);
+        emptyReply.setAgentId(11L);
+        emptyReply.setSource("EXTERNAL");
+        emptyReply.setSuccess(false);
+        emptyReply.setOutput("");
+
+        handler.handleReport(emptyReply);
+
+        TransactionSynchronizationManager.getSynchronizations().forEach(s -> s.afterCommit());
+
+        verify(failureTracker, times(1)).recordFailure(eq(11L), eq(FailureCategory.CONTINUATION));
     }
 
     @Test
@@ -237,7 +260,7 @@ class ExecutionResultHandlerIntegrationTest {
                 eq(33L), eq(22L), eq("sub_task_execute_submit"),
                 eq(AgentRole.EXECUTOR), eq(11L), any());
         order.verify(failureTracker, never()).recordSuccess(anyLong());
-        order.verify(failureTracker, never()).recordFailure(anyLong());
+        order.verify(failureTracker, never()).recordFailure(anyLong(), any());
     }
 
     private static Agent cliAgent(Long id) {

@@ -12,6 +12,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
+import com.helloai.core.agent.observability.FailureCategory;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -264,7 +265,7 @@ class AgentHealthCheckTaskTest {
             verify(subTaskDispatchService, never()).dispatchPendingSubTaskCompensating(anyLong(), any());
             verify(taskTimelineService, never()).recordEvent(
                     any(), any(), eq("agent_offline"), any(), any(), any());
-            verify(failureTracker, never()).recordFailure(anyLong());
+            verify(failureTracker, never()).recordFailure(anyLong(), any());
         }
 
         @Test
@@ -282,7 +283,7 @@ class AgentHealthCheckTaskTest {
 
             verify(taskTimelineService, times(1)).recordEvent(
                     any(), any(), eq("agent_offline"), eq(AgentRole.EXECUTOR), eq(101L), any());
-            verify(failureTracker, times(1)).recordFailure(101L);
+            verify(failureTracker, times(1)).recordFailure(101L, FailureCategory.RECOVERY);
         }
 
         @Test
@@ -301,7 +302,7 @@ class AgentHealthCheckTaskTest {
             // 避免"提交后停止心跳"的客户端每完成一个任务就被计 1 次失败
             verify(taskTimelineService, times(1)).recordEvent(
                     any(), any(), eq("agent_offline"), eq(AgentRole.EXECUTOR), eq(101L), any());
-            verify(failureTracker, never()).recordFailure(anyLong());
+            verify(failureTracker, never()).recordFailure(anyLong(), any());
         }
 
         @Test
@@ -333,7 +334,7 @@ class AgentHealthCheckTaskTest {
 
             verify(agentService, never()).markOfflineIfStale(any(), any(), anyString(), anyString(), any());
             verify(subTaskService, never()).listInFlightAssignedOrInProgress(anyLong());
-            verify(failureTracker, never()).recordFailure(anyLong());
+            verify(failureTracker, never()).recordFailure(anyLong(), any());
         }
 
         @Test
@@ -502,7 +503,7 @@ class AgentHealthCheckTaskTest {
                     .dispatchPendingSubTaskCompensating(anyLong(), any());
             verify(taskTimelineService, never())
                     .recordEvent(any(), any(), eq("agent_offline"), any(), any(), any());
-            verify(failureTracker, never()).recordFailure(anyLong());
+            verify(failureTracker, never()).recordFailure(anyLong(), any());
         }
 
         @Test
@@ -521,7 +522,7 @@ class AgentHealthCheckTaskTest {
             verify(agentService, never())
                     .markOfflineIfStale(any(), any(), anyString(), anyString(), any());
             verify(subTaskService, never()).listInFlightAssignedOrInProgress(anyLong());
-            verify(failureTracker, never()).recordFailure(anyLong());
+            verify(failureTracker, never()).recordFailure(anyLong(), any());
         }
 
         @Test
@@ -579,7 +580,7 @@ class AgentHealthCheckTaskTest {
             verify(agentService, never())
                     .markOfflineIfStale(any(), any(), anyString(), anyString(), any());
             verify(subTaskDispatchService, never()).redispatchOfflineSubTask(anyLong(), anyLong());
-            verify(failureTracker, never()).recordFailure(anyLong());
+            verify(failureTracker, never()).recordFailure(anyLong(), any());
         }
     }
 

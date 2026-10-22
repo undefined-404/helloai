@@ -45,29 +45,56 @@ public class ExternalAgentFailureTracker {
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * 记录一次失败：原子累加 consecutive_failure_count + 刷新 last_failure_at。
+     * 记录一次失败：按 {@link FailureCategory} 归入对应配额 + 刷新 last_failure_at。
+     *
+     * <p>Paperclip 阶段一·4（三配额分离）：三类失败各自计数、互不挤占 ——
+     * 空回复（{@link FailureCategory#CONTINUATION}）不再挤占真失败
+     * （{@link FailureCategory#RECOVERY}）的配额，避免「没真正坏掉的 Agent
+     * 被提前回退」。</p>
      *
      * <p>仅在 Agent.access_type = CLI_CLIENT 时生效；
      * API_KEY_LLM / WEB_BROWSER 不参与 N11 闭环（被 SQL 条件直接跳过）。</p>
      *
      * <p>使用 {@code REQUIRES_NEW} 事务：即便外层主链路事务回滚，失败计数也保留，
      * 避免"任务被回滚后 Agent 不再被计入失败"导致阈值永远触发不了。</p>
+     *
+     * @param agentId 目标 Agent ID
+     * @param category 失败类别（{@link FailureCategory#RETRY} /
+     *                 {@link FailureCategory#CONTINUATION} / {@link FailureCategory#RECOVERY}）；
+     *                 null 按 {@link FailureCategory#RECOVERY} 保守处理（真失败口径）
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
-    public void recordFailure(Long agentId) {
+    public void recordFailure(Long agentId, FailureCategory category) {
         if (!isEnabled() || agentId == null) {
             return;
         }
+        FailureCategory effective = category != null ? category : FailureCategory.RECOVERY;
         try {
-            int updated = agentMapper.incrementConsecutiveFailure(agentId, OffsetDateTime.now());
+            int updated;
+            switch (effective) {
+                case RETRY -> updated = agentMapper.incrementRetryCount(agentId, OffsetDateTime.now());
+                case CONTINUATION -> updated = agentMapper.incrementContinuationCount(agentId, OffsetDateTime.now());
+                default -> updated = agentMapper.incrementRecoveryCount(agentId, OffsetDateTime.now());
+            }
             if (updated == 0) {
                 log.debug("recordFailure skipped: agentId={} (not CLI_CLIENT or deleted)", agentId);
             } else if (log.isDebugEnabled()) {
-                log.debug("recordFailure: agentId={} consecutive_failure_count +1", agentId);
+                log.debug("recordFailure: agentId={} {}_count +1", agentId, effective.name().toLowerCase());
             }
         } catch (Exception e) {
-            log.error("recordFailure 失败: agentId={}", agentId, e);
+            log.error("recordFailure 失败: agentId={}, category={}", agentId, effective, e);
         }
+    }
+
+    /**
+     * 记录一次失败（兼容重载）：null 类别按 {@link FailureCategory#RECOVERY} 保守处理。
+     *
+     * <p>保留旧签名以避免既有调用方（离线 / 超时补偿）在未显式归因时
+     * 默认走「真失败」口径（与旧行为逐字一致，仅计数列变为 recovery_count）。</p>
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void recordFailure(Long agentId) {
+        recordFailure(agentId, FailureCategory.RECOVERY);
     }
 
     /**

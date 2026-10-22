@@ -9,6 +9,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
+import com.helloai.core.agent.observability.FailureCategory;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
@@ -140,8 +141,8 @@ class ExecutionCompensationTaskTest {
                 Map.of("previousAgentId", 909L,
                         "timeoutMinutes", 10,
                         "eventId", "evt-running"));
-        // N11 阈值回退：超时计为执行失败，累加原 Agent 连续失败计数
-        verify(failureTracker).recordFailure(909L);
+        // N11 阈值回退：超时计为执行失败，累加原 Agent 的 recovery 真失败配额
+        verify(failureTracker).recordFailure(909L, FailureCategory.RECOVERY);
     }
 
     @Test

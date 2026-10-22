@@ -13,6 +13,7 @@ import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
+import com.helloai.core.agent.observability.FailureCategory;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
@@ -132,11 +133,11 @@ public class ExecutionCompensationTask {
                     record.getId(), record.getSubTaskId(), e);
         }
 
-        // N11 阈值回退计数：超时被视为执行失败。仅对 CLI_CLIENT Agent 累加；
-        // SQL 条件已限定 access_type=CLI_CLIENT，误调不会写库。
+        // N11 阈值回退计数：超时被视为执行失败（Paperclip 阶段一·4：归 recovery 真失败配额）。
+        // 仅对 CLI_CLIENT Agent 累加；SQL 条件已限定 access_type=CLI_CLIENT，误调不会写库。
         Long agentId = record.getAgentId();
         if (agentId != null) {
-            failureTracker.recordFailure(agentId);
+            failureTracker.recordFailure(agentId, FailureCategory.RECOVERY);
         }
     }
 }

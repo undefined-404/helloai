@@ -11,6 +11,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
+import com.helloai.core.agent.observability.FailureCategory;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -224,8 +225,9 @@ public class AgentHealthCheckTask {
         //    "提交后停止心跳"的静默待命（trae 实测形态），若计入失败会把干活的 agent
         //    每完成一个任务就计 1 次失败，误伤 N11 阈值回退。
         //    已被 SQL 条件限定 access_type=CLI_CLIENT（API_KEY_LLM/WEB_BROWSER 不会写库）。
+        //    Paperclip 阶段一·4：离线失联归 recovery 真失败配额。
         if (inFlightCount > 0) {
-            failureTracker.recordFailure(agent.getId());
+            failureTracker.recordFailure(agent.getId(), FailureCategory.RECOVERY);
         }
     }
 

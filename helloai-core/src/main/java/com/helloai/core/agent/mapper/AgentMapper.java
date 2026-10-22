@@ -113,6 +113,40 @@ public interface AgentMapper extends BaseMapper<Agent> {
                                     @Param("now") OffsetDateTime now);
 
     /**
+     * 原子累加 CLI_CLIENT Agent 的<b>retry 配额</b>（Paperclip 阶段一·4 三配额分离）。
+     *
+     * <p>与 {@link #incrementContinuationCount} / {@link #incrementRecoveryCount}
+     * 各自独立计数，互不挤占；仍同步刷新 {@code consecutive_failure_count}（总览字段）
+     * 与 {@code last_failure_time}。</p>
+     *
+     * @return 1 = 成功累加；0 = Agent 不存在 / 非 CLI_CLIENT / 已删除
+     */
+    int incrementRetryCount(@Param("agentId") Long agentId,
+                            @Param("now") OffsetDateTime now);
+
+    /**
+     * 原子累加 CLI_CLIENT Agent 的<b>continuation 配额</b>（Paperclip 阶段一·4 三配额分离）。
+     *
+     * <p>空回复 / 续跑类失败（EMPTY_REPLY）归此配额，可容忍——不触发真失败（recovery）
+     * 的阈值回退。</p>
+     *
+     * @return 1 = 成功累加；0 = Agent 不存在 / 非 CLI_CLIENT / 已删除
+     */
+    int incrementContinuationCount(@Param("agentId") Long agentId,
+                                   @Param("now") OffsetDateTime now);
+
+    /**
+     * 原子累加 CLI_CLIENT Agent 的<b>recovery 配额</b>（Paperclip 阶段一·4 三配额分离）。
+     *
+     * <p>真失败（离线失联 / 执行超时 / 执行报错）归此配额，严格计数——与
+     * {@code consecutive_failure_count} 一同参与阈值回退判定。</p>
+     *
+     * @return 1 = 成功累加；0 = Agent 不存在 / 非 CLI_CLIENT / 已删除
+     */
+    int incrementRecoveryCount(@Param("agentId") Long agentId,
+                               @Param("now") OffsetDateTime now);
+
+    /**
      * 重置连续失败计数（成功路径上调用）。
      *
      * @return 1 = 成功重置；0 = Agent 不存在 / 非 CLI_CLIENT / 已删除

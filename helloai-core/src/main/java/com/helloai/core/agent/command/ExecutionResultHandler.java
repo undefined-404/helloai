@@ -26,6 +26,7 @@ import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
+import com.helloai.core.agent.observability.FailureCategory;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -511,15 +512,23 @@ public class ExecutionResultHandler {
         if (targetAgent != null && targetAgent.getAccessType() == AgentAccessType.CLI_CLIENT) {
             final Long trackAgentId = report.getAgentId();
             final boolean trackSuccess = report.isSuccess();
+            // Paperclip 阶段一·4（三配额分离）：失败现场按 output 是否空白归因 ——
+            // 空回复（EMPTY_REPLY）归 continuation 配额（可容忍），其余真失败归 recovery。
+            // ★判据要点（2026-10-22 自查修正）：EMPTY_REPLY 须「output 非 null 且空白」——
+            // handleFailure 等异常路径构造的 report.output 恒为 null（表示「无产出」，
+            // 是异常现场而非执行者空回复），判为真失败 recovery；只有执行者显式回空串
+            // （handleReport 的 output=""）才是 continuation。
+            final boolean emptyReply = !trackSuccess
+                    && report.getOutput() != null && report.getOutput().isBlank();
             if (TransactionSynchronizationManager.isSynchronizationActive()) {
                 TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                     @Override
                     public void afterCommit() {
-                        applyFailureTracking(trackAgentId, trackSuccess);
+                        applyFailureTracking(trackAgentId, trackSuccess, emptyReply);
                     }
                 });
             } else {
-                applyFailureTracking(trackAgentId, trackSuccess);
+                applyFailureTracking(trackAgentId, trackSuccess, emptyReply);
             }
         }
 
@@ -588,11 +597,14 @@ public class ExecutionResultHandler {
      * 锁 agent 行；本方法若留在主事务内（而非 afterCommit），会与外层事务
      * 持有的 agent 行锁形成自死锁。本类 L178-192 处的 afterCommit 注册不可删除。</p>
      */
-    private void applyFailureTracking(Long agentId, boolean success) {
+    private void applyFailureTracking(Long agentId, boolean success, boolean emptyReply) {
         if (success) {
             failureTracker.recordSuccess(agentId);
         } else {
-            failureTracker.recordFailure(agentId);
+            // Paperclip 阶段一·4：空回复（EMPTY_REPLY）归 continuation（可容忍），
+            // 其余真失败归 recovery（严格配额，参与阈值回退）
+            failureTracker.recordFailure(agentId,
+                    emptyReply ? FailureCategory.CONTINUATION : FailureCategory.RECOVERY);
         }
     }
 

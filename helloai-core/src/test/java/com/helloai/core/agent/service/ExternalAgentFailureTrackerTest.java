@@ -9,6 +9,7 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
+import com.helloai.core.agent.observability.FailureCategory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -77,13 +78,57 @@ class ExternalAgentFailureTrackerTest {
     class Counting {
 
         @Test
-        @DisplayName("recordFailure 调用 incrementConsecutiveFailure")
+        @DisplayName("recordFailure(agentId) 单参重载 → 保守归 recovery（incrementRecoveryCount）")
         void shouldRecordFailure() {
-            when(agentMapper.incrementConsecutiveFailure(eq(1L), any(OffsetDateTime.class))).thenReturn(1);
+            when(agentMapper.incrementRecoveryCount(eq(1L), any(OffsetDateTime.class))).thenReturn(1);
 
             tracker.recordFailure(1L);
 
-            verify(agentMapper, times(1)).incrementConsecutiveFailure(eq(1L), any(OffsetDateTime.class));
+            verify(agentMapper, times(1)).incrementRecoveryCount(eq(1L), any(OffsetDateTime.class));
+        }
+
+        @Test
+        @DisplayName("recordFailure(RECOVERY) → incrementRecoveryCount（真失败配额）")
+        void shouldRecordRecoveryFailure() {
+            when(agentMapper.incrementRecoveryCount(eq(1L), any(OffsetDateTime.class))).thenReturn(1);
+
+            tracker.recordFailure(1L, FailureCategory.RECOVERY);
+
+            verify(agentMapper, times(1)).incrementRecoveryCount(eq(1L), any(OffsetDateTime.class));
+            verify(agentMapper, never()).incrementContinuationCount(any(), any());
+            verify(agentMapper, never()).incrementRetryCount(any(), any());
+        }
+
+        @Test
+        @DisplayName("recordFailure(CONTINUATION) → incrementContinuationCount（空回复可容忍配额）")
+        void shouldRecordContinuationFailure() {
+            when(agentMapper.incrementContinuationCount(eq(1L), any(OffsetDateTime.class))).thenReturn(1);
+
+            tracker.recordFailure(1L, FailureCategory.CONTINUATION);
+
+            verify(agentMapper, times(1)).incrementContinuationCount(eq(1L), any(OffsetDateTime.class));
+            verify(agentMapper, never()).incrementRecoveryCount(any(), any());
+        }
+
+        @Test
+        @DisplayName("recordFailure(RETRY) → incrementRetryCount（显式 retry 配额）")
+        void shouldRecordRetryFailure() {
+            when(agentMapper.incrementRetryCount(eq(1L), any(OffsetDateTime.class))).thenReturn(1);
+
+            tracker.recordFailure(1L, FailureCategory.RETRY);
+
+            verify(agentMapper, times(1)).incrementRetryCount(eq(1L), any(OffsetDateTime.class));
+            verify(agentMapper, never()).incrementRecoveryCount(any(), any());
+        }
+
+        @Test
+        @DisplayName("recordFailure(null 类别) → 保守归 recovery（真失败口径）")
+        void shouldDefaultNullCategoryToRecovery() {
+            when(agentMapper.incrementRecoveryCount(eq(1L), any(OffsetDateTime.class))).thenReturn(1);
+
+            tracker.recordFailure(1L, null);
+
+            verify(agentMapper, times(1)).incrementRecoveryCount(eq(1L), any(OffsetDateTime.class));
         }
 
         @Test
@@ -114,6 +159,9 @@ class ExternalAgentFailureTrackerTest {
             tracker.markFallbackTriggered(null);
 
             verify(agentMapper, never()).incrementConsecutiveFailure(any(), any());
+            verify(agentMapper, never()).incrementRecoveryCount(any(), any());
+            verify(agentMapper, never()).incrementContinuationCount(any(), any());
+            verify(agentMapper, never()).incrementRetryCount(any(), any());
             verify(agentMapper, never()).resetConsecutiveFailure(any(), any());
             verify(agentMapper, never()).markFallbackTriggered(any(), any());
         }
@@ -128,6 +176,9 @@ class ExternalAgentFailureTrackerTest {
             tracker.markFallbackTriggered(1L);
 
             verify(agentMapper, never()).incrementConsecutiveFailure(any(), any());
+            verify(agentMapper, never()).incrementRecoveryCount(any(), any());
+            verify(agentMapper, never()).incrementContinuationCount(any(), any());
+            verify(agentMapper, never()).incrementRetryCount(any(), any());
             verify(agentMapper, never()).resetConsecutiveFailure(any(), any());
             verify(agentMapper, never()).markFallbackTriggered(any(), any());
         }
