@@ -636,15 +636,43 @@
                   </div>
                 </div>
                 <div class="composer-area">
-                  <el-input
-                    v-model="input"
-                    type="textarea"
-                    :rows="4"
-                    resize="none"
-                    :disabled="sending || finalizing"
-                    :placeholder="inputPlaceholder"
-                    @keydown.enter.exact.prevent="handleSend"
-                  />
+                  <!-- 已选技能：以胶囊形式固定在光标前（对齐 WorkBuddy），选中 ≠ 立即发送，
+                       用户在同一输入框里补完需求再 Enter；发送时才翻译成后端既有斜杠协议。 -->
+                  <div class="composer-input-row">
+                    <transition name="skill-token-fade">
+                      <span
+                        v-if="activeSkill"
+                        class="skill-token"
+                        :class="`skill-token--${activeSkill}`"
+                        :title="activeSkillHint"
+                      >
+                        <el-icon class="skill-token-icon">
+                          <EditPen v-if="activeSkill === 'planner'" />
+                          <MagicStick v-else />
+                        </el-icon>
+                        <span class="skill-token-name">{{ activeSkillLabel }}</span>
+                        <button
+                          type="button"
+                          class="skill-token-close"
+                          title="移除技能（输入为空时按退格亦可）"
+                          @click="clearSkill"
+                        >
+                          <el-icon><Close /></el-icon>
+                        </button>
+                      </span>
+                    </transition>
+                    <el-input
+                      ref="composerRef"
+                      v-model="input"
+                      type="textarea"
+                      :rows="4"
+                      resize="none"
+                      :disabled="sending || finalizing"
+                      :placeholder="inputPlaceholder"
+                      @keydown.enter.exact.prevent="handleSend"
+                      @keydown="onComposerKeydown"
+                    />
+                  </div>
                   <div class="input-actions">
                     <div class="input-actions-left">
                       <!-- 「＋」能力入口（2026-10-22，对齐 WorkBuddy 交互）：一个 + 收纳可选能力，
@@ -672,6 +700,7 @@
                           <button
                             type="button"
                             class="plus-menu-item"
+                            :class="{ 'is-active': activeSkill === 'planner' }"
                             @click="pickSkill('planner')"
                           >
                             <span class="plus-menu-icon"><el-icon><EditPen /></el-icon></span>
@@ -679,16 +708,29 @@
                               <span class="plus-menu-name">方案整理</span>
                               <span class="plus-menu-desc">逐轮问清边界与取舍，再产出可执行方案</span>
                             </span>
+                            <span
+                              v-if="activeSkill === 'planner'"
+                              class="plus-menu-check"
+                            >
+                              <el-icon><Check /></el-icon>
+                            </span>
                           </button>
                           <button
                             type="button"
                             class="plus-menu-item"
+                            :class="{ 'is-active': activeSkill === 'task' }"
                             @click="pickSkill('task')"
                           >
                             <span class="plus-menu-icon"><el-icon><MagicStick /></el-icon></span>
                             <span class="plus-menu-text">
                               <span class="plus-menu-name">直接拆解</span>
                               <span class="plus-menu-desc">跳过澄清，按当前描述直接产出方案并建任务</span>
+                            </span>
+                            <span
+                              v-if="activeSkill === 'task'"
+                              class="plus-menu-check"
+                            >
+                              <el-icon><Check /></el-icon>
                             </span>
                           </button>
                         </div>
@@ -827,7 +869,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen } from '@element-plus/icons-vue'
+import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { promptEnhanceApi } from '@/api/promptEnhance'
 import { taskApi } from '@/api/task'
@@ -857,6 +899,9 @@ const isChatMode = computed(() => conversation.value?.mode === 'CHAT')
 // 2026-10-22：斜杠语法不再出现在文案里——能力入口收进输入框左下角「＋」菜单的「技能」组，
 // 命令本身仍是同一套后端协议（/plan 与 /task），只作为高级别名保留、不再对外宣传。
 const inputPlaceholder = computed(() => {
+  // 已挂载技能：占位直接说明「补需求 + Enter 会发生什么」，用户不用猜胶囊是什么意思
+  if (activeSkill.value === 'planner') return '写一句你想梳理的事，Enter 进入方案整理'
+  if (activeSkill.value === 'task') return '写一句需求，Enter 直接拆解并建任务'
   if (activeId.value == null) {
     return '描述你想做的事，或直接提问；点左下角「＋」选技能可直接建任务，Enter 发送'
   }
@@ -882,41 +927,56 @@ const skillDisabled = computed(() => sending.value
   || finalizing.value
   || (activeId.value != null && conversation.value?.status !== 'ACTIVE'))
 
-// 「＋」能力菜单展开态（点技能项后先收起，再触发，避免菜单遮住生成中的回复）
+// 「＋」能力菜单展开态（点技能项后先收起，再挂载到输入框）
 const plusMenuVisible = ref(false)
 
-/** 从「＋」菜单选技能：收起菜单后复用同一套技能入口逻辑。 */
+// 已挂载的技能（2026-10-22，对齐 WorkBuddy「技能 chip + 光标」）：
+// 选技能 ≠ 立即发送——挂成输入框里的胶囊，用户补完需求再 Enter；
+// 发送时才翻译成后端既有协议（planner → /planner，task → /task 前缀），语法始终不外露。
+const activeSkill = ref<'planner' | 'task' | null>(null)
+const composerRef = ref<any>(null)
+
+const activeSkillLabel = computed(() => {
+  if (activeSkill.value === 'planner') return '方案整理'
+  if (activeSkill.value === 'task') return '直接拆解'
+  return ''
+})
+const activeSkillHint = computed(() => (activeSkill.value === 'planner'
+  ? '方案整理：逐轮问清边界与取舍，再产出可执行方案'
+  : activeSkill.value === 'task'
+    ? '直接拆解：跳过澄清，按当前描述直接产出方案并建任务'
+    : ''))
+
+/** 从「＋」菜单选技能：收起菜单后挂成输入框里的胶囊，光标回到输入框（不发送）。 */
 function pickSkill(kind: 'planner' | 'task') {
   plusMenuVisible.value = false
-  void useSkill(kind)
+  if (skillDisabled.value) return
+  activeSkill.value = kind
+  focusComposer()
 }
 
-/**
- * 技能入口（2026-10-22）：把「斜杠命令语法」收进 UI，用户只选能力。
- * <ul>
- *   <li>方案整理 → 等价 <code>/planner|/plan</code>：进方案澄清轮（后端仅在 CHAT 模式生效，新会话恒为 CHAT）</li>
- *   <li>直接拆解 → 等价 <code>/task</code>：终稿直出 + 自动建任务（任意模式优先，信息不足后端会降级追问）</li>
- * </ul>
- * 两条能力全部由既有后端命令协议承载，这里只做入口与文案，不新增协议、不改后端。
- */
-async function useSkill(kind: 'planner' | 'task') {
-  const text = input.value.trim()
-  if (!text) {
-    ElMessage.warning(kind === 'planner'
-      ? '先写一句你想做什么，再点「方案整理」'
-      : '先写一句需求描述，再点「直接拆解」')
-    return
-  }
-  if (kind === 'planner') {
-    // 走既有 /planner 链路：附加文本落库进上下文后再切 CLARIFY
-    input.value = ''
-    await handlePlannerCommand(text)
-    return
-  }
-  // 走既有 /task 链路：拼前缀后交给 handleSend 的同步 create 分支（读 FINALIZED/taskId 联动审阅）
-  input.value = `/task ${text}`
-  await handleSend()
+/** 移除已挂载的技能（胶囊上的 ×，或空输入时退格）。 */
+function clearSkill() {
+  activeSkill.value = null
+  focusComposer()
 }
+
+function focusComposer() {
+  void nextTick(() => composerRef.value?.focus?.())
+}
+
+/** 空输入时按退格移除技能胶囊：与 WorkBuddy 的删除手势一致。 */
+function onComposerKeydown(e: KeyboardEvent) {
+  if (e.key === 'Backspace' && activeSkill.value && !input.value) {
+    e.preventDefault()
+    clearSkill()
+  }
+}
+
+// 会话进入终态（FINALIZED/ARCHIVED）后技能不再可用，避免残留胶囊点了没反应
+watch(() => conversation.value?.status, (s) => {
+  if (s && s !== 'ACTIVE') activeSkill.value = null
+})
 
 // 编辑已发送消息（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）：
 // editingMsgId 非空 = 该消息气泡处于行内编辑态；editingDraft 为 textarea 草稿；editingSaving 防重复提交
@@ -1193,17 +1253,37 @@ function closeEnhancePanel() {
 }
 
 async function handleSend() {
-  const text = input.value.trim()
-  if (!text || sending.value) return
+  const raw = input.value.trim()
+  if (!raw) {
+    if (activeSkill.value && !sending.value) {
+      ElMessage.warning(`已选「${activeSkillLabel.value}」，先在输入框里写一句需求再按 Enter`)
+    }
+    return
+  }
+  if (sending.value) return
+  // 已挂载技能：先按能力语义改写，再走各自链路（命令语法对用户不可见）
+  if (activeSkill.value === 'planner') {
+    // /planner 链路：附加文本先落库进上下文，再切 CLARIFY
+    input.value = ''
+    activeSkill.value = null
+    await handlePlannerCommand(raw)
+    return
+  }
+  // 直接拆解：补 /task 前缀走下方同步 create 分支（读 FINALIZED/taskId 联动审阅）
+  const text = activeSkill.value === 'task' ? `/task ${raw}` : raw
+  const skill = activeSkill.value
   // V40.2 /planner 斜杠命令：显式进入方案澄清模式（命令前缀不落消息）
   const cmd = text.match(PLANNER_COMMAND_RE)
   if (cmd) {
+    activeSkill.value = null
     await handlePlannerCommand(cmd[1]?.trim() ?? '')
     return
   }
   closeEnhancePanel()
   input.value = ''
-  pendingText.value = text
+  activeSkill.value = null
+  // 气泡展示用户原文（不带 /task 前缀），保证斜杠语法不出现在可见面
+  pendingText.value = raw
   sending.value = true
   scrollToBottom()
   try {
@@ -1250,12 +1330,16 @@ async function handleSend() {
           try { detail.value = await clarifyApi.detail(fid) } catch { /* 拦截器已弹错 */ }
         }
       }
-      // 消息未落库（建会前就失败/未找回会话）时回填输入框，避免丢失用户文本
+      // 消息未落库（建会前就失败/未找回会话）时回填输入框，避免丢失用户文本；
+      // 回填用户原文而非 /task 组合文本，并把技能胶囊一并恢复，重试时语义不丢
       const msgs = detail.value?.messages ?? []
       const lastIsSameUserText = msgs.length > 0
         && msgs[msgs.length - 1].role === 'user'
-        && msgs[msgs.length - 1].content === text
-      if (!lastIsSameUserText) input.value = text
+        && (msgs[msgs.length - 1].content === text || msgs[msgs.length - 1].content === raw)
+      if (!lastIsSameUserText) {
+        input.value = raw
+        activeSkill.value = skill
+      }
     }
   } finally {
     pendingText.value = ''
@@ -1584,7 +1668,8 @@ async function recoverAbortedNewConversation(text: string) {
 async function handlePlannerCommand(extra: string) {
   if (sending.value) return
   input.value = ''
-  pendingText.value = extra || '/planner'
+  // 气泡展示用户意图文案，不再回显 /planner 语法
+  pendingText.value = extra || '请帮我整理一份技术方案'
   sending.value = true
   scrollToBottom()
   try {
@@ -2388,6 +2473,84 @@ onMounted(() => {
   line-height: 1.6;
 }
 
+/* 输入行：技能胶囊与正文同一行起点（对齐 WorkBuddy「技能 chip + 光标」），
+   胶囊不吃文本宽度，正文从胶囊右侧开始；多行时整块右移保持左对齐一致。 */
+.composer-input-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.composer-input-row :deep(.el-input) {
+  flex: 1;
+  min-width: 0;
+}
+.skill-token {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  margin-top: 1px;
+  padding: 0 3px 0 7px;
+  border-radius: 6px;
+  background: var(--ha-surface-hover);
+  color: var(--ha-ink);
+  font-size: 13px;
+  line-height: 22px;
+  white-space: nowrap;
+  user-select: none;
+}
+/* 两条技能给图标一点颜色差，扫一眼能分清挂的是哪个 */
+.skill-token--planner .skill-token-icon {
+  color: var(--ha-primary);
+}
+.skill-token--task .skill-token-icon {
+  color: var(--ha-accent-cyan);
+}
+.skill-token-icon {
+  font-size: 13px;
+  color: var(--ha-ink-secondary);
+}
+.skill-token-name {
+  font-weight: 500;
+}
+.skill-token-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ha-muted);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--ha-duration-fast) var(--ha-ease-out),
+              background var(--ha-duration-fast) var(--ha-ease-out),
+              color var(--ha-duration-fast) var(--ha-ease-out);
+}
+.skill-token:hover .skill-token-close {
+  opacity: 1;
+}
+.skill-token-close:hover {
+  background: var(--ha-border-light);
+  color: var(--ha-ink);
+}
+/* 挂载/移除时的轻量进出场，避免胶囊硬闪 */
+.skill-token-fade-enter-active,
+.skill-token-fade-leave-active {
+  transition: opacity var(--ha-duration-fast) var(--ha-ease-out),
+              transform var(--ha-duration-fast) var(--ha-ease-out);
+}
+.skill-token-fade-enter-from,
+.skill-token-fade-leave-to {
+  opacity: 0;
+  transform: translateX(-4px);
+}
+
 /* 「＋」能力入口（对齐 WorkBuddy：一个 + 收纳可选能力） */
 .plus-btn {
   display: inline-flex;
@@ -2455,6 +2618,7 @@ onMounted(() => {
 :global(.plus-menu-popover .plus-menu-text) {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-width: 0;
 }
 :global(.plus-menu-popover .plus-menu-name) {
@@ -2466,6 +2630,22 @@ onMounted(() => {
   font-size: 12px;
   color: var(--ha-muted);
   line-height: 1.4;
+}
+/* 菜单里回显「当前已挂载的技能」，避免用户忘了自己选过什么 */
+:global(.plus-menu-popover .plus-menu-item.is-active) {
+  background: var(--ha-primary-light);
+}
+:global(.plus-menu-popover .plus-menu-item.is-active .plus-menu-name) {
+  color: var(--ha-primary);
+  font-weight: 600;
+}
+:global(.plus-menu-popover .plus-menu-check) {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--ha-primary);
+  font-size: 13px;
 }
 
 .input-actions {
