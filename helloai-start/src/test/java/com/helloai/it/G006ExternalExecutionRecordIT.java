@@ -4,6 +4,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,13 +29,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code markSuccess/markTimeout} 的 CAS，mock 上只能验证「方法被调用过」，
  * 无法证明「哪一行被改、哪一行没被改」，而那正是本需求的风险点
  * （误改平台内记录会让内部执行被外部收口截断）。</p>
+ *
+ * <p><b>ID 段（2026-10-22 修正）</b>：本类原用 9401 段，与
+ * {@link TaskRunningSpecPhaseBIT}（9401~9406）撞号且无 {@code @AfterEach} 清理，
+ * 残留 {@code sub_task(task_id=9401/9402)} 使后者 seed 的
+ * {@code DELETE FROM task WHERE id IN (9401,9402)} 撞 {@code sub_task_task_id_fkey}
+ * （全量 *IT 实跑暴露，CI 门禁 5 失败）。现迁至空段 9601 并补 {@code @AfterEach}
+ * 清场（按 FK 依赖顺序，先删 agent_execution_record 再删 sub_task/agent/task）。</p>
  */
 @DisplayName("G-006: 外部执行 attempt 生命周期")
 class G006ExternalExecutionRecordIT extends AbstractItTestBase {
 
-    private static final long TASK_ID = 9401L;
-    private static final long AGENT_ID = 9401L;
-    private static final long SUB_TASK_ID = 9401L;
+    private static final long TASK_ID = 9601L;
+    private static final long AGENT_ID = 9601L;
+    private static final long SUB_TASK_ID = 9601L;
 
     @Autowired
     private AgentExecutionRecordService agentExecutionRecordService;
@@ -136,6 +144,26 @@ class G006ExternalExecutionRecordIT extends AbstractItTestBase {
         assertNotNull(jdbcTemplate.queryForObject(
                 "SELECT end_time FROM agent_execution_record WHERE sub_task_id = ?", Object.class, subTaskId),
                 "收口必须写 end_time");
+    }
+
+    // ==================== 清场 ====================
+
+    /**
+     * 用例后清场：本类 seed 的 9601 段数据必须回收，否则残留行污染外层共享容器
+     * （所有 *IT 共享同一 Testcontainers 库；本类最大用到 SUB_TASK_ID+6=9607、
+     * TASK_ID+6=9607、AGENT_ID+6=9607，record id 另加 5000 → 14601~14607）。
+     *
+     * <p>按 FK 依赖顺序（子 → 父）删除，避免 {code task} 残留 sub_task 引用触发
+     * {@code sub_task_task_id_fkey}（2026-10-22 全量 *IT 实跑暴露的撞段教训）。</p>
+     */
+    @AfterEach
+    void cleanup() {
+        for (long i = 0; i <= 6; i++) {
+            jdbcTemplate.update("DELETE FROM agent_execution_record WHERE sub_task_id = ?", SUB_TASK_ID + i);
+            jdbcTemplate.update("DELETE FROM sub_task WHERE id = ?", SUB_TASK_ID + i);
+            jdbcTemplate.update("DELETE FROM agent WHERE id = ?", AGENT_ID + i);
+            jdbcTemplate.update("DELETE FROM task WHERE id = ?", TASK_ID + i);
+        }
     }
 
     // ==================== 局部辅助 ====================
