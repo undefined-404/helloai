@@ -142,7 +142,13 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
-        ChatAttachment attachment = getByIdRequired(id);
+        // 幂等（对齐 AttachmentController#deleteById 口径）：已删或不存在直接返回成功，
+        // 外部重试/前端重复点击不会拿到 404——删除的目标状态已经达成，报错反而制造噪音。
+        ChatAttachment attachment = id == null ? null : getById(id);
+        if (attachment == null) {
+            log.info("会话附件删除跳过（不存在或已删，幂等）: id={}", id);
+            return;
+        }
         removeById(id);
         // 对象回收放提交后：回滚时不能把对象删掉（DB 行还在，对象却没了 = 僵尸附件）
         afterCommit(() -> purgeObjectQuietly(attachment));

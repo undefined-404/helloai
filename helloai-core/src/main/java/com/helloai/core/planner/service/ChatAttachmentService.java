@@ -55,7 +55,7 @@ public interface ChatAttachmentService {
     /** 取附件，不存在抛 {@code BizException}(404)。 */
     ChatAttachment getByIdRequired(Long id);
 
-    /** 软删 + 事务提交后 best-effort 回收对象（幂等）。 */
+    /** 软删 + 事务提交后 best-effort 回收对象；已删/不存在同样返回成功（幂等，重试安全）。 */
     void delete(Long id);
 
     /**
