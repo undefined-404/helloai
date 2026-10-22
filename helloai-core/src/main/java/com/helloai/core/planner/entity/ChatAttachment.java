@@ -40,6 +40,15 @@ public class ChatAttachment extends BaseEntity {
 
     private String objectKey;
 
+    /**
+     * 平台存储地址（{@code minio://bucket/objectKey} 或 {@code local://...}）。
+     *
+     * <p>读写一律走 {@code ArtifactStorage} 的 storageUrl 口径，与子任务级 {@code attachment}
+     * 表一致；bucketName/objectKey 只是对账与排障用的冗余列，<b>不用于拼装读地址</b>
+     * （不同存储实现的 URL 语法不同，拼装会把介质细节泄漏到业务层）。</p>
+     */
+    private String storageUrl;
+
     private ChatAttachmentParseStatus parseStatus;
 
     /** 失败原因（截断到 512），供前端展示与排障；不含堆栈。 */

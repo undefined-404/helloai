@@ -148,8 +148,8 @@ public class RequirementConversationController {
                 // 连接已在订阅启动前断开：不再启动流（会话与消息未落库，前端重发即可）
                 return;
             }
-            subscription[0] = requirementClarifyService.streamCreate(req.getMessage(), req.getPlannerAgentId(),
-                            req.getWebSearchEnabled())
+            subscription[0] = requirementClarifyService.streamCreateWithClientToken(req.getMessage(),
+                            req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getClientToken())
                     .subscribe(aggregator::onEvent,
                             error -> aggregator.onEvent(ChatStreamEvent.error(fallbackErrorMessage(error))),
                             () -> {
@@ -261,8 +261,8 @@ public class RequirementConversationController {
     public R<ClarifyConversationDetail> create(@Valid @RequestBody ClarifyMessageRequest req) {
         // 联网搜索开关透传：NULL 走默认开启语义（与老数据兼容）；
         // initialMode 已废弃，新会话始终 CHAT 模式
-        return R.ok(requirementClarifyService.create(
-                req.getMessage(), req.getPlannerAgentId(), req.getWebSearchEnabled()));
+        return R.ok(requirementClarifyService.createWithClientToken(
+                req.getMessage(), req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getClientToken()));
     }
 
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */

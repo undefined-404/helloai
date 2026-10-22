@@ -166,6 +166,13 @@ export const paths = {
     download: (id: string | number) => `/attachments/downloadById/${enc(id)}`,
     preview: (id: string | number) => `/attachments/previewById/${enc(id)}`
   },
+  /** 需求对话附件（会话级，V121）：上传 / 清单 / 删除 / 预览 */
+  chatAttachments: {
+    upload: '/chat-attachments/upload',
+    list: '/chat-attachments',
+    deleteById: (id: string | number) => `/chat-attachments/deleteById/${enc(id)}`,
+    previewById: (id: string | number) => `/chat-attachments/previewById/${enc(id)}`
+  },
   clarifications: {
     create: '/requirement-conversations',
     send: (id: string | number) => `/requirement-conversations/sendMessageById/${enc(id)}`,

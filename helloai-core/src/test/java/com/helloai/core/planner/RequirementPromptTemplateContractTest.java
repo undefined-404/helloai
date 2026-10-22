@@ -128,4 +128,56 @@ class RequirementPromptTemplateContractTest {
                 .contains("把资料里的功能点直接写进")
                 .contains("基于一般知识");
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  会话附件注入契约（LOG-20261022-014）
+    // ══════════════════════════════════════════════════════════════
+
+    /** 三个主模板都必须带两层附件占位 + 使用约束（防模板回退致模型看不到附件 / 靠猜）。 */
+    private void assertAttachmentContract(String template) {
+        assertThat(template)
+                .as("附件清单占位（恒注入）")
+                .contains("{{ATTACHMENT_MANIFEST}}")
+                .as("附件正文占位（按预算注入）")
+                .contains("{{ATTACHMENT_CONTEXT}}")
+                .as("不可读文件禁止臆测")
+                .contains("不得**据此推测其中内容")
+                .as("附件引用标号")
+                .contains("[附件1]")
+                .as("截断须说明")
+                .contains("正文未完整提供");
+    }
+
+    @Test
+    @DisplayName("附件契约：clarify / chat / finalize 三模板均携带 MANIFEST + CONTEXT + 使用约束")
+    void allRequirementTemplatesCarryAttachmentContract() throws IOException {
+        assertAttachmentContract(loadTemplate("requirement-clarify.md"));
+        assertAttachmentContract(loadTemplate("requirement-chat.md"));
+        assertAttachmentContract(loadTemplate("requirement-finalize.md"));
+    }
+
+    /**
+     * 变量闭包守卫（与 G-010「无残留 {{…}}」同源）：模板里出现的占位符必须在渲染器支持的集合内。
+     *
+     * <p>漏一个替换 = 模型收到字面 {@code {{X}}}，这既污染输入又会让模型模仿输出该形态；
+     * 而这类缺陷只在真实调用时才暴露，故用静态断言把它挡在编译期之后的第一步。</p>
+     */
+    @Test
+    @DisplayName("附件契约：三模板占位符必须全部落在渲染器支持的变量集合内（无未替换变量）")
+    void templatePlaceholdersAreAllRendered() throws IOException {
+        java.util.Set<String> supported = java.util.Set.of(
+                "CURRENT_USER_MESSAGE", "CONVERSATION_HISTORY", "WEB_SEARCH_CONTEXT",
+                "SYSTEM_TIME_CONTEXT", "LONG_TERM_MEMORY_CONTEXT",
+                "ATTACHMENT_MANIFEST", "ATTACHMENT_CONTEXT");
+        java.util.regex.Pattern placeholder = java.util.regex.Pattern.compile("\\{\\{([A-Z_]+)}}");
+        for (String name : new String[]{"requirement-clarify.md", "requirement-chat.md", "requirement-finalize.md"}) {
+            String template = loadTemplate(name);
+            java.util.regex.Matcher matcher = placeholder.matcher(template);
+            while (matcher.find()) {
+                assertThat(supported)
+                        .as(name + " 出现未替换的占位符 {{" + matcher.group(1) + "}}")
+                        .contains(matcher.group(1));
+            }
+        }
+    }
 }

@@ -183,6 +183,25 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         return streamService.streamCreate(message, plannerAgentId, webSearchEnabled);
     }
 
+    /** 流式新建会话 + 认领首句前上传的附件（见 {@link #createWithClientToken}）。 */
+    @Override
+    public Flux<ChatStreamEvent> streamCreateWithClientToken(String message, Long plannerAgentId,
+                                                             Boolean webSearchEnabled, String clientToken) {
+        return streamService.streamCreate(message, plannerAgentId, webSearchEnabled, clientToken);
+    }
+
+    /**
+     * 新建会话 + 认领首句前上传的附件：建会话（含 claim）后跑首轮，与 {@link #create} 同构，
+     * 差别只在 {@code clientToken} 会随建会一起把附件挂到新会话上。
+     */
+    @Override
+    public ClarifyConversationDetail createWithClientToken(String firstMessage, Long plannerAgentId,
+                                                           Boolean webSearchEnabled, String clientToken) {
+        RequirementConversation conversation =
+                orchestrator.createConversation(firstMessage, plannerAgentId, webSearchEnabled, clientToken);
+        return orchestrator.doRound(conversation, firstMessage.trim());
+    }
+
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */
     @Override
     public List<PlannerAgentPicker.PlannerOption> listPlannerOptions() {

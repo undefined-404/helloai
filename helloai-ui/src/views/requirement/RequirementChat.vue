@@ -635,9 +635,48 @@
                     </el-button>
                   </div>
                 </div>
-                <div class="composer-area">
+                <div
+                  class="composer-area"
+                  :class="{ 'is-dragover': dragOver }"
+                  @dragover.prevent="onComposerDragOver"
+                  @dragleave.prevent="onComposerDragLeave"
+                  @drop.prevent="onComposerDrop"
+                >
                   <!-- 已选技能：以胶囊形式固定在光标前（对齐 WorkBuddy），选中 ≠ 立即发送，
                        用户在同一输入框里补完需求再 Enter；发送时才翻译成后端既有斜杠协议。 -->
+                  <!-- 会话附件（V121）：上传后以胶囊列在输入框上方；解析态必须可见——
+                       SKIPPED 画成「加载中」会让用户一直等一个永远不会好的文件。 -->
+                  <div
+                    v-if="attachments.length || uploading"
+                    class="attachment-bar"
+                  >
+                    <span
+                      v-for="item in attachments"
+                      :key="item.id"
+                      class="attachment-chip"
+                      :class="attachmentChipClass(item)"
+                      :title="attachmentChipTitle(item)"
+                    >
+                      <el-icon class="attachment-icon"><Document /></el-icon>
+                      <span class="attachment-name">{{ item.fileName }}</span>
+                      <span class="attachment-state">{{ attachmentStateText(item) }}</span>
+                      <button
+                        type="button"
+                        class="attachment-close"
+                        title="移除附件"
+                        @click="removeAttachment(item.id)"
+                      >
+                        <el-icon><Close /></el-icon>
+                      </button>
+                    </span>
+                    <span
+                      v-if="uploading"
+                      class="attachment-chip attachment-chip--uploading"
+                    >
+                      <el-icon class="attachment-icon is-loading"><Loading /></el-icon>
+                      <span class="attachment-name">上传中…</span>
+                    </span>
+                  </div>
                   <div class="composer-input-row">
                     <transition name="skill-token-fade">
                       <span
@@ -671,6 +710,7 @@
                       :placeholder="inputPlaceholder"
                       @keydown.enter.exact.prevent="handleSend"
                       @keydown="onComposerKeydown"
+                      @paste="onComposerPaste"
                     />
                   </div>
                   <div class="input-actions">
@@ -733,8 +773,28 @@
                               <el-icon><Check /></el-icon>
                             </span>
                           </button>
+                          <div class="plus-menu-group-title">文件</div>
+                          <button
+                            type="button"
+                            class="plus-menu-item"
+                            @click="pickFiles"
+                          >
+                            <span class="plus-menu-icon"><el-icon><Document /></el-icon></span>
+                            <span class="plus-menu-text">
+                              <span class="plus-menu-name">添加文件</span>
+                              <span class="plus-menu-desc">PDF / Word / 文本 / 代码；单文件 20MB，单次 5 个</span>
+                            </span>
+                          </button>
                         </div>
                       </el-popover>
+                      <input
+                        ref="fileInputRef"
+                        type="file"
+                        multiple
+                        class="attachment-input"
+                        accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.html,.htm"
+                        @change="onFileInputChange"
+                      >
                       <!-- V34 会话级联网搜索开关：ima copilot 样式（默认开启；仅新会话可改；老会话只读取会话原值） -->
                       <div class="web-search-switch">
                         <el-tooltip
@@ -878,7 +938,7 @@ import { fmtTime } from '@/utils/tableConfig'
 import StructuredQuestionCard from './StructuredQuestionCard.vue'
 import WebSearchBar from './WebSearchBar.vue'
 import MarkdownView from '@/components/MarkdownView.vue'
-import type { ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, RoundProcessTrace, WebSearchTrace } from '@/types'
+import type { ChatAttachmentItem, ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, RoundProcessTrace, WebSearchTrace } from '@/types'
 
 const router = useRouter()
 
@@ -977,6 +1037,186 @@ function onComposerKeydown(e: KeyboardEvent) {
 watch(() => conversation.value?.status, (s) => {
   if (s && s !== 'ACTIVE') activeSkill.value = null
 })
+
+// ══════════════════════════════════════════════════════════════
+//  会话附件（V121 / 「＋→文件」）：上传 → 解析态轮询 → 胶囊管理
+// ══════════════════════════════════════════════════════════════
+
+/** 已挂到本会话（或本临时批次）的附件。 */
+const attachments = ref<ChatAttachmentItem[]>([])
+/** 上传中（本地占位胶囊，避免点了没反应）。 */
+const uploading = ref(false)
+/** 拖拽悬停态（高亮落区）。 */
+const dragOver = ref(false)
+const fileInputRef = ref<HTMLInputElement | null>(null)
+
+/**
+ * 新会话首句前的附件临时归属（前端 UUID）。
+ *
+ * <p>顺序是「先传文件、再发第一句」，此刻还没有 conversationId；后端用本 token 占位，
+ * 建会时按 token 认领回填。首条消息发出后置空，避免下一轮误用旧批次。</p>
+ */
+const clientToken = ref<string | null>(null)
+let parsePollTimer: number | null = null
+
+const MAX_FILES_PER_UPLOAD = 5
+const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
+
+/** 生成临时归属 token（crypto.randomUUID 在 http 内网环境可能不可用，退化为时间戳随机串）。 */
+function ensureClientToken(): string {
+  if (clientToken.value) return clientToken.value
+  const cryptoObj = window.crypto as Crypto | undefined
+  clientToken.value = cryptoObj?.randomUUID
+    ? cryptoObj.randomUUID()
+    : `ct-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+  return clientToken.value
+}
+
+/** 「＋→添加文件」：打开系统文件选择框。 */
+function pickFiles() {
+  plusMenuVisible.value = false
+  if (skillDisabled.value) return
+  fileInputRef.value?.click()
+}
+
+function onFileInputChange(e: Event) {
+  const target = e.target as HTMLInputElement
+  const files = Array.from(target.files ?? [])
+  // 清空 value：同一文件连续选择两次也能触发 change
+  target.value = ''
+  void uploadFiles(files)
+}
+
+function onComposerDragOver() {
+  if (skillDisabled.value) return
+  dragOver.value = true
+}
+
+function onComposerDragLeave() {
+  dragOver.value = false
+}
+
+function onComposerDrop(e: DragEvent) {
+  dragOver.value = false
+  if (skillDisabled.value) return
+  const files = Array.from(e.dataTransfer?.files ?? [])
+  void uploadFiles(files)
+}
+
+/** 粘贴上传（截图/复制的文件）：只有剪贴板里真有文件时才拦截默认粘贴。 */
+function onComposerPaste(e: ClipboardEvent) {
+  const files = Array.from(e.clipboardData?.files ?? [])
+  if (!files.length) return
+  e.preventDefault()
+  void uploadFiles(files)
+}
+
+/** 上传：前端先做一次「单文件 20MB / 单次 5 个」预校验，给出即时反馈（后端仍会再校验一遍）。 */
+async function uploadFiles(files: File[]) {
+  if (!files.length || uploading.value || skillDisabled.value) return
+  if (files.length > MAX_FILES_PER_UPLOAD) {
+    ElMessage.warning(`单次最多 ${MAX_FILES_PER_UPLOAD} 个文件，本次已忽略多余的 ${files.length - MAX_FILES_PER_UPLOAD} 个`)
+    files = files.slice(0, MAX_FILES_PER_UPLOAD)
+  }
+  const tooBig = files.find((f) => f.size > MAX_FILE_SIZE_BYTES)
+  if (tooBig) {
+    ElMessage.error(`「${tooBig.name}」超过 20MB 上限`)
+    return
+  }
+  const form = new FormData()
+  files.forEach((f) => form.append('files', f))
+  if (activeId.value != null) {
+    form.append('conversationId', String(activeId.value))
+  } else {
+    form.append('clientToken', ensureClientToken())
+  }
+  uploading.value = true
+  try {
+    const saved = await clarifyApi.uploadAttachments(form)
+    // 去重合并：后端可能因同一文件重复上传返回既有记录
+    const known = new Set(attachments.value.map((a) => String(a.id)))
+    saved.forEach((item) => {
+      if (!known.has(String(item.id))) attachments.value.push(item)
+    })
+    scheduleParsePoll()
+  } catch {
+    // 拦截器已弹错（400 会带可读原因：超限/不支持的类型）
+  } finally {
+    uploading.value = false
+  }
+}
+
+/** 移除附件（软删；后端幂等，前端先摘胶囊保证手感）。 */
+async function removeAttachment(id: LongId) {
+  const before = attachments.value
+  attachments.value = attachments.value.filter((a) => String(a.id) !== String(id))
+  try {
+    await clarifyApi.deleteAttachment(id)
+  } catch {
+    attachments.value = before
+  }
+}
+
+/**
+ * 轮询解析状态：附件从 PENDING/PARSING 到 READY/FAILED/SKIPPED 通常 1~3s（本地解析）。
+ * 2s 一次、最多 15 次（30s）——超时后按实际状态展示，不无限轮询。
+ */
+function scheduleParsePoll() {
+  if (parsePollTimer != null) return
+  let attempts = 0
+  parsePollTimer = window.setInterval(async () => {
+    attempts += 1
+    await refreshAttachments()
+    const pending = attachments.value.some((a) => a.parseStatus === 'PENDING' || a.parseStatus === 'PARSING')
+    if (!pending || attempts >= 15) {
+      if (parsePollTimer != null) {
+        window.clearInterval(parsePollTimer)
+        parsePollTimer = null
+      }
+    }
+  }, 2000)
+}
+
+/** 拉一次附件清单（切会话、发完消息、轮询共用）。 */
+async function refreshAttachments() {
+  if (activeId.value == null && !clientToken.value) {
+    attachments.value = []
+    return
+  }
+  try {
+    attachments.value = await clarifyApi.listAttachments(activeId.value, clientToken.value)
+  } catch {
+    // 清单拉取失败不打断对话：保留现有胶囊，下一轮再试
+  }
+}
+
+/** 胶囊状态文案（SKIPPED 必须显式「未识别」，不能画成加载中）。 */
+function attachmentStateText(item: ChatAttachmentItem): string {
+  switch (item.parseStatus) {
+    case 'READY':
+      return item.extractedChars ? `${item.extractedChars} 字` : '可读'
+    case 'PENDING':
+    case 'PARSING':
+      return '解析中'
+    case 'FAILED':
+      return '解析失败'
+    case 'SKIPPED':
+      return '未识别'
+    default:
+      return ''
+  }
+}
+
+function attachmentChipClass(item: ChatAttachmentItem): string {
+  const status = (item.parseStatus ?? '').toLowerCase()
+  return status ? `attachment-chip--${status}` : ''
+}
+
+function attachmentChipTitle(item: ChatAttachmentItem): string {
+  const size = item.fileSize ? `${(item.fileSize / 1024).toFixed(0)}KB` : ''
+  const reason = item.parseError ? `；${item.parseError}` : ''
+  return `${item.fileName}${size ? ' · ' + size : ''}${reason}`
+}
 
 // 编辑已发送消息（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）：
 // editingMsgId 非空 = 该消息气泡处于行内编辑态；editingDraft 为 textarea 草稿；editingSaving 防重复提交
@@ -1210,10 +1450,14 @@ async function selectConversation(id: LongId) {
   closeEnhancePanel()
   const sid = String(id)
   activeId.value = sid
+  // 跨会话切换：临时批次只属于「尚未建会」的那一轮，换会话即作废
+  clientToken.value = null
+  attachments.value = []
   try {
     detail.value = await clarifyApi.detail(sid)
     scrollToBottom()
   } catch { /* 拦截器已弹错 */ }
+  void refreshAttachments()
 }
 
 function startNew() {
@@ -1222,6 +1466,9 @@ function startNew() {
   activeId.value = null
   detail.value = null
   input.value = ''
+  // 新会话从零开始：清掉上一轮的临时批次与胶囊（避免把旧文件带进新需求）
+  clientToken.value = null
+  attachments.value = []
 }
 
 // ── 输入优化（PromptEnhancer）：独立辅助链路，不进会话/任务链路 ──
@@ -1357,9 +1604,12 @@ function isTaskCommand(text: string): boolean {
  * 成功后按 FINALIZED/taskId 联动打开草案审阅（§6.169）。
  */
 async function sendSyncCreate(text: string, plannerId: string | null) {
-  const result = await clarifyApi.create(text, plannerId, webSearchEnabled.value)
+  const result = await clarifyApi.create(text, plannerId, webSearchEnabled.value, clientToken.value)
   detail.value = result
   activeId.value = String(result.conversation.id)
+  // 建会已认领临时批次：清 token（避免下一轮误用）并按会话重新拉附件清单
+  clientToken.value = null
+  void refreshAttachments()
   loadList()
   scrollToBottom()
   if (result.conversation.status === 'FINALIZED' && result.conversation.taskId != null) {
@@ -1513,6 +1763,9 @@ async function streamSendOrCreate(text: string, plannerId: string | null) {
           streamCreatedId = newId
           // 立刻切到新会话（左侧列表随后由 settleStream 的 detail 拉取刷新）
           activeId.value = newId
+          // 后端已在建会时认领临时批次：清 token 并按会话重拉附件
+          clientToken.value = null
+          void refreshAttachments()
         },
         onToken: appendStreamToken,
         onReasoning: appendStreamReasoning,
@@ -1900,6 +2153,8 @@ function handleMoreAction(cmd: string) {
 onMounted(() => {
   loadList()
   loadPlannerOptions()
+  // 附件清单：仅在已有会话时拉（新会话为空，等用户上传后才出现胶囊）
+  if (activeId.value != null) void refreshAttachments()
 })
 </script>
 
@@ -2475,6 +2730,87 @@ onMounted(() => {
 
 /* 输入行：技能胶囊与正文同一行起点（对齐 WorkBuddy「技能 chip + 光标」），
    胶囊不吃文本宽度，正文从胶囊右侧开始；多行时整块右移保持左对齐一致。 */
+/* 会话附件胶囊（V121）：状态可见是硬要求——SKIPPED 必须与「解析中」在视觉上区分开 */
+.attachment-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 8px;
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 260px;
+  padding: 3px 8px;
+  border: 1px solid var(--ha-border-light);
+  border-radius: 999px;
+  background: var(--ha-surface-hover);
+  color: var(--ha-ink);
+  font-size: 12px;
+  line-height: 18px;
+}
+.attachment-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-state {
+  color: var(--ha-muted);
+  white-space: nowrap;
+}
+.attachment-chip--ready .attachment-state {
+  color: var(--ha-success, #16a34a);
+}
+.attachment-chip--pending .attachment-state,
+.attachment-chip--parsing .attachment-state {
+  color: var(--ha-warning, #d97706);
+}
+.attachment-chip--failed {
+  border-color: var(--ha-danger, #dc2626);
+}
+.attachment-chip--failed .attachment-state {
+  color: var(--ha-danger, #dc2626);
+}
+.attachment-chip--skipped {
+  border-style: dashed;
+}
+.attachment-chip--skipped .attachment-state {
+  color: var(--ha-muted);
+}
+.attachment-icon {
+  font-size: 13px;
+  color: var(--ha-muted);
+}
+.attachment-close {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  margin-left: 2px;
+  border: none;
+  background: transparent;
+  color: var(--ha-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--ha-duration-fast) var(--ha-ease-out);
+}
+.attachment-chip:hover .attachment-close {
+  opacity: 1;
+}
+.attachment-close:hover {
+  color: var(--ha-danger, #dc2626);
+}
+/* 原生 file input 只作为触发源，不对用户可见 */
+.attachment-input {
+  display: none;
+}
+/* 拖拽落区高亮：让用户知道可以松手 */
+.composer-area.is-dragover {
+  border-color: var(--ha-primary) !important;
+  box-shadow: 0 0 0 2px var(--ha-primary-light);
+}
+
 .composer-input-row {
   display: flex;
   align-items: flex-start;

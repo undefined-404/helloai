@@ -233,14 +233,21 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
      */
     @Override
     public Flux<ChatStreamEvent> streamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled) {
-        return Flux.defer(() -> runStreamCreate(message, plannerAgentId, webSearchEnabled))
+        return streamCreate(message, plannerAgentId, webSearchEnabled, null);
+    }
+
+    @Override
+    public Flux<ChatStreamEvent> streamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled,
+                                              String clientToken) {
+        return Flux.defer(() -> runStreamCreate(message, plannerAgentId, webSearchEnabled, clientToken))
                 .onErrorResume(e -> {
                     log.warn("流式新建会话失败: err={}", e.getMessage());
                     return Flux.just(ChatStreamEvent.error(streamErrorMessage(e)));
                 });
     }
 
-    private Flux<ChatStreamEvent> runStreamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled) {
+    private Flux<ChatStreamEvent> runStreamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled,
+                                                  String clientToken) {
         String trimmed = message == null ? "" : message.trim();
         if (trimmed.isEmpty()) {
             throw new BizException("首条消息不能为空");
@@ -250,7 +257,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
             throw new BizException("斜杠命令暂不支持流式，请使用普通发送");
         }
         RequirementConversation conversation =
-                orchestrator.createConversation(trimmed, plannerAgentId, webSearchEnabled);
+                orchestrator.createConversation(trimmed, plannerAgentId, webSearchEnabled, clientToken);
         messageService.addMessage(conversation.getId(), ClarifyCommandSearchServiceImpl.ROLE_USER, trimmed, null);
         conversation.setRoundCount(1);
         conversationService.updateById(conversation);

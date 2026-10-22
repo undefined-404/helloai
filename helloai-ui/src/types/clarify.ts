@@ -93,3 +93,28 @@ export interface PlannerOption {
   selectable: boolean
   disabledReason: string | null
 }
+
+/**
+ * 会话附件（V121 / 需求对话「添加文件」）。
+ *
+ * <p>与子任务附件（`Attachment`）是两套：这里挂会话、随对话生命周期回收。
+ * `parseStatus` 是胶囊状态的核心：PENDING/PARSING 显示转圈，READY 显示字数，
+ * FAILED 可点重试，SKIPPED 显式标「未识别」——**不能**把 SKIPPED 画成加载中，
+ * 否则用户会一直等一个永远不会好的文件。</p>
+ */
+export interface ChatAttachmentItem {
+  id: LongId
+  conversationId: LongId | null
+  fileName: string
+  fileType: string
+  mimeType: string
+  fileSize: number | null
+  /** PENDING | PARSING | READY | FAILED | SKIPPED */
+  parseStatus: string | null
+  /** 失败/跳过原因（SKIPPED 时用于展示「未识别：图片…」） */
+  parseError: string | null
+  extractedChars: number | null
+  pageCount: number | null
+  parser: string | null
+  createTime?: string | null
+}

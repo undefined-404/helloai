@@ -13,6 +13,7 @@ import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.search.WebSearchOutcome;
+import com.helloai.core.planner.service.ChatAttachmentService;
 import com.helloai.core.planner.service.ClarifyCommandSearchService;
 import com.helloai.core.planner.service.ClarifyFinalizeService;
 import com.helloai.core.planner.service.ClarifyPromptRenderService;
@@ -69,6 +70,9 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     private final ChatRoundDecisionParser decisionParser;
     private final ClarifyWebSearchOrchestrator webSearchOrchestrator;
 
+    /** 会话附件认领（新建会话时把 clientToken 下的临时附件挂到会话上）。 */
+    private final ChatAttachmentService chatAttachmentService;
+
     // ══════════════════════════════════════════════════════════════
     //  对外轮次入口
     // ══════════════════════════════════════════════════════════════
@@ -81,6 +85,12 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     @Override
     public RequirementConversation createConversation(String firstMessage, Long plannerAgentId,
                                                      Boolean webSearchEnabled) {
+        return createConversation(firstMessage, plannerAgentId, webSearchEnabled, null);
+    }
+
+    @Override
+    public RequirementConversation createConversation(String firstMessage, Long plannerAgentId,
+                                                     Boolean webSearchEnabled, String clientToken) {
         if (firstMessage == null || firstMessage.isBlank()) {
             throw new BizException("首条消息不能为空");
         }
@@ -106,6 +116,11 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         // 新会话始终 CHAT 自由对话（auto 意图路由 + /planner 命令触发转方案）
         conversation.setMode(RequirementClarifyService.MODE_CHAT);
         conversationService.save(conversation);
+        // 认领新会话首句前上传的临时附件（clientToken → conversationId）。
+        // 必须在 save 之后：claim 的 WHERE 条件是 conversation_id IS NULL，需要有会话 id 才写得进去。
+        if (clientToken != null && !clientToken.isBlank()) {
+            chatAttachmentService.claimByClientToken(clientToken, conversation.getId());
+        }
         log.info("澄清会话创建（仅建会话，轮次由调用方执行）: id={}, title={}, plannerAgentId={}, webSearchEnabled={}, mode={}",
                 conversation.getId(), conversation.getTitle(), plannerAgentId, webSearchEnabled,
                 RequirementClarifyService.MODE_CHAT);

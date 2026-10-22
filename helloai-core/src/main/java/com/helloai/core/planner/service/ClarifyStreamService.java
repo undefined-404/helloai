@@ -39,4 +39,14 @@ public interface ClarifyStreamService {
      * @return session + token/reasoning 增量事件流，恒以 DONE 或 ERROR 收尾
      */
     Flux<ChatStreamEvent> streamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled);
+
+    /**
+     * 同上，并在建会时认领 {@code clientToken} 名下的临时附件（默认退化为不认领）。
+     *
+     * @param clientToken 前端生成的新会话临时标识（可空）
+     */
+    default Flux<ChatStreamEvent> streamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled,
+                                               String clientToken) {
+        return streamCreate(message, plannerAgentId, webSearchEnabled);
+    }
 }

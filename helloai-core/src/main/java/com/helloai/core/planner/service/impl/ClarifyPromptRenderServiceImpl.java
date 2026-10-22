@@ -7,6 +7,7 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.planner.attachment.ChatAttachmentPromptRenderer;
 import com.helloai.core.planner.clarify.ClarifyReplyParser;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.entity.RequirementConversation;
@@ -106,6 +107,9 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
     private final ClarifyReplyParser replyParser;
     private final ClarifyCommandSearchService commandSearch;
 
+    /** 会话附件两层注入（MANIFEST 恒注入 + CONTEXT 按 G-016 预算）。 */
+    private final ChatAttachmentPromptRenderer chatAttachmentPromptRenderer;
+
     // ══════════════════════════════════════════════════════════════
     //  主模板渲染（三模板共用）
     // ══════════════════════════════════════════════════════════════
@@ -169,6 +173,8 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
         }
         String contextSection = (webSearchContext == null || webSearchContext.isBlank())
                 ? "（无可用联网资料）" : webSearchContext;
+        ChatAttachmentPromptRenderer.Rendered attachmentRendered =
+                chatAttachmentPromptRenderer.render(conversationId);
         return template
                 .replace("{{CONVERSATION_HISTORY}}", transcript.toString().trim())
                 .replace("{{CURRENT_USER_MESSAGE}}", currentUserInput != null ? currentUserInput : "")
@@ -177,7 +183,11 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
                 // 三个模板在回答时效性问题时均以服务器实时日期为基准
                 .replace("{{SYSTEM_TIME_CONTEXT}}", systemTimeContextBuilder.build())
                 // 长期记忆受控 recall（N-009，C5-S3）：有限条数 + 无结果占位 + 失败降级不阻断
-                .replace("{{LONG_TERM_MEMORY_CONTEXT}}", resolveMemoryContext(conversationId));
+                .replace("{{LONG_TERM_MEMORY_CONTEXT}}", resolveMemoryContext(conversationId))
+                // 会话附件两层注入（方案 §3.4）：清单恒注入（哪怕正文读不出，也要让模型知道有文件），
+                // 正文按 G-016 预算注入；一次查询同时供两层使用。
+                .replace("{{ATTACHMENT_MANIFEST}}", attachmentRendered.manifest())
+                .replace("{{ATTACHMENT_CONTEXT}}", attachmentRendered.context());
     }
 
     @Override

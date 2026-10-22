@@ -32,6 +32,8 @@ import com.helloai.core.planner.service.WebPageFetchService;
 import com.helloai.core.planner.service.SearchQueryPlannerService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.RequirementClarifyService;
+import com.helloai.core.planner.attachment.ChatAttachmentPromptRenderer;
+import com.helloai.core.planner.service.ChatAttachmentService;
 import com.helloai.core.planner.service.impl.ClarifyCommandSearchServiceImpl;
 import com.helloai.core.planner.service.impl.ClarifyFinalizeServiceImpl;
 import com.helloai.core.planner.service.impl.ClarifyPromptRenderServiceImpl;
@@ -167,10 +169,13 @@ class RequirementClarifyServiceTest {
                 new ObjectMapper());
         ClarifyCommandSearchServiceImpl commandSearch = new ClarifyCommandSearchServiceImpl(
                 webSearchOrchestrator, messageService, confirmCard, conversationService);
+        // 会话附件注入（LOG-20261022-014）：渲染器新增一个依赖，测试里给真实实现 + mock 服务
+        ChatAttachmentPromptRenderer attachmentPromptRenderer =
+                new ChatAttachmentPromptRenderer(mock(ChatAttachmentService.class));
         ClarifyPromptRenderServiceImpl promptRenderService = new ClarifyPromptRenderServiceImpl(
                 messageService, conversationService, longTermMemoryService, new SystemTimeContextBuilder(),
                 taskTimelineService, platformAgentExecutionService, plannerAgentPicker, replyParser,
-                commandSearch);
+                commandSearch, attachmentPromptRenderer);
         ClarifyFinalizeServiceImpl finalizeService = new ClarifyFinalizeServiceImpl(
                 conversationService, messageService, taskService, agentService, agentInboxService,
                 taskTimelineService, longTermMemoryService, requirementConversationMapper,
@@ -178,7 +183,8 @@ class RequirementClarifyServiceTest {
         ClarifyRoundOrchestratorServiceImpl orchestrator = new ClarifyRoundOrchestratorServiceImpl(
                 commandSearch, promptRenderService, finalizeService, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
-                new ChatRoundDecisionParser(new ObjectMapper()), webSearchOrchestrator);
+                new ChatRoundDecisionParser(new ObjectMapper()), webSearchOrchestrator,
+                mock(ChatAttachmentService.class));
         ClarifyStreamServiceImpl streamService = new ClarifyStreamServiceImpl(
                 orchestrator, promptRenderService, commandSearch, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,

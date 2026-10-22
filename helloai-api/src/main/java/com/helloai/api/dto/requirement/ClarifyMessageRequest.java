@@ -26,6 +26,15 @@ public class ClarifyMessageRequest {
     private Boolean webSearchEnabled;
 
     /**
+     * 新会话首句前上传附件的临时归属（仅新建会话生效；前端生成 UUID）。
+     *
+     * <p>新会话是「先传文件、再发第一句」的顺序，此刻还没有 {@code conversationId}，
+     * 故先用本 token 占位；建会时按 token 认领并回填会话 id，附件随后进入
+     * {@code {{ATTACHMENT_MANIFEST}}}。老调用方不传即为无附件，行为不变。</p>
+     */
+    private String clientToken;
+
+    /**
      * 初始对话模式（仅新建会话生效；append 消息接口忽略）。
      * <p>已废弃：新会话始终 CHAT 模式，LLM auto 意图路由 + /planner 命令触发转方案。</p>
      * @deprecated 使用 /planner 命令替代

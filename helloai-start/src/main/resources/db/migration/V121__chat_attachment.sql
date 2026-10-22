@@ -29,6 +29,9 @@ CREATE TABLE chat_attachment (
     content_hash    varchar(64),
     bucket_name     varchar(64)  NOT NULL DEFAULT '',
     object_key      varchar(255) NOT NULL DEFAULT '',
+    -- 与子任务级 attachment.storage_url 同口径：平台存储统一用 storageUrl 读写，
+    -- bucket/objectKey 只是便于对账与排查的冗余列（不单独作为读地址拼装依据）。
+    storage_url     varchar(512) NOT NULL DEFAULT '',
     parse_status    varchar(16)  NOT NULL DEFAULT 'PENDING',
     parse_error     varchar(512),
     extracted_text  text,

@@ -45,6 +45,19 @@ public interface ClarifyRoundOrchestratorService {
      */
     RequirementConversation createConversation(String firstMessage, Long plannerAgentId,
                                                Boolean webSearchEnabled);
+
+    /**
+     * 同上，并<b>认领</b>新会话首句前上传的附件（{@code clientToken} 名下、{@code conversation_id}
+     * 为空的临时批次）——认领后附件才随会话进入 {@code {{ATTACHMENT_MANIFEST}}}。
+     *
+     * <p>为什么认领放在建会里而不是另开一个端点：附件归属与会话创建是同一件事的两个半步，
+     * 分开调会出现「会话建了、文件没挂上」的中间态，用户看到文件消失。放在同一次调用里，
+     * 建会成功即归属确定。</p>
+     *
+     * @param clientToken 前端生成的新会话临时标识（可空=没传过附件）
+     */
+    RequirementConversation createConversation(String firstMessage, Long plannerAgentId,
+                                               Boolean webSearchEnabled, String clientToken);
     /** 向会话追加一条用户消息并走一轮 LLM（可携带结构化选项回答快照）。 */
     ClarifyConversationDetail sendMessage(Long conversationId, String message, List<ClarifySelection> selections);
 

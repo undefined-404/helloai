@@ -136,6 +136,25 @@ public interface RequirementClarifyService {
      */
     Flux<ChatStreamEvent> streamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled);
 
+    /**
+     * 新建会话并认领新会话首句前上传的附件（{@code clientToken} 名下临时批次）。
+     *
+     * <p>默认实现退化为不带认领的 {@link #create(String, Long, Boolean)}：老调用方与测试替身
+     * 不需要改；需要附件归属的入口（HTTP 层）覆写本方法。</p>
+     *
+     * @param clientToken 前端生成的新会话临时标识（可空）
+     */
+    default ClarifyConversationDetail createWithClientToken(String firstMessage, Long plannerAgentId,
+                                                            Boolean webSearchEnabled, String clientToken) {
+        return create(firstMessage, plannerAgentId, webSearchEnabled);
+    }
+
+    /** 流式新建会话 + 附件认领，语义同 {@link #createWithClientToken}。 */
+    default Flux<ChatStreamEvent> streamCreateWithClientToken(String message, Long plannerAgentId,
+                                                              Boolean webSearchEnabled, String clientToken) {
+        return streamCreate(message, plannerAgentId, webSearchEnabled);
+    }
+
     /** 流式轮事件：type 决定事件名（token / done / error），data 为载荷文本。 */
     record ChatStreamEvent(Type type, String data) {
 

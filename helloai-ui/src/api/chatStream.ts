@@ -58,11 +58,13 @@ export async function streamCreateConversation(
   plannerAgentId: string | null,
   webSearchEnabled: boolean | null,
   handlers: ChatStreamHandlers,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  clientToken?: string | null
 ): Promise<void> {
   return consumeSse(
     `/api${paths.clarifications.streamCreate}`,
-    { message, plannerAgentId, webSearchEnabled },
+    // clientToken：新会话首句前上传的附件临时归属，建会时由后端认领（可空）
+    { message, plannerAgentId, webSearchEnabled, clientToken: clientToken ?? null },
     handlers,
     signal
   )

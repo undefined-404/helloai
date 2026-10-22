@@ -1,6 +1,6 @@
 import request from './request'
 import { paths } from './paths'
-import type { ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, Task, LongId } from '@/types'
+import type { ChatAttachmentItem, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, Task, LongId } from '@/types'
 
 // V29 对话式需求澄清: 每轮走一次 LLM，耗时远超全局 30s，create/send/retry 单请求覆盖 timeout
 // v1.1 修复: 澄清会话 ID 为 Snowflake 长整型，URL/比较一律按 string 处理防 JS Number 精度丢失
@@ -8,10 +8,13 @@ import type { ClarifyConversationDetail, ClarifySelection, PlannerOption, Requir
 // V46: initialMode 已废弃，新会话始终 CHAT 模式
 export const clarifyApi = {
   // 新建会话（首条用户消息触发一轮 LLM；plannerAgentId 空=系统自动选择；新会话始终 CHAT 模式）
-  create(message: string, plannerAgentId?: LongId | null, webSearchEnabled?: boolean | null) {
+  create(message: string, plannerAgentId?: LongId | null, webSearchEnabled?: boolean | null,
+         clientToken?: string | null) {
     return request.post<any, ClarifyConversationDetail>(
       paths.clarifications.create,
-      { message, plannerAgentId: plannerAgentId ?? null, webSearchEnabled: webSearchEnabled ?? null },
+      // clientToken：新会话首句前上传的附件临时归属，建会时后端按 token 认领（可空）
+      { message, plannerAgentId: plannerAgentId ?? null, webSearchEnabled: webSearchEnabled ?? null,
+        clientToken: clientToken ?? null },
       { timeout: 120_000 })
   },
   // 追加用户消息并走一轮 LLM 澄清（可附 V33 结构化选项回答快照）
@@ -51,6 +54,29 @@ export const clarifyApi = {
   // 会话列表（按创建时间倒序，LIMIT 50）
   list() {
     return request.get<any, RequirementConversation[]>(paths.clarifications.list)
+  },
+
+  // ── 会话附件（V121，需求对话「添加文件」）─────────────────────────────
+  /** 上传附件（1~5 个）；新会话首句前不传 conversationId，改传前端生成的 clientToken。 */
+  uploadAttachments(form: FormData) {
+    return request.post<any, ChatAttachmentItem[]>(
+      paths.chatAttachments.upload, form,
+      { timeout: 120_000, headers: { 'Content-Type': 'multipart/form-data' } })
+  },
+  /** 会话附件清单（解析状态轮询用；新会话首句前按 clientToken 查临时批次）。 */
+  listAttachments(conversationId?: LongId | null, clientToken?: string | null) {
+    const params: Record<string, string> = {}
+    if (conversationId != null) params.conversationId = String(conversationId)
+    else if (clientToken) params.clientToken = clientToken
+    return request.get<any, ChatAttachmentItem[]>(paths.chatAttachments.list, { params })
+  },
+  /** 删除附件（软删，幂等）。 */
+  deleteAttachment(id: LongId) {
+    return request.post<any, void>(paths.chatAttachments.deleteById(id))
+  },
+  /** 内联预览地址（文本/图片/PDF 小文件；交给 <a target=_blank> 或 fetch 直接打开）。 */
+  attachmentPreviewUrl(id: LongId) {
+    return `${import.meta.env.VITE_API_BASE ?? '/api'}${paths.chatAttachments.previewById(id)}`
   },
   // 会话详情（含全部消息按 seq 升序）
   detail(id: LongId) {
