@@ -145,6 +145,15 @@
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
         </dependency>
+        <!-- Apache Tika 标准解析包（需求对话附件解析）：pom 打包的聚合件，type=pom 必写。
+             4.1.0 会把 tika-core 一并传递进来（经 tika-encoding-detector-html），无需单独声明；
+             版本由根 pom dependencyManagement 管理（键含 type，故此处必须重复 type=pom）。
+             方案与实测见 doc/plan/HelloAI 需求对话附件设计方案（2026-10-22）.md §2.5。 -->
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parsers-standard-package</artifactId>
+            <type>pom</type>
+        </dependency>
         <!-- 测试（v2.4 §4.10） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

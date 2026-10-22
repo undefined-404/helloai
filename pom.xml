@@ -32,6 +32,10 @@
         <lombok.version>1.18.32</lombok.version>
         <resilience4j.version>2.2.0</resilience4j.version>
         <minio.version>8.5.12</minio.version>
+        <!-- Apache Tika：需求对话附件解析（PDF/Office/HTML → 文本或 Markdown）。
+             取 4.x 线（4.1.0 release）；聚合件为 pom 打包，依赖侧必须写 type=pom。
+             选型与实测见 doc/plan/HelloAI 需求对话附件设计方案（2026-10-22）.md §2.5。 -->
+        <tika.version>4.1.0</tika.version>
         <!-- OkHttp：出站 SSRF 守卫（REF-5.4）用自定义 Dns 做地址 pinning。
              它原是本仓传递依赖（MinIO SDK 8.5.12 → okhttp 4.12.0），按 D-2026-10-09-6③-2
              「传递依赖落地必须在 pom.xml 显式声明，不裸用」在此定版（与 commons-compress 同规矩）。 -->
@@ -40,8 +44,12 @@
              JDK 的 java.util.zip.ZipEntry **不暴露** unix mode（external attributes 在中央目录里）
              与加密位，查不了 symlink / 加密条目；commons-compress 两者都给。
              它原是本仓传递依赖（1.26.0），按既有规矩（D-2026-10-09-6③-2 对 OkHttp 的处置：
-             「传递依赖落地必须在 pom.xml 显式声明」）在此定版。 -->
-        <commons-compress.version>1.26.0</commons-compress.version>
+             「传递依赖落地必须在 pom.xml 显式声明」）在此定版。
+             2026-10-22 升级 1.26.0 → 1.28.0：Apache Tika 4.1.0（需求对话附件解析）声明 1.28.0，
+             且 1.26 的 ArchiveStreamFactory.detect 对未知签名**抛受检异常**（1.28 起
+             ArchiveException 改为 RuntimeException 并返回 null），版本不齐会让 Tika 的类型探测
+             对任何非压缩包文件直接抛错（实测：“No Archiver found for the stream signature”）。 -->
+        <commons-compress.version>1.28.0</commons-compress.version>
         <!-- Redisson 分布式锁（子任务审核并发锁迁移，v1.2 §阶段1） -->
         <redisson.version>4.0.0</redisson.version>
         <!-- ShedLock 定时任务分布式锁（11 个 job 任务迁移，v1.2 §阶段2） -->
@@ -199,6 +207,14 @@
                 <groupId>io.minio</groupId>
                 <artifactId>minio</artifactId>
                 <version>${minio.version}</version>
+            </dependency>
+            <!-- Apache Tika 标准解析包（需求对话附件）：pom 打包的聚合件，type=pom 必写且管理键含 type，
+                 因此模块侧引用时同样要写 type=pom，否则版本管理不生效。 -->
+            <dependency>
+                <groupId>org.apache.tika</groupId>
+                <artifactId>tika-parsers-standard-package</artifactId>
+                <type>pom</type>
+                <version>${tika.version}</version>
             </dependency>
             <!-- Apache Commons Compress：技能包 zip 摄入闸门（REF-1.5） -->
             <dependency>
