@@ -237,9 +237,13 @@ export interface ActivityLogItem {
   agentId: string
   subTaskId: LongId | null
   action: string
-  summary: string
+  detail: Record<string, any> | null
   level: string
+  source: string
   createTime: string
+  /** 后端 2026-10-22 增强：活动流展示「哪个 Agent 干的 + 接入类型标签」 */
+  agentName?: string
+  agentAccessType?: string
 }
 
 /** Agent 接入内容生成响应 */
