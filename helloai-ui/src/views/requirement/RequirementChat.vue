@@ -5,7 +5,7 @@
         <div class="card-header chat-header">
           <div class="chat-header-title">
             <span class="chat-header-main">新建对话（AI 助手）</span>
-            <span class="chat-header-sub">与 AI 助手自由对话；输入 /planner 进入方案整理，/task 直达拆解</span>
+            <span class="chat-header-sub">与 AI 助手自由对话；需要成体系时点「＋」→ 技能 →「方案整理」，想跳过澄清直接建任务选「直接拆解」</span>
           </div>
           <div class="header-actions">
             <!-- 模式 chip + 操作组（刷新 / 分享 / 更多）；新建会话入口收敛在左栏顶部「新建对话」 -->
@@ -647,6 +647,52 @@
                   />
                   <div class="input-actions">
                     <div class="input-actions-left">
+                      <!-- 「＋」能力入口（2026-10-22，对齐 WorkBuddy 交互）：一个 + 收纳可选能力，
+                           当前只有「技能」一组；技能语义等价于旧斜杠命令 /planner 与 /task，
+                           语法不再外露，命令仅作高级别名保留。 -->
+                      <el-popover
+                        v-model:visible="plusMenuVisible"
+                        placement="top-start"
+                        :width="300"
+                        trigger="click"
+                        popper-class="plus-menu-popover"
+                      >
+                        <template #reference>
+                          <button
+                            type="button"
+                            class="plus-btn"
+                            :disabled="skillDisabled"
+                            title="选择技能"
+                          >
+                            <el-icon><Plus /></el-icon>
+                          </button>
+                        </template>
+                        <div class="plus-menu">
+                          <div class="plus-menu-group-title">技能</div>
+                          <button
+                            type="button"
+                            class="plus-menu-item"
+                            @click="pickSkill('planner')"
+                          >
+                            <span class="plus-menu-icon"><el-icon><EditPen /></el-icon></span>
+                            <span class="plus-menu-text">
+                              <span class="plus-menu-name">方案整理</span>
+                              <span class="plus-menu-desc">逐轮问清边界与取舍，再产出可执行方案</span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            class="plus-menu-item"
+                            @click="pickSkill('task')"
+                          >
+                            <span class="plus-menu-icon"><el-icon><MagicStick /></el-icon></span>
+                            <span class="plus-menu-text">
+                              <span class="plus-menu-name">直接拆解</span>
+                              <span class="plus-menu-desc">跳过澄清，按当前描述直接产出方案并建任务</span>
+                            </span>
+                          </button>
+                        </div>
+                      </el-popover>
                       <!-- V34 会话级联网搜索开关：ima copilot 样式（默认开启；仅新会话可改；老会话只读取会话原值） -->
                       <div class="web-search-switch">
                         <el-tooltip
@@ -807,12 +853,16 @@ const taskExists = computed(() => detail.value?.taskExists === true)
 // V39 双模式：CHAT 自由对话 / CLARIFY 方案澄清（mode 为 null 的老数据视为 CLARIFY）
 const isChatMode = computed(() => conversation.value?.mode === 'CHAT')
 
-// 输入框占位文案按会话模式区分（V39；V40.2 补 /planner 斜杠命令入口提示；§6.169 补 /task 直达拆解提示）
+// 输入框占位文案按会话模式区分（三态口径统一：新建 / 自由对话 / 方案澄清）。
+// 2026-10-22：斜杠语法不再出现在文案里——能力入口收进输入框左下角「＋」菜单的「技能」组，
+// 命令本身仍是同一套后端协议（/plan 与 /task），只作为高级别名保留、不再对外宣传。
 const inputPlaceholder = computed(() => {
-  if (activeId.value == null) return '描述你想做的事情，或直接提问；输入 /task 可直达拆解，Enter 发送'
+  if (activeId.value == null) {
+    return '描述你想做的事，或直接提问；点左下角「＋」选技能可直接建任务，Enter 发送'
+  }
   return isChatMode.value
-    ? '和 AI 助手自由对话；输入 /planner 进入方案整理，/task 直达拆解'
-    : '继续补充需求，Enter 发送'
+    ? '和 AI 助手自由对话；想成体系地梳理，点左下角「＋」→ 技能，Enter 发送'
+    : '继续补充需求，Enter 发送；「＋」→ 技能 里的「直接拆解」此时仍可用'
 })
 
 // V40.2 计划类斜杠命令（/planner|/plan）：显式进入方案澄清模式（CLARIFY）；可带附加文本（落库进上下文后再切）。
@@ -826,6 +876,47 @@ const finalizing = ref(false)
 const streamEl = ref<HTMLElement | null>(null)
 // 停止生成（2026-10-19）：当前流式发送的 AbortController 句柄；非空 = 流在跑，展示「停止生成」按钮
 const streamAbort = ref<AbortController | null>(null)
+
+// 技能入口可用性：生成中 / 定稿中 / 会话已非 ACTIVE 时禁用（避免点了没反应）
+const skillDisabled = computed(() => sending.value
+  || finalizing.value
+  || (activeId.value != null && conversation.value?.status !== 'ACTIVE'))
+
+// 「＋」能力菜单展开态（点技能项后先收起，再触发，避免菜单遮住生成中的回复）
+const plusMenuVisible = ref(false)
+
+/** 从「＋」菜单选技能：收起菜单后复用同一套技能入口逻辑。 */
+function pickSkill(kind: 'planner' | 'task') {
+  plusMenuVisible.value = false
+  void useSkill(kind)
+}
+
+/**
+ * 技能入口（2026-10-22）：把「斜杠命令语法」收进 UI，用户只选能力。
+ * <ul>
+ *   <li>方案整理 → 等价 <code>/planner|/plan</code>：进方案澄清轮（后端仅在 CHAT 模式生效，新会话恒为 CHAT）</li>
+ *   <li>直接拆解 → 等价 <code>/task</code>：终稿直出 + 自动建任务（任意模式优先，信息不足后端会降级追问）</li>
+ * </ul>
+ * 两条能力全部由既有后端命令协议承载，这里只做入口与文案，不新增协议、不改后端。
+ */
+async function useSkill(kind: 'planner' | 'task') {
+  const text = input.value.trim()
+  if (!text) {
+    ElMessage.warning(kind === 'planner'
+      ? '先写一句你想做什么，再点「方案整理」'
+      : '先写一句需求描述，再点「直接拆解」')
+    return
+  }
+  if (kind === 'planner') {
+    // 走既有 /planner 链路：附加文本落库进上下文后再切 CLARIFY
+    input.value = ''
+    await handlePlannerCommand(text)
+    return
+  }
+  // 走既有 /task 链路：拼前缀后交给 handleSend 的同步 create 分支（读 FINALIZED/taskId 联动审阅）
+  input.value = `/task ${text}`
+  await handleSend()
+}
 
 // 编辑已发送消息（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）：
 // editingMsgId 非空 = 该消息气泡处于行内编辑态；editingDraft 为 textarea 草稿；editingSaving 防重复提交
@@ -1500,11 +1591,13 @@ async function handlePlannerCommand(extra: string) {
     const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
     let result: ClarifyConversationDetail
     if (activeId.value == null) {
-      // 新会话：先建 CHAT 会话，再调 toClarify 切换
+      // 新会话：先建 CHAT 会话（首条消息即 extra），再调 toClarify 切换。
+      // 首条消息已在 create 轮落库，切换时不再重复带 extra——否则同一段文本会落两条 user 消息
+      // （旧版只在斜杠命令下暴露，技能入口上线后这条路径变成主入口，故一并修正）。
       const initMsg = extra || '请帮我整理一份技术方案'
       result = await clarifyApi.create(initMsg, plannerId, webSearchEnabled.value)
       activeId.value = String(result.conversation.id)
-      result = await clarifyApi.toClarify(activeId.value, extra || null)
+      result = await clarifyApi.toClarify(activeId.value, null)
     } else {
       result = await clarifyApi.toClarify(activeId.value, extra || null)
     }
@@ -2293,6 +2386,86 @@ onMounted(() => {
   resize: none;
   font-size: 14px;
   line-height: 1.6;
+}
+
+/* 「＋」能力入口（对齐 WorkBuddy：一个 + 收纳可选能力） */
+.plus-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--ha-border-light);
+  border-radius: 50%;
+  background: var(--ha-surface);
+  color: var(--ha-muted);
+  cursor: pointer;
+  transition: border-color var(--ha-duration-fast) var(--ha-ease-out),
+              background var(--ha-duration-fast) var(--ha-ease-out),
+              color var(--ha-duration-fast) var(--ha-ease-out);
+}
+.plus-btn:hover:not(:disabled) {
+  border-color: var(--ha-primary);
+  background: var(--ha-primary-light);
+  color: var(--ha-primary);
+}
+.plus-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 菜单内容被 teleport 到 body，scoped 选择器命中不到 → 用 :global 锚定 popper-class */
+:global(.plus-menu-popover) {
+  padding: 6px !important;
+}
+:global(.plus-menu-popover .plus-menu-group-title) {
+  padding: 4px 8px 6px;
+  font-size: 12px;
+  color: var(--ha-muted);
+  letter-spacing: 0.5px;
+}
+:global(.plus-menu-popover .plus-menu-item) {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: var(--ha-radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--ha-duration-fast) var(--ha-ease-out);
+}
+:global(.plus-menu-popover .plus-menu-item:hover) {
+  background: var(--ha-surface-hover);
+}
+:global(.plus-menu-popover .plus-menu-icon) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  height: 24px;
+  border-radius: var(--ha-radius-sm);
+  background: var(--ha-primary-light);
+  color: var(--ha-primary);
+  font-size: 14px;
+}
+:global(.plus-menu-popover .plus-menu-text) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+:global(.plus-menu-popover .plus-menu-name) {
+  font-size: 13px;
+  color: var(--ha-ink);
+  line-height: 1.4;
+}
+:global(.plus-menu-popover .plus-menu-desc) {
+  font-size: 12px;
+  color: var(--ha-muted);
+  line-height: 1.4;
 }
 
 .input-actions {
