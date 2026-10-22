@@ -126,7 +126,7 @@ class McpToolServiceTest {
                 agentService, heartbeatService, agentDutyLeaseService, attachmentPort,
                 executionResultHandler, activityLogService, submissionActivityRecorder,
                 subTaskQueryPort, subTaskCommandPort, agentExecutionRecordService,
-                skillPackageCatalog, llmProviderModelQueryService);
+                skillPackageCatalog, llmProviderModelQueryService, agentInboxService);
         McpTaskClaimService taskClaimService = new McpTaskClaimServiceImpl(
                 agentService, agentInboxService, agentMcpServerService, subTaskQueryPort,
                 subTaskCommandPort, heartbeatService, agentEventRecorder, taskTimelinePort,
@@ -303,6 +303,37 @@ class McpToolServiceTest {
         when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(subTask(AGENT_ID));
         McpToolService.PullTasksResult noSla = mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
         assertThat(noSla.getMessages().get(0).getDeadline()).isNull();
+    }
+
+    @Test
+    @DisplayName("pullTasks：每条消息按 eventType 映射 wakeReason（Paperclip 阶段一·2）")
+    void shouldMapWakeReasonPerMessage() {
+        AgentInbox assigned = subTaskInbox(SUB_TASK_ID);
+        assigned.setEventType("sub_task.assigned");
+        AgentInbox rejected = subTaskInbox(6L);
+        rejected.setEventType("sub_task.rejected");
+        when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of(assigned, rejected));
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(subTask(AGENT_ID));
+        when(subTaskQueryPort.findById(6L)).thenReturn(subTask(AGENT_ID));
+
+        McpToolService.PullTasksResult result = mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
+
+        assertThat(result.getMessages()).hasSize(2);
+        assertThat(result.getMessages().get(0).getWakeReason()).isEqualTo("issue_assigned");
+        assertThat(result.getMessages().get(1).getWakeReason()).isEqualTo("retry");
+    }
+
+    @Test
+    @DisplayName("pullTasks：未知 eventType 兜底为 continuation（Paperclip 阶段一·2）")
+    void shouldDefaultUnknownEventTypeToContinuation() {
+        AgentInbox unknown = subTaskInbox(SUB_TASK_ID);
+        unknown.setEventType("sub_task.approved");
+        when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of(unknown));
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(subTask(AGENT_ID));
+
+        McpToolService.PullTasksResult result = mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
+
+        assertThat(result.getMessages().get(0).getWakeReason()).isEqualTo("continuation");
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -701,6 +732,81 @@ class McpToolServiceTest {
         assertThat(result.getLeaseId()).isNull();
         assertThat(result.getLeaseExpiresAt()).isNull();
         assertThat(result.getRemainingTtlSeconds()).isZero();
+    }
+
+    @Test
+    @DisplayName("heartbeat：有未读收件箱（sub_task.assigned）→ wakeReason=issue_assigned（Paperclip 阶段一·2）")
+    void shouldReportIssueAssignedWakeReason() {
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(null);
+        AgentInbox assigned = subTaskInbox(SUB_TASK_ID);
+        assigned.setEventType("sub_task.assigned");
+        when(agentInboxService.getUnread(AGENT_ID, 1)).thenReturn(List.of(assigned));
+
+        McpToolService.HeartbeatResult result = mcpToolService.heartbeat(AGENT_ID);
+
+        assertThat(result.getWakeReason()).isEqualTo("issue_assigned");
+    }
+
+    @Test
+    @DisplayName("heartbeat：有未读收件箱（sub_task.rejected）→ wakeReason=retry（Paperclip 阶段一·2）")
+    void shouldReportRetryWakeReason() {
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(null);
+        AgentInbox rejected = subTaskInbox(SUB_TASK_ID);
+        rejected.setEventType("sub_task.rejected");
+        when(agentInboxService.getUnread(AGENT_ID, 1)).thenReturn(List.of(rejected));
+
+        McpToolService.HeartbeatResult result = mcpToolService.heartbeat(AGENT_ID);
+
+        assertThat(result.getWakeReason()).isEqualTo("retry");
+    }
+
+    @Test
+    @DisplayName("heartbeat：有未读收件箱（sub_task.review）→ wakeReason=comment_mentioned（Paperclip 阶段一·2）")
+    void shouldReportCommentMentionedWakeReason() {
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(null);
+        AgentInbox review = subTaskInbox(SUB_TASK_ID);
+        review.setEventType("sub_task.review");
+        when(agentInboxService.getUnread(AGENT_ID, 1)).thenReturn(List.of(review));
+
+        McpToolService.HeartbeatResult result = mcpToolService.heartbeat(AGENT_ID);
+
+        assertThat(result.getWakeReason()).isEqualTo("comment_mentioned");
+    }
+
+    @Test
+    @DisplayName("heartbeat：有未读收件箱（task.created 等兜底）→ wakeReason=continuation（Paperclip 阶段一·2）")
+    void shouldReportContinuationWakeReason() {
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(null);
+        AgentInbox created = subTaskInbox(SUB_TASK_ID);
+        created.setEventType("task.created");
+        when(agentInboxService.getUnread(AGENT_ID, 1)).thenReturn(List.of(created));
+
+        McpToolService.HeartbeatResult result = mcpToolService.heartbeat(AGENT_ID);
+
+        assertThat(result.getWakeReason()).isEqualTo("continuation");
+    }
+
+    @Test
+    @DisplayName("heartbeat：无未读收件箱 → wakeReason=none（Paperclip 阶段一·2）")
+    void shouldReportNoneWakeReasonWhenNoUnread() {
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(null);
+        when(agentInboxService.getUnread(AGENT_ID, 1)).thenReturn(List.of());
+
+        McpToolService.HeartbeatResult result = mcpToolService.heartbeat(AGENT_ID);
+
+        assertThat(result.getWakeReason()).isEqualTo("none");
+    }
+
+    @Test
+    @DisplayName("heartbeat：读收件箱异常 → wakeReason=none 降级，不影响心跳主链（观测面字段）")
+    void shouldDegradeWakeReasonToNoneWhenInboxReadFails() {
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(null);
+        when(agentInboxService.getUnread(AGENT_ID, 1)).thenThrow(new RuntimeException("db down"));
+
+        McpToolService.HeartbeatResult result = mcpToolService.heartbeat(AGENT_ID);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.getWakeReason()).isEqualTo("none");
     }
 
     @Test
@@ -1161,6 +1267,66 @@ class McpToolServiceTest {
                 any(), any(), eq("sub_task_claim_rejected"), any(), any(), anyMap());
     }
 
+    @Test
+    @DisplayName("claimSubTask：原子占位失败且已被他人赋主 → already_claimed_by_other（Paperclip 409，勿重试换活）")
+    void shouldSplitRaceReasonWhenStillPending() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+        SubTaskSnapshot pending = SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID)
+                .taskId(TASK_ID)
+                .status(SubTaskStatus.PENDING)
+                .build();
+        SubTaskSnapshot claimedByOther = SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID)
+                .taskId(TASK_ID)
+                .assignedAgentId(OTHER_AGENT)
+                .status(SubTaskStatus.ASSIGNED)
+                .build();
+        // 首次读取 = PENDING；claimAtomic 失败后重读：已被并发方赋主（assigned_agent_id 非空且非我）
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(pending, claimedByOther);
+        when(subTaskQueryPort.claimConstraint(SUB_TASK_ID)).thenReturn(null);
+        when(subTaskQueryPort.isReady(SUB_TASK_ID)).thenReturn(true);
+        when(subTaskCommandPort.claimAtomic(SUB_TASK_ID, AGENT_ID)).thenReturn(false);
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.isClaimed()).isFalse();
+        // 409 语义：已被他人抢占 → 客户端应换活，不得重试
+        assertThat(result.getReason()).isEqualTo("already_claimed_by_other");
+        // 归因不埋 AGENT_STARTED（未认领成功）
+        verifyNoInteractions(agentEventRecorder);
+    }
+
+    @Test
+    @DisplayName("claimSubTask：原子占位失败且状态已变（归属非他人）→ invalid_status:XXX（状态非法，勿盲目重试）")
+    void shouldSplitRaceReasonWhenStatusChanged() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+        SubTaskSnapshot pending = SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID)
+                .taskId(TASK_ID)
+                .status(SubTaskStatus.PENDING)
+                .build();
+        // 状态已变（DONE）但归属非他人（未分配）→ 非抢占，属「状态非法」类
+        SubTaskSnapshot done = SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID)
+                .taskId(TASK_ID)
+                .assignedAgentId(null)
+                .status(SubTaskStatus.DONE)
+                .build();
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(pending, done);
+        when(subTaskQueryPort.claimConstraint(SUB_TASK_ID)).thenReturn(null);
+        when(subTaskQueryPort.isReady(SUB_TASK_ID)).thenReturn(true);
+        when(subTaskCommandPort.claimAtomic(SUB_TASK_ID, AGENT_ID)).thenReturn(false);
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.isClaimed()).isFalse();
+        assertThat(result.getReason()).isEqualTo("invalid_status:DONE");
+        verifyNoInteractions(agentEventRecorder);
+    }
+
     // ══════════════════════════════════════════════════════════════
     //  getSubTaskDetail 附件可发现性（P1-4-b）
     //  ══════════════════════════════════════════════════════════════
@@ -1403,5 +1569,25 @@ class McpToolServiceTest {
         ArgumentCaptor<ExecutionResultReport> captor = ArgumentCaptor.forClass(ExecutionResultReport.class);
         verify(executionResultHandler).handleReport(captor.capture());
         assertThat(captor.getValue().getTokenUsage()).isNull();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  WakeReason.resolve 纯函数映射（Paperclip 阶段一·2）
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("WakeReason.resolve：review.* 前缀 → comment_mentioned")
+    void shouldMapReviewPrefixToCommentMentioned() {
+        assertThat(McpToolService.WakeReason.resolve("review.requested")).isEqualTo("comment_mentioned");
+        assertThat(McpToolService.WakeReason.resolve("review.commented")).isEqualTo("comment_mentioned");
+    }
+
+    @Test
+    @DisplayName("WakeReason.resolve：reassigned → retry，null/空 → none")
+    void shouldMapReassignedAndEmptyInputs() {
+        assertThat(McpToolService.WakeReason.resolve("sub_task.reassigned")).isEqualTo("retry");
+        assertThat(McpToolService.WakeReason.resolve(null)).isEqualTo("none");
+        assertThat(McpToolService.WakeReason.resolve("")).isEqualTo("none");
+        assertThat(McpToolService.WakeReason.resolve("  ")).isEqualTo("none");
     }
 }

@@ -13,14 +13,16 @@ import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.command.ExecutionResultReport;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
+import com.helloai.core.agent.entity.AgentInbox;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
-import com.helloai.core.agent.service.ActivityLogService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
+import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ActivityLogService;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.McpAgentReportService;
 import com.helloai.core.agent.service.McpToolService;
@@ -31,6 +33,7 @@ import com.helloai.core.agent.service.McpToolService.HeartbeatResult;
 import com.helloai.core.agent.service.McpToolService.ReportBlockedResult;
 import com.helloai.core.agent.service.McpToolService.SubmitResultResult;
 import com.helloai.core.agent.service.McpToolService.UploadArtifactResult;
+import com.helloai.core.agent.service.McpToolService.WakeReason;
 import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.agent.skill.SkillPackageCatalog;
 import com.helloai.core.system.port.LlmProviderModelProfile;
@@ -93,6 +96,11 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
      */
     private final SkillPackageCatalog skillPackageCatalog;
     private final LlmProviderModelQueryService llmProviderModelQueryService;
+    /**
+     * 收件箱（Paperclip 阶段一·2）：heartbeat 据未读消息判定「为什么被唤醒」，
+     * 让外部 Agent 轮询时无需自行猜测该干什么而白跑一轮。
+     */
+    private final AgentInboxService agentInboxService;
 
     /**
      * 心跳上报。刷新 Agent 的 last_seen_time，维持在线状态。
@@ -134,7 +142,34 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
             result.setOnDuty(false);
             result.setRemainingTtlSeconds(0L);
         }
+
+        // Paperclip 阶段一·2：唤醒原因 —— 有未读收件箱消息时按首条未读 eventType 映射，
+        // 无未读为 none。读失败按 fail-open 降级为 none（观测字段，不得影响心跳主链）。
+        result.setWakeReason(resolveHeartbeatWakeReason(agentId));
         return result;
+    }
+
+    /**
+     * 解析 heartbeat 的唤醒原因（Paperclip 阶段一·2）。
+     *
+     * <p>口径：无未读消息 → {@link WakeReason#NONE}；有未读 → 取<b>首条未读</b>
+     * （{@code getUnread} 按 priority + create_time 倒序，最高优先级/最新消息最能代表
+     * 「为什么唤醒我」）的 eventType 经 {@link WakeReason#resolve} 映射。</p>
+     *
+     * <p>观测面字段：读收件箱失败仅告警并降级为 {@code none}，绝不因它影响心跳主链
+     * （与既有 heartbeat 幂等、无副作用语义一致）。</p>
+     */
+    private String resolveHeartbeatWakeReason(Long agentId) {
+        try {
+            List<AgentInbox> unread = agentInboxService.getUnread(agentId, 1);
+            if (unread == null || unread.isEmpty()) {
+                return WakeReason.NONE;
+            }
+            return WakeReason.resolve(unread.get(0).getEventType());
+        } catch (Exception e) {
+            log.warn("heartbeat 读取未读收件箱失败（降级为 none）: agentId={}, err={}", agentId, e.getMessage());
+            return WakeReason.NONE;
+        }
     }
 
     /**

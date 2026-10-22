@@ -13,6 +13,81 @@ import java.util.List;
  */
 public interface McpToolService {
 
+    /**
+     * 唤醒原因（Paperclip 阶段一·2：wakeReason 写进响应体）。
+     *
+     * <p>外部 Agent 轮询 heartbeat / pullTasks 时，据此判断「自己为什么被唤醒」，
+     * 避免领活后自行猜测该干什么而白跑一轮。字符串常量（与收件箱 eventType
+     * 的字符串风格一致，避免枚举跨 JSON 序列化耦合）。</p>
+     *
+     * <p>映射口径（以收件箱未读消息的 eventType 为准，见
+     * {@code McpAgentReportServiceImpl#resolveWakeReason} / {@code McpTaskClaimServiceImpl}）：</p>
+     * <ul>
+     *   <li>{@code issue_assigned} —— 有新任务派给本 Agent（{@code sub_task.assigned}）；</li>
+     *   <li>{@code comment_mentioned} —— 被评论 / 审查请求（{@code review.requested} 等）；</li>
+     *   <li>{@code retry} —— 失败重试 / 返工（{@code sub_task.rejected} / rework）；</li>
+     *   <li>{@code continuation} —— 续跑 / 状态推进通知（其余事件类型兜底）；</li>
+     *   <li>{@code none} —— 无未读消息（heartbeat 无待办时）。</li>
+     * </ul>
+     */
+    final class WakeReason {
+        public static final String ISSUE_ASSIGNED = "issue_assigned";
+        public static final String COMMENT_MENTIONED = "comment_mentioned";
+        public static final String RETRY = "retry";
+        public static final String CONTINUATION = "continuation";
+        public static final String NONE = "none";
+
+        private WakeReason() {
+            // 常量类：禁止实例化
+        }
+
+        /**
+         * 由收件箱消息 {@code eventType} 解析唤醒原因（单一事实源）。
+         *
+         * <p>供 {@code McpAgentReportServiceImpl#heartbeat}（取首条未读）与
+         * {@code McpTaskClaimServiceImpl#pullTasks}（逐条消息）共用，避免映射口径
+         * 在两处散落 while/switch 漂移。</p>
+         *
+         * <p>映射口径（与既有投递事件字符串对齐，见
+         * {@code SubTaskNotificationServiceImpl} / {@code ClarifyFinalizeServiceImpl}）：</p>
+         * <ul>
+         *   <li>{@code sub_task.assigned} → {@link #ISSUE_ASSIGNED}（新任务派发）；</li>
+         *   <li>{@code sub_task.rejected} / {@code sub_task.reassigned} →
+         *       {@link #RETRY}（失败返工 / 转移提示）；</li>
+         *   <li>{@code sub_task.review} / {@code review.*} → {@link #COMMENT_MENTIONED}
+         *       （审查请求 / 评论提及）；</li>
+         *   <li>其余（{@code task.created} / {@code task.republished} /
+         *       {@code sub_task.paused} / {@code sub_task.approved} /
+         *       {@code sub_task.blocked} / {@code sub_task.unassigned} 等）
+         *       → {@link #CONTINUATION}（续跑 / 状态推进通知兜底）；</li>
+         *   <li>null / 空 → {@link #NONE}（无有效唤醒依据）。</li>
+         * </ul>
+         *
+         * @param eventType 收件箱事件类型字符串（可为 null）
+         * @return 唤醒原因常量；null/空输入返回 {@link #NONE}
+         */
+        public static String resolve(String eventType) {
+            if (eventType == null || eventType.isBlank()) {
+                return NONE;
+            }
+            switch (eventType) {
+                case "sub_task.assigned":
+                    return ISSUE_ASSIGNED;
+                case "sub_task.rejected":
+                case "sub_task.reassigned":
+                    return RETRY;
+                case "sub_task.review":
+                    return COMMENT_MENTIONED;
+                default:
+                    // 其余事件（含 review.* 前缀）统一为续跑/状态推进
+                    if (eventType.startsWith("review.")) {
+                        return COMMENT_MENTIONED;
+                    }
+                    return CONTINUATION;
+            }
+        }
+    }
+
     /** 拉取收件箱消息（含子任务通知摘要与已读状态）。 */
     PullTasksResult pullTasks(Long agentId, String role, int max);
 
@@ -116,6 +191,11 @@ public interface McpToolService {
             private Boolean reassigned;
             /** 子任务当前实际执行者 Agent ID（配合 reassigned 使用）。 */
             private Long currentAgentId;
+            /**
+             * 唤醒原因（Paperclip 阶段一·2）：{@link WakeReason} 常量。
+             * 按本条消息 eventType 映射；老客户端可忽略（向后兼容）。
+             */
+            private String wakeReason;
         }
     }
 
@@ -245,6 +325,11 @@ public interface McpToolService {
         private String leaseExpiresAt;
         /** 当前 ACTIVE 租约剩余 TTL（秒）；未在岗为 0。 */
         private Long remainingTtlSeconds;
+        /**
+         * 唤醒原因（Paperclip 阶段一·2）：{@link WakeReason} 常量。
+         * 有未读收件箱消息时按消息类型映射；无未读为 {@code none}。
+         */
+        private String wakeReason;
     }
 
     @Data

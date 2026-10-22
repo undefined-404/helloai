@@ -289,7 +289,7 @@ public class McpController {
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
                                     "messageId", Map.of("type", "string")),
                                     "required", java.util.List.of("messageId"))),
-                    Map.of("name", "claimSubTask", "description", "原子认领子任务（前置未全部 DONE 时返回 dependency_not_ready）",
+                    Map.of("name", "claimSubTask", "description", "原子认领子任务。reason 语义：claimed=true 成功；claimed=false 时 reason=already_claimed_by_other（已被他人抢占，等价 409，勿重试、直接换下一个活）/ invalid_status:XXX（状态非法，上报现状）/ dependency_not_ready（前置未就绪，可稍后重试或换活）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
                                     "subTaskId", Map.of("type", "integer")),
                                     "required", java.util.List.of("subTaskId"))),

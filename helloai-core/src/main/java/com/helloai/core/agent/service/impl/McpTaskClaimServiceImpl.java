@@ -26,6 +26,7 @@ import com.helloai.core.agent.service.McpToolService.AckResult;
 import com.helloai.core.agent.service.McpToolService.ClaimSubTaskResult;
 import com.helloai.core.agent.service.McpToolService.PullTasksResult;
 import com.helloai.core.agent.service.McpToolService.StartSubTaskResult;
+import com.helloai.core.agent.service.McpToolService.WakeReason;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -107,6 +108,8 @@ public class McpTaskClaimServiceImpl implements McpTaskClaimService {
             msg.setSummary(inbox.getSummary());
             // 未读/已读状态位（false=未读待 ack，true=已 ack）
             msg.setRead(inbox.getIsRead() != null && inbox.getIsRead() == 1);
+            // Paperclip 阶段一·2：按本条消息 eventType 映射唤醒原因（单一事实源 WakeReason.resolve）
+            msg.setWakeReason(WakeReason.resolve(inbox.getEventType()));
 
             // 如果 refType=sub_task，补充 taskId 和 deadline
             if ("sub_task".equals(inbox.getRefType()) && inbox.getRefId() != null) {
@@ -271,11 +274,28 @@ public class McpTaskClaimServiceImpl implements McpTaskClaimService {
         }
 
         // 原子条件更新: WHERE status='PENDING' AND (assigned_agent IS NULL OR = agentId)
+        // Paperclip 阶段一·3（409 语义固化）：claimAtomic 返回 false 可能是「已被他人抢走」
+        // 或「状态已变」两种情形，此前统一回 race_condition_or_invalid_status 语义混——
+        // 客户端无法区分「应换活（永不重试 409）」与「状态非法（应上报）」。
+        // 归因是消费方协议适配层的职责（SubTaskCommandPort javadoc 划界），故在此重读做精确拆分。
+        // ★判据要点（2026-10-22 并发 IT 实测修正）：claimAtomic 的 SQL 原子地同时改
+        //   status（PENDING→ASSIGNED）与 assigned_agent_id，故「状态仍 PENDING 但被赋主」
+        //   的组合不会出现；「被抢占」的可靠判据是 assigned_agent_id 非空且 ≠ 本 Agent。
         if (!subTaskCommandPort.claimAtomic(subTaskId, agentId)) {
+            SubTaskSnapshot latest = subTaskQueryPort.findById(subTaskId);
             ClaimSubTaskResult result = new ClaimSubTaskResult();
             result.setOk(true);
             result.setClaimed(false);
-            result.setReason("race_condition_or_invalid_status");
+            if (latest == null) {
+                result.setReason("subtask_not_found");
+            } else if (latest.assignedAgentId() != null && !agentId.equals(latest.assignedAgentId())) {
+                // 已被他人抢占（assigned_agent_id 非空且非我）：等价 Paperclip 409 ——
+                // 客户端应「永不重试、直接换活」
+                result.setReason("already_claimed_by_other");
+            } else {
+                // 状态已变但归属仍为我/未分配（任务被暂停/取消/回收等）：客户端应上报现状，勿盲目重试
+                result.setReason("invalid_status:" + latest.status());
+            }
             return result;
         }
 
