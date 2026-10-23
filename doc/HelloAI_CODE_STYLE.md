@@ -5,7 +5,7 @@
 > 当前架构：Spring Boot 单体 + DDD 业务域 + RabbitMQ + PostgreSQL + Redis + Vue 3\
 > 文档定位：**当前有效的代码与架构工程规范**\
 > 版本：V2.1\
-> 最后更新：2026-10-21
+> 最后更新：2026-10-23
 >
 > **重要：本文件只描述“当前有效规则”，不记录历史迭代过程。**
 >
@@ -365,6 +365,12 @@ core/service
 
 这种全局平铺结构。
 
+> **「典型结构」= 示例，不是完整性清单。** 各域子包随能力演进按需扩展，新增子包的合规判定只看两条：**① 归属本域职责；② 不违反 §6 依赖方向**。
+
+结构完整性**不作为校验基线**——CI 校验的是**依赖方向与跨域泄漏**（`scripts/ci/check-arch-freeze.sh` 的「反向依赖 / 跨域 Mapper / 跨域实体泄漏」三组红线），不是「子包数量是否与本文一致」。
+
+> **子域（三级结构）是允许的既定形态。** 当一组能力自带 entity/mapper/service 且需要独立成块时，允许在域内建子域包（现状 4 例：`agent/session`、`agent/quality`、`task/workflow`、`planner/memory`）。子域的 mapper 需显式登记在 `HelloAIApplication` 的 `@MapperScan`（不随父域通配）。
+
 ***
 
 ## 5.1 agent 域
@@ -384,24 +390,38 @@ Agent 可观测
 Agent Execution
 ```
 
-典型结构：
+典型结构（现状实际子包）：
 
 ```text
 agent/
-├── entity
+├── entity            # 技术分层底座
 ├── mapper
 ├── service
 ├── service.impl
-├── domain
-├── chat
-├── command
-├── dispatcher
-├── executor
-├── mqconsumer
-├── mcp
-├── observability
-└── output
+├── browser           # 浏览器执行通道
+├── chat              # Chat / LLM 会话
+├── command           # 执行命令下发与回执
+├── dispatcher        # 任务派发
+├── domain            # 域模型与领域规则
+├── doorbell          # 唤醒 / 通知
+├── dto
+├── event             # Agent 事件（agent_event）
+├── executor          # 执行器实现
+├── mcp               # MCP 接入
+├── mqconsumer        # 执行命令 MQ 消费
+├── observability     # 可观测（审计 / 轨迹）
+├── output            # 产出物
+├── port              # §7 端口（跨域只读契约）
+├── projection        # 只读投影（AgentProfileSnapshot 等）
+├── quality           # 子域：quality_report / gate / service
+├── runtime           # 运行时（RuntimeTurnExecutor / AgentLoop）
+├── session           # 子域：会话锚点 entity / mapper / service
+├── skill             # 技能包
+├── tool              # 工具注册与回调
+└── validator         # 校验器
 ```
+
+`session` / `quality` 为**子域**（自带 entity/mapper/service，mapper 需在 `@MapperScan` 单独登记）；其余为能力包。
 
 ***
 
@@ -420,20 +440,30 @@ SubTask
 任务执行生命周期
 ```
 
-典型结构：
+典型结构（现状实际子包）：
 
 ```text
 task/
-├── entity
+├── entity            # 技术分层底座
 ├── mapper
 ├── service
 ├── service.impl
-├── policy
-├── spec
-├── statemachine
-├── score
-└── listener
+├── adapter           # 跨域端口提供方适配器
+├── listener          # 事件监听（子任务完成 / 契约回填）
+├── member            # 任务成员
+├── observability
+├── policy            # 任务策略
+├── port              # §7 端口（跨域只读契约）
+├── projection        # 只读投影
+├── score             # 评分
+├── spec              # 运行规格（TaskRunningSpec）
+├── statemachine      # 子任务状态机
+├── support           # 支撑组件
+├── util
+└── workflow          # 子域：aggregator / domain / entity / mapper / service / support / validator
 ```
+
+`workflow` 为**子域**（mapper 需在 `@MapperScan` 单独登记）；`statemachine` / `spec` / `score` / `policy` 是任务生命周期的核心能力包。
 
 ***
 
@@ -451,26 +481,40 @@ Planner Agent 选择
 Prompt 输入增强
 ```
 
-典型结构：
+典型结构（现状实际子包）：
 
 ```text
 planner/
-├── entity
+├── entity            # 技术分层底座（含 ChatAttachment 实体）
 ├── mapper
 ├── service
 ├── service.impl
-├── picker
+├── attachment        # 附件解析实现（DocumentParser 族 / 编码探测 / Prompt 渲染）——纯能力包，无 entity/service
+├── clarify           # 需求澄清（追问决策 / 确认卡协议 / 搜索补位 / 相对时间归一）
+├── memory            # 子域：长期记忆 entity / mapper / service / ConversationMemorySummarizer
+├── picker            # Planner Agent 选择
+├── policy            # 规划粒度与需求包（Granularity / RequirementPackage）
+├── prompt
 ├── search
-└── prompt
+└── tool              # WebSearch 工具回调
 ```
 
-其中：
+两点容易误读，明确如下：
 
 ```text
-prompt
+attachment 子包 = 附件「解析实现」，不含数据模型；
+附件实体/服务在 planner 根下的 entity/ChatAttachment、mapper/ChatAttachmentMapper、service/ChatAttachmentService。
 ```
 
-用于 Planner 相关的 Prompt 能力。
+```text
+附件在平台有两套模型，语义不同，均为本域职责：
+planner.ChatAttachment  = 对话/澄清阶段用户上传的附件
+task.Attachment         = 任务附件与交付物
+```
+
+`memory` 为**子域**（mapper 需在 `@MapperScan` 单独登记）。
+
+关于 `prompt` 子包：用于 Planner 相关的 Prompt 能力。
 
 例如：
 
@@ -534,6 +578,22 @@ Review MQ Consumer
 
 评审产生的业务产物归 review 域。
 
+典型结构（现状实际子包）：
+
+```text
+review/
+├── entity            # 技术分层底座
+├── mapper
+├── service
+├── service.impl
+├── adapter           # 跨域端口提供方适配器
+├── dto
+├── mqconsumer        # 核验 MQ 消费
+├── picker            # Reviewer 选择
+├── quality           # 质量统计
+└── support           # 核验执行引擎 / 审查通道
+```
+
 ***
 
 ## 5.5 system 域
@@ -545,8 +605,7 @@ Review MQ Consumer
 系统配置
 规则
 凭据
-附件
-存储
+对象存储
 LLM Provider
 系统级能力
 ```
@@ -554,6 +613,22 @@ LLM Provider
 system 是平台支撑域。
 
 禁止将具体业务流程塞入 system。
+
+典型结构（现状实际子包）：
+
+```text
+system/
+├── entity            # 技术分层底座
+├── mapper
+├── service
+├── service.impl
+├── auth              # 认证 / 会话
+├── backup            # 备份与恢复闸门
+├── crypto            # 凭据加解密（CredentialCryptoService）
+├── port              # §7 端口
+├── projection        # 只读投影
+└── storage           # 对象存储（MinIO）
+```
 
 ***
 
@@ -567,6 +642,15 @@ Domain Event
 Doorbell
 公共 Handler
 真正跨域复用的 Util
+```
+
+典型结构（现状实际子包）：
+
+```text
+shared/
+├── event             # Domain Event 基础设施
+├── handler           # 公共 Handler（JSONB 类型处理器等）
+└── util              # 真正跨域复用的工具
 ```
 
 禁止：
