@@ -300,16 +300,21 @@ MQ 基础设施属于 mq 模块。
 
 ## 4.4 helloai-core
 
-核心业务域：
+核心业务域（自上而下 = §6 依赖方向，上层依赖下层）：
 
 ```text
-agent
-task
 planner
 review
+task
+knowledge
+agent
 system
+event
+dlx
 shared
 ```
+
+其中 knowledge / event / dlx 于 **2026-10-23 补登记**：此前三者已存在于 `core/` 但既未写入本文、也未纳入 `check-arch-freeze.sh` 的域链，属「规则存在但不覆盖」的守卫盲区（与 2026-10-02 前的 api/job/mq/start 同类）。
 
 ***
 
@@ -668,6 +673,96 @@ shared/
 
 ***
 
+## 5.7 knowledge 域
+
+职责：
+
+```text
+知识库管理
+文档向量化（Embedding）
+语义检索
+检索工具回调
+```
+
+典型结构（现状实际文件，扁平无子包）：
+
+```text
+knowledge/
+├── KnowledgeBaseService          # 知识库增删改查
+├── KnowledgeEmbedder             # 文本向量化
+├── KnowledgeRepository           # 检索持久化
+├── KnowledgeHit                  # 单条检索命中（值对象）
+├── KnowledgeSearchResult         # 检索结果集（值对象）
+├── KbCharBudget                  # 拼装上下文时的字符预算裁剪
+└── SearchKnowledgeToolCallback   # 暴露给 LLM 的检索工具
+```
+
+依赖（实测）：
+
+```text
+knowledge → agent.service   PlatformProviderConfigService（取 embedding 模型配置）
+knowledge → agent.tool      ToolCallbackContributor / ToolContext（检索工具注册）
+knowledge → shared.util     TextTruncator
+```
+
+`core` 内**没有任何域依赖 knowledge**，它只被 api 层 `KnowledgeBaseController` 直接使用。
+
+> 因此在 §6 依赖链中 knowledge 位于 agent **之上**——`knowledge → agent` 是合法的顺向依赖。若将来出现 agent → knowledge 的反向依赖，`check-arch-freeze.sh` 会拦截。
+
+***
+
+## 5.8 event 域
+
+职责：
+
+```text
+事件码目录（TimelineEventCode 编目）
+工具名目录（ToolDisplayName 编目）
+只读查询
+```
+
+典型结构（现状实际文件）：
+
+```text
+event/
+├── EventCatalogService   + EventCatalogItem
+└── ToolCatalogService    + ToolCatalogItem
+```
+
+依赖：**仅 `common.constant`，零 core 域依赖**；不持久化、不参与业务流程。
+
+定位：给前端与文档提供「系统支持哪些事件码 / 哪些工具、各自中文名是什么」的**只读编目**，避免这类展示口径散落在各页面前端硬编码。
+
+> 与 `shared/event`（Domain Event 基础设施）**不是同一概念**，勿混用：`shared/event` 是事件**发布/订阅机制**，`core/event` 是事件**名目清单**。
+
+***
+
+## 5.9 dlx 域
+
+职责：
+
+```text
+死信消息归档
+死信消息恢复重投
+死信告警消费
+```
+
+典型结构（现状实际文件）：
+
+```text
+dlx/
+├── DeadLetterRecoveryService
+├── impl/DeadLetterRecoveryServiceImpl
+├── DlxAlertConsumer              # 死信告警 MQ 消费者
+└── MqDeadLetterArchiveRow        # 归档行（record）
+```
+
+依赖：`common.base` + **`helloai-mq` 的 `RabbitMQConfig`**（跨模块，不属于 core 域）；零 core 域依赖。被 api 层 `AdminMqRecoveryController` 使用。
+
+> **已知观察项**：`core → helloai-mq` 是「业务域依赖基础设施模块」。`check-arch-freeze.sh` 的组 2b/3c 只覆盖**反方向**（非 core 模块 → core 的 mapper/entity），因此**这条当前不在规则集内**。若后续要治理，需单列规则并走评审，**不要假设它已被守卫覆盖**。
+
+***
+
 # 6. Core 域依赖方向
 
 当前核心依赖方向：
@@ -679,22 +774,36 @@ review
    ↓
 task
    ↓
+knowledge
+   ↓
 agent
    ↓
 system
    ↓
+event
+   ↓
+dlx
+   ↓
 shared
 ```
 
-更准确地说：
+线性图表示的是**偏序**：任一域可以依赖它下方的任一域，**相邻不等于必有直接依赖**（`event` / `dlx` 目前对 core 域零依赖，挂在低位只是表示「它们不在上层，不得依赖上层」）。
+
+实测的直接依赖关系：
 
 ```text
-planner → task
-review  → task
-task    → agent
-agent   → system
-*       → shared
+planner   → task
+review    → task
+task      → agent
+knowledge → agent      （PlatformProviderConfigService / ToolCallbackContributor）
+knowledge → shared     （TextTruncator）
+agent     → system
+event     → （无 core 域依赖，仅 common.constant）
+dlx       → （无 core 域依赖，仅 common.base 与 helloai-mq）
+*         → shared
 ```
+
+> 这张图的**唯一事实源是 `scripts/ci/check-arch-freeze.sh` 的 `DOMAINS` 数组**；本文与之必须一致。改域链时两处同改，并跑 `--update-baseline` 重锁基线。
 
 并且：
 
@@ -807,7 +916,7 @@ review.ReviewPortAdapter
 
 > **Port 应该定义在能力需求方，而不是能力提供方。**
 
-**⚠️ 归属判据的完整表述（2026-10-01 修正）**：上式是**基本式**，但必须叠加项目特有的第二条约束 —— **实现侧依赖必须顺向**（沿 `planner > review > task > agent > system > shared` 向下依赖）。两条可能冲突，**冲突时以「顺向」为准**。原因：若把端口放消费方会强迫提供方依赖消费者，当提供方低于消费者时即产生**反向依赖**（§6 禁止），端口就沦为「用抽象掩盖违规」，反而更难回收。
+**⚠️ 归属判据的完整表述（2026-10-01 修正）**：上式是**基本式**，但必须叠加项目特有的第二条约束 —— **实现侧依赖必须顺向**（沿 §6 依赖链 `planner > review > task > knowledge > agent > system > event > dlx > shared` 向下依赖）。两条可能冲突，**冲突时以「顺向」为准**。原因：若把端口放消费方会强迫提供方依赖消费者，当提供方低于消费者时即产生**反向依赖**（§6 禁止），端口就沦为「用抽象掩盖违规」，反而更难回收。
 
 因此分三种情形：
 
