@@ -39,11 +39,17 @@ export async function streamSendConversation(
   message: string,
   selectedOptions: ClarifySelection[] | null,
   handlers: ChatStreamHandlers,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  attachmentIds?: (string | number)[] | null
 ): Promise<void> {
   return consumeSse(
     `/api${paths.clarifications.streamSend(id)}`,
-    { message, selectedOptions: selectedOptions?.length ? selectedOptions : null },
+    {
+      message,
+      selectedOptions: selectedOptions?.length ? selectedOptions : null,
+      // ATT-3：前端勾选的附件 id；null = 未指定，由后端按模型判定收窄
+      attachmentIds: attachmentIds?.length ? attachmentIds : null
+    },
     handlers,
     signal
   )
@@ -59,12 +65,19 @@ export async function streamCreateConversation(
   webSearchEnabled: boolean | null,
   handlers: ChatStreamHandlers,
   signal?: AbortSignal,
-  clientToken?: string | null
+  clientToken?: string | null,
+  attachmentIds?: (string | number)[] | null
 ): Promise<void> {
   return consumeSse(
     `/api${paths.clarifications.streamCreate}`,
     // clientToken：新会话首句前上传的附件临时归属，建会时由后端认领（可空）
-    { message, plannerAgentId, webSearchEnabled, clientToken: clientToken ?? null },
+    {
+      message,
+      plannerAgentId,
+      webSearchEnabled,
+      clientToken: clientToken ?? null,
+      attachmentIds: attachmentIds?.length ? attachmentIds : null
+    },
     handlers,
     signal
   )

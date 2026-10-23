@@ -273,7 +273,10 @@
                             v-if="row.process.thinking"
                             class="msg-process-thinking"
                           >
-                            {{ row.process.thinking }}
+                            <MarkdownView
+                              compact
+                              :content="row.process.thinking"
+                            />
                           </div>
                         </div>
                       </div>
@@ -509,7 +512,10 @@
                         v-if="thinkingText"
                         class="msg-process-thinking"
                       >
-                        {{ thinkingText }}
+                        <MarkdownView
+                          compact
+                          :content="thinkingText"
+                        />
                       </div>
                     </div>
                   </div>
@@ -650,21 +656,27 @@
                     v-if="attachments.length || uploading"
                     class="attachment-bar"
                   >
+                    <!-- ATT-3：点击胶囊切换「本轮是否参与」；未参与的不注入正文也不进检索池 -->
                     <span
                       v-for="item in attachments"
                       :key="item.id"
                       class="attachment-chip"
                       :class="attachmentChipClass(item)"
                       :title="attachmentChipTitle(item)"
+                      @click="toggleAttachmentParticipation(item)"
                     >
-                      <el-icon class="attachment-icon"><Document /></el-icon>
+                      <!-- 实心圆形勾 = 参与本轮；未参与回落文件图标（勾只在选中时出现，语义不反） -->
+                      <el-icon class="attachment-icon">
+                        <CircleCheckFilled v-if="!isAttachmentExcluded(item)" />
+                        <Document v-else />
+                      </el-icon>
                       <span class="attachment-name">{{ item.fileName }}</span>
                       <span class="attachment-state">{{ attachmentStateText(item) }}</span>
                       <button
                         type="button"
                         class="attachment-close"
                         title="移除附件"
-                        @click="removeAttachment(item.id)"
+                        @click.stop="removeAttachment(item.id)"
                       >
                         <el-icon><Close /></el-icon>
                       </button>
@@ -929,7 +941,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check } from '@element-plus/icons-vue'
+import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { promptEnhanceApi } from '@/api/promptEnhance'
 import { taskApi } from '@/api/task'
@@ -1044,6 +1056,36 @@ watch(() => conversation.value?.status, (s) => {
 
 /** 已挂到本会话（或本临时批次）的附件。 */
 const attachments = ref<ChatAttachmentItem[]>([])
+/**
+ * ATT-3：「本轮不参与」的附件 id 集合（默认空 = 全部参与）。
+ *
+ * <p>只收集排除项而不是收集选中项：空集合天然表示「用户没动过」，
+ * 此时请求不带 attachmentIds，让后端按模型判定收窄——两者语义才能区分。</p>
+ */
+const excludedAttachmentIds = ref<Set<string>>(new Set())
+
+function isAttachmentExcluded(item: ChatAttachmentItem): boolean {
+  return excludedAttachmentIds.value.has(String(item.id))
+}
+
+function toggleAttachmentParticipation(item: ChatAttachmentItem): void {
+  const key = String(item.id)
+  const next = new Set(excludedAttachmentIds.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  excludedAttachmentIds.value = next
+}
+
+/**
+ * 本轮参与的附件 id：全部参与时返回 null（= 未指定，交给后端模型判定），
+ * 有排除项时返回剩余 id（= 用户显式指定，优先于模型判定）。
+ */
+function effectiveAttachmentIds(): string[] | null {
+  if (!excludedAttachmentIds.value.size) return null
+  return attachments.value
+    .filter((a) => !excludedAttachmentIds.value.has(String(a.id)))
+    .map((a) => String(a.id))
+}
 /** 上传中（本地占位胶囊，避免点了没反应）。 */
 const uploading = ref(false)
 /** 拖拽悬停态（高亮落区）。 */
@@ -1209,13 +1251,16 @@ function attachmentStateText(item: ChatAttachmentItem): string {
 
 function attachmentChipClass(item: ChatAttachmentItem): string {
   const status = (item.parseStatus ?? '').toLowerCase()
-  return status ? `attachment-chip--${status}` : ''
+  const base = status ? `attachment-chip--${status}` : ''
+  // ATT-3：未参与本轮时叠加「降级态」（灰字 + 无底色；不用删除线，否则像已删除）
+  return isAttachmentExcluded(item) ? `${base} attachment-chip--excluded`.trim() : base
 }
 
 function attachmentChipTitle(item: ChatAttachmentItem): string {
   const size = item.fileSize ? `${(item.fileSize / 1024).toFixed(0)}KB` : ''
   const reason = item.parseError ? `；${item.parseError}` : ''
-  return `${item.fileName}${size ? ' · ' + size : ''}${reason}`
+  const participation = isAttachmentExcluded(item) ? '本轮不参与（点击恢复）' : '本轮参与（点击取消）'
+  return `${item.fileName}${size ? ' · ' + size : ''}${reason} · ${participation}`
 }
 
 // 编辑已发送消息（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）：
@@ -1547,7 +1592,7 @@ async function handleSend() {
     //   新会话  → streamCreate 通道（首帧 session 回传 id，再增量渲染）
     //   原同步 create 必须等「意图决策 + 联网搜索 + 完整 LLM」才一次性返回，
     //   用户全程只看到「思考中」占位——这是「1 分钟后一次性刷出」的直接原因。
-    await streamSendOrCreate(text, plannerId)
+    await streamSendOrCreate(text, plannerId, effectiveAttachmentIds())
     return
   } catch {
     // 兜底：流式建连失败（非业务错误，多为网络/鉴权层）时退回同步链路，
@@ -1735,7 +1780,8 @@ async function streamSendActiveMessage(id: LongId, text: string,
  * 流式发送「自适应」入口（2026-10-18）：activeId 为空走 streamCreate（首帧 session 拿新 id），
  * 否则走 streamSend。两条通道共用同一套流式状态与收敛逻辑，避免「新会话无流式」的分叉。
  */
-async function streamSendOrCreate(text: string, plannerId: string | null) {
+async function streamSendOrCreate(text: string, plannerId: string | null,
+                                  attachmentIds: string[] | null = null) {
   resetStreamState()
   const existingId = activeId.value
   // 新会话：id 由首帧 session 事件带回；done 前可能仍为 null，收敛时以 streamCreatedId 为准
@@ -1756,7 +1802,7 @@ async function streamSendOrCreate(text: string, plannerId: string | null) {
           void settleStream(existingId, false)
         },
         onAbort: () => { void settleStream(existingId, false) }
-      }, abort.signal)
+      }, abort.signal, attachmentIds)
     } else {
       await streamCreateConversation(text, plannerId, webSearchEnabled.value, {
         onSession: (newId) => {
@@ -1795,7 +1841,9 @@ async function streamSendOrCreate(text: string, plannerId: string | null) {
         // 漏传则后端 claimByClientToken 因空值早退，附件永远停在临时态
         // （conversation_id 为 null），正文进不了 Prompt，模型只能说「本轮没有附件」。
         // 取值发生在调用瞬间，早于 onSession 回调里的 clientToken 清空。
-        clientToken.value)
+        clientToken.value,
+        // 第 7 参：本轮参与的附件 id（ATT-3）；null = 未指定，由后端按模型判定收窄
+        attachmentIds)
     }
   } finally {
     streamAbort.value = null
@@ -2586,15 +2634,21 @@ onMounted(() => {
 }
 .msg-streaming { font-size: 15px; }
 
-/* 思考过程区（2026-10-18）：区分于正文气泡——灰底、等宽感、可折叠 */
+/* 思考过程区（2026-10-23 重做）：
+   改前三处问题——① 用 Element Plus 默认值而非品牌 token：`border-left: 3px solid var(--el-color-info-light-5)`
+   是**蓝色**侧条（蓝是已废弃的旧主色，且侧条强调是禁用的装饰手法）；② 正文用 --ha-muted(#8B96AB)
+   压在 #FAFAFA 上实测只有 **2.85:1**，远低于 WCAG AA 的 4.5:1 —— 这就是「发灰、发糊」的来源；
+   ③ 思考内容按纯文本插值，`**`/反引号原样露出，没有行内代码 chip。
+   改后：品牌描边浅底 + --ha-ink-secondary(#4A5568 ≈ 6.8:1) + 走 MarkdownView 紧凑变体。 */
 .msg-thinking {
   margin-bottom: 8px;
-  padding: 8px 12px;
-  border-left: 3px solid var(--el-color-info-light-5);
-  background: var(--el-fill-color-lighter);
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--ha-muted);
+  padding: 10px 14px;
+  border: 1px solid var(--ha-border-light);
+  border-radius: var(--ha-radius-md);
+  background: var(--ha-surface-hover);
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--ha-ink-secondary);
 }
 .msg-thinking-head {
   display: flex;
@@ -2603,39 +2657,38 @@ onMounted(() => {
   cursor: pointer;
   user-select: none;
   font-weight: 500;
+  color: var(--ha-ink);
 }
 .msg-thinking-toggle {
   margin-left: auto;
   font-size: 12px;
-  opacity: 0.7;
+  color: var(--ha-muted);
 }
 .msg-process-step {
   padding: 2px 0;
-  color: var(--ha-muted);
-  font-size: 12.5px;
+  color: var(--ha-ink-secondary);
+  font-size: 13px;
   line-height: 1.7;
 }
 .msg-process-step::before {
   content: '·';
   margin-right: 6px;
-  opacity: 0.6;
+  color: var(--ha-muted);
 }
 .msg-process-thinking {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--el-border-color-lighter);
-  white-space: pre-wrap;
-  word-break: break-word;
-  line-height: 1.6;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ha-border);
+  color: var(--ha-ink-secondary);
 }
 .msg-thinking-history { margin-bottom: 6px; }
+/* 正文交给 MarkdownView 紧凑变体排版，这里只承担「可折叠 + 定高滚动」两个职责；
+   不再设 white-space: pre-wrap —— 否则会与 markdown 块级元素的空白处理叠加。 */
 .msg-thinking-body {
   margin-top: 6px;
   max-height: 240px;
   overflow-y: auto;
-  white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.6;
 }
 
 /* 结构化问题卡片 / 联网搜索查验条：与气泡同宽上限 */
@@ -2742,31 +2795,42 @@ onMounted(() => {
   gap: 6px;
   padding-bottom: 8px;
 }
+/* ATT-3 参与态：选中 = 主色勾 + 主色浅底 + 文件名加粗；
+   未参与只做「降级」（灰字 + 无底色），不用删除线/虚线 —— 那会被读成「文件已删除」 */
 .attachment-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   max-width: 260px;
-  padding: 3px 8px;
-  border: 1px solid var(--ha-border-light);
+  padding: 3px 9px;
+  border: 1px solid rgba(124, 58, 237, 0.28);
   border-radius: 999px;
-  background: var(--ha-surface-hover);
+  background: var(--ha-primary-light);
   color: var(--ha-ink);
   font-size: 12px;
+  /* ATT-3：胶囊可点击切换「本轮是否参与」 */
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
   line-height: 18px;
+}
+.attachment-chip:hover {
+  border-color: rgba(124, 58, 237, 0.55);
 }
 .attachment-name {
   max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 600;
 }
 .attachment-state {
   color: var(--ha-muted);
   white-space: nowrap;
 }
 .attachment-chip--ready .attachment-state {
-  color: var(--ha-success, #16a34a);
+  /* 就绪态不再用绿色：与主色浅底打架，「90385 字」本身已是就绪信号 */
+  color: var(--ha-muted);
 }
 .attachment-chip--pending .attachment-state,
 .attachment-chip--parsing .attachment-state {
@@ -2785,8 +2849,27 @@ onMounted(() => {
   color: var(--ha-muted);
 }
 .attachment-icon {
+  font-size: 15px;
+  color: var(--ha-primary);
+}
+/* 未参与本轮：整颗胶囊降级为中性态（勾消失、文字转灰、底色去掉） */
+.attachment-chip--excluded {
+  border-color: var(--ha-border-light);
+  background: transparent;
+}
+.attachment-chip--excluded .attachment-name {
+  color: var(--ha-muted);
+  font-weight: 400;
+}
+.attachment-chip--excluded .attachment-icon {
   font-size: 13px;
   color: var(--ha-muted);
+}
+/* 上传中占位胶囊不是「选中」语义，保持中性底 */
+.attachment-chip--uploading {
+  border-color: var(--ha-border-light);
+  background: var(--ha-surface-hover);
+  cursor: default;
 }
 .attachment-close {
   display: inline-flex;
