@@ -203,9 +203,11 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
      */
     private static String describeSearchResult(WebSearchOutcome outcome) {
         if (outcome == null) {
-            // 搜索未执行（开关关闭）或调用被短路：措辞用「未返回结果」而非「未执行」，
-            // 因为调用方无法区分二者，统一描述对用户无害
-            return "联网检索未返回结果（将使用模型自有知识回答）";
+            // 搜索未执行（开关关闭）、调用被短路，或候选词全是元词被过滤：
+            // 措辞用「未返回结果」而非「未执行」，因为调用方无法区分二者。
+            // 结尾用「本轮可用资料」而不是「模型自有知识」——有附件时答案来自附件，
+            // 说成"自有知识"会让用户误以为附件没被读到。
+            return "联网检索未返回结果（将基于本轮可用资料回答）";
         }
         if (outcome.isFailed()) {
             return "联网检索失败，已降级为模型自有知识回答";

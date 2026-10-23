@@ -153,6 +153,11 @@ class RequirementClarifyServiceTest {
 
     @BeforeEach
     void setUp() {
+        // 元词过滤（2026-10-23 附件+联网修复）：本类存量用例走的是「规划器无产出 →
+        // 兜底规则截断」这条路径，而兜底前新增了 isRetrievable 判定。这里放行，
+        // 保持存量语义不变；元词过滤本身的语义在 SearchQueryPlannerServiceImplTest 覆盖。
+        // 用 lenient：多数用例不触达兜底分支，严格模式下会被判为多余 stub。
+        lenient().when(searchQueryPlannerService.isRetrievable(any())).thenReturn(true);
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）；
         // searchQueryPlannerService 默认 mock 返回空列表 → 走规则截断兜底路径（存量用例行为不变）；
         // 拆分组件 ClarifyReplyParser/ConfirmCardProtocol/ClarifyWebSearchOrchestrator/ChatRoundDecisionParser

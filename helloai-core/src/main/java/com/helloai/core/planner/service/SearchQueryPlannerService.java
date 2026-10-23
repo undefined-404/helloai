@@ -23,4 +23,16 @@ public interface SearchQueryPlannerService {
      *         输入空白或无可提取关键词时返回空列表（绝不抛异常）
      */
     List<String> planQueries(String semanticText);
+
+    /**
+     * 判定一个候选词是否含可检索实体（不是纯指代/元动作词）。
+     *
+     * <p>供调用方在「规划器无产出」时做兜底前置判定：旧实现会把用户原话截断兜底，
+     * 于是「我上传的附件」「分析一下」这类词绕过了 {@link #planQueries} 的过滤重新进场。
+     * 兜底也必须是可检索的词，否则不如不搜。</p>
+     *
+     * @param query 待判定候选词（可为 null）
+     * @return true=含实体，可送检索；false=纯元词，应丢弃
+     */
+    boolean isRetrievable(String query);
 }

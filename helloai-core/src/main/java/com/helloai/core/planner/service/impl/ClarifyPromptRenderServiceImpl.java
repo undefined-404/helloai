@@ -225,7 +225,13 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
                 .replace("{{SEARCH_POLICY}}", policyHint)
                 // 每轮调用前注入系统当前时间（第一层防线：LLM 无系统时钟，
                 // 跨天对话时须以实时时间锚定"今天"，不得用历史日期推断）
-                .replace("{{SYSTEM_TIME_CONTEXT}}", systemTimeContextBuilder.build());
+                .replace("{{SYSTEM_TIME_CONTEXT}}", systemTimeContextBuilder.build())
+                // 决策阶段附件视图（清单 + 预览 + 可外部核验的锚点）：决策发生在正文渲染
+                // 之前，不注入则模型只能拿用户那句问话当检索依据，把「分析我上传的手册」
+                // 改写成「手册 方案 正确性」这类无实体空壳词——检索必然跑偏。
+                // 同一缺陷见 deer-flow #1647 根因 2/4；本处是方案四（preview 注入）的落点。
+                .replace("{{ATTACHMENT_DECISION_VIEW}}",
+                        chatAttachmentPromptRenderer.renderForDecision(conversation.getId()));
     }
 
     // ══════════════════════════════════════════════════════════════

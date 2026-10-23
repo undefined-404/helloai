@@ -130,4 +130,81 @@ class ChatAttachmentPromptRendererTest {
         assertThat(rendered.context()).contains("本次未注入正文：上下文预算已用尽");
         assertThat(rendered.manifest()).contains("| 附件5 | e.md |");
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  决策阶段视图（renderForDecision）
+    //
+    //  锁定的语义：决策调用发生在正文渲染之前，不注入附件则模型只能拿用户那句问话
+    //  当检索依据，把「分析我上传的手册」改写成「手册 方案 正确性」这类无实体空壳词。
+    //  deer-flow #1647 根因 2/4 即此缺陷；本组用例防回归。
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("决策视图·无附件：给占位文本，不返回空串（保持 Prompt 语义节稳定）")
+    void decisionView_shouldRenderPlaceholderWhenNoAttachment() {
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of());
+
+        assertThat(renderer.renderForDecision(9L)).isEqualTo("（本轮无附件）");
+    }
+
+    @Test
+    @DisplayName("决策视图·conversationId 为空（新建会话首轮）：直接占位，不查库")
+    void decisionView_nullConversation_shouldNotQueryStore() {
+        assertThat(renderer.renderForDecision(null)).isEqualTo("（本轮无附件）");
+    }
+
+    @Test
+    @DisplayName("决策视图·有附件：清单 + 预览 + 三类锚点（法规名/标准号/技术专名）都出现")
+    void decisionView_shouldExposeManifestPreviewAndAnchors() {
+        String text = "《运输机场使用许可规定》要求手册采用活页格式。执行 GB/T 12345 标准，"
+                + "工具用 PowerShell 与 Windows。";
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
+                attachment("手册.md", ChatAttachmentParseStatus.READY, text)));
+
+        String view = renderer.renderForDecision(9L);
+
+        assertThat(view)
+                .contains("【附件清单】")
+                .contains("| 附件1 | 手册.md |")
+                .contains("【内容预览】")
+                .contains("【可外部核验的锚点】")
+                .contains("《运输机场使用许可规定》")
+                .contains("GB/T 12345")
+                .contains("PowerShell");
+    }
+
+    @Test
+    @DisplayName("决策视图·预览只给前 500 字并标注省略（决策是轻量调用，不灌全文）")
+    void decisionView_shouldTruncatePreview() {
+        String longText = "字".repeat(1000);
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
+                attachment("长文.md", ChatAttachmentParseStatus.READY, longText)));
+
+        String view = renderer.renderForDecision(9L);
+
+        assertThat(view).contains("字".repeat(500) + "…");
+    }
+
+    @Test
+    @DisplayName("决策视图·无可外部核验锚点：必须写明「未发现」（模板据此判 need_search=false）")
+    void decisionView_shouldStateNoAnchorExplicitly() {
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
+                attachment("内部流程.md", ChatAttachmentParseStatus.READY,
+                        "这是一份内部手册，说明日常工作流程与交接要求。")));
+
+        String view = renderer.renderForDecision(9L);
+
+        assertThat(view).contains("【可外部核验的锚点】").contains("未发现");
+    }
+
+    @Test
+    @DisplayName("决策视图·解析中的附件：清单可见但标「解析中」，不编造正文")
+    void decisionView_pendingAttachment_shouldMarkParsing() {
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
+                attachment("待解析.pdf", ChatAttachmentParseStatus.PARSING, null)));
+
+        String view = renderer.renderForDecision(9L);
+
+        assertThat(view).contains("待解析.pdf").contains("解析中").contains("（无可用正文）");
+    }
 }

@@ -167,10 +167,14 @@ public class ClarifyWebSearchOrchestrator {
         mergeCandidates(candidates, priorityQueries);
         mergeCandidates(candidates, searchQueryPlannerService.planQueries(stripUrls(userMessage)));
         if (candidates.isEmpty()) {
-            // 规划器无产出（极端消息清洗后为空）时兜底规则截断，不丢搜索机会
+            // 规划器无产出（消息清洗后为空，或候选全是「附件/手册/分析一下」这类元词）
+            // 时兜底规则截断。注意：兜底词同样必须是可检索的——旧实现不判定，
+            // 元词会绕过 planQueries 的过滤重新进场，等于没修。
             String fallback = extractQueryKeyword(stripUrls(userMessage));
-            if (!fallback.isBlank()) {
+            if (!fallback.isBlank() && searchQueryPlannerService.isRetrievable(fallback)) {
                 candidates = List.of(fallback);
+            } else if (!fallback.isBlank()) {
+                log.info("澄清联网搜索：兜底词为纯元词，放弃本轮检索 fallback={}", fallback);
             }
         }
         List<WebPageContent> pages = fetchUserPages(urls);

@@ -178,4 +178,69 @@ class SearchQueryPlannerServiceImplTest {
         // LLM 改写生效：正交查询（不是规则拆碎的长尾词）
         assertThat(queries).containsExactlyInAnyOrder("膝盖旧伤 减脂训练", "减脂饮食方案");
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  元词过滤（附件场景）
+    //
+    //  实测现场（2026-10-23）：用户问「帮我分析一下，我上传的附件，这个手册内容中的
+    //  方案是否正确？」时，规则层从原话切出三条纯元词候选，全部送进搜索引擎，
+    //  首词已命中 15 条的情况下整轮仍耗时 42 秒。这组用例锁住过滤语义。
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("元词过滤：用户原话切出的三条候选全是元词 → 全丢弃，返回空（放弃本轮检索）")
+    void planQueries_metaOnlyCandidates_allDropped() {
+        properties.setQueryRewriteEnabled(false);
+
+        List<String> queries = planner.planQueries(
+                "帮我分析一下，我上传的附件，这个手册内容的中方案是否正确");
+
+        assertThat(queries).isEmpty();
+    }
+
+    @Test
+    @DisplayName("元词过滤：含实体的候选保留（抽象维度词与「手册」不构成元词）")
+    void planQueries_candidatesWithEntities_kept() {
+        properties.setQueryRewriteEnabled(false);
+
+        List<String> queries = planner.planQueries("机场使用许可规定，手册编制要求");
+
+        assertThat(queries).isNotEmpty();
+        assertThat(queries).anyMatch(q -> q.contains("机场使用许可规定"));
+    }
+
+    @Test
+    @DisplayName("元词过滤：带英文/数字的问句不按「问句照搬」丢弃（外部标识优先）")
+    void planQueries_questionWithExternalMarker_kept() {
+        properties.setQueryRewriteEnabled(false);
+
+        List<String> queries = planner.planQueries("GB 12345 是否适用于机场");
+
+        assertThat(queries).isNotEmpty();
+        assertThat(queries.get(0)).contains("GB");
+    }
+
+    @Test
+    @DisplayName("元词过滤：LLM 改写产物同样过滤（模型仍按旧习惯改写时不至于放开跑偏检索）")
+    void planQueries_llmReturnsMetaWords_allDropped() {
+        when(plannerAgentPicker.pick(isNull())).thenReturn(mock(AgentProfileSnapshot.class));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "[\"我上传的附件\",\"分析一下\"]", "stop", "llm", 100));
+
+        List<String> queries = planner.planQueries(
+                "帮我分析一下我上传的附件这个手册内容中的方案是否正确？");
+
+        assertThat(queries).isEmpty();
+    }
+
+    @Test
+    @DisplayName("isRetrievable：与候选过滤同源，供兜底链路拦住元词重新进场")
+    void isRetrievable_matchesFilterSemantics() {
+        assertThat(planner.isRetrievable("我上传的附件")).isFalse();
+        assertThat(planner.isRetrievable("分析一下")).isFalse();
+        assertThat(planner.isRetrievable("这个手册内容的中方案是否正确")).isFalse();
+        assertThat(planner.isRetrievable(null)).isFalse();
+        assertThat(planner.isRetrievable("《运输机场使用许可规定》手册编制要求")).isTrue();
+    }
 }

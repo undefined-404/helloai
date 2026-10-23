@@ -87,6 +87,30 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
     /** 句尾疑问/语气词：无检索语义，尾部剥除。 */
     private static final Pattern TRAILING_PARTICLE_PATTERN = Pattern.compile("(吗|呢|吧|啊|呀)+\\s*$");
 
+    /**
+     * 指代元词：在检索域里是纯噪音——搜索引擎无法解析「我上传的附件」「这个手册」，
+     * 这类词只会把检索引向无关结果，并让多词并行检索白跑。
+     *
+     * <p>实测来源（2026-10-23）：用户问「帮我分析一下，我上传的附件，这个手册内容中的
+     * 方案是否正确？」时，规则层从原话切出「分析一下」「我上传的附件」
+     * 「这个手册内容的中方案是否正确」三条，三条全部送进搜索引擎，
+     * 首词已命中 15 条的情况下整轮仍耗时 42 秒。</p>
+     */
+    private static final Pattern META_WORD_PATTERN = Pattern.compile(
+            "我上传的|我刚上传的|我发的|上传的|附件|手册|文档|文件|资料|内容|"
+                    + "这个|那个|上面|刚才|刚刚|帮我|请|分析一下|分析|看看|看一下|研究一下|"
+                    + "判断|是否正确|对不对|行不行|有没有问题|的中|的|了|吗|呢|吧");
+
+    /** 疑问/祈使标记：整句带这些标记且无任何外部标识时，判为「问句照搬」。 */
+    private static final Pattern INTERROGATIVE_PATTERN = Pattern.compile(
+            "是否|是不是|对不对|行不行|有没有|怎么样|如何|为什么|吗|呢|？|\\?");
+
+    /** 外部标识：英文、数字、书名号——出现任一即认为候选词含可检索实体，不再当问句处理。 */
+    private static final Pattern EXTERNAL_MARKER_PATTERN = Pattern.compile("[A-Za-z0-9《》]");
+
+    /** 「问句照搬」判定的长度下限：短句（如「机场运行」）不算，只有长问句才丢。 */
+    private static final int SENTENCE_QUERY_CHAR_LIMIT = 8;
+
     private final WebSearchProperties properties;
     private final ObjectMapper objectMapper;
     private final SystemTimeContextBuilder systemTimeContextBuilder;
@@ -109,15 +133,15 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
         String text = semanticText == null ? "" : semanticText.trim();
         List<String> ruleQueries = rulePlan(text);
         if (!shouldLlmRewrite(text, ruleQueries)) {
-            return ruleQueries;
+            return dropMetaQueries(ruleQueries);
         }
         List<String> rewritten = llmRewrite(text);
         if (rewritten.isEmpty()) {
             log.info("搜索词 LLM 改写未产出可用结果，降级规则结果: rules={}", ruleQueries);
-            return ruleQueries;
+            return dropMetaQueries(ruleQueries);
         }
         log.info("搜索词 LLM 改写成功: rewritten={}, ruleFallback={}", rewritten, ruleQueries);
-        return rewritten;
+        return dropMetaQueries(rewritten);
     }
 
     /** 规则层：前导噪音剥离 → 连接符拆分 → 标点/语气词清洗 → 截断去重（总是执行）。 */
@@ -168,6 +192,62 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
             s = next;
         }
         return s;
+    }
+
+    /**
+     * 丢弃「纯元词」候选：只由指代/元动作构成的词没有检索价值。
+     *
+     * <p>决策层注入附件锚点后这类词会大幅减少（模型不该再产出它们），本过滤器是
+     * 「模型仍按旧习惯改写」与「无附件场景」的兜底，防的是白跑检索与耗时膨胀。</p>
+     *
+     * <p>判据两条，任一命中即丢弃：</p>
+     * <ol>
+     *   <li>剥掉元词后剩余实词不足 2 字（「分析一下」「我上传的附件」）；</li>
+     *   <li>带疑问/祈使标记、无任何外部标识（英文/数字/书名号）且长度 ≥ 8
+     *       （「这个手册内容的中方案是否正确」——剥完元词还剩「方案」，但仍是问句照搬）。</li>
+     * </ol>
+     *
+     * <p>全量丢弃时返回空列表 = 放弃本轮检索（调用方 {@code doWebSearch} 对空候选已有分支，
+     * 文案降级为「联网检索未返回结果（将基于本轮可用资料回答）」）。这与旧实现的差别是
+     * 语义修正：候选全由「附件/手册/这个/分析一下」构成时，说明消息里根本没有可检索实体，
+     * 此时搜任何一个词都是无目标检索——不如不搜，直接基于附件作答。</p>
+     */
+    private List<String> dropMetaQueries(List<String> queries) {
+        if (queries == null || queries.isEmpty()) {
+            return queries == null ? List.of() : queries;
+        }
+        List<String> kept = new ArrayList<>(queries.size());
+        for (String query : queries) {
+            if (isMetaOnlyQuery(query)) {
+                log.info("搜索词过滤：丢弃纯元词候选 query={}", query);
+            } else {
+                kept.add(query);
+            }
+        }
+        if (kept.isEmpty()) {
+            log.info("搜索词过滤：候选全为元词（无可检索实体），放弃本轮检索 queries={}", queries);
+            return List.of();
+        }
+        return kept;
+    }
+
+    /** 判定单条候选是否为「纯元词」：剥元词后剩不下实词，或整句问句照搬。 */
+    private boolean isMetaOnlyQuery(String query) {
+        if (query == null || query.isBlank()) {
+            return true;
+        }
+        String residual = META_WORD_PATTERN.matcher(query).replaceAll("").replaceAll("\\s+", "");
+        if (residual.length() < 2) {
+            return true;
+        }
+        return query.length() >= SENTENCE_QUERY_CHAR_LIMIT
+                && INTERROGATIVE_PATTERN.matcher(query).find()
+                && !EXTERNAL_MARKER_PATTERN.matcher(query).find();
+    }
+
+    @Override
+    public boolean isRetrievable(String query) {
+        return !isMetaOnlyQuery(query);
     }
 
     /**
