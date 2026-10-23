@@ -494,6 +494,7 @@ planner/
 ├── mapper
 ├── service
 ├── service.impl
+├── adapter           # §7.2 端口实现（ChatAttachmentReferencePortAdapter，供 system 域存储对账）
 ├── attachment        # 附件解析实现（DocumentParser 族 / 编码探测 / Prompt 渲染）——纯能力包，无 entity/service
 ├── clarify           # 需求澄清（追问决策 / 确认卡协议 / 搜索补位 / 相对时间归一）
 ├── memory            # 子域：长期记忆 entity / mapper / service / ConversationMemorySummarizer
@@ -516,6 +517,8 @@ attachment 子包 = 附件「解析实现」，不含数据模型；
 planner.ChatAttachment  = 对话/澄清阶段用户上传的附件
 task.Attachment         = 任务附件与交付物
 ```
+
+> **`adapter` 不得并入 `task/adapter`。** 存储对账需要同时读两张附件表，`attachment` 由 `task/adapter/ArtifactReferencePortAdapter` 提供、`chat_attachment` 由本域提供。把后者也挪到 task 域会让 `task → planner` 成为**反向依赖**（§6 禁止，守卫直接拦截）；端口定义留在消费方 `system`，两个提供方各自实现，是这里唯一合规的形态。
 
 `memory` 为**子域**（mapper 需在 `@MapperScan` 单独登记）。
 
