@@ -14,11 +14,11 @@ import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import reactor.core.Disposable;
 
@@ -31,7 +31,7 @@ import reactor.core.Disposable;
 public class RequirementConversationController {
 
     private final RequirementClarifyService requirementClarifyService;
-    private final ThreadPoolTaskExecutor chatStreamExecutor;
+    private final Executor chatStreamExecutor;
 
     /**
      * 手写构造器而非 {@code @RequiredArgsConstructor}：
@@ -40,10 +40,13 @@ public class RequirementConversationController {
      * {@code ThreadPoolTaskExecutor} 时会退化成纯按类型注入而报
      * 「required a single bean, but 2 were found」。
      * 把 {@code @Qualifier} 直接写在构造参数上才真正生效。
+     *
+     * <p>注入接口 {@link Executor} 而非具体类：本处只用到 {@code execute()}，
+     * 具体类型见 {@code ChatStreamConfig} 的说明（`CODE_STYLE` §7.4.2）。</p>
      */
     public RequirementConversationController(
             RequirementClarifyService requirementClarifyService,
-            @Qualifier("chatStreamExecutor") ThreadPoolTaskExecutor chatStreamExecutor) {
+            @Qualifier("chatStreamExecutor") Executor chatStreamExecutor) {
         this.requirementClarifyService = requirementClarifyService;
         this.chatStreamExecutor = chatStreamExecutor;
     }

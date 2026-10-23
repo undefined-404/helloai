@@ -63,7 +63,7 @@ public class SubTaskCompletionListener {
     private final TaskRunningSpecService taskRunningSpecService;
     private final AttachmentService attachmentService;
 
-    @Async
+    @Async("appEventExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onSubTaskCompleted(SubTaskCompletedEvent event) {
         try {

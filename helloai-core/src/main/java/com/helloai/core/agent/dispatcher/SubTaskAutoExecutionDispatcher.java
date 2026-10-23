@@ -36,7 +36,7 @@ public class SubTaskAutoExecutionDispatcher {
     private final ExecutionCommandService executionCommandService;
     private final TaskTimelinePort taskTimelinePort;
 
-    @Async
+    @Async("appEventExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onAssigned(SubTaskAssignedEvent event) {
         Agent agent = agentService.getById(event.getAgentId());

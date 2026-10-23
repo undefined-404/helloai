@@ -58,7 +58,7 @@ public class CircuitBreakerAlertServiceImpl implements CircuitBreakerAlertServic
      * @param fromState 变更前状态
      * @param toState   变更后状态
      */
-    @Async
+    @Async("appEventExecutor")
     public void onCircuitStateChange(String cbName, Long agentId,
                                      String fromState, String toState) {
         String title = buildTitle(cbName, agentId, toState);
@@ -100,7 +100,7 @@ public class CircuitBreakerAlertServiceImpl implements CircuitBreakerAlertServic
      * <p>复用熔断器告警的 webhook 通道与发送核心；标题/正文独立，
      * 便于运维在告警流中区分「熔断」与「无候选」两类事件。</p>
      */
-    @Async
+    @Async("appEventExecutor")
     public void onNoEligibleAgent(Long subTaskId, Long taskId, String role, String reason) {
         String title = String.format("🟠 [HelloAI] 调度无可用候选 Agent: subTaskId=%d", subTaskId);
         String text = String.format(

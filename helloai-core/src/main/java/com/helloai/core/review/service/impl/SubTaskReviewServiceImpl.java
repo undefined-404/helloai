@@ -178,7 +178,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
 
     /** AFTER_COMMIT 异步监听：结果回报事务提交后触发自动核验。 */
     @Override
-    @Async
+    @Async("appEventExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onSubmittedForReview(SubTaskSubmittedForReviewEvent event) {
         if (!dispatchProperties.isAutoReviewEnabled()) {

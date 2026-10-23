@@ -79,7 +79,7 @@ public class ExecutorDoneIssuesBackfiller {
      * @param subTaskId      子任务 ID
      * @param executorOutput 执行者本轮产出正文（成功回写时的原始 output）
      */
-    @Async
+    @Async("appEventExecutor")
     public void backfill(Long subTaskId, String executorOutput) {
         if (subTaskId == null) {
             return;

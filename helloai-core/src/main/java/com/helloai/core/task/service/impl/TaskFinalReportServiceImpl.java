@@ -95,7 +95,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
 
     /** 任务自动收口后异步生成报告；已有报告或开关关闭时跳过，异常吞掉（手动端点兜底）。 */
     @Override
-    @Async
+    @Async("appEventExecutor")
     @EventListener
     public void onTaskAutoCompleted(TaskAutoCompletedEvent event) {
         if (!dispatchProperties.isAutoFinalReportEnabled()) {
