@@ -1790,7 +1790,12 @@ async function streamSendOrCreate(text: string, plannerId: string | null) {
           // 按标题找回并打开，靠重试条续跑；找不回则回填输入框保留用户文本
           void recoverAbortedNewConversation(text)
         }
-      }, abort.signal)
+      }, abort.signal,
+        // 必须传 clientToken（第 6 参）：新会话首句前上传的附件靠它建会时被认领。
+        // 漏传则后端 claimByClientToken 因空值早退，附件永远停在临时态
+        // （conversation_id 为 null），正文进不了 Prompt，模型只能说「本轮没有附件」。
+        // 取值发生在调用瞬间，早于 onSession 回调里的 clientToken 清空。
+        clientToken.value)
     }
   } finally {
     streamAbort.value = null
