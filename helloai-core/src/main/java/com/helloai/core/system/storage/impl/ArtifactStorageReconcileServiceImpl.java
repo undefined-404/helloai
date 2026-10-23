@@ -3,6 +3,7 @@ package com.helloai.core.system.storage.impl;
 import com.helloai.common.config.ArtifactStorageProperties;
 import com.helloai.core.system.port.ArtifactReference;
 import com.helloai.core.system.port.ArtifactReferencePort;
+import com.helloai.core.system.port.ChatAttachmentReferencePort;
 import com.helloai.core.system.storage.ArtifactReconcileReport;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.system.storage.ArtifactStorageReconcileService;
@@ -21,9 +22,9 @@ import java.util.Map;
  *
  * <p>算法：</p>
  * <ol>
- *   <li>经 {@link ArtifactReferencePort}（§6.146 端口反转，task 域实现）取 attachment
- *       <b>全量行（含逻辑删除）</b>，按"当前协议 + 当前桶"筛出被引用的
- *       objectKey 集合（保守口径：任何一行指向即视为被引用）。</li>
+ *   <li>经两个端口（§6.146 端口反转）分别取 {@code attachment}（task 域实现）与
+ *       {@code chat_attachment}（planner 域实现）的<b>全量行（含逻辑删除）</b>，合并后按
+ *       "当前协议 + 当前桶"筛出被引用的 objectKey 集合（保守口径：任何一行指向即视为被引用）。</li>
  *   <li>枚举桶内真实对象（{@code listObjects}），建 objectKey → 摘要 索引。</li>
  *   <li>双向比对出悬空 / 孤儿 / 字节不符。</li>
  *   <li>清理开关开启时，按时间窗与单轮上限删除孤儿；单个删除失败只记 error，
@@ -45,9 +46,19 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
     private static final String MINIO_PROTOCOL = "minio://";
     private static final String LOCAL_PROTOCOL = "local://";
 
+    /**
+     * 会话附件的 objectKey 前缀（{@code ChatAttachmentServiceImpl#ownerName} 产出
+     * {@code chat-{conversationId}} / {@code chat-tmp-{clientToken}}）。
+     *
+     * <p>仅用于把孤儿清单按来源分列以便定位，<b>不参与任何判定</b>——归属者注册名恰好以
+     * {@code chat-} 开头的子任务产物也会命中该前缀，因此它不能作为「是否该清理」的依据。</p>
+     */
+    private static final String CHAT_OWNER_PREFIX = "chat-";
+
     private final ArtifactStorage artifactStorage;
     private final ArtifactStorageProperties properties;
     private final ArtifactReferencePort artifactReferencePort;
+    private final ChatAttachmentReferencePort chatAttachmentReferencePort;
 
     @Override
     public ArtifactReconcileReport reconcile() {
@@ -55,16 +66,15 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
         String protocol = minio ? MINIO_PROTOCOL : LOCAL_PROTOCOL;
         String bucket = minio ? properties.getMinioBucket() : properties.getBucket();
 
-        List<ArtifactReference> rows = artifactReferencePort.listAllIncludingDeleted();
+        List<ArtifactReference> artifactRows = artifactReferencePort.listAllIncludingDeleted();
+        List<ArtifactReference> chatRows = chatAttachmentReferencePort.listAllIncludingDeleted();
 
-        // 1) 被引用对象集合（含逻辑删除行 → 口径保守，宁可漏判孤儿也不误删）
+        // 1) 被引用对象集合：两类记录**共同**构成（含逻辑删除行 → 口径保守，宁可漏判孤儿也不误删）。
+        //    只认其中一类，另一类的对象会整批被判成孤儿——会话附件与子任务产物共用同一个桶，
+        //    仅 objectKey 前缀不同，这也是 2026-10-23 补本条的直接原因。
         Map<String, Long> referencedSize = new LinkedHashMap<>();
-        for (ArtifactReference row : rows) {
-            String key = objectKeyOf(row.storageUrl(), protocol, bucket);
-            if (key != null) {
-                referencedSize.putIfAbsent(key, row.fileSize() == null ? -1L : row.fileSize());
-            }
-        }
+        collectReferenced(referencedSize, artifactRows, protocol, bucket);
+        collectReferenced(referencedSize, chatRows, protocol, bucket);
 
         // 2) 桶内真实对象
         List<ArtifactStorage.StoredObject> objects = artifactStorage.listObjects(bucket, null);
@@ -86,9 +96,13 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
         }
 
         List<String> orphaned = new ArrayList<>();
+        List<String> orphanedChatPrefixed = new ArrayList<>();
         for (ArtifactStorage.StoredObject object : objects) {
             if (!referencedSize.containsKey(object.objectKey())) {
                 orphaned.add(object.objectKey());
+                if (object.objectKey().startsWith(CHAT_OWNER_PREFIX)) {
+                    orphanedChatPrefixed.add(object.objectKey());
+                }
             }
         }
 
@@ -98,10 +112,22 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
                 : List.of();
 
         ArtifactReconcileReport report = new ArtifactReconcileReport(protocol, bucket,
-                rows.size(), objects.size(), dangling, orphaned, sizeMismatch, removed,
+                artifactRows.size(), chatRows.size(), objects.size(),
+                dangling, orphaned, orphanedChatPrefixed, sizeMismatch, removed,
                 properties.isOrphanCleanupEnabled());
         logReport(report);
         return report;
+    }
+
+    /** 把一批引用行的 objectKey → 字节数 合并进 referenced 集合；跨桶/跨协议与空地址行跳过。 */
+    private static void collectReferenced(Map<String, Long> referenced, List<ArtifactReference> rows,
+                                          String protocol, String bucket) {
+        for (ArtifactReference row : rows) {
+            String key = objectKeyOf(row.storageUrl(), protocol, bucket);
+            if (key != null) {
+                referenced.putIfAbsent(key, row.fileSize() == null ? -1L : row.fileSize());
+            }
+        }
     }
 
     /**
@@ -145,15 +171,18 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
 
     private void logReport(ArtifactReconcileReport report) {
         if (report.consistent()) {
-            log.info("存储对账一致: bucket={} 附件行={} 桶内对象={}",
-                    report.bucket(), report.attachmentRows(), report.objectCount());
+            log.info("存储对账一致: bucket={} 产物行={} 会话附件行={} 桶内对象={}",
+                    report.bucket(), report.attachmentRows(), report.chatAttachmentRows(),
+                    report.objectCount());
             return;
         }
-        log.warn("存储对账发现不一致: bucket={} 附件行={} 桶内对象={} 悬空={} 孤儿={} 字节不符={}",
-                report.bucket(), report.attachmentRows(), report.objectCount(),
-                report.danglingCount(), report.orphanedCount(), report.sizeMismatchCount());
+        log.warn("存储对账发现不一致: bucket={} 产物行={} 会话附件行={} 桶内对象={} "
+                        + "悬空={} 孤儿={}（其中 chat- 前缀 {} 个）字节不符={}",
+                report.bucket(), report.attachmentRows(), report.chatAttachmentRows(),
+                report.objectCount(), report.danglingCount(), report.orphanedCount(),
+                report.chatPrefixedOrphanedCount(), report.sizeMismatchCount());
         logBounded("悬空（DB 有记录、对象缺失，预览/核验会 404）", report.dangling());
-        logBounded("孤儿（对象存在、无任何附件行引用，含逻辑删除）", report.orphaned());
+        logBounded("孤儿（对象存在、两类记录均未引用，含逻辑删除）", report.orphaned());
         logBounded("字节数不符", report.sizeMismatch());
         if (report.cleanupEnabled()) {
             log.warn("孤儿清理已开启: 本轮删除 {} 个对象", report.removedCount());

@@ -131,6 +131,11 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
     }
 
     @Override
+    public List<ChatAttachment> listStorageRefsIncludingDeleted() {
+        return baseMapper.selectStorageRefAllIncludingDeleted();
+    }
+
+    @Override
     public ChatAttachment getByIdRequired(Long id) {
         ChatAttachment attachment = id == null ? null : getById(id);
         if (attachment == null) {

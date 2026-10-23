@@ -55,6 +55,19 @@ public interface ChatAttachmentMapper extends BaseMapper<ChatAttachment> {
     List<ChatAttachment> listByClientToken(@Param("clientToken") String clientToken);
 
     /**
+     * 存储对账用：全量读取「存储地址 + 字节数」，<b>包含逻辑删除行</b>。
+     *
+     * <p>为什么不用 {@code BaseMapper.selectList}：内置方法会按逻辑删除列自动追加
+     * {@code deleted = 0}，而孤儿判定必须取保守口径——只要还有任意一行（含已逻辑删除）
+     * 指向某个对象，该对象就不算孤儿。只读未删除行会让会话/附件删除后尚未回收的对象
+     * 被误判成孤儿，进而在清理开关开启时被真删。</p>
+     *
+     * <p>只选两列：对账不需要正文与解析状态，避免把 {@code extracted_text} 大字段拉进内存。</p>
+     */
+    @org.apache.ibatis.annotations.Select("SELECT storage_url, file_size FROM chat_attachment")
+    List<ChatAttachment> selectStorageRefAllIncludingDeleted();
+
+    /**
      * 领取解析任务：{@code PENDING → PARSING} 的<b>条件更新</b>。
      *
      * <p>返回 1 才算领到。这是解析幂等的唯一闸门：同一附件被重复投递（上传重试、worker 重跑）

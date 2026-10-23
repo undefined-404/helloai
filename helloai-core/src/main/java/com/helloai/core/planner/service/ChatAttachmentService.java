@@ -52,6 +52,14 @@ public interface ChatAttachmentService {
     /** 按会话列附件（Prompt 注入用；不做鉴权，调用方已具备会话上下文）。 */
     List<ChatAttachment> listByConversation(Long conversationId);
 
+    /**
+     * 存储对账用：全量读取「存储地址 + 字节数」，<b>包含逻辑删除行</b>（保守口径）。
+     *
+     * <p>仅供 {@code system} 域对账端口适配器使用，不参与业务读写；返回对象除
+     * {@code storageUrl} / {@code fileSize} 外其余字段为 null。</p>
+     */
+    List<ChatAttachment> listStorageRefsIncludingDeleted();
+
     /** 取附件，不存在抛 {@code BizException}(404)。 */
     ChatAttachment getByIdRequired(Long id);
 

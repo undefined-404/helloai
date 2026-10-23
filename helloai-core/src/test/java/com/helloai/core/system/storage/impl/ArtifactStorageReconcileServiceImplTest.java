@@ -3,6 +3,7 @@ package com.helloai.core.system.storage.impl;
 import com.helloai.common.config.ArtifactStorageProperties;
 import com.helloai.core.system.port.ArtifactReference;
 import com.helloai.core.system.port.ArtifactReferencePort;
+import com.helloai.core.system.port.ChatAttachmentReferencePort;
 import com.helloai.core.system.storage.ArtifactReconcileReport;
 import com.helloai.core.system.storage.ArtifactStorage;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +36,7 @@ class ArtifactStorageReconcileServiceImplTest {
     private ArtifactStorage storage;
     private ArtifactStorageProperties properties;
     private ArtifactReferencePort artifactReferencePort;
+    private ChatAttachmentReferencePort chatAttachmentReferencePort;
 
     private ArtifactStorageReconcileServiceImpl service;
 
@@ -45,7 +47,11 @@ class ArtifactStorageReconcileServiceImplTest {
         properties.setType("minio");
         properties.setMinioBucket(BUCKET);
         artifactReferencePort = mock(ArtifactReferencePort.class);
-        service = new ArtifactStorageReconcileServiceImpl(storage, properties, artifactReferencePort);
+        chatAttachmentReferencePort = mock(ChatAttachmentReferencePort.class);
+        // 默认「无会话附件行」：其余用例只关心产物侧；本类用例各自覆盖需要的场景。
+        when(chatAttachmentReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
+        service = new ArtifactStorageReconcileServiceImpl(
+                storage, properties, artifactReferencePort, chatAttachmentReferencePort);
     }
 
     // ---------- helpers ----------
@@ -131,6 +137,85 @@ class ArtifactStorageReconcileServiceImplTest {
 
         assertThat(report.dangling()).isEmpty();
         assertThat(report.orphaned()).isEmpty();
+    }
+
+    // ---------- 会话附件（chat_attachment）与产物共用同一桶 ----------
+
+    @Test
+    @DisplayName("两类记录共同构成被引用集合：会话附件对象不被误判成孤儿")
+    void chatAttachmentObjectsShouldNotBeOrphaned() {
+        when(artifactReferencePort.listAllIncludingDeleted())
+                .thenReturn(List.of(row("agent-a/2026/10/1/2/x.md", 10L)));
+        when(chatAttachmentReferencePort.listAllIncludingDeleted())
+                .thenReturn(List.of(row("chat-1001/2026/10/0/0/y.pdf", 20L)));
+        when(storage.listObjects(BUCKET, null)).thenReturn(List.of(
+                obj("agent-a/2026/10/1/2/x.md", 10L, daysAgo(1)),
+                obj("chat-1001/2026/10/0/0/y.pdf", 20L, daysAgo(1))));
+
+        ArtifactReconcileReport report = service.reconcile();
+
+        assertThat(report.consistent()).isTrue();
+        assertThat(report.orphaned()).isEmpty();
+        assertThat(report.attachmentRows()).isEqualTo(1);
+        assertThat(report.chatAttachmentRows()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("会话附件行指向的对象缺失 → 计入 dangling（与产物同口径）")
+    void chatAttachmentMissingObjectShouldBeDangling() {
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
+        when(chatAttachmentReferencePort.listAllIncludingDeleted())
+                .thenReturn(List.of(row("chat-1001/2026/10/0/0/gone.pdf", 20L)));
+        when(storage.listObjects(BUCKET, null)).thenReturn(List.of());
+
+        ArtifactReconcileReport report = service.reconcile();
+
+        assertThat(report.dangling()).containsExactly("chat-1001/2026/10/0/0/gone.pdf");
+    }
+
+    @Test
+    @DisplayName("孤儿按 chat- 前缀分列：仅用于定位，orphaned 仍为两类合计")
+    void orphanedShouldBeSplitByChatPrefix() {
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
+        when(storage.listObjects(BUCKET, null)).thenReturn(List.of(
+                obj("chat-1001/2026/10/0/0/orphan.pdf", 1L, daysAgo(1)),
+                obj("agent-a/2026/10/1/2/orphan.md", 2L, daysAgo(1))));
+
+        ArtifactReconcileReport report = service.reconcile();
+
+        assertThat(report.orphaned()).hasSize(2);
+        assertThat(report.orphanedChatPrefixed()).containsExactly("chat-1001/2026/10/0/0/orphan.pdf");
+        assertThat(report.chatPrefixedOrphanedCount()).isEqualTo(1);
+        assertThat(report.otherOrphanedCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("清理开启：会话附件引用的对象不在删除范围（防误删用户上传文件）")
+    void cleanupEnabled_shouldNotRemoveReferencedChatAttachment() {
+        properties.setOrphanCleanupEnabled(true);
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
+        when(chatAttachmentReferencePort.listAllIncludingDeleted())
+                .thenReturn(List.of(row("chat-1001/2026/10/0/0/keep.pdf", 20L)));
+        when(storage.listObjects(BUCKET, null)).thenReturn(List.of(
+                obj("chat-1001/2026/10/0/0/keep.pdf", 20L, daysAgo(5)),
+                obj("chat-1001/2026/10/0/0/really-orphan.pdf", 3L, daysAgo(5))));
+
+        ArtifactReconcileReport report = service.reconcile();
+
+        assertThat(report.removed()).containsExactly("chat-1001/2026/10/0/0/really-orphan.pdf");
+        verify(storage, never()).removeObject(BUCKET, "chat-1001/2026/10/0/0/keep.pdf");
+    }
+
+    @Test
+    @DisplayName("两个引用端口都必须被查询（漏接其一会让另一类对象整批变孤儿）")
+    void bothReferencePortsMustBeConsulted() {
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
+        when(storage.listObjects(BUCKET, null)).thenReturn(List.of());
+
+        service.reconcile();
+
+        verify(artifactReferencePort).listAllIncludingDeleted();
+        verify(chatAttachmentReferencePort).listAllIncludingDeleted();
     }
 
     // ---------- 清理：三重保险 ----------
