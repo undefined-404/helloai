@@ -4,7 +4,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.ChatAttachmentParseStatus;
 import com.helloai.core.planner.attachment.ChatAttachmentParseWorker;
-import com.helloai.core.planner.attachment.ChatAttachmentProperties;
+import com.helloai.common.config.ChatAttachmentProperties;
 import com.helloai.core.planner.attachment.ContentKind;
 import com.helloai.core.planner.entity.ChatAttachment;
 import com.helloai.core.planner.mapper.ChatAttachmentMapper;

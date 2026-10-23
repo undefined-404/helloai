@@ -1,6 +1,7 @@
 package com.helloai.core.planner.attachment;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.config.ChatAttachmentProperties;
 import com.helloai.core.planner.entity.ChatAttachment;
 import com.helloai.core.planner.mapper.ChatAttachmentMapper;
 import com.helloai.core.planner.service.ChatAttachmentService.UploadFile;
