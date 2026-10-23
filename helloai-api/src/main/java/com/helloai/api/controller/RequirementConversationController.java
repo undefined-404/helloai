@@ -105,7 +105,8 @@ public class RequirementConversationController {
                 // 连接已在订阅启动前断开：不再启动流（user 消息未落库，前端重发即可）
                 return;
             }
-            subscription[0] = requirementClarifyService.streamRound(id, req.getMessage(), req.getSelectedOptions())
+            subscription[0] = requirementClarifyService.streamRound(id, req.getMessage(), req.getSelectedOptions(),
+                            req.getAttachmentIds())
                     .subscribe(aggregator::onEvent,
                             // 服务层已将异常转 error 事件（onErrorResume），此处为订阅侧防御
                             error -> aggregator.onEvent(ChatStreamEvent.error(fallbackErrorMessage(error))),
@@ -165,7 +166,8 @@ public class RequirementConversationController {
                 return;
             }
             subscription[0] = requirementClarifyService.streamCreateWithClientToken(req.getMessage(),
-                            req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getClientToken())
+                            req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getClientToken(),
+                            req.getAttachmentIds())
                     .subscribe(aggregator::onEvent,
                             error -> aggregator.onEvent(ChatStreamEvent.error(fallbackErrorMessage(error))),
                             () -> {
@@ -278,7 +280,8 @@ public class RequirementConversationController {
         // 联网搜索开关透传：NULL 走默认开启语义（与老数据兼容）；
         // initialMode 已废弃，新会话始终 CHAT 模式
         return R.ok(requirementClarifyService.createWithClientToken(
-                req.getMessage(), req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getClientToken()));
+                req.getMessage(), req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getClientToken(),
+                            req.getAttachmentIds()));
     }
 
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */

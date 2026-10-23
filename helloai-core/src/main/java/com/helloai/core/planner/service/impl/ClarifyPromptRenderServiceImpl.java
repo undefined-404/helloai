@@ -135,7 +135,20 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
 
     @Override
     public String renderChatPrompt(Long conversationId, String webSearchContext, boolean includeAttachment) {
-        return renderPrompt(conversationId, webSearchContext, CHAT_PROMPT_TEMPLATE_PATH, includeAttachment);
+        return renderChatPrompt(conversationId, webSearchContext, includeAttachment, null);
+    }
+
+    @Override
+    public String renderChatPrompt(Long conversationId, String webSearchContext, boolean includeAttachment,
+                                   java.util.List<Integer> attachmentTargets) {
+        return renderChatPrompt(conversationId, webSearchContext, includeAttachment, attachmentTargets, null);
+    }
+
+    @Override
+    public String renderChatPrompt(Long conversationId, String webSearchContext, boolean includeAttachment,
+                                   java.util.List<Integer> attachmentTargets, java.util.List<Long> selectedIds) {
+        return renderPrompt(conversationId, webSearchContext, CHAT_PROMPT_TEMPLATE_PATH,
+                includeAttachment, attachmentTargets, selectedIds);
     }
 
     @Override
@@ -157,7 +170,7 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
      * @param templatePath 按会话模式选模板（CLARIFY=requirement-clarify.md / CHAT=requirement-chat.md）
      */
     private String renderPrompt(Long conversationId, String webSearchContext, String templatePath) {
-        return renderPrompt(conversationId, webSearchContext, templatePath, true);
+        return renderPrompt(conversationId, webSearchContext, templatePath, true, null);
     }
 
     /**
@@ -167,6 +180,24 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
      */
     private String renderPrompt(Long conversationId, String webSearchContext, String templatePath,
                                 boolean includeAttachment) {
+        return renderPrompt(conversationId, webSearchContext, templatePath, includeAttachment, null, null);
+    }
+
+    /**
+     * 同 {@link #renderPrompt(Long, String, String)}，多一个附件正文可见性开关（`ATT-5`）
+     * 与目标附件集（`ATT-3` 第三层检索收窄）。
+     *
+     * @param includeAttachment false 时只注入附件清单，正文区渲染 {@link #ATTACHMENT_BODY_SKIPPED}
+     * @param attachmentTargets 本轮指向的附件序号（1-based）；null/空 = 不限
+     */
+    private String renderPrompt(Long conversationId, String webSearchContext, String templatePath,
+                                boolean includeAttachment, java.util.List<Integer> attachmentTargets) {
+        return renderPrompt(conversationId, webSearchContext, templatePath, includeAttachment, attachmentTargets, null);
+    }
+
+    private String renderPrompt(Long conversationId, String webSearchContext, String templatePath,
+                                boolean includeAttachment, java.util.List<Integer> attachmentTargets,
+                                java.util.List<Long> selectedIds) {
         ClassPathResource resource = new ClassPathResource(templatePath);
         if (!resource.exists()) {
             throw new BizException("未找到 Prompt 模板: " + templatePath);
@@ -198,7 +229,7 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
         String contextSection = (webSearchContext == null || webSearchContext.isBlank())
                 ? "（无可用联网资料）" : webSearchContext;
         ChatAttachmentPromptRenderer.Rendered attachmentRendered =
-                chatAttachmentPromptRenderer.render(conversationId, currentUserInput);
+                chatAttachmentPromptRenderer.render(conversationId, currentUserInput, selectedIds, attachmentTargets);
         return template
                 .replace("{{CONVERSATION_HISTORY}}", transcript.toString().trim())
                 .replace("{{CURRENT_USER_MESSAGE}}", currentUserInput != null ? currentUserInput : "")

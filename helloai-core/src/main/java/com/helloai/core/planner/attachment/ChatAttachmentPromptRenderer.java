@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.List;
@@ -144,7 +145,55 @@ public class ChatAttachmentPromptRenderer {
 
     /** 一次查询渲染两层（避免同一轮 Prompt 渲染查两遍库）；不做检索（第三层）。 */
     public Rendered render(Long conversationId) {
-        return render(conversationId, null);
+        return render(conversationId, null, null, null);
+    }
+
+    /** 兼容重载：带检索语义锚但不限定目标附件（会话级检索）。 */
+    public Rendered render(Long conversationId, String query) {
+        return render(conversationId, query, null, null);
+    }
+
+    /**
+     * 完整入口：显式勾选 + 模型判定两种作用域信号。
+     *
+     * <p><b>优先级：用户显式勾选 &gt; 模型判定</b>。用户点了就是点了，模型不该再猜；
+     * 没点（null/空）才用模型从提问里推断的序号。</p>
+     *
+     * @param selectedIds 前端勾选的附件 id；null/空 = 未指定
+     * @param targets     模型判定的附件序号（1-based）；null/空 = 不限
+     */
+    public Rendered render(Long conversationId, String query, List<Long> selectedIds, List<Integer> targets) {
+        List<ChatAttachment> attachments = chatAttachmentService.listByConversation(conversationId);
+        if (attachments == null || attachments.isEmpty()) {
+            return new Rendered(NO_ATTACHMENT, NO_ATTACHMENT, NO_RETRIEVAL);
+        }
+        Set<Integer> scope = resolveScope(attachments, selectedIds, targets);
+        return new Rendered(buildManifest(attachments), buildContext(attachments, scope),
+                buildRetrieval(conversationId, query, attachments, scope));
+    }
+
+    /**
+     * 统一计算「本轮参与注入的附件下标集」：显式勾选优先，回落到模型判定的序号。
+     *
+     * <p>两种信号都可能失效（勾选的 id 不属于本会话、模型给的序号越界），
+     * 失效时一律回退全量——宁可多给，不要因为一个错误标识就让用户看不到附件。</p>
+     */
+    private Set<Integer> resolveScope(List<ChatAttachment> attachments, List<Long> selectedIds,
+                                      List<Integer> targets) {
+        if (selectedIds != null && !selectedIds.isEmpty()) {
+            Set<Integer> picked = new LinkedHashSet<>();
+            for (int i = 0; i < attachments.size(); i++) {
+                Long id = attachments.get(i).getId();
+                if (id != null && selectedIds.contains(id)) {
+                    picked.add(i);
+                }
+            }
+            if (!picked.isEmpty()) {
+                return picked;
+            }
+            log.warn("attachmentIds 与本次会话附件无一匹配（{}），回退为模型判定/全量", selectedIds);
+        }
+        return resolveScopedIndexes(attachments, targets);
     }
 
     /**
@@ -157,29 +206,30 @@ public class ChatAttachmentPromptRenderer {
      * <p><b>检索失败一律降级为空</b>：KB 未启用、嵌入接口不可用、会话无 ingest 记录——
      * 都返回占位文本，正文层照常注入。检索是附加值，不能因为它失败让附件读不出来。</p>
      *
-     * @param query 本轮用户消息（检索语义锚）；null/空白时跳过第三层
+     * @param query   本轮用户消息（检索语义锚）；null/空白时跳过第三层
+     * @param targets 本轮指向的附件序号（1-based，与清单一致）；空 = 不限
      */
-    public Rendered render(Long conversationId, String query) {
-        List<ChatAttachment> attachments = chatAttachmentService.listByConversation(conversationId);
-        if (attachments == null || attachments.isEmpty()) {
-            return new Rendered(NO_ATTACHMENT, NO_ATTACHMENT, NO_RETRIEVAL);
-        }
-        return new Rendered(buildManifest(attachments), buildContext(attachments),
-                buildRetrieval(conversationId, query, attachments));
+    public Rendered render(Long conversationId, String query, List<Integer> targets) {
+        return render(conversationId, query, null, targets);
     }
 
     /**
      * 第三层：超预算附件的按需检索（`ATT-3`）。
      *
-     * <p>只在存在 {@code kb_source} 的附件时检索——没有 ingest 记录时检索必然为空，
-     * 白花一次嵌入调用。检索范围强制带 {@code conversationId}：{@code kb_chunk} 是全平台
-     * 共享表，不带会话过滤会捞到别的会话的附件正文。</p>
+     * <p><b>两重收窄</b>：先按会话（`kb_chunk` 是全平台共享表，不带会话过滤会捞到别的会话），
+     * 再按<b>本轮指向的附件</b>——会话里两份文件、用户只问第二份时，只检索第二份的分片，
+     * 否则第一份的内容会混进回答并占用注入预算。</p>
+     *
+     * <p><b>目标集悬空时回退为不限</b>：序号超出实际附件数、或指向的附件没 ingest 过，
+     * 都退回会话级检索——宁可多召回一点，不要因为模型报错一个序号就整轮检索不到内容。</p>
      */
-    private String buildRetrieval(Long conversationId, String query, List<ChatAttachment> attachments) {
+    private String buildRetrieval(Long conversationId, String query, List<ChatAttachment> attachments,
+                                  Set<Integer> scope) {
         if (knowledgeBaseService == null) {
             return NO_RETRIEVAL; // 兼容构造：未注入 KB
         }
-        boolean hasIngested = attachments.stream().anyMatch(a -> a.getKbSource() != null);
+        List<ChatAttachment> scoped = scope.stream().map(attachments::get).toList();
+        boolean hasIngested = scoped.stream().anyMatch(a -> a.getKbSource() != null);
         if (!hasIngested || query == null || query.isBlank()) {
             return NO_RETRIEVAL;
         }
@@ -187,15 +237,21 @@ public class ChatAttachmentPromptRenderer {
             // 检索用独立预算（窗口 15%）：全局 KbProperties.charBudget 默认只有 4,000 字，
             // 是为全库检索设的；几万字的附件靠它会只能覆盖 3% 左右。
             int retrievalLimit = AttachmentContentPolicy.resolveChatAttachmentRetrievalLimit(contextWindowTokens);
+            List<String> sources = scoped.stream()
+                    .map(ChatAttachment::getKbSource)
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .toList();
             KnowledgeSearchResult result = knowledgeBaseService.search(
-                    query, KB_RETRIEVAL_TOP_K, conversationId, null, retrievalLimit);
+                    query, KB_RETRIEVAL_TOP_K, conversationId, null, retrievalLimit, sources);
             // 成功路径也要留痕：只在失败时打日志，排查时只能靠模型回答反推命中数。
-            log.info("附件检索命中: conversationId={}, hits={}, chars={}, limit={}, truncated={}",
+            log.info("附件检索命中: conversationId={}, hits={}, chars={}, limit={}, truncated={}, scopedTo={}",
                     conversationId,
                     result == null || result.hits() == null ? 0 : result.hits().size(),
                     result == null ? 0 : result.totalChars(),
                     retrievalLimit,
-                    result != null && result.truncated());
+                    result != null && result.truncated(),
+                    sources.size());
             if (result == null || result.hits() == null || result.hits().isEmpty()) {
                 return NO_RETRIEVAL;
             }
@@ -365,15 +421,22 @@ public class ChatAttachmentPromptRenderer {
     }
 
     /** 正文：按预算逐份注入，超预算显式标注。 */
-    private String buildContext(List<ChatAttachment> attachments) {
+    private String buildContext(List<ChatAttachment> attachments, Set<Integer> inScope) {
         int totalLimit = AttachmentContentPolicy.resolveChatAttachmentTotalLimit(contextWindowTokens);
         int perFileLimit = Math.min(AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT, totalLimit);
-        int[] quota = planContextQuota(attachments, totalLimit, perFileLimit);
+        int[] quota = planContextQuota(attachments, totalLimit, perFileLimit, inScope);
 
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < attachments.size(); i++) {
             ChatAttachment a = attachments.get(i);
+            // 序号必须沿用清单的 1-based 全量顺序，否则模型对不上清单条目
             String header = "### [附件" + (i + 1) + "] " + safe(a.getFileName()) + "（" + statusText(a) + "）";
+            // 本轮提问未指向的附件：只留标题 + 说明，不注入正文（省预算、防混淆）
+            if (!inScope.contains(i)) {
+                sb.append(header).append('\n')
+                        .append("（本轮未涉及该附件：提问指向的是其他附件；如需查看其内容请明确指出文件）\n\n");
+                continue;
+            }
             String text = a.getExtractedText();
             if (a.getParseStatus() != ChatAttachmentParseStatus.READY || text == null || text.isBlank()) {
                 sb.append(header).append('\n')
@@ -404,6 +467,39 @@ public class ChatAttachmentPromptRenderer {
     }
 
     /**
+     * 把「本轮指向的附件序号」解析成**0-based 下标集合**供正文层使用。
+     *
+     * <p>与 {@link #resolveScopedAttachments} 的区别：那个返回附件对象（检索层用），
+     * 这个返回下标（正文层要按原顺序遍历、且需要判断「某项是否在范围内」）。
+     * 语义一致：未指定 / 全部越界 → 返回全部下标（会话级回退）。</p>
+     */
+    private Set<Integer> resolveScopedIndexes(List<ChatAttachment> attachments, List<Integer> targets) {
+        Set<Integer> all = new LinkedHashSet<>();
+        for (int i = 0; i < attachments.size(); i++) {
+            all.add(i);
+        }
+        if (targets == null || targets.isEmpty()) {
+            return all;
+        }
+        Set<Integer> picked = new LinkedHashSet<>();
+        for (Integer idx : targets) {
+            if (idx != null && idx >= 1 && idx <= attachments.size()) {
+                picked.add(idx - 1);
+            }
+        }
+        return picked.isEmpty() ? all : picked;
+    }
+
+    /**
+     * 把「本轮指向的附件序号」解析成附件列表：序号 1-based、越界忽略；
+     * 全部越界或未指定 → 返回全部（会话级回退）。
+     */
+    private List<ChatAttachment> resolveScopedAttachments(List<ChatAttachment> attachments,
+                                                          List<Integer> targets) {
+        return resolveScopedIndexes(attachments, targets).stream().map(attachments::get).toList();
+    }
+
+    /**
      * 分配每个附件的正文注入额度（`ATT-3` per-file 配额）：**均分保底 + 余量回收**。
      *
      * <p><b>为什么不能先到先得</b>：原实现按附件顺序切预算，第一个文件可以吃掉
@@ -420,7 +516,8 @@ public class ChatAttachmentPromptRenderer {
      *
      * @return 与 {@code attachments} 同序的额度数组；不可读项为 0
      */
-    private int[] planContextQuota(List<ChatAttachment> attachments, int totalLimit, int perFileLimit) {
+    private int[] planContextQuota(List<ChatAttachment> attachments, int totalLimit, int perFileLimit,
+                                   Set<Integer> inScope) {
         int size = attachments.size();
         int[] quota = new int[size];
         int[] demand = new int[size];
@@ -429,10 +526,13 @@ public class ChatAttachmentPromptRenderer {
         int readable = 0;
 
         for (int i = 0; i < size; i++) {
+            if (!inScope.contains(i)) {
+                continue; // 本轮未涉及的附件：不参与均分，否则会白占一份份额
+            }
             ChatAttachment a = attachments.get(i);
             String text = a.getExtractedText();
             if (a.getParseStatus() != ChatAttachmentParseStatus.READY || text == null || text.isBlank()) {
-                continue; // 不可读：额度 0，也不参与均分（否则会白占一份份额）
+                continue; // 不可读：额度 0，也不参与均分
             }
             readable++;
             demand[i] = Math.min(text.length(), perFileLimit);

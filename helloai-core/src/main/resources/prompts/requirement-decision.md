@@ -55,6 +55,18 @@
 2. 是 → 附件里有没有能直接回答它的内容？有 → `answerable`
 3. 都没有 → `needs_external`
 
+### 目标附件（`attachment_targets`，仅 `answerable` / `needs_external` 时填）
+
+有多个附件时，必须指出**本轮问的是哪几份**（填清单里的序号）：
+
+| 情形 | 取值 |
+|---|---|
+| 明确指向某几份（「第 2 个附件里…」「这份手册的第三章」「对比附件1 和附件2」） | `[2]` / `[1, 2]` |
+| 不指向特定附件、泛指「附件」| `[]`（表示全部） |
+| 无附件，或 `attachment_intent = none` | `[]` |
+
+**为什么要填**：检索按此过滤。不填的话，会话里所有附件的分片都会进检索池——问第 2 份时第 1 份的内容也会被召回，既浪费预算又干扰判断。
+
 ## 四、web_search 判定（仅 `none` / `needs_external` 时有意义）
 
 可选值：`need_search` 布尔 + `search_query` 搜索词 + `reason` 理由。
@@ -103,7 +115,7 @@
 
 输出且仅输出一个 JSON 对象，不要 Markdown 代码块围栏，不要任何解释文字：
 
-{"intent":"chat|clarify","intent_reason":"direct_answer|ambiguous|task_oriented|need_clarification","clarification_question":null,"attachment_intent":"none|answerable|needs_external","web_search":{"need_search":true|false,"search_query":"优化后的搜索词或 null","reason":"决策理由"}}
+{"intent":"chat|clarify","intent_reason":"direct_answer|ambiguous|task_oriented|need_clarification","clarification_question":null,"attachment_intent":"none|answerable|needs_external","attachment_targets":[],"web_search":{"need_search":true|false,"search_query":"优化后的搜索词或 null","reason":"决策理由"}}
 
 字段约束：
 - `intent_reason` 必须与 `intent` 匹配（见上文表格）

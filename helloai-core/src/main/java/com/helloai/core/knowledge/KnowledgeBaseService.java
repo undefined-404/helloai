@@ -93,7 +93,7 @@ public class KnowledgeBaseService {
         if (!kbProperties.isEnabled()) {
             throw new BizException("知识库未启用：helloai.kb.enabled=false");
         }
-        return doSearch(query, maxResults, null, null, null);
+        return doSearch(query, maxResults, null, null, null, null);
     }
 
     /**
@@ -121,21 +121,35 @@ public class KnowledgeBaseService {
      */
     public KnowledgeSearchResult search(String query, Integer maxResults, Long conversationId, Long userId,
                                         Integer charBudgetOverride) {
+        return search(query, maxResults, conversationId, userId, charBudgetOverride, null);
+    }
+
+    /**
+     * 带作用域 + 自定义预算 + **附件粒度**的检索（`ATT-3`）。
+     *
+     * <p>{@code sources} 非空时只在这些来源里检索——解决「会话里两份附件、只问第二份，
+     * 第一份的分片也被召回」的问题。传 null/空表示不限（会话级）。</p>
+     *
+     * @param sources 允许命中的 kb 来源（形如 {@code chat:{conv}:{att}}）；null = 全会话
+     */
+    public KnowledgeSearchResult search(String query, Integer maxResults, Long conversationId, Long userId,
+                                        Integer charBudgetOverride, List<String> sources) {
         if (!kbProperties.isEnabled()) {
             return KnowledgeSearchResult.empty(query);
         }
         try {
-            return doSearch(query, maxResults, conversationId, userId, charBudgetOverride);
+            return doSearch(query, maxResults, conversationId, userId, charBudgetOverride, sources);
         } catch (RuntimeException e) {
-            log.warn("知识库检索失败（降级为无检索结果）: query={}, conversationId={}, err={}",
-                    query, conversationId, e.toString());
+            log.warn("知识库检索失败（降级为无检索结果）: query={}, conversationId={}, sources={}, err={}",
+                    query, conversationId, sources, e.toString());
             return KnowledgeSearchResult.empty(query);
         }
     }
 
     /** 检索主体：嵌入 → 余弦 top-k → 按 char_budget 截断。 */
     private KnowledgeSearchResult doSearch(String query, Integer maxResults,
-                                           Long conversationId, Long userId, Integer charBudgetOverride) {
+                                           Long conversationId, Long userId, Integer charBudgetOverride,
+                                           List<String> sources) {
         if (query == null || query.isBlank()) {
             return KnowledgeSearchResult.empty(query);
         }
@@ -147,7 +161,7 @@ public class KnowledgeBaseService {
                 ? Math.min(maxResults == null || maxResults < 1 ? kbProperties.getDefaultResults() : maxResults,
                            HARD_MAX_RESULTS)
                 : resolveLimit(maxResults);
-        List<KnowledgeHit> hits = repository.search(queryVec, k, conversationId, userId);
+        List<KnowledgeHit> hits = repository.search(queryVec, k, conversationId, userId, sources);
 
         int budget = charBudgetOverride != null && charBudgetOverride > 0
                 ? charBudgetOverride : kbProperties.getCharBudget();

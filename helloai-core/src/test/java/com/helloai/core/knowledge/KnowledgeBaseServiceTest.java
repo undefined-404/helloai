@@ -118,7 +118,7 @@ class KnowledgeBaseServiceTest {
         KbProperties p = props();
         p.setCharBudget(10);
         when(embedder.embedOne(anyString())).thenReturn(new double[]{0.9});
-        when(repository.search(any(double[].class), anyInt(), isNull(), isNull())).thenReturn(List.of(
+        when(repository.search(any(double[].class), anyInt(), isNull(), isNull(), any())).thenReturn(List.of(
                 new KnowledgeHit(1L, "a", 0, "0123456789abcdef", 0.1), // 16 字符
                 new KnowledgeHit(2L, "b", 0, "xyz", 0.2)));
 
@@ -146,10 +146,10 @@ class KnowledgeBaseServiceTest {
         KbProperties p = props();
         p.setMaxResults(8);
         when(embedder.embedOne(anyString())).thenReturn(new double[]{0.9});
-        when(repository.search(any(double[].class), anyInt(), isNull(), isNull())).thenReturn(List.of());
+        when(repository.search(any(double[].class), anyInt(), isNull(), isNull(), any())).thenReturn(List.of());
         svc(p).search("q", 99);
         verify(repository).search(any(double[].class), org.mockito.ArgumentMatchers.eq(8),
-                isNull(), isNull());
+                isNull(), isNull(), any());
     }
 
     @Test
@@ -158,10 +158,10 @@ class KnowledgeBaseServiceTest {
         KbProperties p = props();
         p.setDefaultResults(2);
         when(embedder.embedOne(anyString())).thenReturn(new double[]{0.9});
-        when(repository.search(any(double[].class), anyInt(), isNull(), isNull())).thenReturn(List.of());
+        when(repository.search(any(double[].class), anyInt(), isNull(), isNull(), any())).thenReturn(List.of());
         svc(p).search("q", null);
         verify(repository).search(any(double[].class), org.mockito.ArgumentMatchers.eq(2),
-                isNull(), isNull());
+                isNull(), isNull(), any());
     }
 
     @Test
@@ -199,10 +199,10 @@ class KnowledgeBaseServiceTest {
         p.setDefaultResults(2);
         p.setMaxResults(8);
         when(embedder.embedOne(anyString())).thenReturn(new double[]{0.9});
-        when(repository.search(any(double[].class), anyInt(), isNull(), isNull())).thenReturn(List.of());
+        when(repository.search(any(double[].class), anyInt(), isNull(), isNull(), any())).thenReturn(List.of());
         svc(p).search("q", null);
         verify(repository).search(any(double[].class), org.mockito.ArgumentMatchers.eq(2),
-                isNull(), isNull());
+                isNull(), isNull(), any());
     }
 
     @Test

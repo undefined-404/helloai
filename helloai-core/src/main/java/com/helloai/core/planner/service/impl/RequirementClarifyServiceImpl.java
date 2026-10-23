@@ -174,6 +174,13 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     @Override
     public Flux<ChatStreamEvent> streamRound(Long conversationId, String message,
                                              List<ClarifySelection> selections) {
+        return streamRound(conversationId, message, selections, null);
+    }
+
+    @Override
+    public Flux<ChatStreamEvent> streamRound(Long conversationId, String message,
+                                             List<ClarifySelection> selections,
+                                             java.util.List<Long> attachmentIds) {
         return streamService.streamRound(conversationId, message, selections);
     }
 
@@ -186,8 +193,10 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     /** 流式新建会话 + 认领首句前上传的附件（见 {@link #createWithClientToken}）。 */
     @Override
     public Flux<ChatStreamEvent> streamCreateWithClientToken(String message, Long plannerAgentId,
-                                                             Boolean webSearchEnabled, String clientToken) {
-        return streamService.streamCreate(message, plannerAgentId, webSearchEnabled, clientToken);
+                                                             Boolean webSearchEnabled, String clientToken,
+                                                             java.util.List<Long> attachmentIds) {
+        return streamService.streamCreateWithClientToken(message, plannerAgentId, webSearchEnabled,
+                clientToken, attachmentIds);
     }
 
     /**

@@ -26,6 +26,16 @@ public interface ClarifyStreamService {
     Flux<ChatStreamEvent> streamRound(Long conversationId, String message, List<ClarifySelection> selections);
 
     /**
+     * 流式轮次 + 本轮参与的附件集（`ATT-3` 前端勾选）。
+     *
+     * @param attachmentIds 用户勾选的附件 id；null/空 = 未指定，回落模型判定
+     */
+    default Flux<ChatStreamEvent> streamRound(Long conversationId, String message,
+                                              List<ClarifySelection> selections, List<Long> attachmentIds) {
+        return streamRound(conversationId, message, selections);
+    }
+
+    /**
      * 流式新建会话并跑首轮（Chat SSE）：<b>新会话首条消息</b>的流式入口。
      *
      * <p><b>为什么需要</b>（2026-10-18 实测）：前端新会话走同步 {@code create}——该接口要跑完
@@ -45,6 +55,12 @@ public interface ClarifyStreamService {
      *
      * @param clientToken 前端生成的新会话临时标识（可空）
      */
+    default Flux<ChatStreamEvent> streamCreateWithClientToken(String message, Long plannerAgentId,
+                                                              Boolean webSearchEnabled, String clientToken,
+                                                              List<Long> attachmentIds) {
+        return streamCreate(message, plannerAgentId, webSearchEnabled);
+    }
+
     default Flux<ChatStreamEvent> streamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled,
                                                String clientToken) {
         return streamCreate(message, plannerAgentId, webSearchEnabled);

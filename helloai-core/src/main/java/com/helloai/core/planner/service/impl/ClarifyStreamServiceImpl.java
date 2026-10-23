@@ -67,7 +67,14 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
     @Override
     public Flux<ChatStreamEvent> streamRound(Long conversationId, String message,
                                              List<ClarifySelection> selections) {
-        return Flux.defer(() -> runStreamRound(conversationId, message, selections))
+        return streamRound(conversationId, message, selections, null);
+    }
+
+    @Override
+    public Flux<ChatStreamEvent> streamRound(Long conversationId, String message,
+                                             List<ClarifySelection> selections,
+                                             List<Long> attachmentIds) {
+        return Flux.defer(() -> runStreamRound(conversationId, message, selections, attachmentIds))
                 .onErrorResume(e -> {
                     log.warn("流式对话轮失败: conversationId={}, err={}", conversationId, e.getMessage());
                     return Flux.just(ChatStreamEvent.error(streamErrorMessage(e)));
@@ -76,7 +83,9 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
 
     /** 流式轮实现：同步前置段（校验/落库/决策/搜索）在订阅线程执行，主回复段返回 token 流。 */
     private Flux<ChatStreamEvent> runStreamRound(Long conversationId, String message,
-                                                 List<ClarifySelection> selections) {        String trimmed = message == null ? "" : message.trim();
+                                                 List<ClarifySelection> selections,
+                                                 List<Long> attachmentIds) {
+        String trimmed = message == null ? "" : message.trim();
         if (trimmed.isEmpty()) {
             throw new BizException("消息不能为空");
         }
@@ -108,7 +117,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
         }
 
         // CHAT 模式主回复段（决策 + 三态搜索 + 流式主回复），与 streamCreate 首轮共用
-        return runChatStream(conversation, trimmed, userPayload, rounds + 1);
+        return runChatStream(conversation, trimmed, userPayload, rounds + 1, attachmentIds);
     }
 
     /**
@@ -121,7 +130,8 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
      * @param roundNo 本轮序号（仅日志用：老会话 = round_count+1，新会话 = 1）
      */
     private Flux<ChatStreamEvent> runChatStream(RequirementConversation conversation, String userMessage,
-                                                String userPayload, int roundNo) {
+                                                String userPayload, int roundNo,
+                                                List<Long> attachmentIds) {
         Long conversationId = conversation.getId();
         // ★过程数据（2026-10-18）：思考全文 + 检索步骤，随消息 payload 落库
         // （done 后/刷新后仍可回看，对齐 DeepSeek「已深度思考」与 ChatGPT「Thinking」面板）
@@ -154,7 +164,8 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                                     steps.add(describeSearchResult(outcome));
                                 }
                                 return runChatMainReply(conversation, outcome, steps, thinking, roundNo,
-                                        roundDecision.decision().shouldInjectAttachment());
+                                        roundDecision.decision().shouldInjectAttachment(),
+                                        roundDecision.decision().attachmentTargets(), attachmentIds);
                             }));
                 }));
     }
@@ -163,14 +174,17 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
     private Flux<ChatStreamEvent> runChatMainReply(RequirementConversation conversation,
                                                    WebSearchOutcome outcome, List<String> steps,
                                                    StringBuilder thinking, int roundNo,
-                                                   boolean includeAttachment) {
+                                                   boolean includeAttachment,
+                                                   java.util.List<Integer> attachmentTargets,
+                                                   java.util.List<Long> attachmentIds) {
         Long conversationId = conversation.getId();
         // 主回复 prompt 构造（与 runLlmRound CHAT 分支同构：固定 CHAT 模板）
         String webSearchContext = outcome != null ? outcome.toContextText() : "";
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
-                .userPrompt(promptRenderService.renderChatPrompt(conversationId, webSearchContext, includeAttachment))
+                .userPrompt(promptRenderService.renderChatPrompt(conversationId, webSearchContext, includeAttachment,
+                        attachmentTargets, attachmentIds))
                 .context(Map.of("conversationId", conversationId, "scene", "requirement_chat"))
                 .requiredCapabilities(Map.of())
                 .build();
@@ -243,7 +257,15 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
     @Override
     public Flux<ChatStreamEvent> streamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled,
                                               String clientToken) {
-        return Flux.defer(() -> runStreamCreate(message, plannerAgentId, webSearchEnabled, clientToken))
+        return streamCreateWithClientToken(message, plannerAgentId, webSearchEnabled, clientToken, null);
+    }
+
+    @Override
+    public Flux<ChatStreamEvent> streamCreateWithClientToken(String message, Long plannerAgentId,
+                                                             Boolean webSearchEnabled, String clientToken,
+                                                             List<Long> attachmentIds) {
+        return Flux.defer(() -> runStreamCreate(message, plannerAgentId, webSearchEnabled, clientToken,
+                attachmentIds))
                 .onErrorResume(e -> {
                     log.warn("流式新建会话失败: err={}", e.getMessage());
                     return Flux.just(ChatStreamEvent.error(streamErrorMessage(e)));
@@ -251,7 +273,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
     }
 
     private Flux<ChatStreamEvent> runStreamCreate(String message, Long plannerAgentId, Boolean webSearchEnabled,
-                                                  String clientToken) {
+                                                  String clientToken, List<Long> attachmentIds) {
         String trimmed = message == null ? "" : message.trim();
         if (trimmed.isEmpty()) {
             throw new BizException("首条消息不能为空");
@@ -270,7 +292,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
         // 首帧必须给前端会话 id（否则 done 后无从拉 detail / 后续消息发错会话）
         return Flux.concat(
                 Flux.just(ChatStreamEvent.session(String.valueOf(conversation.getId()))),
-                runChatStream(conversation, trimmed, null, 1));
+                runChatStream(conversation, trimmed, null, 1, attachmentIds));
     }
 
 

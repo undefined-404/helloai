@@ -6,6 +6,7 @@ import com.helloai.core.shared.util.LlmJsonSanitizer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -47,7 +48,8 @@ public class ChatRoundDecisionParser {
 
     /** 顶层字段白名单（未知字段即拒绝，防 LLM 输出漂移）。 */
     private static final Set<String> TOP_LEVEL_KEYS =
-            Set.of("intent", "intent_reason", "clarification_question", "web_search", "attachment_intent");
+            Set.of("intent", "intent_reason", "clarification_question", "web_search",
+                    "attachment_intent", "attachment_targets");
 
     /** web_search 子对象字段白名单。 */
     private static final Set<String> WEB_SEARCH_KEYS = Set.of("need_search", "search_query", "reason");
@@ -74,7 +76,7 @@ public class ChatRoundDecisionParser {
      */
     public record ChatRoundDecision(
             String intent, String intentReason, String clarificationQuestion, SearchDecision webSearch,
-            AttachmentIntent attachmentIntent) {
+            AttachmentIntent attachmentIntent, List<Integer> attachmentTargets) {
 
         /** 是否为建议转入澄清模式的意图。 */
         public boolean isClarify() {
@@ -94,6 +96,16 @@ public class ChatRoundDecisionParser {
          */
         public boolean vetoesWebSearch() {
             return attachmentIntent == AttachmentIntent.ANSWERABLE;
+        }
+
+        /**
+         * 本轮检索限定在哪些附件（1-based 清单序号）；空表示不限（全会话）。
+         *
+         * <p>悬空引用（序号超出实际附件数）由调用方按「不限」兜底——宁可多召回，
+         * 不要因为模型报错一个序号就整轮检索不到东西。</p>
+         */
+        public boolean hasAttachmentTargets() {
+            return attachmentTargets != null && !attachmentTargets.isEmpty();
         }
     }
 
@@ -122,7 +134,7 @@ public class ChatRoundDecisionParser {
      */
     public static ChatRoundDecision defaults() {
         return new ChatRoundDecision(INTENT_CHAT, null, null,
-                new SearchDecision(false, null, null), null);
+                new SearchDecision(false, null, null), null, List.of());
     }
 
     /**
@@ -187,7 +199,45 @@ public class ChatRoundDecisionParser {
 
         return new ChatRoundDecision(intent, intentReason, question,
                 parseWebSearch(root.get("web_search"), raw),
-                parseAttachmentIntent(root.get("attachment_intent")));
+                parseAttachmentIntent(root.get("attachment_intent")),
+                parseAttachmentTargets(root.get("attachment_targets")));
+    }
+
+    /**
+     * 解析目标附件序号（`ATT-3` 附件粒度检索）：数组内每项取正整数，去重升序；
+     * 缺失 / 非数组 / 全非法 → 空列表（= 不限，保持会话级检索行为）。
+     *
+     * <p>宽容处理的理由同 {@link #parseAttachmentIntent}：这是新增字段，旧模板天然缺失，
+     * 严格校验会把存量部署打成降级。</p>
+     */
+    private List<Integer> parseAttachmentTargets(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return List.of();
+        }
+        if (!node.isArray()) {
+            log.warn("attachment_targets 必须是数组，按不限处理");
+            return List.of();
+        }
+        java.util.TreeSet<Integer> targets = new java.util.TreeSet<>();
+        for (JsonNode item : node) {
+            int idx = item.isInt() ? item.asInt() : (item.isTextual() ? parseIntSafe(item.asText()) : -1);
+            if (idx > 0) {
+                targets.add(idx);
+            }
+        }
+        if (targets.isEmpty() && !node.isEmpty()) {
+            log.warn("attachment_targets 无有效正整数，按不限处理: {}", summarize(node.toString()));
+        }
+        return List.copyOf(targets);
+    }
+
+    /** 文本形式的序号（模板偶尔输出 "2"）；非数字返回 -1。 */
+    private int parseIntSafe(String text) {
+        try {
+            return Integer.parseInt(text.trim());
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     /**

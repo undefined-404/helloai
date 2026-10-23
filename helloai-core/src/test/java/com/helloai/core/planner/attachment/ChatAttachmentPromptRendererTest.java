@@ -13,6 +13,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -307,7 +308,7 @@ class ChatAttachmentPromptRendererTest {
         ChatAttachment ingested = attachment("大手册.md", ChatAttachmentParseStatus.READY, "正文");
         ingested.setKbSource("chat:9:1");
         when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(ingested));
-        when(knowledgeBaseService.search(eq("怎么装"), anyInt(), eq(9L), isNull(), anyInt()))
+        when(knowledgeBaseService.search(eq("怎么装"), anyInt(), eq(9L), isNull(), anyInt(), anyList()))
                 .thenReturn(new KnowledgeSearchResult("怎么装",
                         List.of(new KnowledgeSearchResult.Hit("chat:9:1", 2, "第三步：复制到技能目录")),
                         10, false));
@@ -340,7 +341,7 @@ class ChatAttachmentPromptRendererTest {
         ChatAttachment ingested = attachment("大手册.md", ChatAttachmentParseStatus.READY, "正文");
         ingested.setKbSource("chat:9:1");
         when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(ingested));
-        when(knowledgeBaseService.search(anyString(), anyInt(), anyLong(), isNull(), anyInt()))
+        when(knowledgeBaseService.search(anyString(), anyInt(), anyLong(), isNull(), anyInt(), anyList()))
                 .thenReturn(KnowledgeSearchResult.empty("q"));
 
         ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(
@@ -349,7 +350,82 @@ class ChatAttachmentPromptRendererTest {
 
         // 128000 × 15% ÷ 2 = 9,600；若错误地沿用 KbProperties.charBudget 会是 4,000
         verify(knowledgeBaseService).search(anyString(), anyInt(), anyLong(), isNull(),
-                org.mockito.ArgumentMatchers.eq(9_600));
+                org.mockito.ArgumentMatchers.eq(9_600), anyList());
+    }
+
+    @Test
+    @DisplayName("ATT-3：指定目标附件时只检索该附件的分片（问第2份不召回第1份）")
+    @SuppressWarnings("unchecked")
+    void shouldRestrictRetrievalToTargetAttachments() {
+        ChatAttachment first = attachment("附件一.md", ChatAttachmentParseStatus.READY, "正文一");
+        first.setKbSource("chat:9:1");
+        ChatAttachment second = attachment("附件二.md", ChatAttachmentParseStatus.READY, "正文二");
+        second.setKbSource("chat:9:2");
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(first, second));
+        when(knowledgeBaseService.search(anyString(), anyInt(), anyLong(), isNull(), anyInt(), anyList()))
+                .thenReturn(KnowledgeSearchResult.empty("q"));
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(
+                chatAttachmentService, knowledgeBaseService, 128_000);
+        r.render(9L, "只问第二份", List.of(2));
+
+        org.mockito.ArgumentCaptor<List<String>> captor =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(knowledgeBaseService).search(anyString(), anyInt(), anyLong(), isNull(), anyInt(),
+                captor.capture());
+        assertThat(captor.getValue()).containsExactly("chat:9:2");
+    }
+
+    @Test
+    @DisplayName("ATT-3：目标序号越界时回退为全附件检索（不因模型报错序号导致检索不到）")
+    @SuppressWarnings("unchecked")
+    void shouldFallBackToAllWhenTargetsOutOfRange() {
+        ChatAttachment only = attachment("唯一.md", ChatAttachmentParseStatus.READY, "正文");
+        only.setKbSource("chat:9:1");
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(only));
+        when(knowledgeBaseService.search(anyString(), anyInt(), anyLong(), isNull(), anyInt(), anyList()))
+                .thenReturn(KnowledgeSearchResult.empty("q"));
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(
+                chatAttachmentService, knowledgeBaseService, 128_000);
+        r.render(9L, "问点什么", List.of(9)); // 只有 1 份附件，序号 9 越界
+
+        org.mockito.ArgumentCaptor<List<String>> captor =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(knowledgeBaseService).search(anyString(), anyInt(), anyLong(), isNull(), anyInt(),
+                captor.capture());
+        assertThat(captor.getValue()).containsExactly("chat:9:1");
+    }
+
+    @Test
+    @DisplayName("ATT-3：正文层也只注入目标附件（问第2份时第1份只留标题）")
+    void shouldScopeContextBodyToTargets() {
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
+                attachment("附件一.md", ChatAttachmentParseStatus.READY, "第一份的正文内容"),
+                attachment("附件二.md", ChatAttachmentParseStatus.READY, "第二份的正文内容")));
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(chatAttachmentService, 128_000);
+        String context = r.render(9L, "只问第二份", List.of(2)).context();
+
+        assertThat(context).contains("第二份的正文内容");
+        assertThat(context).doesNotContain("第一份的正文内容");
+        assertThat(context).contains("本轮未涉及该附件");
+        // 序号仍按清单全量顺序
+        assertThat(context).contains("[附件2] 附件二.md");
+    }
+
+    @Test
+    @DisplayName("ATT-3：未指定目标附件时正文全量注入（保持旧行为）")
+    void shouldInjectAllBodiesWhenNoTargets() {
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
+                attachment("附件一.md", ChatAttachmentParseStatus.READY, "第一份的正文内容"),
+                attachment("附件二.md", ChatAttachmentParseStatus.READY, "第二份的正文内容")));
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(chatAttachmentService, 128_000);
+        String context = r.render(9L, "都说说").context();
+
+        assertThat(context).contains("第一份的正文内容").contains("第二份的正文内容");
+        assertThat(context).doesNotContain("本轮未涉及该附件");
     }
 
     @Test
@@ -358,7 +434,7 @@ class ChatAttachmentPromptRendererTest {
         ChatAttachment ingested = attachment("大手册.md", ChatAttachmentParseStatus.READY, "正文");
         ingested.setKbSource("chat:9:1");
         when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(ingested));
-        when(knowledgeBaseService.search(anyString(), anyInt(), anyLong(), isNull(), anyInt()))
+        when(knowledgeBaseService.search(anyString(), anyInt(), anyLong(), isNull(), anyInt(), anyList()))
                 .thenThrow(new IllegalStateException("embed 挂了"));
 
         ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(

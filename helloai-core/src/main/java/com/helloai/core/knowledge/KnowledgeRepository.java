@@ -101,20 +101,56 @@ public class KnowledgeRepository {
      * @param userId         上传者 id；null = 不限
      */
     public List<KnowledgeHit> search(double[] queryVec, int limit, Long conversationId, Long userId) {
+        return search(queryVec, limit, conversationId, userId, null);
+    }
+
+    /**
+     * 带**附件粒度**过滤的检索（`ATT-3`）：{@code sources} 非空时只在这些来源里检索。
+     *
+     * <p><b>为什么需要这一层</b>：会话级过滤（{@code conversation_id}）只能保证「不跨会话」，
+     * 保证不了「不跨附件」。同一会话传了两份文件、用户只问第二份时，第一份的分片仍会进
+     * 检索池并占用注入预算——表现为「问附件2，回答里混进附件1 的内容」。</p>
+     *
+     * <p>{@code source} 形如 {@code chat:{conv}:{att}}，由调用方从选中附件的 {@code kb_source}
+     * 映射而来；传 null/空表示不限（保留原会话级行为）。</p>
+     *
+     * <p><b>为什么这里动态拼 IN 而不是沿用 {@code ? IS NULL OR} 模式</b>：来源个数可变
+     * （1~5），占位符数量必须跟随；参数仍走绑定，无注入风险。会话/用户过滤继续用
+     * {@code ? IS NULL OR} 保持单语句。</p>
+     */
+    public List<KnowledgeHit> search(double[] queryVec, int limit, Long conversationId, Long userId,
+                                     List<String> sources) {
         String vec = toVectorStr(queryVec);
-        return jdbcTemplate.query(
+        StringBuilder sql = new StringBuilder(
                 "SELECT id, source, chunk_idx, content, (embedding <=> ?::vector) AS distance "
                         + "FROM kb_chunk WHERE deleted = 0 "
                         + "AND (?::bigint IS NULL OR conversation_id = ?::bigint) "
-                        + "AND (?::bigint IS NULL OR user_id IS NULL OR user_id = ?::bigint) "
-                        + "ORDER BY embedding <=> ?::vector LIMIT ?",
+                        + "AND (?::bigint IS NULL OR user_id IS NULL OR user_id = ?::bigint) ");
+        List<Object> args = new java.util.ArrayList<>(6);
+        args.add(vec);
+        args.add(conversationId);
+        args.add(conversationId);
+        args.add(userId);
+        args.add(userId);
+        if (sources != null && !sources.isEmpty()) {
+            sql.append("AND source IN (");
+            for (int i = 0; i < sources.size(); i++) {
+                sql.append(i == 0 ? "?" : ", ?");
+                args.add(sources.get(i));
+            }
+            sql.append(") ");
+        }
+        sql.append("ORDER BY embedding <=> ?::vector LIMIT ?");
+        args.add(vec);
+        args.add(limit);
+        return jdbcTemplate.query(sql.toString(),
                 (rs, rowNum) -> new KnowledgeHit(
                         rs.getLong("id"),
                         rs.getString("source"),
                         rs.getInt("chunk_idx"),
                         rs.getString("content"),
                         rs.getDouble("distance")),
-                vec, conversationId, conversationId, userId, userId, vec, limit);
+                args.toArray());
     }
 
     private String toVectorStr(double[] v) {

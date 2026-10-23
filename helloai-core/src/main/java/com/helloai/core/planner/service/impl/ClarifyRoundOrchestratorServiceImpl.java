@@ -313,7 +313,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         log.info("澄清会话切换模式: conversationId={}, from={}, to={}",
                 conversationId, from, RequirementClarifyService.MODE_CLARIFY);
         // 切换轮不做联网搜索（后续再评估）；澄清模板基于全量历史直接产草案/追问
-        return runLlmRound(conversation, null, true);
+        return runLlmRound(conversation, null, true, null);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -337,7 +337,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         WebSearchOutcome webSearchOutcome = commandSearch.resolveChatSearchOutcome(conversation, userMessage, userPayload,
                 roundDecision.decision(), roundDecision.degraded());
         return runLlmRound(conversation, webSearchOutcome,
-                roundDecision.decision().shouldInjectAttachment());
+                roundDecision.decision().shouldInjectAttachment(),
+                roundDecision.decision().attachmentTargets());
     }
 
     /** CLARIFY 模式轮次（V45 语义）：绕过决策，开关开启则按规则搜索后主回复。 */
@@ -348,7 +349,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
             webSearchOutcome = webSearchOrchestrator.doWebSearch(
                     commandSearch.resolveSearchSource(conversation.getId(), userMessage, userPayload));
         }
-        return runLlmRound(conversation, webSearchOutcome, true);
+        return runLlmRound(conversation, webSearchOutcome, true, null);
     }
 
     /**
@@ -486,7 +487,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
      */
     private ClarifyConversationDetail runLlmRound(RequirementConversation conversation,
                                                   WebSearchOutcome webSearchOutcome,
-                                                  boolean includeAttachment) {
+                                                  boolean includeAttachment,
+                                                  java.util.List<Integer> attachmentTargets) {
         Long conversationId = conversation.getId();
         // 双模式分派：CLARIFY（含 NULL 老数据）走澄清模板 + JSON 协议解析；
         // CHAT 走通用助手模板，纯文本直接落库
@@ -496,7 +498,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         String prompt = clarifyMode
                 ? promptRenderService.renderClarifyPrompt(conversationId, webSearchContext)
-                : promptRenderService.renderChatPrompt(conversationId, webSearchContext, includeAttachment);
+                : promptRenderService.renderChatPrompt(conversationId, webSearchContext, includeAttachment,
+                        attachmentTargets);
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
                 .userPrompt(prompt)

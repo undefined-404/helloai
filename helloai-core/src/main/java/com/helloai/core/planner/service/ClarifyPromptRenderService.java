@@ -32,6 +32,27 @@ public interface ClarifyPromptRenderService {
      */
     String renderChatPrompt(Long conversationId, String webSearchContext, boolean includeAttachment);
 
+    /**
+     * 带附件可见性 + **目标附件集**的 CHAT 渲染（`ATT-3`）。
+     *
+     * <p>{@code attachmentTargets} 是联合决策判定的「本轮问的是哪几份附件」（1-based 清单序号）。
+     * 第三层检索按此收窄：会话里两份文件、用户只问第二份时，只检索第二份的分片——
+     * 否则第一份的内容会混进回答并占用注入预算。空/null 表示不限（会话级回退）。</p>
+     */
+    String renderChatPrompt(Long conversationId, String webSearchContext, boolean includeAttachment,
+                            java.util.List<Integer> attachmentTargets);
+
+    /**
+     * 完整入口：附件可见性 + 显式勾选 + 模型判定（`ATT-3`）。
+     *
+     * <p>{@code selectedIds}（前端勾选）优先于 {@code attachmentTargets}（模型判定）——
+     * 用户点了就是点了，模型不该再猜。</p>
+     *
+     * @param selectedIds 前端勾选的附件 id；null/空 = 未指定
+     */
+    String renderChatPrompt(Long conversationId, String webSearchContext, boolean includeAttachment,
+                            java.util.List<Integer> attachmentTargets, java.util.List<Long> selectedIds);
+
     /** 渲染终稿直出 Prompt（/task 直达拆解模板）。 */
     String renderFinalizePrompt(Long conversationId, String webSearchContext);
 

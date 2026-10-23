@@ -41,4 +41,13 @@ public class ClarifyMessageRequest {
      */
     @Deprecated
     private String initialMode;
+
+    /**
+     * 本轮参与的附件 id 列表（`ATT-3`：前端勾选）。
+     *
+     * <p>非空时**优先于模型判定**：只注入/检索这些附件的正文与分片。
+     * 空或 null 表示「用户没指定」——回落到模型根据提问内容的判定
+     * （{@code attachment_targets}），两者是「显式信号优先、推断信号兜底」的关系。</p>
+     */
+    private java.util.List<Long> attachmentIds;
 }

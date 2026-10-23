@@ -152,7 +152,31 @@ public interface RequirementClarifyService {
     /** 流式新建会话 + 附件认领，语义同 {@link #createWithClientToken}。 */
     default Flux<ChatStreamEvent> streamCreateWithClientToken(String message, Long plannerAgentId,
                                                               Boolean webSearchEnabled, String clientToken) {
+        return streamCreateWithClientToken(message, plannerAgentId, webSearchEnabled, clientToken, null);
+    }
+
+    /**
+     * 流式新建会话 + 附件认领 + **本轮参与的附件集**（`ATT-3` 前端勾选）。
+     *
+     * @param attachmentIds 用户勾选的附件 id；空/null = 未指定，回落模型判定
+     */
+    default Flux<ChatStreamEvent> streamCreateWithClientToken(String message, Long plannerAgentId,
+                                                              Boolean webSearchEnabled, String clientToken,
+                                                              List<Long> attachmentIds) {
         return streamCreate(message, plannerAgentId, webSearchEnabled);
+    }
+
+    /**
+     * 流式轮次 + **本轮参与的附件集**（`ATT-3` 前端勾选）。
+     *
+     * <p>显式勾选优先于模型判定：非空时只处理这些附件，模型不再参与选择。</p>
+     *
+     * @param attachmentIds 用户勾选的附件 id；空/null = 未指定，回落模型判定
+     */
+    default Flux<ChatStreamEvent> streamRound(Long conversationId, String message,
+                                              List<ClarifySelection> selections,
+                                              List<Long> attachmentIds) {
+        return streamRound(conversationId, message, selections);
     }
 
     /** 流式轮事件：type 决定事件名（token / done / error），data 为载荷文本。 */
