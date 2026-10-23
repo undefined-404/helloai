@@ -11,7 +11,6 @@ import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.task.port.TaskView;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
@@ -29,11 +28,25 @@ import reactor.core.Disposable;
 @Slf4j
 @RestController
 @RequestMapping("/api/requirement-conversations")
-@RequiredArgsConstructor
 public class RequirementConversationController {
 
     private final RequirementClarifyService requirementClarifyService;
-    private final @Qualifier("chatStreamExecutor") ThreadPoolTaskExecutor chatStreamExecutor;
+    private final ThreadPoolTaskExecutor chatStreamExecutor;
+
+    /**
+     * 手写构造器而非 {@code @RequiredArgsConstructor}：
+     * 字段上的 {@code @Qualifier} <b>不会</b>被 Lombok 复制到构造参数（项目未配置
+     * {@code lombok.config} 的 {@code copyableAnnotations}），容器里出现第二个
+     * {@code ThreadPoolTaskExecutor} 时会退化成纯按类型注入而报
+     * 「required a single bean, but 2 were found」。
+     * 把 {@code @Qualifier} 直接写在构造参数上才真正生效。
+     */
+    public RequirementConversationController(
+            RequirementClarifyService requirementClarifyService,
+            @Qualifier("chatStreamExecutor") ThreadPoolTaskExecutor chatStreamExecutor) {
+        this.requirementClarifyService = requirementClarifyService;
+        this.chatStreamExecutor = chatStreamExecutor;
+    }
 
     /** SseEmitter 显式超时（与前端 120s 对话超时档位对齐，超时后连接自动关闭）。 */
     private static final long STREAM_EMITTER_TIMEOUT_MS = 120_000L;
