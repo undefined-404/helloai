@@ -1044,6 +1044,70 @@ Adapter 用于：
 
 ***
 
+## 7.4 异步执行器（@Async 与线程池）
+
+### 7.4.1 `@Async` 必须显式命名执行器
+
+```java
+// ❌ 禁止
+@Async
+public void onSomething(SomeEvent event) { ... }
+
+// ✅ 要求
+@Async("appEventExecutor")
+public void onSomething(SomeEvent event) { ... }
+```
+
+**理由**：无参 `@Async` 的落点是**运行期**注入的，取决于「容器里恰好有几个 `TaskExecutor`」——这个数字会随别人新增线程池而变，编译器、静态检查、代码评审全都看不出来，而且不报错。
+
+真实事故（详见 `LOG-20261023-007`）：容器里出现第二个 `ThreadPoolTaskExecutor` 后，两件事同时发生——按类型注入报「required a single bean, but 2 were found」；7 处无参 `@Async` 的落点从 `SimpleAsyncTaskExecutor`（无池、无上限、每次新建线程）悄悄变成 `chatStreamExecutor`（core=4 的对话池），后台派发 / 评审 / 报告生成开始抢占对话线程，线程名还显示成 `chat-stream-N`，排查时看不出真实来源。
+
+### 7.4.2 池的 `@Bean` 返回类型写接口 `Executor`
+
+```java
+// ✅ 项目惯例（helloai-start/config/*ExecutorConfig.java 全部一致）
+@Bean("appEventExecutor")
+public Executor appEventExecutor() {
+    ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+    ...
+    return executor;
+}
+```
+
+声明为具体类 `ThreadPoolTaskExecutor` 会让该池**额外成为 `TaskExecutor` 候选**，参与「默认执行器」的争夺，进而影响所有无参 `@Async` 与按 `TaskExecutor` / `ThreadPoolTaskExecutor` 类型的注入。只要池是按名 `@Async("xxx")` 使用，不暴露具体类型没有任何损失。
+
+### 7.4.3 注入执行器时 `@Qualifier` 必须写在构造参数上
+
+项目**没有** `lombok.config`（未配置 `lombok.copyableAnnotations`），因此字段上的 `@Qualifier` 不会出现在 `@RequiredArgsConstructor` 生成的构造参数里：
+
+```java
+// ❌ 退化为纯类型注入
+@RequiredArgsConstructor
+public class XxxController {
+    private final @Qualifier("chatStreamExecutor") ThreadPoolTaskExecutor exec;
+}
+
+// ✅ 手写构造器，@Qualifier 落在参数上
+public XxxController(@Qualifier("chatStreamExecutor") ThreadPoolTaskExecutor exec) {
+    this.exec = exec;
+}
+```
+
+### 7.4.4 池按「阻塞形态」隔离，不按「模块」隔离
+
+判据是**这个任务会不会长时间阻塞、丢了会怎样**，而不是它属于哪个域：
+
+| 池 | 承载 | 拒绝策略取向 |
+|---|---|---|
+| `chatStreamExecutor` | 对话流式订阅（用户直接等待） | 任务不丢 |
+| `appEventExecutor` | 后台事件（用户不直接等待） | 任务不丢（丢则流程停在中间态） |
+| `chatAttachmentParseExecutor` | 附件解析（CPU + IO，大文件） | 任务不丢 |
+| `doorbellExecutor` | 响铃（第三方慢消费） | 可丢（有轮询兜底） |
+
+现状档位见 `helloai-start/config/*ExecutorConfig.java` 与 `helloai-api/config/ChatStreamConfig.java`，本表只给取向、不复述参数。
+
+***
+
 # 8. Service 规范
 
 ## 8.1 当前 Service 结构
