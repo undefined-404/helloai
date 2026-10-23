@@ -19,7 +19,7 @@
 | `HelloAI OpenSandbox 沙箱集成计划.md` | `S-1`~`S-6` | **OpenSandbox 沙箱专项**（能力预研 + 契约落地，2026-10-17 建号）——声明式 spec / 诚实五边界策略 / `OpenSandboxSandboxProvider`（Kotlin SDK `com.alibaba.opensandbox:sandbox:1.1.1`）/ 探针 / 部署拓扑 / 验证集；**不触发 `G-005` 重新排期、不接业务执行链** | 该文件 §3 任务表 |
 | `HelloAI 联网搜索效果优化实施计划（2026-10-18）.md` | `W-1`~`W-7` | **联网搜索效果优化专项**（2026-10-18 建号）——P0 编排器请求 answer / 动态 freshness + P1 并行搜索 / 搜索词质量 + P2 Rerank / Grounding / 模态卡；**P3 Agentic 多轮搜索 = 登记不启动** | 该文件各节 `Status` |
 | `HelloAI Paperclip 借鉴落地计划（2026-10-21）.md` | `PC-1`~`PC-19` | **Paperclip 借鉴落地**——`PC-1`~`PC-6` 现有机制补硬 / `PC-7`~`PC-11` CLI 推通道（含开工四前置）/ `PC-12`~`PC-19` 有条件再做 / 明确不借 6 条 | 该文件各节状态 |
-| `HelloAI 需求对话附件实施计划（2026-10-22）.md` | `ATT-1`~`ATT-4` | **需求对话附件专项**（2026-10-23 建号）——`ATT-1` 文本 + PDF 文本层 + 两层 Prompt 注入（已落地）/ `ATT-2` 视觉直读 / `ATT-3` 大文件 RAG + 引用回源 / `ATT-4` 版面增强（登记不启动） | 该文件头部 + `ATT-x` 各节 |
+| `HelloAI 需求对话附件实施计划（2026-10-22）.md` | `ATT-1`~`ATT-7` | **需求对话附件专项**（2026-10-23 建号）——`ATT-1` 文本 + PDF 文本层 + 两层 Prompt 注入（已落地）/ `ATT-2` 视觉直读 / `ATT-3` 大文件 RAG + 引用回源 / `ATT-4` 版面增强（登记不启动） | 该文件头部 + `ATT-x` 各节 |
 
 > **2026-10-12 出列**：`HelloAI 基础架构调整实施计划.md`（`BASE-1.x`~`BASE-4.x`）批次一~四全部 PASS + 6 项技术债清零，已迁 `archive/implemented/` 并标 `Done`（详见 `README.md` §2.3 出列记录）。
 >

@@ -20,6 +20,18 @@ public interface ClarifyPromptRenderService {
     /** 渲染自由对话主回复 Prompt（CHAT 模板，纯文本）。 */
     String renderChatPrompt(Long conversationId, String webSearchContext);
 
+    /**
+     * 带附件可见性控制的 CHAT 渲染（`ATT-5`）。
+     *
+     * <p>联合决策判定 {@code attachment_intent=none}（本轮不涉及附件）时传 {@code false}：
+     * 附件<b>清单</b>仍注入（模型要知道有文件），但<b>正文</b>不注入——避免「问天气也带
+     * 200k 手册」把上下文顶爆。默认重载 {@code (id, ctx)} 等价于 {@code includeAttachment=true}，
+     * 未改造的调用方行为零变化。</p>
+     *
+     * @param includeAttachment 是否注入附件正文
+     */
+    String renderChatPrompt(Long conversationId, String webSearchContext, boolean includeAttachment);
+
     /** 渲染终稿直出 Prompt（/task 直达拆解模板）。 */
     String renderFinalizePrompt(Long conversationId, String webSearchContext);
 

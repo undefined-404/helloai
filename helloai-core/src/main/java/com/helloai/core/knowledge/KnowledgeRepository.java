@@ -31,12 +31,28 @@ public class KnowledgeRepository {
         return c == null ? 0 : c;
     }
 
-    /** 摄入一个分片。 */
+    /** 摄入一个分片（全库知识，无会话归属）。 */
     public void insertChunk(String source, int chunkIdx, String content, double[] embedding) {
+        insertChunk(source, chunkIdx, content, embedding, null, null);
+    }
+
+    /**
+     * 摄入一个分片，带会话 / 用户归属（`ATT-3`：会话附件 ingest 到 kb）。
+     *
+     * <p>归属列是可空的：全库知识（运维手册等）不填，会话附件必填——否则检索侧
+     * 无法把它们与别的会话隔离。</p>
+     *
+     * @param conversationId 会话 id；非会话知识传 null
+     * @param userId         上传者 id；历史数据可为 null（检索侧按 IS NULL 兼容）
+     */
+    public void insertChunk(String source, int chunkIdx, String content, double[] embedding,
+                            Long conversationId, Long userId) {
         jdbcTemplate.update(
-                "INSERT INTO kb_chunk(id, source, chunk_idx, content, embedding, create_by, update_by) "
-                        + "VALUES (?, ?, ?, ?, ?::vector, 'system', 'system')",
-                IdWorker.getId(), source, chunkIdx, content, toVectorStr(embedding));
+                "INSERT INTO kb_chunk(id, source, chunk_idx, content, embedding, "
+                        + "conversation_id, user_id, create_by, update_by) "
+                        + "VALUES (?, ?, ?, ?, ?::vector, ?, ?, 'system', 'system')",
+                IdWorker.getId(), source, chunkIdx, content, toVectorStr(embedding),
+                conversationId, userId);
     }
 
     /** 按来源 + 分片键取单个分片（引用溯源卡片，REF-4.3）。空可选。 */
@@ -60,13 +76,37 @@ public class KnowledgeRepository {
     }
 
     /**
-     * 检索：query 向量 → 余弦最近 top-k 分片。
+     * 检索：query 向量 → 余弦最近 top-k 分片（全库，无作用域）。
+     *
+     * <p>供 {@code search_knowledge} 工具与全库知识检索使用，行为与改造前一致。</p>
      */
     public List<KnowledgeHit> search(double[] queryVec, int limit) {
+        return search(queryVec, limit, null, null);
+    }
+
+    /**
+     * 带作用域的检索（`ATT-3`）：会话附件检索**必须**走这里，不能走无参版本。
+     *
+     * <p><b>为什么必须带 conversationId</b>：{@code kb_chunk} 是**全平台共享**的向量表，
+     * 不带会话过滤时 A 会话能检索出 B 会话的附件正文——跨会话泄漏。{@code source} 前缀
+     * （{@code chat:{conv}:{att}}）只是命名约定，不是访问控制。</p>
+     *
+     * <p><b>SQL 用 {@code ? IS NULL OR} 而非动态拼串</b>：保持参数绑定（防注入），
+     * 同时让「不限作用域」与「限定作用域」共用一条语句与一份执行计划。</p>
+     *
+     * <p><b>user_id 的 IS NULL 分支</b>：V122 之前写入的历史数据没有归属，若严格按
+     * {@code user_id = ?} 过滤会把它们排除；单租户阶段历史上不存在跨用户数据，故放行。</p>
+     *
+     * @param conversationId 会话 id；null = 不限（全库）
+     * @param userId         上传者 id；null = 不限
+     */
+    public List<KnowledgeHit> search(double[] queryVec, int limit, Long conversationId, Long userId) {
         String vec = toVectorStr(queryVec);
         return jdbcTemplate.query(
                 "SELECT id, source, chunk_idx, content, (embedding <=> ?::vector) AS distance "
                         + "FROM kb_chunk WHERE deleted = 0 "
+                        + "AND (?::bigint IS NULL OR conversation_id = ?::bigint) "
+                        + "AND (?::bigint IS NULL OR user_id IS NULL OR user_id = ?::bigint) "
                         + "ORDER BY embedding <=> ?::vector LIMIT ?",
                 (rs, rowNum) -> new KnowledgeHit(
                         rs.getLong("id"),
@@ -74,7 +114,7 @@ public class KnowledgeRepository {
                         rs.getInt("chunk_idx"),
                         rs.getString("content"),
                         rs.getDouble("distance")),
-                vec, vec, limit);
+                vec, conversationId, conversationId, userId, userId, vec, limit);
     }
 
     private String toVectorStr(double[] v) {

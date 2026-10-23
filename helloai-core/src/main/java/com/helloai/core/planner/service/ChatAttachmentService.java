@@ -42,6 +42,17 @@ public interface ChatAttachmentService {
     List<ChatAttachment> uploadBatch(Long conversationId, String clientToken, List<UploadFile> files);
 
     /**
+     * 批量上传会话附件，记录上传者登录用户（`ATT-3`，V123）。
+     *
+     * <p>上传端点有 {@code @SaCheckPermission("conversation:add")}，登录态必然存在。
+     * 记录用途：ingest 到 kb 时落到 {@code kb_chunk.user_id}，让检索隔离能区分同一会话的多个用户。</p>
+     *
+     * @param uploaderUserId 上传者用户 id；无登录上下文（测试/历史调用）传 null
+     */
+    List<ChatAttachment> uploadBatch(Long conversationId, String clientToken,
+                                     List<UploadFile> files, Long uploaderUserId);
+
+    /**
      * 会话附件清单（按上传顺序）；{@code clientToken} 用于新会话首句前的临时批次。
      *
      * @param conversationId 会话 ID（可空）

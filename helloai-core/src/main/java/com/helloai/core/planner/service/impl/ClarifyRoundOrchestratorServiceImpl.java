@@ -313,7 +313,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         log.info("澄清会话切换模式: conversationId={}, from={}, to={}",
                 conversationId, from, RequirementClarifyService.MODE_CLARIFY);
         // 切换轮不做联网搜索（后续再评估）；澄清模板基于全量历史直接产草案/追问
-        return runLlmRound(conversation, null);
+        return runLlmRound(conversation, null, true);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -336,7 +336,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         }
         WebSearchOutcome webSearchOutcome = commandSearch.resolveChatSearchOutcome(conversation, userMessage, userPayload,
                 roundDecision.decision(), roundDecision.degraded());
-        return runLlmRound(conversation, webSearchOutcome);
+        return runLlmRound(conversation, webSearchOutcome,
+                roundDecision.decision().shouldInjectAttachment());
     }
 
     /** CLARIFY 模式轮次（V45 语义）：绕过决策，开关开启则按规则搜索后主回复。 */
@@ -347,7 +348,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
             webSearchOutcome = webSearchOrchestrator.doWebSearch(
                     commandSearch.resolveSearchSource(conversation.getId(), userMessage, userPayload));
         }
-        return runLlmRound(conversation, webSearchOutcome);
+        return runLlmRound(conversation, webSearchOutcome, true);
     }
 
     /**
@@ -447,7 +448,14 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
                         conversationId, result.getErrorMessage());
                 return RoundDecision.degradedDefaults();
             }
-            return new RoundDecision(decisionParser.parse(result.getOutput()), false);
+            ChatRoundDecisionParser.ChatRoundDecision decision = decisionParser.parse(result.getOutput());
+            // ATT-5 可观测位：附件意图的取值直接决定「注不注入正文、搜不搜」，必须能从日志判读。
+            // 不打印它的话，attachment_intent=none 在界面上没有任何可观察差异（只是正文区变成占位）。
+            log.info("联合决策: conversationId={}, intent={}, intentReason={}, needSearch={}, attachmentIntent={}",
+                    conversationId, decision.intent(), decision.intentReason(),
+                    decision.webSearch() == null ? null : decision.webSearch().needSearch(),
+                    decision.attachmentIntent() == null ? null : decision.attachmentIntent().wireValue());
+            return new RoundDecision(decision, false);
         } catch (Exception e) {
             log.warn("联合决策解析失败，降级 chat 决策: conversationId={}, err={}",
                     conversationId, e.getMessage());
@@ -477,7 +485,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
      * @param webSearchOutcome 本轮联网搜索归一化记录（未搜索/重试/切换轮传 null）
      */
     private ClarifyConversationDetail runLlmRound(RequirementConversation conversation,
-                                                  WebSearchOutcome webSearchOutcome) {
+                                                  WebSearchOutcome webSearchOutcome,
+                                                  boolean includeAttachment) {
         Long conversationId = conversation.getId();
         // 双模式分派：CLARIFY（含 NULL 老数据）走澄清模板 + JSON 协议解析；
         // CHAT 走通用助手模板，纯文本直接落库
@@ -487,7 +496,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         String prompt = clarifyMode
                 ? promptRenderService.renderClarifyPrompt(conversationId, webSearchContext)
-                : promptRenderService.renderChatPrompt(conversationId, webSearchContext);
+                : promptRenderService.renderChatPrompt(conversationId, webSearchContext, includeAttachment);
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
                 .userPrompt(prompt)

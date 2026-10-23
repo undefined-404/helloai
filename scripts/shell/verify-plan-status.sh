@@ -75,13 +75,18 @@ for i, l in enumerate(ls):
         if "**状态**" not in win:
             bad.append("L%d(%s 缺 `> **状态**：` 行)" % (i+1, m.group(1))); continue
         line = [x for x in ls[i+1:i+6] if "**状态**" in x][0]
-        hits = [w for w in S if w in line]
+        # 只解析「状态」段（到 ｜ 为止）与「剩余动作」段，避免剩余动作里的描述文字
+        # （如「已完成 V122 迁移」）被误当成状态值——这是解析缺陷，不是文档缺陷。
+        state_seg = line.split("**状态**：", 1)[-1].split("｜")[0] if "**状态**：" in line else line
+        act_seg = line.split("**剩余动作**：", 1)[-1] if "**剩余动作**：" in line else ""
+        hits = [w for w in S if w in state_seg]
         if not hits:
             bad.append("L%d(%s 状态值不在九态内)" % (i+1, m.group(1))); continue
-        if "已完成" in hits and "**剩余动作**：—" not in line:
+        act_blank = act_seg.strip() in ("", "—")
+        if "已完成" in hits and act_seg.strip() != "—":
             bad.append("L%d(%s 已完成但剩余动作非「—」)" % (i+1, m.group(1)))
-        if "已完成" not in hits and "**剩余动作**：—" in line:
-            bad.append("L%d(%s 非已完成但剩余动作为「—」)" % (i+1, m.group(1)))
+        if "已完成" not in hits and act_blank:
+            bad.append("L%d(%s 非已完成但剩余动作为「—」或空)" % (i+1, m.group(1)))
 print("%d|%s" % (checked, " ".join(bad[:10])))
 PY
 )

@@ -162,6 +162,15 @@ public class ClarifyCommandSearchServiceImpl implements ClarifyCommandSearchServ
                                                      String userMessage, String userPayload,
                                                      ChatRoundDecisionParser.ChatRoundDecision decision,
                                                      boolean degraded) {
+        // ATT-5：附件能独立作答时否决联网（附件优先），<b>不受搜索策略限制</b>。
+        // ALWAYS_ON 的语义是「每轮都允许联网」，不是「禁止判断本轮是否需要」——用户打开
+        // 开关的意图是「你可以搜」，而不是「必须搜」。实测（LOG-20261023-016）：开关开着
+        // 时 answerable 仍联网，正是因为原实现把否决限定在 AUTO 分支。
+        if (decision.vetoesWebSearch()) {
+            log.info("附件意图=answerable，跳过本轮联网（附件优先，搜索策略={}）: conversationId={}",
+                    resolveSearchPolicy(conversation), conversation.getId());
+            return null;
+        }
         switch (resolveSearchPolicy(conversation)) {
             case ALWAYS_ON:
                 // 每轮搜索，LLM 只提供优化词（优先候选），不决策是否需要

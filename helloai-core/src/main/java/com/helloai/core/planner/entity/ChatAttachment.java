@@ -24,6 +24,15 @@ public class ChatAttachment extends BaseEntity {
     /** 临时归属（前端生成 UUID）；建会时按此认领回填 conversationId，认领后保留便于幂等重试。 */
     private String clientToken;
 
+    /**
+     * 上传者登录用户 id（`ATT-3`，V123）。
+     *
+     * <p>上传端点有 {@code @SaCheckPermission("conversation:add")}，登录态必然存在，新数据一律写值。
+     * 用途：ingest 到 kb 时落到 {@code kb_chunk.user_id}，让检索隔离能区分「同一会话的多个人」；
+     * 历史数据为 null（该列 V123 才加）。</p>
+     */
+    private Long uploaderUserId;
+
     private String fileName;
 
     /** 归一化扩展名（小写、不含点）。 */

@@ -58,6 +58,15 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
     /** CHAT 自由对话 Prompt 模板（通用 AI 助手角色，纯文本回复，无 JSON 协议）。 */
     private static final String CHAT_PROMPT_TEMPLATE_PATH = "prompts/requirement-chat.md";
 
+    /**
+     * `ATT-5`：联合决策判定 {@code attachment_intent=none} 时的附件正文占位。
+     *
+     * <p>刻意不写「（本轮无附件）」——那会让模型误以为用户没传文件，而清单里明明列着。
+     * 这里要传达的是「有文件，但本轮不需要读」。</p>
+     */
+    private static final String ATTACHMENT_BODY_SKIPPED =
+            "（本轮未注入附件正文：本次提问与附件无关。若用户随后问及附件内容，请提示其明确指出要看哪份文件）";
+
     /** CHAT 轮前置联合决策 Prompt 模板（意图路由 + 联网搜索决策，低预算调用）。 */
     private static final String CHAT_DECISION_TEMPLATE_PATH = "prompts/requirement-decision.md";
 
@@ -125,6 +134,11 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
     }
 
     @Override
+    public String renderChatPrompt(Long conversationId, String webSearchContext, boolean includeAttachment) {
+        return renderPrompt(conversationId, webSearchContext, CHAT_PROMPT_TEMPLATE_PATH, includeAttachment);
+    }
+
+    @Override
     public String renderFinalizePrompt(Long conversationId, String webSearchContext) {
         return renderPrompt(conversationId, webSearchContext, FINALIZE_TEMPLATE_PATH);
     }
@@ -143,6 +157,16 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
      * @param templatePath 按会话模式选模板（CLARIFY=requirement-clarify.md / CHAT=requirement-chat.md）
      */
     private String renderPrompt(Long conversationId, String webSearchContext, String templatePath) {
+        return renderPrompt(conversationId, webSearchContext, templatePath, true);
+    }
+
+    /**
+     * 同 {@link #renderPrompt(Long, String, String)}，多一个附件正文可见性开关（`ATT-5`）。
+     *
+     * @param includeAttachment false 时只注入附件清单，正文区渲染 {@link #ATTACHMENT_BODY_SKIPPED}
+     */
+    private String renderPrompt(Long conversationId, String webSearchContext, String templatePath,
+                                boolean includeAttachment) {
         ClassPathResource resource = new ClassPathResource(templatePath);
         if (!resource.exists()) {
             throw new BizException("未找到 Prompt 模板: " + templatePath);
@@ -174,7 +198,7 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
         String contextSection = (webSearchContext == null || webSearchContext.isBlank())
                 ? "（无可用联网资料）" : webSearchContext;
         ChatAttachmentPromptRenderer.Rendered attachmentRendered =
-                chatAttachmentPromptRenderer.render(conversationId);
+                chatAttachmentPromptRenderer.render(conversationId, currentUserInput);
         return template
                 .replace("{{CONVERSATION_HISTORY}}", transcript.toString().trim())
                 .replace("{{CURRENT_USER_MESSAGE}}", currentUserInput != null ? currentUserInput : "")
@@ -187,7 +211,9 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
                 // 会话附件两层注入（方案 §3.4）：清单恒注入（哪怕正文读不出，也要让模型知道有文件），
                 // 正文按 G-016 预算注入；一次查询同时供两层使用。
                 .replace("{{ATTACHMENT_MANIFEST}}", attachmentRendered.manifest())
-                .replace("{{ATTACHMENT_CONTEXT}}", attachmentRendered.context());
+                .replace("{{ATTACHMENT_RETRIEVAL}}", includeAttachment ? attachmentRendered.retrieval() : ATTACHMENT_BODY_SKIPPED)
+                .replace("{{ATTACHMENT_CONTEXT}}",
+                        includeAttachment ? attachmentRendered.context() : ATTACHMENT_BODY_SKIPPED);
     }
 
     @Override

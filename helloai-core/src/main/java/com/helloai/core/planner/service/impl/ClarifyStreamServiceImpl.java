@@ -153,7 +153,8 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                                 if (willSearch) {
                                     steps.add(describeSearchResult(outcome));
                                 }
-                                return runChatMainReply(conversation, outcome, steps, thinking, roundNo);
+                                return runChatMainReply(conversation, outcome, steps, thinking, roundNo,
+                                        roundDecision.decision().shouldInjectAttachment());
                             }));
                 }));
     }
@@ -161,14 +162,15 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
     /** CHAT 主回复段（检索完成后）：流式主回复 → 连同过程数据落库 → done。 */
     private Flux<ChatStreamEvent> runChatMainReply(RequirementConversation conversation,
                                                    WebSearchOutcome outcome, List<String> steps,
-                                                   StringBuilder thinking, int roundNo) {
+                                                   StringBuilder thinking, int roundNo,
+                                                   boolean includeAttachment) {
         Long conversationId = conversation.getId();
         // 主回复 prompt 构造（与 runLlmRound CHAT 分支同构：固定 CHAT 模板）
         String webSearchContext = outcome != null ? outcome.toContextText() : "";
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
-                .userPrompt(promptRenderService.renderChatPrompt(conversationId, webSearchContext))
+                .userPrompt(promptRenderService.renderChatPrompt(conversationId, webSearchContext, includeAttachment))
                 .context(Map.of("conversationId", conversationId, "scene", "requirement_chat"))
                 .requiredCapabilities(Map.of())
                 .build();

@@ -168,7 +168,7 @@ class RequirementPromptTemplateContractTest {
         java.util.Set<String> supported = java.util.Set.of(
                 "CURRENT_USER_MESSAGE", "CONVERSATION_HISTORY", "WEB_SEARCH_CONTEXT",
                 "SYSTEM_TIME_CONTEXT", "LONG_TERM_MEMORY_CONTEXT",
-                "ATTACHMENT_MANIFEST", "ATTACHMENT_CONTEXT");
+                "ATTACHMENT_MANIFEST", "ATTACHMENT_CONTEXT", "ATTACHMENT_RETRIEVAL");
         java.util.regex.Pattern placeholder = java.util.regex.Pattern.compile("\\{\\{([A-Z_]+)}}");
         for (String name : new String[]{"requirement-clarify.md", "requirement-chat.md", "requirement-finalize.md"}) {
             String template = loadTemplate(name);

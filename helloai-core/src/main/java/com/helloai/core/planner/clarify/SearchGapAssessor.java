@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -45,6 +46,12 @@ public class SearchGapAssessor {
     /** 单条结果摘要注入评估 Prompt 的字符上限。 */
     private static final int SNIPPET_IN_PROMPT_CHARS = 120;
 
+    /** `ATT-6`：单轮补搜最多几条变体——3 条覆盖「依据 / 参数 / 步骤」三个典型角度，再多会推高延迟。 */
+    private static final int MAX_GAP_QUERIES = 3;
+
+    /** `ATT-6`：单条补充查询的字数上限（与规划器口径一致）。 */
+    private static final int GAP_QUERY_CHAR_LIMIT = 20;
+
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final PlannerAgentPicker plannerAgentPicker;
     private final SystemTimeContextBuilder systemTimeContextBuilder;
@@ -61,17 +68,21 @@ public class SearchGapAssessor {
     }
 
     /**
-     * 评估首轮检索是否充分，不足时给出 1 个补充查询词。
+     * 评估首轮检索是否充分，不足时给出 1~3 个补充查询词（`ATT-6`）。
+     *
+     * <p><b>为什么是多条</b>：原实现只取 LLM 输出的第一条（{@code arr.get(0)}），
+     * 导致补搜永远是单角度——而「缺口」往往是多维的（缺规范依据、缺具体参数、缺实施步骤
+     * 是三个不同方向，各需一条查询）。模板已改为「1~3 个不同角度」，本方法取全数组。</p>
      *
      * @param userMessage     用户需求原文（语义文本）
-     * @param firstRound      首轮归一化结果（可为空——空结果无需评估，直接返回 null）
+     * @param firstRound      首轮归一化结果（可为空——空结果无需评估，直接返回空列表）
      * @param existingQueries 已检索过的查询词（防同义重复）
-     * @return 补充查询词（1 个，已清洗）；无需补搜 / 不可用 / 失败时返回 null
+     * @return 补充查询词（0~3 条，已清洗去重）；无需补搜 / 不可用 / 失败时返回空列表
      */
-    public String assessGap(String userMessage, List<WebSearchResult> firstRound,
-                            List<String> existingQueries) {
+    public List<String> assessGaps(String userMessage, List<WebSearchResult> firstRound,
+                                   List<String> existingQueries) {
         if (firstRound == null || firstRound.isEmpty()) {
-            return null; // 首轮无结果：无可评估素材，交由上层按原语义处理
+            return List.of(); // 首轮无结果：无可评估素材，交由上层按原语义处理
         }
         long t0 = System.currentTimeMillis();
         try {
@@ -91,14 +102,14 @@ public class SearchGapAssessor {
             AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
             if (!result.isSuccess()) {
                 log.warn("检索缺口评估 LLM 失败（不补搜）: err={}", result.getErrorMessage());
-                return null;
+                return List.of();
             }
-            String gap = parseGapQuery(result.getOutput());
-            log.info("检索缺口评估结束: costMs={}, gapQuery={}", System.currentTimeMillis() - t0, gap);
-            return gap;
+            List<String> gaps = parseGapQueries(result.getOutput());
+            log.info("检索缺口评估结束: costMs={}, gapQueries={}", System.currentTimeMillis() - t0, gaps);
+            return gaps;
         } catch (Exception e) {
             log.warn("检索缺口评估失败（不补搜）: err={}", e.getMessage());
-            return null;
+            return List.of();
         }
     }
 
@@ -119,31 +130,41 @@ public class SearchGapAssessor {
     }
 
     /**
-     * 宽松解析补充查询词：剥 markdown 围栏后取首个 {@code [ ... ]} 数组，
-     * 取第一个有效字符串（截断到 20 字）；空数组 / 解析失败返回 null。
+     * 宽松解析补充查询词（`ATT-6` 取全数组）：剥 markdown 围栏后取首个 {@code [ ... ]} 数组，
+     * 逐项清洗（截断 20 字、去重），最多取 {@link #MAX_GAP_QUERIES} 条。
+     *
+     * <p>空数组 / 解析失败返回空列表，<b>不抛异常</b>——缺口语义同「无需补搜」，
+     * 上层据此决定是否跳过补搜轮。</p>
      */
-    private String parseGapQuery(String content) {
+    private List<String> parseGapQueries(String content) {
         if (content == null || content.isBlank()) {
-            return null;
+            return List.of();
         }
         try {
             String s = content.replaceAll("(?i)```json", "").replace("```", "").trim();
             int from = s.indexOf('[');
             int to = s.lastIndexOf(']');
             if (from < 0 || to <= from) {
-                return null;
+                return List.of();
             }
             JsonNode arr = objectMapper.readTree(s.substring(from, to + 1));
             if (!arr.isArray() || arr.isEmpty()) {
-                return null;
+                return List.of();
             }
-            String q = arr.get(0).asText("").trim();
-            if (q.isBlank()) {
-                return null;
+            List<String> out = new ArrayList<>();
+            for (JsonNode node : arr) {
+                String q = node.asText("").trim();
+                if (q.isBlank() || out.contains(q)) {
+                    continue;
+                }
+                out.add(q.length() > GAP_QUERY_CHAR_LIMIT ? q.substring(0, GAP_QUERY_CHAR_LIMIT) : q);
+                if (out.size() >= MAX_GAP_QUERIES) {
+                    break;
+                }
             }
-            return q.length() > 20 ? q.substring(0, 20) : q;
+            return out;
         } catch (Exception e) {
-            return null;
+            return List.of();
         }
     }
 

@@ -39,7 +39,23 @@
 | chat | `direct_answer`（可直接回答的咨询）/ `ambiguous`（意图模糊暂保持对话） |
 | clarify | `task_oriented`（明确的做事/建方案意图）/ `need_clarification`（想整理方案但细节不足） |
 
-## 三、web_search 判定（本轮是否需要联网搜索）
+## 三、attachment_intent 判定（本轮提问与附件的关系）
+
+可选值：`none` / `answerable` / `needs_external`。**无附件时必须为 `none`**。
+
+| 取值 | 判据 | 系统后果 |
+|---|---|---|
+| `none` | 提问与附件内容无关（「今天天气」「帮我写封邮件」「解释下闭包」） | **不注入附件正文**（清单仍可见）；联网按第四节 `need_search` 正常判定 |
+| `answerable` | 附件本身能回答（「这份手册第 3 章说什么」「这个方案有什么问题」） | **跳过联网**（附件优先，`need_search` 被忽略） |
+| `needs_external` | 需要附件之外的事实来核验（法规 / 标准 / 版本 / 价格 / 时效） | 进「分析后检索」；`search_query` 只能由附件里的外部锚点构成（见第四节） |
+
+**判定顺序**（按此顺序，不要跳步）：
+
+1. 本轮提问是否指向附件内容？否 → `none`
+2. 是 → 附件里有没有能直接回答它的内容？有 → `answerable`
+3. 都没有 → `needs_external`
+
+## 四、web_search 判定（仅 `none` / `needs_external` 时有意义）
 
 可选值：`need_search` 布尔 + `search_query` 搜索词 + `reason` 理由。
 
@@ -47,22 +63,20 @@
 - `need_search: true` 的情形：用户询问时效性信息（最新/今天/本月/最近发生了什么）、行情报价、竞品现状、政策动态、未出现在对话历史与模型常识中的具体事实、需要查证的具体数据（数据来源、接口文档、价格等）
 - `need_search: false` 的情形：概念解释、思路讨论、方案建议、代码实现讲解、纯创意或推理类问题——模型自身知识足够回答
 - 拿不准时倾向 `need_search: true`（搜索失败有降级，不影响用户体验），但明显常识/概念类问题不要误判
-  —— **这条保守偏置只在「本轮无附件」时适用**；有附件时按下方「附件优先」判定，不得套用兜底倾向
 
-### 附件优先（`{{ATTACHMENT_DECISION_VIEW}}` 不是「（本轮无附件）」时强制适用）
 
-附件是用户提供的**第一手材料**，优先级高于网络检索。四条硬规则，优先于上面的判定规则：
+### 检索词规则（`attachment_intent = needs_external` 时强制）
 
-1. **附件能直接回答 → `need_search: false`**。手册、方案、文档这类附件的作用就是被审查、被分析，
-   读完附件即可作答；只有「附件明确缺某个外部事实」时才搜，并在 `reason` 写明缺的是哪一项。
-2. **`search_query` 只能由附件里的外部锚点构成**。允许：法规/标准全名（`《…》`）、标准号（`GB/T 12345`）、
+附件是用户提供的**第一手材料**，检索只能用于核验附件里无法自证的外部事实。三条硬规则：
+
+1. **`search_query` 只能由附件里的外部锚点构成**。允许：法规/标准全名（`《…》`）、标准号（`GB/T 12345`）、
    产品版本号、英文技术专名（`PowerShell`、`OpenID`）、机构名。
    **禁止**使用附件自身的元词作为检索词：`附件`、`手册`、`文档`、`文件`、`内容`、`资料`、
    `我刚上传的`、`这个`、`上面提到的`、`分析一下`、`是否正确`。
-3. **锚点区为空 → `need_search: false`**。附件视图里已写明「未发现」时，说明这份文件没有可外部核验的
+2. **锚点区为空 → 改判 `answerable`**。决策视图里已写明「未发现」时，说明这份文件没有可外部核验的
    实体，此时检索没有目标，必然跑偏，直接基于附件作答并说明局限。
-4. **用户问句不能直接当搜索词**。即使 `need_search: true`，也不得把「帮我分析一下……是否正确」这类
-   祈使句/疑问句搬进 `search_query`，必须改写成「锚点 + 待核验维度」。
+3. **用户问句不能直接当搜索词**。不得把「帮我分析一下……是否正确」这类祈使句/疑问句搬进
+   `search_query`，必须改写成「锚点 + 待核验维度」。
 
 正误对照（附件为一份自行编写的操作手册）：
 
@@ -70,8 +84,9 @@
 - ❌ `search_query = "手册 方案 正确性 评估 审查 规范 标准"`（全是元词与抽象维度，无实体）
 - ❌ `search_query = "我上传的附件"`（指代词，搜索引擎无法解析）
 - ❌ `search_query = "这个手册内容中的方案是否正确"`（整句照搬）
-- ✅ 附件锚点区为空 → `need_search: false`，直接审阅手册
-- ✅ 附件里出现《运输机场使用许可规定》→ `search_query = "《运输机场使用许可规定》 手册编制 要求"`
+- ✅ 附件锚点区为空 → `attachment_intent = answerable`，直接审阅手册
+- ✅ 附件里出现《运输机场使用许可规定》→ `attachment_intent = needs_external`，
+  `search_query = "《运输机场使用许可规定》 手册编制 要求"`
 
 `search_query` 生成规范：
 - `need_search: true` 时必须提供非空优化词
@@ -84,18 +99,19 @@
   保留"今天""昨天""上周五""最近"等相对时间词——搜索引擎不理解相对时间语义
 - `reason` 用一句话说明决策理由（如"用户询问时效性行情"）
 
-## 四、输出格式（严格约束）
+## 五、输出格式（严格约束）
 
 输出且仅输出一个 JSON 对象，不要 Markdown 代码块围栏，不要任何解释文字：
 
-{"intent":"chat|clarify","intent_reason":"direct_answer|ambiguous|task_oriented|need_clarification","clarification_question":null,"web_search":{"need_search":true|false,"search_query":"优化后的搜索词或 null","reason":"决策理由"}}
+{"intent":"chat|clarify","intent_reason":"direct_answer|ambiguous|task_oriented|need_clarification","clarification_question":null,"attachment_intent":"none|answerable|needs_external","web_search":{"need_search":true|false,"search_query":"优化后的搜索词或 null","reason":"决策理由"}}
 
 字段约束：
 - `intent_reason` 必须与 `intent` 匹配（见上文表格）
+- `attachment_intent` 必须是 `none` / `answerable` / `needs_external` 之一；无附件时必须为 `none`。缺失或取值非法时系统按「未判定」处理（有附件就注入正文、按 `need_search` 决定是否联网），不会报错但会失去附件优先的效果
 - `clarification_question`：intent 为 clarify 时必填一个非空的具体澄清问题（用于确认卡展示，如"你希望这套方案覆盖哪些核心场景？"）；intent 为 chat 时必须为 null
 - `web_search.need_search` 为 false 时 `web_search.search_query` 置 null 或省略；搜索模式提示为 ALWAYS_ON 时除外（此时须把优化词放入 `search_query`，见第三节）
 
-## 五、输入
+## 六、输入
 
 用户消息：
 {{USER_MESSAGE}}

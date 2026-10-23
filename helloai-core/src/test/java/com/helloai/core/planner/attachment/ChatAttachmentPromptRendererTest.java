@@ -1,6 +1,8 @@
 package com.helloai.core.planner.attachment;
 
 import com.helloai.common.constant.ChatAttachmentParseStatus;
+import com.helloai.core.knowledge.KnowledgeBaseService;
+import com.helloai.core.knowledge.KnowledgeSearchResult;
 import com.helloai.core.planner.entity.ChatAttachment;
 import com.helloai.core.planner.service.ChatAttachmentService;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
@@ -10,7 +12,14 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -23,7 +32,13 @@ import static org.mockito.Mockito.when;
 class ChatAttachmentPromptRendererTest {
 
     private final ChatAttachmentService chatAttachmentService = mock(ChatAttachmentService.class);
-    private final ChatAttachmentPromptRenderer renderer = new ChatAttachmentPromptRenderer(chatAttachmentService);
+    private final KnowledgeBaseService knowledgeBaseService = mock(KnowledgeBaseService.class);
+    /**
+     * 用 1M 窗口复现 ATT-7 改造前的 200k 总预算，使存量断言的数值口径保持不变。
+     * 窗口化行为本身由 {@link #shouldScaleBudgetByContextWindow()} 单独覆盖。
+     */
+    private final ChatAttachmentPromptRenderer renderer =
+            new ChatAttachmentPromptRenderer(chatAttachmentService, 1_000_000);
 
     private static ChatAttachment attachment(String name, ChatAttachmentParseStatus status, String text) {
         ChatAttachment a = new ChatAttachment();
@@ -110,12 +125,13 @@ class ChatAttachmentPromptRendererTest {
     }
 
     @Test
-    @DisplayName("总计预算用尽后的后续文件：不注入正文但保留清单项（信息不丢，只降级）")
-    void shouldSkipContentButKeepManifestWhenBudgetExhausted() {
+    @DisplayName("ATT-3 per-file 配额：5 份各 6.4 万字 → 每份均分 4 万字，不再有文件归零")
+    void shouldSplitBudgetEvenlyAcrossFiles() {
         int perFile = AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT;
         int total = AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT;
-        // 5 份各 64000 字：前 3 份整份注入（192000），第 4 份只注入剩余 8000（并标截断），
-        // 第 5 份预算归零 → 不注入正文但保留清单项
+        // ATT-3 per-file 配额：5 份各 64000 字，均分额度 = 200000/5 = 40000。
+        // 改造前是先到先得（前 3 份整份 192000，第 4 份 8000，第 5 份归零）；
+        // 现在每份都拿到 40000，不再出现「预算已用尽」。
         String chunk = "字".repeat(perFile);
         when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
                 attachment("a.md", ChatAttachmentParseStatus.READY, chunk),
@@ -125,10 +141,40 @@ class ChatAttachmentPromptRendererTest {
                 attachment("e.md", ChatAttachmentParseStatus.READY, chunk)));
 
         ChatAttachmentPromptRenderer.Rendered rendered = renderer.render(9L);
+        String context = rendered.context();
 
         assertThat(total).isEqualTo(200_000);
-        assertThat(rendered.context()).contains("本次未注入正文：上下文预算已用尽");
+        // 每份都注入 40000 并标截断
+        assertThat(context).doesNotContain("本次未注入正文：上下文预算已用尽");
+        assertThat(countOccurrences(context, "本次仅注入前 40000 字")).isEqualTo(5);
         assertThat(rendered.manifest()).contains("| 附件5 | e.md |");
+    }
+
+    @Test
+    @DisplayName("ATT-3：小文件吃不掉的份额要回收给被截断的大文件（不浪费预算）")
+    void shouldRecycleUnusedShareToTruncatedFile() {
+        // 2 份：小文件 2000 字（需求 2000）、大文件 90000 字。均分 12800 → 小文件只用 2000，
+        // 余 10800 应回收给大文件 ⇒ 大文件拿到 12800 + 10800 = 23600
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
+                attachment("小.md", ChatAttachmentParseStatus.READY, "字".repeat(2_000)),
+                attachment("大.md", ChatAttachmentParseStatus.READY, "字".repeat(90_000))));
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(chatAttachmentService, 128_000);
+        String context = r.render(9L).context();
+
+        // 确认小文件全量、大文件拿到 23600（不是被挤成 0，也不是均分后闲置 10800）
+        assertThat(context).contains("字".repeat(2_000));
+        assertThat(context).contains("本次仅注入前 23600 字");
+    }
+
+    private static int countOccurrences(String text, String needle) {
+        int count = 0;
+        int from = 0;
+        while ((from = text.indexOf(needle, from)) >= 0) {
+            count++;
+            from += needle.length();
+        }
+        return count;
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -206,5 +252,120 @@ class ChatAttachmentPromptRendererTest {
         String view = renderer.renderForDecision(9L);
 
         assertThat(view).contains("待解析.pdf").contains("解析中").contains("（无可用正文）");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  ATT-7：预算按模型窗口折算
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("ATT-7：128K 窗口 → 总预算 25,600 字，超限文件截断并提示拆分")
+    void shouldScaleBudgetByContextWindow() {
+        // 128000 token × 40% ÷ 2 token/字 = 25,600 字
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
+                attachment("超大手册.md", ChatAttachmentParseStatus.READY, "字".repeat(30_000))));
+
+        ChatAttachmentPromptRenderer narrow =
+                new ChatAttachmentPromptRenderer(chatAttachmentService, 128_000);
+        String context = narrow.render(9L).context();
+
+        assertThat(context).contains("本次仅注入前 25600 字");
+        assertThat(context).contains("拆分为多个文件分批上传");
+    }
+
+    @Test
+    @DisplayName("ATT-7：窗口未配置（≤0）时按 128K 保守默认，不返回空预算")
+    void shouldFallBackToDefaultWindowWhenUnset() {
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
+                attachment("手册.md", ChatAttachmentParseStatus.READY, "正文")));
+
+        ChatAttachmentPromptRenderer unset = new ChatAttachmentPromptRenderer(chatAttachmentService, 0);
+        String context = unset.render(9L).context();
+
+        assertThat(context).contains("正文");
+    }
+
+    @Test
+    @DisplayName("ATT-7：极小窗口（8K）时预算下探到保底 4,000 字，不致归零")
+    void shouldKeepMinimumBudgetForTinyWindow() {
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
+                attachment("手册.md", ChatAttachmentParseStatus.READY, "字".repeat(10_000))));
+
+        ChatAttachmentPromptRenderer tiny = new ChatAttachmentPromptRenderer(chatAttachmentService, 8_000);
+        String context = tiny.render(9L).context();
+
+        assertThat(context).contains("本次仅注入前 4000 字");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  ATT-3：检索层（第三层）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("ATT-3：有 kb_source 的附件会触发检索，命中片段带锚点与文件名")
+    void shouldRenderRetrievalWhenAttachmentIngested() {
+        ChatAttachment ingested = attachment("大手册.md", ChatAttachmentParseStatus.READY, "正文");
+        ingested.setKbSource("chat:9:1");
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(ingested));
+        when(knowledgeBaseService.search(eq("怎么装"), anyInt(), eq(9L), isNull(), anyInt()))
+                .thenReturn(new KnowledgeSearchResult("怎么装",
+                        List.of(new KnowledgeSearchResult.Hit("chat:9:1", 2, "第三步：复制到技能目录")),
+                        10, false));
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(
+                chatAttachmentService, knowledgeBaseService, 128_000);
+        String retrieval = r.render(9L, "怎么装").retrieval();
+
+        assertThat(retrieval).contains("大手册.md 第 3 片");
+        assertThat(retrieval).contains("[kb:chat:9:1#2]");
+        assertThat(retrieval).contains("第三步：复制到技能目录");
+    }
+
+    @Test
+    @DisplayName("ATT-3：无 kb_source 时不检索（避免每轮白花一次嵌入调用）")
+    void shouldSkipRetrievalWhenNoIngest() {
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(
+                attachment("小文件.md", ChatAttachmentParseStatus.READY, "正文")));
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(
+                chatAttachmentService, knowledgeBaseService, 128_000);
+        r.render(9L, "问点什么");
+
+        verifyNoInteractions(knowledgeBaseService);
+    }
+
+    @Test
+    @DisplayName("ATT-3：检索用独立预算（128K 窗口 ⇒ 9,600 字），不沿用全局 4,000")
+    void shouldUseDedicatedRetrievalBudget() {
+        ChatAttachment ingested = attachment("大手册.md", ChatAttachmentParseStatus.READY, "正文");
+        ingested.setKbSource("chat:9:1");
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(ingested));
+        when(knowledgeBaseService.search(anyString(), anyInt(), anyLong(), isNull(), anyInt()))
+                .thenReturn(KnowledgeSearchResult.empty("q"));
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(
+                chatAttachmentService, knowledgeBaseService, 128_000);
+        r.render(9L, "问点什么");
+
+        // 128000 × 15% ÷ 2 = 9,600；若错误地沿用 KbProperties.charBudget 会是 4,000
+        verify(knowledgeBaseService).search(anyString(), anyInt(), anyLong(), isNull(),
+                org.mockito.ArgumentMatchers.eq(9_600));
+    }
+
+    @Test
+    @DisplayName("ATT-3：检索抛异常时降级为占位，正文层不受影响")
+    void shouldDegradeRetrievalFailure() {
+        ChatAttachment ingested = attachment("大手册.md", ChatAttachmentParseStatus.READY, "正文");
+        ingested.setKbSource("chat:9:1");
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(ingested));
+        when(knowledgeBaseService.search(anyString(), anyInt(), anyLong(), isNull(), anyInt()))
+                .thenThrow(new IllegalStateException("embed 挂了"));
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(
+                chatAttachmentService, knowledgeBaseService, 128_000);
+        ChatAttachmentPromptRenderer.Rendered rendered = r.render(9L, "怎么装");
+
+        assertThat(rendered.retrieval()).contains("未检索附件片段");
+        assertThat(rendered.context()).contains("正文");
     }
 }

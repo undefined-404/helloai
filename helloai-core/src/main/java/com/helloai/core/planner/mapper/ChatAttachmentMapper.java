@@ -98,4 +98,14 @@ public interface ChatAttachmentMapper extends BaseMapper<ChatAttachment> {
     @Update("UPDATE chat_attachment SET parse_status = 'SKIPPED', parse_error = #{reason}, "
             + "update_time = CURRENT_TIMESTAMP WHERE id = #{id} AND deleted = 0")
     int markSkipped(@Param("id") Long id, @Param("reason") String reason);
+
+    /**
+     * `ATT-3`：超预算附件 ingest 到 kb 后回写来源键（形如 {@code chat:{conv}:{att}}）。
+     *
+     * <p>检索侧靠它反查「命中分片属于哪份附件」并拼引用卡片；空值表示未 ingest
+     * （预算内附件走全量注入，不进 kb）。</p>
+     */
+    @Update("UPDATE chat_attachment SET kb_source = #{source}, update_time = CURRENT_TIMESTAMP "
+            + "WHERE id = #{id} AND deleted = 0")
+    int markKbSource(@Param("id") Long id, @Param("source") String source);
 }

@@ -47,7 +47,7 @@ public class ChatRoundDecisionParser {
 
     /** 顶层字段白名单（未知字段即拒绝，防 LLM 输出漂移）。 */
     private static final Set<String> TOP_LEVEL_KEYS =
-            Set.of("intent", "intent_reason", "clarification_question", "web_search");
+            Set.of("intent", "intent_reason", "clarification_question", "web_search", "attachment_intent");
 
     /** web_search 子对象字段白名单。 */
     private static final Set<String> WEB_SEARCH_KEYS = Set.of("need_search", "search_query", "reason");
@@ -65,13 +65,35 @@ public class ChatRoundDecisionParser {
         this.objectMapper = objectMapper;
     }
 
-    /** 联合决策结果（不可变）。webSearch 为 null 表示 LLM 未输出搜索决策（按不搜索处理）。 */
+    /**
+     * 联合决策结果（不可变）。webSearch 为 null 表示 LLM 未输出搜索决策（按不搜索处理）。
+     *
+     * <p>{@code attachmentIntent} 为 {@code null} 表示「模型未判定本轮与附件的关系」——
+     * 旧模板、字段缺失、未知取值都落在这里，消费方按改造前行为处理（有附件就注入、
+     * 按 {@code need_search} 决定联网）。新模板生效前行为零变化，不需要灰度开关。</p>
+     */
     public record ChatRoundDecision(
-            String intent, String intentReason, String clarificationQuestion, SearchDecision webSearch) {
+            String intent, String intentReason, String clarificationQuestion, SearchDecision webSearch,
+            AttachmentIntent attachmentIntent) {
 
         /** 是否为建议转入澄清模式的意图。 */
         public boolean isClarify() {
             return INTENT_CLARIFY.equals(intent);
+        }
+
+        /** 本轮是否应注入附件正文（未判定时按「注入」处理，保持改造前行为）。 */
+        public boolean shouldInjectAttachment() {
+            return attachmentIntent != AttachmentIntent.NONE;
+        }
+
+        /**
+         * 是否应否决「联网」决策：附件本身能答时附件优先于外部检索。
+         *
+         * <p>仅在模型明确判定 {@link AttachmentIntent#ANSWERABLE} 时成立；未判定
+         * （{@code null}）不否决——宁可多搜一次，不因解析层缺失丢掉搜索机会。</p>
+         */
+        public boolean vetoesWebSearch() {
+            return attachmentIntent == AttachmentIntent.ANSWERABLE;
         }
     }
 
@@ -99,7 +121,8 @@ public class ChatRoundDecisionParser {
      * 调用方按当前搜索模式自行决定规则搜索兜底（ALWAYS_ON/AUTO 降级不丢搜索机会）。
      */
     public static ChatRoundDecision defaults() {
-        return new ChatRoundDecision(INTENT_CHAT, null, null, new SearchDecision(false, null, null));
+        return new ChatRoundDecision(INTENT_CHAT, null, null,
+                new SearchDecision(false, null, null), null);
     }
 
     /**
@@ -162,7 +185,31 @@ public class ChatRoundDecisionParser {
             question = null;
         }
 
-        return new ChatRoundDecision(intent, intentReason, question, parseWebSearch(root.get("web_search"), raw));
+        return new ChatRoundDecision(intent, intentReason, question,
+                parseWebSearch(root.get("web_search"), raw),
+                parseAttachmentIntent(root.get("attachment_intent")));
+    }
+
+    /**
+     * 解析附件意图（`ATT-5`）：字段缺失 → {@code null}（未判定，走旧行为）；
+     * 非文本 / 未知取值 → 记 WARN 后同样回落到 {@code null}。
+     *
+     * <p>不抛异常是刻意的：这是新增字段，旧模板天然缺失，若按严格校验会把
+     * 存量部署全部打成降级决策。</p>
+     */
+    private AttachmentIntent parseAttachmentIntent(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (!node.isTextual()) {
+            log.warn("attachment_intent 必须是字符串，按未判定处理");
+            return null;
+        }
+        AttachmentIntent intent = AttachmentIntent.fromWire(node.asText());
+        if (intent == null) {
+            log.warn("attachment_intent 取值非法（必须为 none|answerable|needs_external）: {}", node.asText());
+        }
+        return intent;
     }
 
     /** 解析 web_search 子对象；宽容策略见类注释，任何告警不改变「不丢搜索机会」原则。 */

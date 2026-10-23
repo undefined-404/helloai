@@ -16,6 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
@@ -51,8 +52,7 @@ class KnowledgeBaseServiceTest {
     @DisplayName("总开关关 ⇒ ingest 显式拒绝（REF-6.13 默认关闭）")
     void ingest_whenDisabled_rejects() {
         KbProperties p = props();
-        p.setEnabled(false);
-        assertThatThrownBy(() -> svc(p).ingest("s", "t"))
+        p.setEnabled(false);        assertThatThrownBy(() -> svc(p).ingest("s", "t"))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("未启用");
     }
@@ -92,7 +92,8 @@ class KnowledgeBaseServiceTest {
         ArgumentCaptor<String> contentCap = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<double[]> vecCap = ArgumentCaptor.forClass(double[].class);
         verify(repository, org.mockito.Mockito.times(3))
-                .insertChunk(srcCap.capture(), idxCap.capture(), contentCap.capture(), vecCap.capture());
+                .insertChunk(srcCap.capture(), idxCap.capture(), contentCap.capture(), vecCap.capture(),
+                        isNull(), isNull());
         assertThat(contentCap.getAllValues()).containsExactly("abcd", "defg", "gh");
         assertThat(idxCap.getAllValues()).containsExactly(0, 1, 2);
         verify(repository).clearSource("src-1");
@@ -107,7 +108,8 @@ class KnowledgeBaseServiceTest {
         svc(p).ingest("s", "single");
         // clearSource 与 insertChunk 均命中；先清后写（顺序由 vi 编排体现，此处断言调用了 clearSource）
         verify(repository).clearSource("s");
-        verify(repository).insertChunk(anyString(), anyInt(), anyString(), any(double[].class));
+        verify(repository).insertChunk(anyString(), anyInt(), anyString(), any(double[].class),
+                isNull(), isNull());
     }
 
     @Test
@@ -116,7 +118,7 @@ class KnowledgeBaseServiceTest {
         KbProperties p = props();
         p.setCharBudget(10);
         when(embedder.embedOne(anyString())).thenReturn(new double[]{0.9});
-        when(repository.search(any(double[].class), anyInt())).thenReturn(List.of(
+        when(repository.search(any(double[].class), anyInt(), isNull(), isNull())).thenReturn(List.of(
                 new KnowledgeHit(1L, "a", 0, "0123456789abcdef", 0.1), // 16 字符
                 new KnowledgeHit(2L, "b", 0, "xyz", 0.2)));
 
@@ -144,9 +146,10 @@ class KnowledgeBaseServiceTest {
         KbProperties p = props();
         p.setMaxResults(8);
         when(embedder.embedOne(anyString())).thenReturn(new double[]{0.9});
-        when(repository.search(any(double[].class), anyInt())).thenReturn(List.of());
+        when(repository.search(any(double[].class), anyInt(), isNull(), isNull())).thenReturn(List.of());
         svc(p).search("q", 99);
-        verify(repository).search(any(double[].class), org.mockito.ArgumentMatchers.eq(8));
+        verify(repository).search(any(double[].class), org.mockito.ArgumentMatchers.eq(8),
+                isNull(), isNull());
     }
 
     @Test
@@ -155,9 +158,10 @@ class KnowledgeBaseServiceTest {
         KbProperties p = props();
         p.setDefaultResults(2);
         when(embedder.embedOne(anyString())).thenReturn(new double[]{0.9});
-        when(repository.search(any(double[].class), anyInt())).thenReturn(List.of());
+        when(repository.search(any(double[].class), anyInt(), isNull(), isNull())).thenReturn(List.of());
         svc(p).search("q", null);
-        verify(repository).search(any(double[].class), org.mockito.ArgumentMatchers.eq(2));
+        verify(repository).search(any(double[].class), org.mockito.ArgumentMatchers.eq(2),
+                isNull(), isNull());
     }
 
     @Test
@@ -195,8 +199,26 @@ class KnowledgeBaseServiceTest {
         p.setDefaultResults(2);
         p.setMaxResults(8);
         when(embedder.embedOne(anyString())).thenReturn(new double[]{0.9});
-        when(repository.search(any(double[].class), anyInt())).thenReturn(List.of());
+        when(repository.search(any(double[].class), anyInt(), isNull(), isNull())).thenReturn(List.of());
         svc(p).search("q", null);
-        verify(repository).search(any(double[].class), org.mockito.ArgumentMatchers.eq(2));
+        verify(repository).search(any(double[].class), org.mockito.ArgumentMatchers.eq(2),
+                isNull(), isNull());
+    }
+
+    @Test
+    @DisplayName("ATT-3：带会话归属的摄入，归属列透传到仓储（隔离的唯一依据）")
+    void ingest_withScope_shouldPassOwnership() {
+        KbProperties p = props();
+        when(embedder.embed(anyList())).thenReturn(List.of(new double[]{0.1}, new double[]{0.2}));
+
+        int chunks = svc(p).ingest("chat:111:222", "正文正文正文", 111L, 9L);
+
+        assertThat(chunks).isEqualTo(2);
+        verify(repository).insertChunk(org.mockito.ArgumentMatchers.eq("chat:111:222"),
+                org.mockito.ArgumentMatchers.eq(0), anyString(), any(double[].class),
+                org.mockito.ArgumentMatchers.eq(111L), org.mockito.ArgumentMatchers.eq(9L));
+        verify(repository).insertChunk(org.mockito.ArgumentMatchers.eq("chat:111:222"),
+                org.mockito.ArgumentMatchers.eq(1), anyString(), any(double[].class),
+                org.mockito.ArgumentMatchers.eq(111L), org.mockito.ArgumentMatchers.eq(9L));
     }
 }

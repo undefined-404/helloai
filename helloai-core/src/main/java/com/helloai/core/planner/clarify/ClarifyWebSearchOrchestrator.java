@@ -301,12 +301,26 @@ public class ClarifyWebSearchOrchestrator {
                     Math.max(1L, webSearchProperties.getMinGapSearchBudgetMs()));
             boolean budgetLeft = remainingMs >= minGapBudget;
             if (!searched.isEmpty() && webSearchProperties.getAiSearchMaxRounds() > 1 && budgetLeft) {
-                String gapQuery = searchGapAssessor.assessGap(
+                // ATT-6：补搜支持 1~3 条不同角度的变体。每条之前重算预算——变体的耗时是
+                // 单条的 N 倍，靠外层那一次预算判断挡不住（3 条各 25s 会把总时长拖到 75s+）。
+                List<String> gapQueries = searchGapAssessor.assessGaps(
                         stripUrls(userMessage), new ArrayList<>(searched), attempted);
-                if (gapQuery != null && !gapQuery.isBlank()) {
+                int gapDone = 0;
+                for (String gapQuery : gapQueries) {
+                    if (searched.size() >= maxResults) {
+                        break;
+                    }
+                    long gapRemaining = budgetMs <= 0
+                            ? Long.MAX_VALUE : budgetMs - (System.currentTimeMillis() - t0);
+                    if (gapRemaining < minGapBudget) {
+                        log.info("澄清联网搜索：补搜预算不足，停止后续变体（已完成 {} 条）: remaining={}ms, tried={}",
+                                gapDone, gapRemaining, attempted);
+                        break;
+                    }
                     attempted.add(gapQuery);
                     WebSearchToolResult gap = callWebSearchTool(gapQuery, perQuery,
                             webSearchProperties.isAiSearchAnswer());
+                    gapDone++;
                     if (gap != null) {
                         for (WebSearchResult r : gap.results()) {
                             if (r == null || r.getUrl() == null || r.getUrl().isBlank()
@@ -319,9 +333,11 @@ public class ClarifyWebSearchOrchestrator {
                             }
                         }
                     }
-                    rounds = 2;
                     log.info("澄清联网搜索：缺口补搜完成 gapQuery={}, hits={}, total={}",
                             gapQuery, gap == null ? 0 : gap.results().size(), searched.size());
+                }
+                if (gapDone > 0) {
+                    rounds = 2;
                 }
             } else if (!searched.isEmpty() && webSearchProperties.getAiSearchMaxRounds() > 1) {
                 // 可查验：不是「没找到缺口」而是「预算不够补」——两者对排障的意义完全不同

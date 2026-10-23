@@ -276,4 +276,70 @@ class ChatRoundDecisionParserTest {
         assertThat(search.searchQuery()).isNull();
         assertThat(search.reason()).isNull();
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  ATT-5：附件意图三态
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("ATT-5：attachment_intent 合法三态均解析为对应枚举")
+    void shouldParseAttachmentIntent() {
+        assertThat(parseWithAttachmentIntent("none").attachmentIntent()).isEqualTo(AttachmentIntent.NONE);
+        assertThat(parseWithAttachmentIntent("answerable").attachmentIntent())
+                .isEqualTo(AttachmentIntent.ANSWERABLE);
+        assertThat(parseWithAttachmentIntent("needs_external").attachmentIntent())
+                .isEqualTo(AttachmentIntent.NEEDS_EXTERNAL);
+    }
+
+    @Test
+    @DisplayName("ATT-5：字段缺失按未判定处理（null），保持旧模板行为")
+    void shouldLeaveAttachmentIntentNullWhenAbsent() {
+        String raw = "{\"intent\":\"chat\",\"intent_reason\":\"direct_answer\","
+                + "\"clarification_question\":null,\"web_search\":{\"need_search\":false}}";
+
+        assertThat(parser.parse(raw).attachmentIntent()).isNull();
+    }
+
+    @Test
+    @DisplayName("ATT-5：非法取值按未判定处理，不抛异常（避免一处拼写错误打崩整轮决策）")
+    void shouldTolerateIllegalAttachmentIntent() {
+        assertThat(parseWithAttachmentIntent("ANSWERABLE").attachmentIntent()).isNull();
+        assertThat(parseWithAttachmentIntent("has_attachment").attachmentIntent()).isNull();
+    }
+
+    @Test
+    @DisplayName("ATT-5：none 不注入正文、answerable 否决联网、needs_external 两者都放行")
+    void shouldExposeAttachmentIntentSemantics() {
+        ChatRoundDecision none = parseWithAttachmentIntent("none");
+        assertThat(none.shouldInjectAttachment()).isFalse();
+        assertThat(none.vetoesWebSearch()).isFalse();
+
+        ChatRoundDecision answerable = parseWithAttachmentIntent("answerable");
+        assertThat(answerable.shouldInjectAttachment()).isTrue();
+        assertThat(answerable.vetoesWebSearch()).isTrue();
+
+        ChatRoundDecision needsExternal = parseWithAttachmentIntent("needs_external");
+        assertThat(needsExternal.shouldInjectAttachment()).isTrue();
+        assertThat(needsExternal.vetoesWebSearch()).isFalse();
+    }
+
+    @Test
+    @DisplayName("ATT-5：未判定时按旧行为（注入正文、不否决联网）")
+    void shouldKeepLegacyBehaviourWhenUndetermined() {
+        ChatRoundDecision undetermined = parseWithAttachmentIntent(null);
+
+        assertThat(undetermined.attachmentIntent()).isNull();
+        assertThat(undetermined.shouldInjectAttachment()).isTrue();
+        assertThat(undetermined.vetoesWebSearch()).isFalse();
+    }
+
+    /** 构造带指定 attachment_intent 的最小合法输出（null 表示省略该字段）。 */
+    private ChatRoundDecision parseWithAttachmentIntent(String attachmentIntent) {
+        String field = attachmentIntent == null
+                ? "" : ",\"attachment_intent\":\"" + attachmentIntent + "\"";
+        String raw = "{\"intent\":\"chat\",\"intent_reason\":\"direct_answer\","
+                + "\"clarification_question\":null" + field
+                + ",\"web_search\":{\"need_search\":false}}";
+        return parser.parse(raw);
+    }
 }

@@ -98,7 +98,8 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
      */
     private static final Pattern META_WORD_PATTERN = Pattern.compile(
             "我上传的|我刚上传的|我发的|上传的|附件|手册|文档|文件|资料|内容|"
-                    + "这个|那个|上面|刚才|刚刚|帮我|请|分析一下|分析|看看|看一下|研究一下|"
+                    + "这个|那个|这份|那份|本份|该份|上面|刚才|刚刚|帮我|请|"
+                    + "分析一下|分析|看看|看一下|研究一下|"
                     + "判断|是否正确|对不对|行不行|有没有问题|的中|的|了|吗|呢|吧");
 
     /** 疑问/祈使标记：整句带这些标记且无任何外部标识时，判为「问句照搬」。 */

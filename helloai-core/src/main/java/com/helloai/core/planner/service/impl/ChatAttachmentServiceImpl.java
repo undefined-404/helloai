@@ -68,6 +68,12 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
     @Override
     @Transactional(rollbackFor = Exception.class)
     public List<ChatAttachment> uploadBatch(Long conversationId, String clientToken, List<UploadFile> files) {
+        return uploadBatch(conversationId, clientToken, files, null);
+    }
+
+    @Override
+    public List<ChatAttachment> uploadBatch(Long conversationId, String clientToken,
+                                            List<UploadFile> files, Long uploaderUserId) {
         validateBatch(conversationId, clientToken, files);
 
         List<ChatAttachment> saved = new ArrayList<>(files.size());
@@ -93,6 +99,7 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
             ChatAttachment attachment = new ChatAttachment();
             attachment.setConversationId(conversationId);
             attachment.setClientToken(clientToken);
+            attachment.setUploaderUserId(uploaderUserId);
             attachment.setFileName(file.fileName());
             attachment.setFileType(extensionOf(file.fileName()));
             attachment.setMimeType(mime);

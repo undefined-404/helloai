@@ -1,6 +1,7 @@
 package com.helloai.api.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.stp.StpUtil;
 import com.helloai.api.dto.attachment.ChatAttachmentVO;
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
@@ -65,10 +66,26 @@ public class ChatAttachmentController {
         for (MultipartFile file : files) {
             uploads.add(toUploadFile(file));
         }
-        List<ChatAttachment> saved = chatAttachmentService.uploadBatch(conversationId, clientToken, uploads);
+        List<ChatAttachment> saved = chatAttachmentService.uploadBatch(conversationId, clientToken,
+                uploads, currentUserId());
         log.info("会话附件上传完成: conversationId={}, clientToken={}, count={}",
                 conversationId, clientToken, saved.size());
         return R.ok(ChatAttachmentVO.fromList(saved));
+    }
+
+    /**
+     * 当前登录用户 id（`ATT-3`）：用于把「谁上传的」落到附件与 kb。
+     *
+     * <p>上传端点已有 {@code @SaCheckPermission}，正常路径必有登录态；这里仍兜住异常返回 null，
+     * 避免认证中间件差异导致上传直接 500——空值只影响检索隔离精度，不该阻断上传。</p>
+     */
+    private Long currentUserId() {
+        try {
+            return StpUtil.getLoginIdAsLong();
+        } catch (Exception e) {
+            log.debug("取当前登录用户失败（附件按无归属上传）: {}", e.getMessage());
+            return null;
+        }
     }
 
     /** 会话附件清单（新会话首句前用 clientToken 查临时批次）。 */

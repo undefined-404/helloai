@@ -2,14 +2,20 @@ package com.helloai.core.planner.attachment;
 
 import com.helloai.common.constant.ChatAttachmentParseStatus;
 import com.helloai.core.planner.entity.ChatAttachment;
+import com.helloai.core.knowledge.KnowledgeBaseService;
+import com.helloai.core.knowledge.KnowledgeSearchResult;
 import com.helloai.core.planner.service.ChatAttachmentService;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -31,7 +37,6 @@ import java.util.regex.Pattern;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class ChatAttachmentPromptRenderer {
 
     /** 无附件时的占位：保持 Prompt 语义节稳定（与联网资料节的「（无可用联网资料）」同风格）。 */
@@ -81,6 +86,52 @@ public class ChatAttachmentPromptRenderer {
             "Run", "Set", "Get", "New", "From", "Into", "Then", "Than", "Also", "Only");
 
     private final ChatAttachmentService chatAttachmentService;
+    private final KnowledgeBaseService knowledgeBaseService;
+
+    /**
+     * `ATT-3`：附件检索注入的片段条数上限。
+     *
+     * <p>16 片是按检索预算倒推的：128K 窗口给 15% ≈ 9,600 字，分片 600 字/片 ⇒ 正好 16 片。
+     * 原来的 5 片在 90,385 字的文档上只覆盖 3.3%，问「后半部分某主题」基本答不出。</p>
+     */
+    private static final int KB_RETRIEVAL_TOP_K = 16;
+
+    /** 无检索片段时的占位：保持 Prompt 语义节稳定（与「（本轮无附件）」同风格）。 */
+    private static final String NO_RETRIEVAL = "（本次未检索附件片段：无超预算附件，或检索无命中）";
+
+    /**
+     * 当前模型的上下文窗口（token），用于折算会话附件正文预算（`ATT-7`）。
+     *
+     * <p>取平台的<b>保守下限</b>而非 per-model 动态值：本类拿不到「本轮用哪个模型」的
+     * 上下文（渲染发生在模型选择之前），逐个模型传参要改整条调用链，收益不抵成本。
+     * 默认 128K 保证不溢出；换 1M 窗口模型时通过配置上调即可。</p>
+     */
+    private final int contextWindowTokens;
+
+    @Autowired
+    public ChatAttachmentPromptRenderer(
+            ChatAttachmentService chatAttachmentService,
+            KnowledgeBaseService knowledgeBaseService,
+            @Value("${helloai.attachment.context-window-tokens:128000}") int contextWindowTokens) {
+        this.chatAttachmentService = chatAttachmentService;
+        this.knowledgeBaseService = knowledgeBaseService;
+        this.contextWindowTokens = contextWindowTokens;
+    }
+
+    /**
+     * 兼容构造：不注入 KB（测试 / 只需清单与正文两层的场景）。
+     *
+     * <p>第三层检索会因 {@code knowledgeBaseService == null} 直接返回占位——
+     * 这样存量单测不必 mock 知识库，也不会因缺依赖 NPE。</p>
+     */
+    public ChatAttachmentPromptRenderer(ChatAttachmentService chatAttachmentService) {
+        this(chatAttachmentService, null, AttachmentContentPolicy.DEFAULT_CONTEXT_WINDOW_TOKENS);
+    }
+
+    /** 兼容构造：指定窗口但不注入 KB（单测按窗口验证预算，第三层固定返回占位）。 */
+    public ChatAttachmentPromptRenderer(ChatAttachmentService chatAttachmentService, int contextWindowTokens) {
+        this(chatAttachmentService, null, contextWindowTokens);
+    }
 
     /**
      * 渲染结果。
@@ -88,16 +139,87 @@ public class ChatAttachmentPromptRenderer {
      * @param manifest 清单表（恒非空，无附件时为占位文本）
      * @param context  正文层（无附件或全部不可读时为说明文本）
      */
-    public record Rendered(String manifest, String context) {
+    public record Rendered(String manifest, String context, String retrieval) {
     }
 
-    /** 一次查询渲染两层（避免同一轮 Prompt 渲染查两遍库）。 */
+    /** 一次查询渲染两层（避免同一轮 Prompt 渲染查两遍库）；不做检索（第三层）。 */
     public Rendered render(Long conversationId) {
+        return render(conversationId, null);
+    }
+
+    /**
+     * 一次查询渲染三层：清单 / 正文 / 检索片段（`ATT-3` 第三层）。
+     *
+     * <p><b>第三层只在「有附件被 ingest 过」时产出</b>（{@code kb_source} 非空）：预算内附件
+     * 走全量正文注入（更准），超预算附件才进 kb 按需检索。两者互斥，不会对同一份文件
+     * 既注入全文又注入片段。</p>
+     *
+     * <p><b>检索失败一律降级为空</b>：KB 未启用、嵌入接口不可用、会话无 ingest 记录——
+     * 都返回占位文本，正文层照常注入。检索是附加值，不能因为它失败让附件读不出来。</p>
+     *
+     * @param query 本轮用户消息（检索语义锚）；null/空白时跳过第三层
+     */
+    public Rendered render(Long conversationId, String query) {
         List<ChatAttachment> attachments = chatAttachmentService.listByConversation(conversationId);
         if (attachments == null || attachments.isEmpty()) {
-            return new Rendered(NO_ATTACHMENT, NO_ATTACHMENT);
+            return new Rendered(NO_ATTACHMENT, NO_ATTACHMENT, NO_RETRIEVAL);
         }
-        return new Rendered(buildManifest(attachments), buildContext(attachments));
+        return new Rendered(buildManifest(attachments), buildContext(attachments),
+                buildRetrieval(conversationId, query, attachments));
+    }
+
+    /**
+     * 第三层：超预算附件的按需检索（`ATT-3`）。
+     *
+     * <p>只在存在 {@code kb_source} 的附件时检索——没有 ingest 记录时检索必然为空，
+     * 白花一次嵌入调用。检索范围强制带 {@code conversationId}：{@code kb_chunk} 是全平台
+     * 共享表，不带会话过滤会捞到别的会话的附件正文。</p>
+     */
+    private String buildRetrieval(Long conversationId, String query, List<ChatAttachment> attachments) {
+        if (knowledgeBaseService == null) {
+            return NO_RETRIEVAL; // 兼容构造：未注入 KB
+        }
+        boolean hasIngested = attachments.stream().anyMatch(a -> a.getKbSource() != null);
+        if (!hasIngested || query == null || query.isBlank()) {
+            return NO_RETRIEVAL;
+        }
+        try {
+            // 检索用独立预算（窗口 15%）：全局 KbProperties.charBudget 默认只有 4,000 字，
+            // 是为全库检索设的；几万字的附件靠它会只能覆盖 3% 左右。
+            int retrievalLimit = AttachmentContentPolicy.resolveChatAttachmentRetrievalLimit(contextWindowTokens);
+            KnowledgeSearchResult result = knowledgeBaseService.search(
+                    query, KB_RETRIEVAL_TOP_K, conversationId, null, retrievalLimit);
+            // 成功路径也要留痕：只在失败时打日志，排查时只能靠模型回答反推命中数。
+            log.info("附件检索命中: conversationId={}, hits={}, chars={}, limit={}, truncated={}",
+                    conversationId,
+                    result == null || result.hits() == null ? 0 : result.hits().size(),
+                    result == null ? 0 : result.totalChars(),
+                    retrievalLimit,
+                    result != null && result.truncated());
+            if (result == null || result.hits() == null || result.hits().isEmpty()) {
+                return NO_RETRIEVAL;
+            }
+            // 命中分片的 source → 附件文件名：引用要能说清「来自哪份文件第几片」
+            Map<String, String> nameBySource = attachments.stream()
+                    .filter(a -> a.getKbSource() != null)
+                    .collect(Collectors.toMap(ChatAttachment::getKbSource,
+                            a -> safe(a.getFileName()), (x, y) -> x));
+            StringBuilder sb = new StringBuilder();
+            for (KnowledgeSearchResult.Hit hit : result.hits()) {
+                String fileName = nameBySource.getOrDefault(hit.source(), "未知文件");
+                sb.append("### [").append(fileName).append(" 第 ").append(hit.chunkIdx() + 1).append(" 片]")
+                        .append(" `[kb:").append(hit.source()).append('#').append(hit.chunkIdx()).append("]`")
+                        .append('\n').append(hit.content()).append("\n\n");
+            }
+            if (result.truncated()) {
+                sb.append("（检索片段已截断：命中数超出注入预算，如需更多请缩小提问范围）\n");
+            }
+            return sb.toString().trim();
+        } catch (RuntimeException e) {
+            log.warn("附件检索失败（降级为无检索片段，正文层不受影响）: conversationId={}, err={}",
+                    conversationId, e.toString());
+            return NO_RETRIEVAL;
+        }
     }
 
     /**
@@ -244,8 +366,11 @@ public class ChatAttachmentPromptRenderer {
 
     /** 正文：按预算逐份注入，超预算显式标注。 */
     private String buildContext(List<ChatAttachment> attachments) {
+        int totalLimit = AttachmentContentPolicy.resolveChatAttachmentTotalLimit(contextWindowTokens);
+        int perFileLimit = Math.min(AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT, totalLimit);
+        int[] quota = planContextQuota(attachments, totalLimit, perFileLimit);
+
         StringBuilder sb = new StringBuilder();
-        int used = 0;
         for (int i = 0; i < attachments.size(); i++) {
             ChatAttachment a = attachments.get(i);
             String header = "### [附件" + (i + 1) + "] " + safe(a.getFileName()) + "（" + statusText(a) + "）";
@@ -258,24 +383,89 @@ public class ChatAttachmentPromptRenderer {
                         .append("）\n\n");
                 continue;
             }
-            int remaining = AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT - used;
-            if (remaining <= 0) {
+            int granted = quota[i];
+            if (granted <= 0) {
                 sb.append(header).append('\n')
-                        .append("（本次未注入正文：上下文预算已用尽，如需该文件内容请让用户缩小范围）\n\n");
+                        .append("（本次未注入正文：上下文预算已用尽，如需该文件内容请让用户缩小范围或拆分为多个文件分批上传）\n\n");
                 continue;
             }
-            int quota = Math.min(AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT, remaining);
-            boolean truncated = text.length() > quota;
-            String body = truncated ? text.substring(0, quota) : text;
-            used += body.length();
+            boolean truncated = text.length() > granted;
+            String body = truncated ? text.substring(0, granted) : text;
             sb.append(header).append('\n')
                     .append(body).append('\n')
                     .append(truncated
-                            ? "（该文件正文已截断：原文 " + text.length() + " 字，本次仅注入前 " + quota + " 字）\n\n"
+                            ? "（该文件正文已截断：原文 " + text.length() + " 字，本次仅注入前 " + granted
+                              + " 字；如需后半部分请拆分为多个文件分批上传）\n\n"
                             : "\n");
-            log.debug("附件正文注入: fileName={}, chars={}, truncated={}", a.getFileName(), body.length(), truncated);
+            log.debug("附件正文注入: fileName={}, chars={}, truncated={}, totalLimit={}",
+                    a.getFileName(), body.length(), truncated, totalLimit);
         }
         return sb.toString().trim();
+    }
+
+    /**
+     * 分配每个附件的正文注入额度（`ATT-3` per-file 配额）：**均分保底 + 余量回收**。
+     *
+     * <p><b>为什么不能先到先得</b>：原实现按附件顺序切预算，第一个文件可以吃掉
+     * 全部 25,600 字（`perFileLimit` 被总预算压制），后面的文件一律「预算已用尽」。
+     * 实测（LOG-20261023-024）：7,201 字的小文件排在前面，把 90,385 字的主附件挤到只有
+     * 18,399 字；三个以上附件时第三个直接拿 0。</p>
+     *
+     * <p><b>为什么不能简单均分</b>：两个文件时均分会让小文件「要多少给多少」后余量闲置
+     * ——7,201 字的文件只需求 7,201，均分额 12,800 剩 5,599 白扔，总注入反而少于先到先得。</p>
+     *
+     * <p><b>本实现</b>：第一轮每项按 {@code totalLimit / n} 保底（不超过自身长度与单文件上限），
+     * 第二轮把没用完的余量按「需求量从小到大」补回被截断的文件——小文件先补满，
+     * 大文件吃剩下的。既保证每个文件都有份额，又不浪费预算。</p>
+     *
+     * @return 与 {@code attachments} 同序的额度数组；不可读项为 0
+     */
+    private int[] planContextQuota(List<ChatAttachment> attachments, int totalLimit, int perFileLimit) {
+        int size = attachments.size();
+        int[] quota = new int[size];
+        int[] demand = new int[size];
+        List<Integer> truncatedIdx = new ArrayList<>();
+        long used = 0;
+        int readable = 0;
+
+        for (int i = 0; i < size; i++) {
+            ChatAttachment a = attachments.get(i);
+            String text = a.getExtractedText();
+            if (a.getParseStatus() != ChatAttachmentParseStatus.READY || text == null || text.isBlank()) {
+                continue; // 不可读：额度 0，也不参与均分（否则会白占一份份额）
+            }
+            readable++;
+            demand[i] = Math.min(text.length(), perFileLimit);
+        }
+        if (readable == 0) {
+            return quota;
+        }
+
+        int share = Math.max(1, totalLimit / readable);
+        for (int i = 0; i < size; i++) {
+            if (demand[i] <= 0) {
+                continue;
+            }
+            quota[i] = Math.min(demand[i], share);
+            used += quota[i];
+            if (quota[i] < demand[i]) {
+                truncatedIdx.add(i);
+            }
+        }
+
+        // 第二轮：余量按「剩余需求从小到大」补给被截断项——小文件先补满，避免余量被大文件独占
+        long pool = totalLimit - used;
+        truncatedIdx.sort(Comparator.comparingInt(i -> demand[i] - quota[i]));
+        for (int idx : truncatedIdx) {
+            if (pool <= 0) {
+                break;
+            }
+            int gap = demand[idx] - quota[idx];
+            int extra = (int) Math.min(pool, gap);
+            quota[idx] += extra;
+            pool -= extra;
+        }
+        return quota;
     }
 
     /** 状态词：面向模型，不用枚举名（PENDING/PARSING 对模型是噪音）。 */
