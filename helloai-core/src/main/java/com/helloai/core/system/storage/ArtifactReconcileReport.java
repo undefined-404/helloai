@@ -14,17 +14,19 @@ import java.util.List;
  *   <li>{@link #sizeMismatch()} —— 双侧都在但字节数不符，说明对象被覆盖或截断。</li>
  * </ul>
  *
- * <p><b>为何有两类引用行</b>：会话附件（{@code chat_attachment}，planner 域）与子任务产物
- * （{@code attachment}，task 域）共用同一个桶，仅 objectKey 前缀不同。孤儿判定必须让两类
- * 记录<b>共同</b>作为「被引用集合」——只认其中一类，另一类的对象会整批被判成孤儿。</p>
+ * <p><b>为何有三类引用行</b>：会话附件（{@code chat_attachment}，planner 域）、子任务产物
+ * （{@code attachment}，task 域）与技能包原始 zip（{@code skill_package.origin_zip_url}，
+ * agent 域）共用同一个桶，仅 objectKey 前缀不同。孤儿判定必须让三类记录<b>共同</b>作为
+ * 「被引用集合」——只认其中一类，另一类的对象会整批被判成孤儿。</p>
  *
  * @param protocol              参与对账的平台协议（{@code minio://} / {@code local://}）
  * @param bucket                参与对账的桶
  * @param attachmentRows        子任务产物引用行数（含逻辑删除，保守口径）
  * @param chatAttachmentRows    会话附件引用行数（含逻辑删除，保守口径）
+ * @param skillPackageRows      技能包原始 zip 引用行数（含逻辑删除，保守口径）
  * @param objectCount           桶内真实对象数
- * @param dangling              悬空对象键清单（两类记录合并后仍找不到对象）
- * @param orphaned              孤儿对象键清单（两类记录都未引用）
+ * @param dangling              悬空对象键清单（三类记录合并后仍找不到对象）
+ * @param orphaned              孤儿对象键清单（三类记录都未引用）
  * @param orphanedChatPrefixed  {@link #orphaned()} 中 objectKey 以 {@code chat-} 开头的子集。
  *                              <b>仅为定位方便，按前缀推断来源，不参与任何判定</b>——
  *                              归属者注册名恰好以 {@code chat-} 开头的产物也会落在这里。
@@ -37,6 +39,7 @@ public record ArtifactReconcileReport(
         String bucket,
         int attachmentRows,
         int chatAttachmentRows,
+        int skillPackageRows,
         int objectCount,
         List<String> dangling,
         List<String> orphaned,

@@ -4,6 +4,7 @@ import com.helloai.common.config.ArtifactStorageProperties;
 import com.helloai.core.system.port.ArtifactReference;
 import com.helloai.core.system.port.ArtifactReferencePort;
 import com.helloai.core.system.port.ChatAttachmentReferencePort;
+import com.helloai.core.system.port.SkillPackageReferencePort;
 import com.helloai.core.system.storage.ArtifactReconcileReport;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.system.storage.ArtifactStorageReconcileService;
@@ -59,6 +60,7 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
     private final ArtifactStorageProperties properties;
     private final ArtifactReferencePort artifactReferencePort;
     private final ChatAttachmentReferencePort chatAttachmentReferencePort;
+    private final SkillPackageReferencePort skillPackageReferencePort;
 
     @Override
     public ArtifactReconcileReport reconcile() {
@@ -68,13 +70,16 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
 
         List<ArtifactReference> artifactRows = artifactReferencePort.listAllIncludingDeleted();
         List<ArtifactReference> chatRows = chatAttachmentReferencePort.listAllIncludingDeleted();
+        List<ArtifactReference> skillRows = skillPackageReferencePort.listAllIncludingDeleted();
 
-        // 1) 被引用对象集合：两类记录**共同**构成（含逻辑删除行 → 口径保守，宁可漏判孤儿也不误删）。
-        //    只认其中一类，另一类的对象会整批被判成孤儿——会话附件与子任务产物共用同一个桶，
-        //    仅 objectKey 前缀不同，这也是 2026-10-23 补本条的直接原因。
+        // 1) 被引用对象集合：三类记录**共同**构成（含逻辑删除行 → 口径保守，宁可漏判孤儿也不误删）。
+        //    只认其中一类，另一类的对象会整批被判成孤儿——三者共用同一个桶，仅 objectKey 前缀不同。
+        //    chat_attachment 于 2026-10-23 补入；skill_package.origin_zip_url 同日补入
+        //    （它不叫 storage_url/object_key，按列名检索引用源时扫不到，漏了会误删已装技能包的 zip）。
         Map<String, Long> referencedSize = new LinkedHashMap<>();
         collectReferenced(referencedSize, artifactRows, protocol, bucket);
         collectReferenced(referencedSize, chatRows, protocol, bucket);
+        collectReferenced(referencedSize, skillRows, protocol, bucket);
 
         // 2) 桶内真实对象
         List<ArtifactStorage.StoredObject> objects = artifactStorage.listObjects(bucket, null);
@@ -112,7 +117,7 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
                 : List.of();
 
         ArtifactReconcileReport report = new ArtifactReconcileReport(protocol, bucket,
-                artifactRows.size(), chatRows.size(), objects.size(),
+                artifactRows.size(), chatRows.size(), skillRows.size(), objects.size(),
                 dangling, orphaned, orphanedChatPrefixed, sizeMismatch, removed,
                 properties.isOrphanCleanupEnabled());
         logReport(report);
@@ -171,18 +176,19 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
 
     private void logReport(ArtifactReconcileReport report) {
         if (report.consistent()) {
-            log.info("存储对账一致: bucket={} 产物行={} 会话附件行={} 桶内对象={}",
+            log.info("存储对账一致: bucket={} 产物行={} 会话附件行={} 技能包行={} 桶内对象={}",
                     report.bucket(), report.attachmentRows(), report.chatAttachmentRows(),
-                    report.objectCount());
+                    report.skillPackageRows(), report.objectCount());
             return;
         }
-        log.warn("存储对账发现不一致: bucket={} 产物行={} 会话附件行={} 桶内对象={} "
+        log.warn("存储对账发现不一致: bucket={} 产物行={} 会话附件行={} 技能包行={} 桶内对象={} "
                         + "悬空={} 孤儿={}（其中 chat- 前缀 {} 个）字节不符={}",
                 report.bucket(), report.attachmentRows(), report.chatAttachmentRows(),
-                report.objectCount(), report.danglingCount(), report.orphanedCount(),
-                report.chatPrefixedOrphanedCount(), report.sizeMismatchCount());
+                report.skillPackageRows(), report.objectCount(), report.danglingCount(),
+                report.orphanedCount(), report.chatPrefixedOrphanedCount(),
+                report.sizeMismatchCount());
         logBounded("悬空（DB 有记录、对象缺失，预览/核验会 404）", report.dangling());
-        logBounded("孤儿（对象存在、两类记录均未引用，含逻辑删除）", report.orphaned());
+        logBounded("孤儿（对象存在、三类记录均未引用，含逻辑删除）", report.orphaned());
         logBounded("字节数不符", report.sizeMismatch());
         if (report.cleanupEnabled()) {
             log.warn("孤儿清理已开启: 本轮删除 {} 个对象", report.removedCount());

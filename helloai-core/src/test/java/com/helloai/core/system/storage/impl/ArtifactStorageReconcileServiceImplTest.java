@@ -4,6 +4,7 @@ import com.helloai.common.config.ArtifactStorageProperties;
 import com.helloai.core.system.port.ArtifactReference;
 import com.helloai.core.system.port.ArtifactReferencePort;
 import com.helloai.core.system.port.ChatAttachmentReferencePort;
+import com.helloai.core.system.port.SkillPackageReferencePort;
 import com.helloai.core.system.storage.ArtifactReconcileReport;
 import com.helloai.core.system.storage.ArtifactStorage;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,6 +38,7 @@ class ArtifactStorageReconcileServiceImplTest {
     private ArtifactStorageProperties properties;
     private ArtifactReferencePort artifactReferencePort;
     private ChatAttachmentReferencePort chatAttachmentReferencePort;
+    private SkillPackageReferencePort skillPackageReferencePort;
 
     private ArtifactStorageReconcileServiceImpl service;
 
@@ -48,10 +50,13 @@ class ArtifactStorageReconcileServiceImplTest {
         properties.setMinioBucket(BUCKET);
         artifactReferencePort = mock(ArtifactReferencePort.class);
         chatAttachmentReferencePort = mock(ChatAttachmentReferencePort.class);
-        // 默认「无会话附件行」：其余用例只关心产物侧；本类用例各自覆盖需要的场景。
+        skillPackageReferencePort = mock(SkillPackageReferencePort.class);
+        // 默认「无会话附件行 / 无技能包行」：其余用例只关心产物侧；本类用例各自覆盖需要的场景。
         when(chatAttachmentReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
+        when(skillPackageReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
         service = new ArtifactStorageReconcileServiceImpl(
-                storage, properties, artifactReferencePort, chatAttachmentReferencePort);
+                storage, properties, artifactReferencePort, chatAttachmentReferencePort,
+                skillPackageReferencePort);
     }
 
     // ---------- helpers ----------
@@ -207,8 +212,8 @@ class ArtifactStorageReconcileServiceImplTest {
     }
 
     @Test
-    @DisplayName("两个引用端口都必须被查询（漏接其一会让另一类对象整批变孤儿）")
-    void bothReferencePortsMustBeConsulted() {
+    @DisplayName("三个引用端口都必须被查询（漏接其一会让那一类对象整批变孤儿）")
+    void allReferencePortsMustBeConsulted() {
         when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
         when(storage.listObjects(BUCKET, null)).thenReturn(List.of());
 
@@ -216,6 +221,59 @@ class ArtifactStorageReconcileServiceImplTest {
 
         verify(artifactReferencePort).listAllIncludingDeleted();
         verify(chatAttachmentReferencePort).listAllIncludingDeleted();
+        verify(skillPackageReferencePort).listAllIncludingDeleted();
+    }
+
+    @Test
+    @DisplayName("技能包原始 zip 不被误判成孤儿（origin_zip_url 不叫 storage_url，最易漏接）")
+    void skillPackageZipMustNotBeOrphaned() {
+        String key = "skill-packages/2026/10/0/0/abc-e2e-pkg-1.0.0.zip";
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
+        when(skillPackageReferencePort.listAllIncludingDeleted())
+                .thenReturn(List.of(row(key, null)));
+        when(storage.listObjects(BUCKET, null))
+                .thenReturn(List.of(obj(key, 1024L, daysAgo(30))));
+
+        ArtifactReconcileReport report = service.reconcile();
+
+        assertThat(report.orphaned()).isEmpty();
+        assertThat(report.consistent()).isTrue();
+        assertThat(report.skillPackageRows()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("技能包 fileSize 恒为 null → 跳过字节比对，不产生大小误报")
+    void skillPackageNullSize_shouldSkipSizeCheck() {
+        String key = "skill-packages/2026/10/0/0/abc-e2e-pkg-1.0.0.zip";
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
+        when(skillPackageReferencePort.listAllIncludingDeleted())
+                .thenReturn(List.of(row(key, null)));
+        // 桶内大小与 DB 无从比对（DB 不存 zip 字节数），不得因此报 sizeMismatch
+        when(storage.listObjects(BUCKET, null))
+                .thenReturn(List.of(obj(key, 999_999L, daysAgo(30))));
+
+        ArtifactReconcileReport report = service.reconcile();
+
+        assertThat(report.sizeMismatch()).isEmpty();
+        assertThat(report.consistent()).isTrue();
+    }
+
+    @Test
+    @DisplayName("清理开启：技能包引用的 zip 不在删除范围（否则已装技能包溯源全失效）")
+    void cleanupEnabled_skillPackageZipMustNotBeRemoved() {
+        properties.setOrphanCleanupEnabled(true);
+        properties.setOrphanMinAgeHours(1);
+        String key = "skill-packages/2026/10/0/0/abc-e2e-pkg-1.0.0.zip";
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
+        when(skillPackageReferencePort.listAllIncludingDeleted())
+                .thenReturn(List.of(row(key, null)));
+        when(storage.listObjects(BUCKET, null))
+                .thenReturn(List.of(obj(key, 1024L, daysAgo(30))));
+
+        ArtifactReconcileReport report = service.reconcile();
+
+        assertThat(report.removed()).isEmpty();
+        verify(storage, never()).removeObject(anyString(), anyString());
     }
 
     // ---------- 清理：三重保险 ----------
