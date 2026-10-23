@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadPoolExecutor;
 
 /**
@@ -16,12 +17,21 @@ import java.util.concurrent.ThreadPoolExecutor;
  *
  * <p>拒绝策略 CallerRuns：极端打满时退回调用线程执行，任务不丢（宁可上传请求慢一点，
  * 也不要静默留下永远 PENDING 的附件）。</p>
+ *
+ * <p><b>返回类型刻意声明为 {@link Executor} 而非 {@code ThreadPoolTaskExecutor}</b>：与
+ * {@code helloai-start/config} 下 6 个线程池一致（{@code backupExecutor} /
+ * {@code doorbellExecutor} / {@code executionCommandExecutor} / {@code plannerDecomposeExecutor} /
+ * {@code reportReviewExecutor} / {@code reviewDualExecutor} 均声明为 {@code Executor}）。
+ * 若声明为具体类，本池会额外成为 {@code TaskExecutor} 候选，与 {@code chatStreamExecutor}
+ * 争「唯一默认执行器」——导致（a）按 {@code ThreadPoolTaskExecutor} 类型注入处歧义，
+ * （b）字段无参的 {@code @Async} 方法在调用时找不到唯一执行器。
+ * 本池只被 {@code @Async("chatAttachmentParseExecutor")} 按名使用，降到接口完全够用。</p>
  */
 @Configuration
 public class ChatAttachmentAsyncConfig {
 
     @Bean(name = "chatAttachmentParseExecutor")
-    public ThreadPoolTaskExecutor chatAttachmentParseExecutor(ChatAttachmentProperties properties) {
+    public Executor chatAttachmentParseExecutor(ChatAttachmentProperties properties) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(Math.max(1, properties.getParsePoolSize()));
         executor.setMaxPoolSize(Math.max(1, properties.getParsePoolSize()));
