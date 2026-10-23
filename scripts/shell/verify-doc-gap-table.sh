@@ -97,29 +97,33 @@ else
 fi
 
 # ------------------------------------------------------------
-# ③ 处置列首词 ∈ 九态 + 一行一态
+# ③ 状态列严格等于九态中文值之一 + 优先级 ∈ PR0~PR3 + 已完成 ⇔ 剩余动作为「—」
 # ------------------------------------------------------------
 row_check=$("$PY" -I - "$DOC" <<'PY'
 import io, sys, re
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # 三平台输出一致（-I 会忽略 PYTHONUTF8）
-S = ["TODO","DESIGNING","IMPLEMENTING","VERIFYING","DONE","PARTIAL","BLOCKED","DEFERRED","WONTFIX"]
+S = ["待开始","设计中","实现中","验证中","已完成","部分完成","阻塞","暂缓","明确不做"]
 ls = io.open(sys.argv[1], encoding="utf-8").read().split("\n")
 bad, n = [], 0
 for i, l in enumerate(ls, 1):
     if not l.startswith("| G-0"):
         continue
     c = l.split("|")
-    if len(c) != 8:
-        bad.append("L%d 段数%d" % (i, len(c))); continue
+    if len(c) != 9:
+        bad.append("L%d 段数%d(应 9)" % (i, len(c))); continue
     n += 1
-    disp = c[6].strip()
-    first = re.split(r"[ ·:：]", disp, maxsplit=1)[0].strip()
-    if first not in S:
-        bad.append("L%d(%s 首词=%r)" % (i, c[1].strip(), first))
+    st = c[6].strip()
+    if st not in S:
+        bad.append("L%d(%s 状态=%r)" % (i, c[1].strip(), st))
         continue
-    hits = [w for w in S if re.search(r"(?<![A-Z])" + w + r"(?![A-Z])", disp)]
-    if len(hits) > 1:
-        bad.append("L%d(%s 多状态词=%s)" % (i, c[1].strip(), hits))
+    pr = c[5].strip()
+    if pr not in ("PR0", "PR1", "PR2", "PR3"):
+        bad.append("L%d(%s 优先级=%r)" % (i, c[1].strip(), pr))
+    act = c[7].strip()
+    if st == "已完成" and act != "—":
+        bad.append("L%d(%s 已完成但剩余动作=%r)" % (i, c[1].strip(), act))
+    if st != "已完成" and (not act or act == "—"):
+        bad.append("L%d(%s %s 但剩余动作为空)" % (i, c[1].strip(), st))
 # tripwire：矩阵行数是「新增 / 删除 G-0xx 行」的手动确认闸门。
 # 每次登记新差距行（+1）或关闭删除（-1）时必须同步本数值，否则本守卫会红——
 # 这正是它拦住「静默增删矩阵行」的手段，**不要**改成不等式或自动推导。
@@ -130,7 +134,7 @@ print(" ".join(bad))
 PY
 )
 if [ -z "$row_check" ]; then
-  ok "③ 处置列首词全部 ∈ 九态集合，一行一态，矩阵行数齐备（tripwire）"
+  ok "③ 状态列严格 ∈ 九态中文值、优先级 ∈ PR0~PR3、已完成 ⇔ 剩余动作「—」、矩阵行数齐备（tripwire）"
 else
   bad "③ 状态词校验：$row_check"
 fi
@@ -152,9 +156,9 @@ for i, l in enumerate(ls, 1):
     if not l.startswith("| G-0"):
         continue
     c = l.split("|")
-    if len(c) != 8:
+    if len(c) != 9:
         continue
-    for col in (3, 6):
+    for col in (3, 4):
         txt = anchor.sub("", c[col])
         for m in pat.finditer(txt):
             bad.append("L%d·列%d·%s" % (i, col, m.group(0)))

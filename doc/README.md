@@ -43,6 +43,7 @@
 | `Planner_Capability_Awareness.md` | `Implemented` | G-010 |
 | `Requirement_Package_Uncertainty.md` | `Implemented` | G-011 |
 | `HelloAI Task-Team 与附件可见性设计.md` | `Partial` | G-014 |
+| `HelloAI 需求对话附件设计.md` | `Partial` | G-016 · G-017 · G-024 |
 | `design/adr/ADR-001-run-turn-step-model.md` | （ADR） | — |
 | `design/adr/ADR-002-embedding-provider.md` | （ADR · Accepted 2026-10-11） | `G-019` |
 | `design/adr/ADR-003-opensandbox-deployment-topology.md` | （ADR · Accepted 2026-10-17） | OpenSandbox 集成（S-5） |
@@ -94,6 +95,7 @@
 | `外部提案评估：KIMI「技能执行」分层方案与 Archify 类技能接入（2026-10-15）.md` | `Analysis` | 外部提案（KIMI k3 分层设计）评估 + Archify 类技能接入：厘清「技能**加载**（`REF-8.3` 已交付）≠ 技能**执行**（无通道）」；逐项裁决 KIMI 6 类组件为本仓已有/更优、2 条值得采纳（执行失败 stdout 回灌自修 / node 缺失优雅降级）；**★致命缺陷**——同容器 `ProcessBuilder` 跑第三方 Node 可经 `HELLOAI_CREDENTIAL_AES_KEY_BASE64` 取到凭据主密钥，隔离位置必须独立容器；接入三路径与 `G-005` **触发条件②**「技能包要被执行」的关系（2026-10-15）。**2026-10-15 复核订正（3 处）**：§5 触发判据归一为机械判据「平台侧是否出现一个 *agent 可调用* 且 *碰宿主* 的工具」（表行② 与同节 bullet 的原矛盾已消解；先例 `D-2026-10-10-2②`）· `REF-8.4` **已交付 2026-10-13**（形态 = 循环自有 `LoopHook` 三档，**非** Advisors）· 「拦截链 = A+B **唯一挂点**」**已作废**（**B 挂拦截链、A 出列落 `ResilientDispatcher`**）。记录 `LOG-20261015-007` |
 | `沙箱运作机制与HelloAI沙箱设计分析（2026-10-17）.md` | `Analysis` | 本地三仓源码实测（Octop / octop-harness / DeepSeek Harness）：① Octop = 容器/远程世界（`DockerSandbox` 默认禁网 512MB/1CPU/256pids/120s/100KB + OpenSandbox 远程 + Linux bwrap 自动升级）；② DSH = 同主机进程监禁世界（Linux bwrap→Landlock / macOS Seatbelt / Windows ACL restricted-token，三档策略随调用携带 + fail-closed 拒跑）；③ **可引入开源沙箱**：首选 **OpenSandbox**（Apache-2.0，Octop 官方已集成，MCP 接口 + 独立 server 形态最契合 G-005 裁定）、次选 E2B（Firecracker 微VM，多租户）、避坑 Daytona（2026-06 核心转私有）/ Modal（无自托管）；④ HelloAI 设计蓝图（条件触发时执行）= DSH 策略模型（政策层）+ Octop 声明式 spec / scope 生命周期（执行层）+ **凭据主密钥红线**（独立容器、不共享 env/网络）。本报告为 `G-005` 预案的调研支撑，**不改变「条件触发、不排期」现状**（2026-10-17） |
 | `Paperclip 外部Agent接入与CLI适配器借鉴分析（2026-10-21）.md` | `Analysis` | Paperclip（MIT，Node/React）推模型平台源码实测：CLI 适配器 spawn 契约（`--print --output-format stream-json --verbose` + stdin 传 prompt + `--resume` + `--mcp-config --strict-mcp-config` + `--add-dir`）、session 续接四重 AND 与 poisoned 句柄自愈、usage 按 `message.id` 取 max 去重、run-scoped JWT、invokability 10 种 block reason、retry/continuation/recovery 三配额分离、成本 80%/100% 闸门、技能 trustLevel 由文件推导、员工四件套；§4 明确不抄 6 条；**可执行结论已迁 `plan/`**（2026-10-21） |
+| `HelloAI 需求对话附件产品对标调研（2026-10-22）.md` | `Analysis` | 外部产品（Claude / ChatGPT / Kimi / 通义 / Dify / RAGFlow）在「需求对话挂附件」上的形态与限制，支撑附件设计的选型；2026-10-23 自 plan 的「设计方案」§2 拆出 |
 
 **留存判据（2026-10-17 定则）**：`research/` **不因「执行完毕」而归档** —— 它与 `review/` 的分工不同：`review/` 是**一次性结论**，结论被消化即可退休；`research/` 是**编号的依据**（`REF-x.y` / `M-*` / `A*` / `N-*` 的出处与取材过程），归档会切断「编号 → 依据」链。
 
@@ -116,8 +118,8 @@
 | `HelloAI 借鉴落地实施计划.md` | 借鉴落地专项（`REF-x.y`，已登记进《差距表》§0 编号口径表）：技能可装配 > 备份/恢复 > RAG（可后置）+ 四项之外 A 档 + `REF-6` 判据登记 + `REF-7` 工作详情快照；含各组验证集与文档回填口径。已裁定：Fork 收缩（`D-2026-10-09-5`）、**REF-3 沙箱降级为条件触发**与 **REF-7 新增**（`D-2026-10-09-6`）。**当前版本与逐项 `Status` 以文档头 / 各节为准，本索引不复述（避免腐烂）** |
 | `HelloAI 计划编排与排期总览.md` | 各计划之间的**依赖与冲突视图 + 统一执行次序**（编排视图，**不承载状态**）；含 2026-10-12 横向比对（陈旧快照冲突 / 无编号待排项 `D1~D4`·`E1`）与 `T0~T3` 分层排期 |
 | `HelloAI OpenSandbox 沙箱集成计划.md` | **OpenSandbox 沙箱专项**（`S-1`~`S-6`，2026-10-17 建号，已登记进《差距表》§0 编号口径表）：**能力预研 + 契约落地**（用户裁定）——声明式 spec（`S-1`）+ 诚实五边界策略（`S-2`）+ `OpenSandboxSandboxProvider`（`S-3`，Kotlin SDK `com.alibaba.opensandbox:sandbox:1.1.1`）+ 探针（`S-4`）+ 部署拓扑（`S-5`，独立网络、app 不加入）+ 验证集（`S-6`）。**不触发 `G-005` 重新排期**（三触发条件均未命中）、不接业务执行链、不宣称「安全沙箱已完成」；`enabled=false` 默认关闭。调研支撑：`research/沙箱运作机制与HelloAI沙箱设计分析（2026-10-17）.md` |
-| `HelloAI Paperclip 借鉴落地计划（2026-10-21）.md` | **Paperclip 借鉴落地专项**（用户裁定：**不引入新编号前缀**，条目以「阶段 + 序号」寻址）：阶段一「现有机制补硬」6 项（唤醒原因入响应 / checkout 409 / 三配额分离 / env 不可覆盖运行时 key / MCP 薄封装复核 / 成本双阈值闸门）· 阶段二「CLI 推通道」5 项（含**开工四前提**，未定则第 1 项挂起、2~4 可先行）· 阶段三「有条件再做」8 项 · 明确不借 6 条 · 执行次序与前置待决。调研支撑：`research/Paperclip 外部Agent接入与CLI适配器借鉴分析（2026-10-21）.md` |
-| `HelloAI 需求对话附件设计方案（2026-10-22）.md` | **需求对话附件专项**（`ATT-1`~`ATT-4`，2026-10-23 建号，已登记进《差距表》§0 编号口径表）：`ATT-1` 文本 + PDF 文本层 + 两层 Prompt 注入（清单恒注入 + 正文按预算注入，**已落地**）；`ATT-2` 视觉直读（图片与扫描件共用一条通道）；`ATT-3` 大文件 RAG + 引用回源；`ATT-4` 版面增强（Docling sidecar，**登记不启动**）。**不新增 `G-` 差距项**——能力缺口由 `PRODUCT.md` 与 `G-016` / `G-017` 承载；关联 `ADR-002`（RAG 选型） |
+| `HelloAI Paperclip 借鉴落地计划（2026-10-21）.md` | **Paperclip 借鉴落地专项**（`PC-1`~`PC-19`，2026-10-23 建号，已登记进《差距表》§0 编号口径表）：`PC-1`~`PC-6` 现有机制补硬（唤醒原因入响应 / checkout 409 / 三配额分离 / env 不可覆盖运行时 key / MCP 薄封装复核 / 成本双阈值闸门）· `PC-7`~`PC-11` CLI 推通道（含**开工四前置**，未定则 `PC-7` 挂起、`PC-8`~`PC-10` 可先行）· `PC-12`~`PC-19` 有条件再做 · 明确不借 6 条 · 执行次序与前置待决。**2026-10-23 改号**：旧稿用「阶段 + 序号」寻址（不可被外部引用，且违反治理规则 §6.5 分期标签冻结令），现全部改为 `PC-x`。调研支撑：`research/Paperclip 外部Agent接入与CLI适配器借鉴分析（2026-10-21）.md` |
+| `HelloAI 需求对话附件实施计划（2026-10-22）.md` | **需求对话附件专项**（`ATT-1`~`ATT-4`，2026-10-23 建号，已登记进《差距表》§0 编号口径表）：`ATT-1` 文本 + PDF 文本层 + 两层 Prompt 注入（清单恒注入 + 正文按预算注入，**已落地**）；`ATT-2` 视觉直读（图片与扫描件共用一条通道）；`ATT-3` 大文件 RAG + 引用回源；`ATT-4` 版面增强（Docling sidecar，**登记不启动**）。**不新增 `G-` 差距项**——能力缺口由 `PRODUCT.md` 与 `G-016` / `G-017` 承载；关联 `ADR-002`（RAG 选型） |
 
 > **2026-10-09 出列记录（`plan/` 只留在办项）**：3 份**已执行完成**的方案 / 清单迁入 `archive/implemented/` 并标 `Done` —— `HelloAI_V2回归测试方案（2026-10-04）.md`、`HelloAI_全面复测清单（2026-10-06）.md`、`deploy-checklist-arch-collect-2026-10.md`。
 >

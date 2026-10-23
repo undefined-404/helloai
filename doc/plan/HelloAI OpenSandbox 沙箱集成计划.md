@@ -1,6 +1,6 @@
 # HelloAI OpenSandbox 沙箱集成计划
 
-> **Status**: `Active`（S-1~S-6 已全部落地 2026-10-17；**S-7/S-8/S-9 执行链已接线 2026-10-17**，见 `plan/HelloAI 沙箱执行链设计方案（2026-10-17）.md`；本计划作为 OpenSandbox 集成唯一事实源保留在办，`REF-3` 预案未触发保持原状）
+> **Status**: `Active`（S-1~S-6 已全部落地 2026-10-17；**S-7/S-8/S-9 执行链已接线 2026-10-17**，见 `archive/implemented/HelloAI 沙箱执行链设计方案（2026-10-17）.md`；**S-10 危险命令守卫未实现**，登记不启动；本计划作为 OpenSandbox 集成唯一事实源保留在办，`REF-3` 预案未触发保持原状。**2026-10-23 复核：`S-1`~`S-9` 逐项在代码与测试中落地；`S-10` 属后置登记不启动项、非待办。同目标的执行链设计文档已于同日归档 `Done`（见 `archive/implemented/HelloAI 沙箱执行链设计方案（2026-10-17）.md`）；本计划因承担「集成事实源」职责继续留在 `plan/`。**）
 > **依据**: 用户指令（2026-10-17）——「OpenSandbox 我已下载（`E:\workspace\OpenSandbox-main`），设计 Plan 将沙箱集成到当前项目」；用户裁定集成目标 = **能力预研 + 契约落地**（`S-1`~`S-6`，不触发 `G-005` 重新排期）。
 > **调研支撑**: `doc/research/沙箱运作机制与HelloAI沙箱设计分析（2026-10-17）.md`（三仓源码实测 + 可引入开源沙箱评估，首选 OpenSandbox）。
 > **最后更新**: 2026-10-17
@@ -8,6 +8,13 @@
 ---
 
 ## 0. 定位与边界（★先读）
+
+**问题来源**：
+
+- **用户指令（2026-10-17）**：「OpenSandbox 我已下载（`E:\workspace\OpenSandbox-main`），设计 Plan 将沙箱集成到当前项目」。
+- **调研支撑**：`research/沙箱运作机制与HelloAI沙箱设计分析（2026-10-17）.md`（三仓源码实测 + 可引入开源沙箱评估）。
+- **差距表锚点**：`G-005`（Sandbox Provider，三个触发条件均未命中）。
+- **起点事实**：此前 `ExecutionPolicy` 全为 `NONE`/`PARTIAL`，平台没有任何真实隔离环境（见 `EnvironmentSandboxProvider.java:47-52`）。
 
 **本计划做什么**：把 OpenSandbox 作为 HelloAI **首个真实沙箱提供方**接入 `SandboxProvider` 契约层——完成声明式 spec、诚实五边界策略、OpenSandboxProvider 实现、探针、部署拓扑。**结果是平台首次具备「可诚实标注 `ISOLATED`」的执行环境**（此前 `ExecutionPolicy` 全 `NONE`/`PARTIAL`，见 `EnvironmentSandboxProvider.java:47-52`）。
 

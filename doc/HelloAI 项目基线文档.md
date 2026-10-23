@@ -305,7 +305,7 @@ OpenSandboxProbe                 写→读→删回环 + 失败路径也销毁�
 docker-compose(.server).yml      独立网络 opensandbox-net，app 不加入；api_key 走 config.toml；ACR 镜像源 + python:3.12 预热
 ```
 
-**执行链已接线（`S-7`~`S-9`，2026-10-17，见 `plan/HelloAI 沙箱执行链设计方案（2026-10-17）.md`）**：
+**执行链已接线（`S-7`~`S-9`，2026-10-17，见 `archive/implemented/HelloAI 沙箱执行链设计方案（2026-10-17）.md`）**：
 
 ```text
 SandboxExecutionService           执行通道接口（ExecuteResponse 统一三字段）
