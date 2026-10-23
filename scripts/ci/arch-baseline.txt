@@ -12,71 +12,138 @@
 #     不参与退出码。前向实体泄漏（组 3b/3c）用于**暴露清偿目标**，
 #     使其与反向依赖一样「看得见才可能被清偿」。
 #
-# 规则集（生成式）：
-#   组 1  反向依赖          15 条（6 域全部逆序对）
-#   组 2a core 跨域 Mapper  30 条（6 域全部有序对）
-#   组 2b 非 core ->core.mapper  4 条（api / job / mq / start）
-#   组 3a 域级前向依赖       2 条（planner->agent / task->agent）
-#   组 3b 前向实体泄漏      15 条（6 域全部顺序对）
-#   组 3c 非 core ->core.entity  4 条
-#   合计 70 条。
+# 规则集（生成式；条数由 DOMAINS / NON_CORE_MODULES 长度推导，勿手抄）：
+#   组 1  反向依赖              36 条（9 域全部逆序对）
+#   组 2a core 跨域 Mapper      72 条（9 域全部有序对）
+#   组 2b 非 core ->core.mapper   4 条（api job mq start）
+#   组 3a 域级前向依赖           2 条（planner:agent task:agent）
+#   组 3b 前向实体泄漏          36 条（9 域全部顺序对）
+#   组 3c 非 core ->core.entity   4 条
+#   合计 154 条。
+#
+# 域链（CODE_STYLE §6）：planner review task knowledge agent system event dlx shared
 #
 # 变更史：2026-09-30 由 3 条扩至 20 条（§6 反向依赖全量 + §7.1 Mapper 红线）；
 #   2026-10-02 由「手写 20 条」改为「生成式 70 条」（A1 组 2 全量域对 /
-#   A2 扫描扩至 api·job·mq·start / A3 新增前向实体泄漏计数）。
+#   A2 扫描扩至 api·job·mq·start / A3 新增前向实体泄漏计数）；
+#   2026-10-23 域链 6 → 9（补登记 knowledge / event / dlx 三个此前未纳入
+#   守卫的 core 域），规则随生成式自动扩容，既有域相对顺序与语义不变。
 # 背景：见 doc/review/HelloAI 代码规范与架构偏离专项审计报告（2026-09-30）.md §7
 #       与 doc/review/HelloAI 架构V2进度与质量审计报告（2026-10-02）.md §6.3。
 #
-# 最后更新：2026-10-07
+# 最后更新：2026-10-23
 # ============================================================================
 # ---- 组 1：§6 反向依赖（严格拦截；目标恒为 0） ----
 review->planner=0
 task->planner=0
 task->review=0
+knowledge->planner=0
+knowledge->review=0
+knowledge->task=0
 agent->planner=0
 agent->review=0
 agent->task=0
+agent->knowledge=0
 system->planner=0
 system->review=0
 system->task=0
+system->knowledge=0
 system->agent=0
+event->planner=0
+event->review=0
+event->task=0
+event->knowledge=0
+event->agent=0
+event->system=0
+dlx->planner=0
+dlx->review=0
+dlx->task=0
+dlx->knowledge=0
+dlx->agent=0
+dlx->system=0
+dlx->event=0
 shared->planner=0
 shared->review=0
 shared->task=0
+shared->knowledge=0
 shared->agent=0
 shared->system=0
+shared->event=0
+shared->dlx=0
 
-# ---- 组 2a：core 跨域直捅 Mapper，30 个有序域对全量（严格拦截；目标恒为 0） ----
+# ---- 组 2a：core 跨域直捅 Mapper，72 个有序域对全量（严格拦截；目标恒为 0） ----
 planner->review.mapper=0
 planner->task.mapper=0
+planner->knowledge.mapper=0
 planner->agent.mapper=0
 planner->system.mapper=0
+planner->event.mapper=0
+planner->dlx.mapper=0
 planner->shared.mapper=0
 review->planner.mapper=0
 review->task.mapper=0
+review->knowledge.mapper=0
 review->agent.mapper=0
 review->system.mapper=0
+review->event.mapper=0
+review->dlx.mapper=0
 review->shared.mapper=0
 task->planner.mapper=0
 task->review.mapper=0
+task->knowledge.mapper=0
 task->agent.mapper=0
 task->system.mapper=0
+task->event.mapper=0
+task->dlx.mapper=0
 task->shared.mapper=0
+knowledge->planner.mapper=0
+knowledge->review.mapper=0
+knowledge->task.mapper=0
+knowledge->agent.mapper=0
+knowledge->system.mapper=0
+knowledge->event.mapper=0
+knowledge->dlx.mapper=0
+knowledge->shared.mapper=0
 agent->planner.mapper=0
 agent->review.mapper=0
 agent->task.mapper=0
+agent->knowledge.mapper=0
 agent->system.mapper=0
+agent->event.mapper=0
+agent->dlx.mapper=0
 agent->shared.mapper=0
 system->planner.mapper=0
 system->review.mapper=0
 system->task.mapper=0
+system->knowledge.mapper=0
 system->agent.mapper=0
+system->event.mapper=0
+system->dlx.mapper=0
 system->shared.mapper=0
+event->planner.mapper=0
+event->review.mapper=0
+event->task.mapper=0
+event->knowledge.mapper=0
+event->agent.mapper=0
+event->system.mapper=0
+event->dlx.mapper=0
+event->shared.mapper=0
+dlx->planner.mapper=0
+dlx->review.mapper=0
+dlx->task.mapper=0
+dlx->knowledge.mapper=0
+dlx->agent.mapper=0
+dlx->system.mapper=0
+dlx->event.mapper=0
+dlx->shared.mapper=0
 shared->planner.mapper=0
 shared->review.mapper=0
 shared->task.mapper=0
+shared->knowledge.mapper=0
 shared->agent.mapper=0
 shared->system.mapper=0
+shared->event.mapper=0
+shared->dlx.mapper=0
 
 # ---- 组 2b：非 core 模块直捅 com.helloai.core.*.mapper（严格拦截；目标恒为 0） ----
 api->core.mapper=0
@@ -85,28 +152,49 @@ mq->core.mapper=0
 start->core.mapper=0
 
 # ---- 组 3a：域级前向依赖（§6 合法；仅提示） ----
-planner->agent=33
-task->agent=57
+planner->agent=43
+task->agent=63
 
 # ---- 组 3b：前向跨域实体泄漏（A3；仅提示，用于暴露清偿目标） ----
 planner->review.entity=0
 planner->task.entity=0
+planner->knowledge.entity=0
 planner->agent.entity=0
 planner->system.entity=0
+planner->event.entity=0
+planner->dlx.entity=0
 planner->shared.entity=0
 review->task.entity=0
+review->knowledge.entity=0
 review->agent.entity=0
 review->system.entity=0
+review->event.entity=0
+review->dlx.entity=0
 review->shared.entity=0
+task->knowledge.entity=0
 task->agent.entity=0
 task->system.entity=0
+task->event.entity=0
+task->dlx.entity=0
 task->shared.entity=0
+knowledge->agent.entity=0
+knowledge->system.entity=0
+knowledge->event.entity=0
+knowledge->dlx.entity=0
+knowledge->shared.entity=0
 agent->system.entity=0
+agent->event.entity=0
+agent->dlx.entity=0
 agent->shared.entity=0
+system->event.entity=0
+system->dlx.entity=0
 system->shared.entity=0
+event->dlx.entity=0
+event->shared.entity=0
+dlx->shared.entity=0
 
 # ---- 组 3c：非 core 模块的 core 实体泄漏（A3；仅提示） ----
-api->core.entity=49
-job->core.entity=14
+api->core.entity=56
+job->core.entity=15
 mq->core.entity=0
 start->core.entity=0

@@ -170,8 +170,8 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 |---|---|
 | `ci/ci-gate.sh` | **主门禁**：固定可用 JDK → 构建+真实单测（显式 `-DskipTests=false`）→ 断言「用例数 > 0」→ 架构漂移冻结 → 前端 type-check/build。**用例数计数口径（2026-10-01 修正）**：按 surefire XML 内的 `<testcase>` 元素计，**不可**读 `<testsuite tests="N">` 属性——JUnit5 `@Nested` 用例会被写进外层类 XML，但该文件 `tests` 属性仍为 0（实测 `AgentProviderResolverTest.xml`：`tests="0"` 而 `<testcase>` 12 个），属性口径会使本仓库漏计约 **639** 个用例（1144 vs 真实 1783） |
 | `ci/lib-jdk.sh` | JDK 解析库：优先 `$HELLOAI_JAVA_HOME` → `$JAVA_HOME` → 探测 `~/.jdks/*`；**黑名单排除 ms-17.0.19**（本机必然 JVM 崩溃）；并**实测 `java -version` 大版本必须为 17**（防 Gitee 自有主机上 Agent 自带的 JDK 8 被误用） |
-| `ci/check-arch-freeze.sh` | 跨域依赖守卫。**2026-10-02 起规则表改为「生成式」：20 条手写 → 70 条按依赖链生成**，并补齐三类盲区（A1 组 2 由 4 条硬编组合扩为 6 域全部 30 个有序域对；A2 扫描范围由 `helloai-core` 扩至 `helloai-api`/`job`/`mq`/`start`；A3 新增「前向跨域实体泄漏」计数）。**分两档**：组 1/2（反向依赖 + 跨域 Mapper）「只降不升」→ **硬拦截**；组 3（前向依赖 + 前向实体泄漏）→ **仅提示不拦截**。`--update-baseline` 刷新冻结基线，`--verbose` 打印明细。**性能**：每目录只全树抽一次 import 行 + 一次 awk 完成全部计数（约 11 个子进程），勿退回「每条规则一次 grep」（本机单次 grep ≈ 300ms，70 条规则会慢到 2 分钟以上） |
-| `ci/arch-baseline.txt` | 冻结基线（**70 条**规则的计数快照，自动生成，勿手改数字；按组分段注释，组 3 段标注「仅提示」） |
+| `ci/check-arch-freeze.sh` | 跨域依赖守卫。**2026-10-02 起规则表改为「生成式」**（20 条手写 → 按依赖链生成），并补齐三类盲区（A1 组 2 由 4 条硬编组合扩为全部有序域对；A2 扫描范围由 `helloai-core` 扩至 `helloai-api`/`job`/`mq`/`start`；A3 新增「前向跨域实体泄漏」计数）。**2026-10-23 域链由 6 扩至 9**，补登记此前未纳入守卫的 `knowledge` / `event` / `dlx`（规则随生成式自动从 70 条扩到 154 条，既有域相对顺序与语义不变）。**分两档**：组 1/2（反向依赖 + 跨域 Mapper）「只降不升」→ **硬拦截**；组 3（前向依赖 + 前向实体泄漏）→ **仅提示不拦截**。`--update-baseline` 刷新冻结基线，`--verbose` 打印明细。**条数一律由 `DOMAINS` / `NON_CORE_MODULES` 长度推导，勿在任何位置硬编码**。**性能**：每目录只全树抽一次 import 行 + 一次 awk 完成全部计数（子进程数与规则数无关），勿退回「每条规则一次 grep」（本机单次 grep ≈ 300ms） |
+| `ci/arch-baseline.txt` | 冻结基线（**154 条**规则的计数快照，自动生成，勿手改数字；按组分段注释，组 3 段标注「仅提示」） |
 | `ci/host-prepare.sh` | **自有主机侧准备与自检**（Gitee Go 主机组跑 CI 时用）：默认只检测；`--install` 装 JDK17/Maven/Node20；`--swap 2G` 给 4G 内存机器建 swap |
 | `ci/check-shell-portability.sh` | **Shell 脚本可移植性守卫**（2026-10-15 建，`LOG-20261015-008`）。治「**守卫自身失真**」——守卫存在 ≠ 守卫生效，守卫报错 ≠ 报了真错。三项只读断言：**P1** bash 4+ 专属语法（关联数组 `declare -A` / `local -A` / `mapfile` / `readarray` / `local -n` / `wait -n` / `${V^^}`）——macOS 自带 bash 3.2 下**该形态能「中止脚本却返回 0」**（实测：`declare -A X=( [k]=v )` 退化后下标走算术求值 ⇒ `set -u` 致命错 ⇒ 退出码 **0**；对照普通变量未绑定返回 1）；**P2** `$VAR` 后紧跟非 ASCII 字符（须写 `${VAR}`）——bash 3.2 + UTF-8 locale 下会把多字节字符**首字节并入变量名**，同样「中止却 EXIT=0」；**P3** 管道右端 `grep -q…`——命中即退出 + `set -o pipefail` ⇒ 上游收 SIGPIPE(141) ⇒ **间歇假红**（实测同族判据 270 次判里误判 **187 次**）。**反证三连**：`--inject-bash4` / `--inject-mb` / `--inject-pipefail` 均须 EXIT≠0；另有**反空转地板**（bash 实现数 < 20 即红）与**自证**（未产出结论行即判未生效）。P1/P2 覆盖全部在册 `.sh`，P3 覆盖 `scripts/`（`deploy/` 侧同族 4 处为**已登记例外**，见 §五.4） |
 
@@ -191,7 +191,7 @@ bash scripts/ci/host-prepare.sh               # 自有主机自检（只读，�
 
 | 层 | 脚本 | 语义 | 是否进 CI |
 |---|---|---|---|
-| 冻结层（增量） | `ci/check-arch-freeze.sh`（bash，跨平台） | **§6 全量 + §7.1 + 前向实体泄漏**，**70 条规则（生成式）分两档**：**组 1/2（反向依赖 + 跨域 Mapper）「只降不升」硬拦截**（组 1 现已全部归零，故 51 条 block 规则均为 0 值回归护栏）；**组 3（前向依赖 `planner->agent`/`task->agent` + 前向实体泄漏 19 条）仅提示**——前向是 §6 合法方向，也是「端口反转」的承载方向；实体泄漏不拦截但**记数暴露**，使其与反向依赖一样「看得见才可能被清偿」。**扫描范围**：core 六域 + `helloai-api`/`job`/`mq`/`start` | ✅ 门禁 3 |
+| 冻结层（增量） | `ci/check-arch-freeze.sh`（bash，跨平台） | **§6 全量 + §7.1 + 前向实体泄漏**，**154 条规则（生成式）分两档**：**组 1/2（反向依赖 + 跨域 Mapper）「只降不升」硬拦截**（组 1 现已全部归零，故 112 条 block 规则均为 0 值回归护栏）；**组 3（前向依赖 `planner->agent`/`task->agent` + 前向实体泄漏 40 条）仅提示**——前向是 §6 合法方向，也是「端口反转」的承载方向；实体泄漏不拦截但**记数暴露**，使其与反向依赖一样「看得见才可能被清偿」。**扫描范围**：core 九域 + `helloai-api`/`job`/`mq`/`start` | ✅ 门禁 3 |
 | 断言层（存量/命名） | `powershell/verify-dependency-direction.ps1` | 严格断言「应为 0」的红线（2026-10-01 起 `system->task` 已端口反转清零，**亦为严格 0**，不再有 `[DEBT]` 豁免）+ **`@MapperScan` 注册守卫**（漏注册包 → 启动失败） | ❌ 本地/评审辅助 |
 
 ```bash

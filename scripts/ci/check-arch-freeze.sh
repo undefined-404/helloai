@@ -19,8 +19,8 @@
 #   走棘轮评审。组 1（反向依赖）与组 2（跨域 Mapper）仍是**硬拦截**。
 #
 #   2026-10-02（A1/A2/A3：生成化 + 扩面 + 前向实体计数）：规则表由**手写 20 条**改为
-#   **按依赖链生成 70 条**，并补齐此前的三类盲区（见 doc/review 2026-10-02 报告 F-1/F-2）：
-#     A1 组 2（跨域直捅 Mapper）由 4 条硬编组合 → 遍历 6 域的**全部 30 个有序域对**生成；
+#   **按依赖链生成当时 70 条**，并补齐此前的三类盲区（见 doc/review 2026-10-02 报告 F-1/F-2）：
+#     A1 组 2（跨域直捅 Mapper）由 4 条硬编组合 → 遍历当时 6 域的**全部有序域对**生成；
 #     A2 扫描范围由 helloai-core 扩至 **helloai-api / job / mq / start**——此前这些模块
 #        完全不在视野内（脚本内 4 个模块名引用数均为 0），F-1（api 直捅
 #        core.system.mapper.RequestLogMapper）正因此长期存活；
@@ -59,11 +59,22 @@ done
 # ============================================================================
 # 扫描源定义
 # ----------------------------------------------------------------------------
-# 依赖方向链（CODE_STYLE §6），下标即层级：0 最高，5 最低（shared 为叶子域）
-#     planner(0) > review(1) > task(2) > agent(3) > system(4) > shared(5)
+# 依赖方向链（CODE_STYLE §6），下标即层级：0 最高，最小者为 shared（叶子域）
+#     planner(0) > review(1) > task(2) > knowledge(3) > agent(4)
+#       > system(5) > event(6) > dlx(7) > shared(8)
 #   「顺向」= 上层依赖下层（srcIdx < dstIdx）；「反向」= 下层依赖上层（srcIdx > dstIdx）
+#
+#   2026-10-23（扩域 6 → 9）：补登记 knowledge / event / dlx 三个此前未纳入守卫的
+#   core 域（此前它们**完全不在扫描视野内**，与 A2 之前的 api/job/mq/start 同类盲区）。
+#   插入位置的判据不是「重要性」而是「真实依赖方向」：
+#     · knowledge  → agent.service / agent.tool / shared.util（实测 7 处 import）
+#       故必须挂在 agent **之上**（index 3），否则合法的 knowledge→agent 会被误判为反向。
+#     · event      → 零 core 域依赖（仅 common.constant），挂 system 之后无约束。
+#     · dlx        → 零 core 域依赖（仅 common.base 与 helloai-mq 的 RabbitMQConfig），同上。
+#   插入方式保证**既有 6 域相对顺序完全不变**（planner<review<task<agent<system<shared），
+#   因此既有 70 条规则的键名与语义零变化，只是下标平移。
 # ============================================================================
-DOMAINS=(planner review task agent system shared)
+DOMAINS=(planner review task knowledge agent system event dlx shared)
 CORE_ROOT="helloai-core/src/main/java/com/helloai/core"
 
 # A2：core 之外持有 com.helloai.core 依赖的模块（此前完全不在扫描范围内）
@@ -72,8 +83,19 @@ NON_CORE_MODULES=(api job mq start)
 # 组 3 中需要保留计数的**域级前向依赖**组合（2026-09-29 基线既有项，保持键名与语义连续）
 FORWARD_PKG_PAIRS=(planner:agent task:agent)
 
+# ---- 规则条数：一律由数组长度推导，**禁止在此后任何位置硬编码** ----
+# 历史教训：70 条时代「组 2a 30 个有序域对」「合计 70 条」散落在 5 处注释与基线
+# 文件头里，扩域时极易只改一处（同一事实双写必分叉）。
+N_DOMAINS=${#DOMAINS[@]}
+CNT_G1=$(( N_DOMAINS * (N_DOMAINS - 1) / 2 ))   # 逆序对
+CNT_G2A=$(( N_DOMAINS * (N_DOMAINS - 1) ))      # 有序域对
+CNT_G2B=${#NON_CORE_MODULES[@]}
+CNT_G3A=${#FORWARD_PKG_PAIRS[@]}
+CNT_G3B=$CNT_G1                                 # 顺序对
+CNT_G3C=${#NON_CORE_MODULES[@]}
+
 G1="组 1：§6 反向依赖（严格拦截；目标恒为 0）"
-G2A="组 2a：core 跨域直捅 Mapper，30 个有序域对全量（严格拦截；目标恒为 0）"
+G2A="组 2a：core 跨域直捅 Mapper，${CNT_G2A} 个有序域对全量（严格拦截；目标恒为 0）"
 G2B="组 2b：非 core 模块直捅 com.helloai.core.*.mapper（严格拦截；目标恒为 0）"
 G3A="组 3a：域级前向依赖（§6 合法；仅提示）"
 G3B="组 3b：前向跨域实体泄漏（A3；仅提示，用于暴露清偿目标）"
@@ -100,7 +122,7 @@ domain_idx() {
 # ============================================================================
 RULES=()
 
-# ---- 组 1：§6 反向依赖（下层 → 上层）全部 15 对 ----
+# ---- 组 1：§6 反向依赖（下层 → 上层）全部逆序对 ----
 for s in "${DOMAINS[@]}"; do
   for d in "${DOMAINS[@]}"; do
     si="$(domain_idx "$s")"; di="$(domain_idx "$d")"
@@ -109,7 +131,7 @@ for s in "${DOMAINS[@]}"; do
   done
 done
 
-# ---- 组 2a：core 跨域直捅 Mapper，30 个有序域对全量（A1） ----
+# ---- 组 2a：core 跨域直捅 Mapper，全部有序域对（A1） ----
 for s in "${DOMAINS[@]}"; do
   for d in "${DOMAINS[@]}"; do
     [ "$s" = "$d" ] && continue
@@ -128,7 +150,7 @@ for pair in "${FORWARD_PKG_PAIRS[@]}"; do
   RULES+=("${s}->${d}|${CORE_ROOT}/${s}|pkg:com.helloai.core.${d}|warn|${G3A}")
 done
 
-# ---- 组 3b：前向跨域实体泄漏，15 对（A3） ----
+# ---- 组 3b：前向跨域实体泄漏，全部顺序对（A3） ----
 for s in "${DOMAINS[@]}"; do
   for d in "${DOMAINS[@]}"; do
     si="$(domain_idx "$s")"; di="$(domain_idx "$d")"
@@ -142,7 +164,7 @@ for m in "${NON_CORE_MODULES[@]}"; do
   RULES+=("${m}->core.entity|helloai-${m}/src/main/java|re:^[[:space:]]*import[[:space:]]+(static[[:space:]]+)?com\\.helloai\\.core\\.[a-z]+\\.entity\\.|warn|${G3C}")
 done
 
-# 匹配式 -> ERE。结果写入全局 RP（**不起子进程**：70 条规则各 fork 一次，
+# 匹配式 -> ERE。结果写入全局 RP（**不起子进程**：每条规则各 fork 一次，
 # 在本机的进程创建开销下就足以让守卫慢到不可用）
 RP=""
 rule_pattern_set() {
@@ -156,7 +178,7 @@ rule_pattern_set() {
 
 # ----------------------------------------------------------------------------
 # 性能设计（重要，勿退回「每条规则一次 grep」）
-#   70 条规则 × 10 个扫描目录，若每条规则各跑一次 grep + 一次基线查询，实测需 2 分钟
+#   N 条规则 × M 个扫描目录，若每条规则各跑一次 grep + 一次基线查询，实测需 2 分钟
 #   以上——瓶颈是**进程创建**（本机单次 grep ≈ 300ms），而非匹配本身。因此：
 #     ① 每个扫描目录只全树扫一次，抽出 import 行落缓存文件（10 次 grep）；
 #     ② 全部规则的匹配交给**一次 awk**（动态 ERE，纯内存匹配）；
@@ -218,7 +240,7 @@ done
   done
 } > "${CACHE_DIR}/rules.tsv"
 
-# ③ 一次 awk 完成 70 条规则的计数（按输出顺序与 RULES 对齐）
+# ③ 一次 awk 完成全部规则的计数（按输出顺序与 RULES 对齐）
 awk -F'\t' '
   NR == FNR { nm[++n] = $1; fl[n] = $2; re[n] = $3; c[n] = 0; next }
   FNR == 1  { f = FILENAME; sub(/^.*\//, "", f) }
@@ -330,18 +352,22 @@ if [ "$UPDATE" = "1" ]; then
     printf '#     不参与退出码。前向实体泄漏（组 3b/3c）用于**暴露清偿目标**，\n'
     printf '#     使其与反向依赖一样「看得见才可能被清偿」。\n'
     printf '#\n'
-    printf '# 规则集（生成式）：\n'
-    printf '#   组 1  反向依赖          15 条（6 域全部逆序对）\n'
-    printf '#   组 2a core 跨域 Mapper  30 条（6 域全部有序对）\n'
-    printf '#   组 2b 非 core ->core.mapper  4 条（api / job / mq / start）\n'
-    printf '#   组 3a 域级前向依赖       2 条（planner->agent / task->agent）\n'
-    printf '#   组 3b 前向实体泄漏      15 条（6 域全部顺序对）\n'
-    printf '#   组 3c 非 core ->core.entity  4 条\n'
-    printf '#   合计 70 条。\n'
+    printf '# 规则集（生成式；条数由 DOMAINS / NON_CORE_MODULES 长度推导，勿手抄）：\n'
+    printf '#   组 1  反向依赖             %3s 条（%s 域全部逆序对）\n' "$CNT_G1" "$N_DOMAINS"
+    printf '#   组 2a core 跨域 Mapper     %3s 条（%s 域全部有序对）\n' "$CNT_G2A" "$N_DOMAINS"
+    printf '#   组 2b 非 core ->core.mapper %3s 条（%s）\n' "$CNT_G2B" "${NON_CORE_MODULES[*]}"
+    printf '#   组 3a 域级前向依赖         %3s 条（%s）\n' "$CNT_G3A" "${FORWARD_PKG_PAIRS[*]}"
+    printf '#   组 3b 前向实体泄漏         %3s 条（%s 域全部顺序对）\n' "$CNT_G3B" "$N_DOMAINS"
+    printf '#   组 3c 非 core ->core.entity %3s 条\n' "$CNT_G3C"
+    printf '#   合计 %s 条。\n' "${#RULES[@]}"
+    printf '#\n'
+    printf '# 域链（CODE_STYLE §6）：%s\n' "${DOMAINS[*]}"
     printf '#\n'
     printf '# 变更史：2026-09-30 由 3 条扩至 20 条（§6 反向依赖全量 + §7.1 Mapper 红线）；\n'
     printf '#   2026-10-02 由「手写 20 条」改为「生成式 70 条」（A1 组 2 全量域对 /\n'
-    printf '#   A2 扫描扩至 api·job·mq·start / A3 新增前向实体泄漏计数）。\n'
+    printf '#   A2 扫描扩至 api·job·mq·start / A3 新增前向实体泄漏计数）；\n'
+    printf '#   2026-10-23 域链 6 → 9（补登记 knowledge / event / dlx 三个此前未纳入\n'
+    printf '#   守卫的 core 域），规则随生成式自动扩容，既有域相对顺序与语义不变。\n'
     printf '# 背景：见 doc/review/HelloAI 代码规范与架构偏离专项审计报告（2026-09-30）.md §7\n'
     printf '#       与 doc/review/HelloAI 架构V2进度与质量审计报告（2026-10-02）.md §6.3。\n'
     printf '#\n'
