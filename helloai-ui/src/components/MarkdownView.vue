@@ -13,7 +13,8 @@
     width="560px"
     append-to-body
   >
-    <pre class="kb-cite-content">{{ citeContent }}</pre>
+    <!-- 分片原文按 Markdown 渲染：与回答正文同一条管线，避免 `**` / `|---|` 这类标记裸露 -->
+    <div class="md-view kb-cite-content" v-html="citeHtml" />
   </el-dialog>
 </template>
 
@@ -75,11 +76,35 @@ const citeOpen = ref(false)
 const citeTitle = ref('')
 const citeContent = ref('')
 
-const html = computed(() => {
+const html = computed(() => renderMarkdown(props.content))
+
+/**
+ * 引用弹窗正文：分片原文同样要按 Markdown 渲染。
+ *
+ * <p><b>2026-10-24 修复</b>：原实现用 `<pre>{@code {{ text }}}</pre>` 直出——docx 转换出的
+ * `**加粗**`、`|---|` 表格、`2 : +1` 之类的标记全以字面量露出来，用户第一眼看到的是
+ * 一堆星号和竖线。分片内容与回答正文出自同一套解析，必须走同一条渲染管线。</p>
+ */
+const citeHtml = computed(() => renderMarkdown(cleanChunkText(citeContent.value)))
+
+/**
+ * 分片原文清洗：剥掉 Tika 从 docx/pptx 抽出的图片占位标记。
+ *
+ * <p>`![](embedded:image39.png)` 是 Tika 对嵌入图片的转写产物——既取不到图片，也不是
+ * 用户能读的内容，留着只会把正文切成一地碎片（实测一段话被 5 个这样的标记打断）。</p>
+ *
+ * <p><b>结尾的 `)` 必须可选</b>：分片是按字数硬切的，切点经常落在标记中间，实测出现过
+ * `![](embedded:image43.` 这种截断形态；写死 `\)` 会漏掉它，弹窗末尾就留半截标记。
+ * 文件名不含空白，故用 `[^)\s]*` 收紧边界，不会误吃后文。</p>
+ */
+function cleanChunkText(src: string): string {
+  return (src || '').replace(/!\[[^\]]*\]\(embedded:[^)\s]*\)?/g, '').replace(/[ \t]+$/gm, '')
+}
+
+/** 统一渲染管线：格式自愈 → 引用 token 屏蔽 → 渲染 → 净化 → token 还原。 */
+function renderMarkdown(src: string | null | undefined): string {
   // 剥离 HTML 注释（模板脚手架/元信息）：正常 Markdown 中注释不可见，但 html:false 下 <!-- --> 会作为纯文本露出
-  const raw = normalizeGluedTableHeader(
-    normalizeHeadings((props.content || '').replace(/<!--[\s\S]*?-->/g, ''))
-  )
+  const raw = normalizeGluedTableHeader(normalizeHeadings((src || '').replace(/<!--[\s\S]*?-->/g, '')))
   if (!raw.trim()) return '<span class="md-empty">-</span>'
 
   // 1) 收集并屏蔽引用 token → ASCII 占位符（@@ 无 markdown 语义，DOMPurify 视作文本）
@@ -100,7 +125,7 @@ const html = computed(() => {
     const key = keys[Number(n)]
     return `<a class="kb-cite" data-kb-cite="${escapeAttr(key)}" title="知识库引用 ${escapeAttr(key)}">[kb:${escapeAttr(key)}]</a>`
   })
-})
+}
 
 function escapeAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -403,11 +428,16 @@ async function onCiteClick(e: MouseEvent): Promise<void> {
   const chunkIdx = Number(key.slice(hash + 1))
   if (Number.isNaN(chunkIdx)) return
 
-  citeTitle.value = '知识库引用 ' + key
+  // 标题先给通用文案（加载中/失败时无文件名可用），拿到正文后换成「文件名 · 第 N 片」
+  citeTitle.value = '知识库引用'
   citeContent.value = '加载中…'
   citeOpen.value = true
   try {
     const c = await kbApi.chunk(source, chunkIdx)
+    // 片号对人类是 1-based（锚点里的 #36 是 0-based 序号）
+    citeTitle.value = c.fileName
+      ? `${c.fileName} · 第 ${(c.chunkIdx ?? chunkIdx) + 1} 片`
+      : `知识库引用 · 第 ${chunkIdx + 1} 片`
     citeContent.value = c.content
   } catch (err) {
     citeContent.value = '无法加载该分片：' + (err instanceof Error ? err.message : String(err))
@@ -697,9 +727,7 @@ async function onCiteClick(e: MouseEvent): Promise<void> {
 
 .kb-cite-content {
   margin: 0;
-  padding: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
+  /* 不再 pre-wrap：v-html 产物自带换行语义，pre-wrap 会把源码缩进一起显形 */
   font-size: 13px;
   line-height: 1.7;
   max-height: 60vh;

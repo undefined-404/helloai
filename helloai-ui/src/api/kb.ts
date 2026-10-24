@@ -11,6 +11,8 @@ export interface KbChunk {
   source: string
   chunkIdx: number
   content: string
+  /** 会话附件来源时的原始文件名（弹窗标题用，避免把 `chat:{conv}:{att}` 摆给用户）；其它来源为 null */
+  fileName?: string | null
 }
 
 export interface KbHit {
