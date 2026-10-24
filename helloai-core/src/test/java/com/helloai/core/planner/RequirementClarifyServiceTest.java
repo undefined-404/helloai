@@ -81,6 +81,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -151,6 +152,13 @@ class RequirementClarifyServiceTest {
 
     private RequirementClarifyService clarifyService;
 
+    /** ATT-3 回归用：断言「门面 → 流式面」这一跳的入参透传需要拿到装配好的实现类，
+     *  故把 4 个装配件提为字段（装配口径与顺序完全不变，仅可见性变化）。 */
+    private ClarifyStreamServiceImpl streamService;
+    private ClarifyRoundOrchestratorServiceImpl orchestrator;
+    private ClarifyFinalizeServiceImpl finalizeService;
+    private ClarifyCommandSearchServiceImpl commandSearch;
+
     @BeforeEach
     void setUp() {
         // 元词过滤（2026-10-23 附件+联网修复）：本类存量用例走的是「规划器无产出 →
@@ -172,7 +180,7 @@ class RequirementClarifyServiceTest {
                         new SystemTimeContextBuilder(), new ObjectMapper()),
                 new BochaRerankService(webSearchProperties, webSearchCredentialKeyStore, new ObjectMapper()),
                 new ObjectMapper());
-        ClarifyCommandSearchServiceImpl commandSearch = new ClarifyCommandSearchServiceImpl(
+        commandSearch = new ClarifyCommandSearchServiceImpl(
                 webSearchOrchestrator, messageService, confirmCard, conversationService);
         // 会话附件注入（LOG-20261022-014）：渲染器新增一个依赖，测试里给真实实现 + mock 服务
         ChatAttachmentPromptRenderer attachmentPromptRenderer =
@@ -181,16 +189,16 @@ class RequirementClarifyServiceTest {
                 messageService, conversationService, longTermMemoryService, new SystemTimeContextBuilder(),
                 taskTimelineService, platformAgentExecutionService, plannerAgentPicker, replyParser,
                 commandSearch, attachmentPromptRenderer);
-        ClarifyFinalizeServiceImpl finalizeService = new ClarifyFinalizeServiceImpl(
+        finalizeService = new ClarifyFinalizeServiceImpl(
                 conversationService, messageService, taskService, agentService, agentInboxService,
                 taskTimelineService, longTermMemoryService, requirementConversationMapper,
                 new ObjectMapper(), commandSearch);
-        ClarifyRoundOrchestratorServiceImpl orchestrator = new ClarifyRoundOrchestratorServiceImpl(
+        orchestrator = new ClarifyRoundOrchestratorServiceImpl(
                 commandSearch, promptRenderService, finalizeService, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
                 new ChatRoundDecisionParser(new ObjectMapper()), webSearchOrchestrator,
                 mock(ChatAttachmentService.class));
-        ClarifyStreamServiceImpl streamService = new ClarifyStreamServiceImpl(
+        streamService = new ClarifyStreamServiceImpl(
                 orchestrator, promptRenderService, commandSearch, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
                 webSearchOrchestrator);
@@ -2442,6 +2450,19 @@ class RequirementClarifyServiceTest {
         when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
                 .thenReturn(Flux.fromArray(tokenChunks)
                         .map(com.helloai.core.agent.chat.LlmStreamChunk::content));
+    }
+
+    @Test
+    @DisplayName("ATT-3：显式勾选的附件 id 必须透传到流式面（曾在此处静默丢弃）")
+    void streamRound_forwardsAttachmentIdsToStreamService() {
+        // 本跳曾写成 streamService.streamRound(convId, msg, selections)（3 参）⇒ 勾选被降级成模型判定，
+        // 用户点选看起来「没生效」。用 spy 钉死 4 参版本的透传，防再次退化。
+        ClarifyStreamServiceImpl spyStream = spy(streamService);
+        new RequirementClarifyServiceImpl(conversationService, messageService, taskService,
+                plannerAgentPicker, orchestrator, spyStream, finalizeService, commandSearch)
+                .streamRound(CONV_ID, "你好", null, List.of(7L, 9L));
+
+        verify(spyStream).streamRound(CONV_ID, "你好", null, List.of(7L, 9L));
     }
 
     @Test

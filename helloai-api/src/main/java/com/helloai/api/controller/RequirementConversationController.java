@@ -278,10 +278,12 @@ public class RequirementConversationController {
     @PostMapping
     public R<ClarifyConversationDetail> create(@Valid @RequestBody ClarifyMessageRequest req) {
         // 联网搜索开关透传：NULL 走默认开启语义（与老数据兼容）；
-        // initialMode 已废弃，新会话始终 CHAT 模式
+        // initialMode 已废弃，新会话始终 CHAT 模式。
+        // 同步 create 不接受 attachmentIds：它是流式失败后的兜底入口（前端 sendSyncCreate 同样不传），
+        // 且同步链 doRound 没有「本轮参与附件集」这一层参数。此处显式不传而非静默丢弃——
+        // 需要精确控制附件参与范围请走 /streamCreate。
         return R.ok(requirementClarifyService.createWithClientToken(
-                req.getMessage(), req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getClientToken(),
-                            req.getAttachmentIds()));
+                req.getMessage(), req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getClientToken()));
     }
 
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */

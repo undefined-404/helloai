@@ -181,7 +181,9 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     public Flux<ChatStreamEvent> streamRound(Long conversationId, String message,
                                              List<ClarifySelection> selections,
                                              java.util.List<Long> attachmentIds) {
-        return streamService.streamRound(conversationId, message, selections);
+        // ATT-3：必须把 attachmentIds 透传给流式面，否则前端勾选在「已有会话」这条主链上被静默丢弃
+        // （降级成模型判定，用户点选看起来「没生效」）
+        return streamService.streamRound(conversationId, message, selections, attachmentIds);
     }
 
     /** 流式新建会话并跑首轮（新会话首条消息不走同步 create，避免用户干等完整一轮）。 */
