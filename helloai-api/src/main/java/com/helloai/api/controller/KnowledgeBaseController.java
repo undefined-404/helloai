@@ -1,11 +1,14 @@
 package com.helloai.api.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import com.helloai.api.dto.admin.KbChunkView;
 import com.helloai.api.dto.admin.KbIngestRequest;
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
 import com.helloai.core.knowledge.KnowledgeBaseService;
 import com.helloai.core.knowledge.KnowledgeSearchResult;
+import com.helloai.core.planner.entity.ChatAttachment;
+import com.helloai.core.planner.service.ChatAttachmentService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
@@ -23,9 +26,13 @@ import org.springframework.web.bind.annotation.*;
 public class KnowledgeBaseController {
 
     private final KnowledgeBaseService kbService;
+    /** 仅用于把 `chat:{conv}:{att}` 反解成文件名（弹窗标题）；不参与检索与摄入。 */
+    private final ChatAttachmentService chatAttachmentService;
 
-    public KnowledgeBaseController(KnowledgeBaseService kbService) {
+    public KnowledgeBaseController(KnowledgeBaseService kbService,
+                                   ChatAttachmentService chatAttachmentService) {
         this.kbService = kbService;
+        this.chatAttachmentService = chatAttachmentService;
     }
 
     /**
@@ -76,12 +83,45 @@ public class KnowledgeBaseController {
      */
     @SaCheckPermission("kb:view")
     @GetMapping("/chunk/{source}/{chunkIdx}")
-    public R<KnowledgeSearchResult.Hit> chunk(@PathVariable("source") String source,
-                                              @PathVariable("chunkIdx") int chunkIdx) {
+    public R<KbChunkView> chunk(@PathVariable("source") String source,
+                                @PathVariable("chunkIdx") int chunkIdx) {
         var hit = kbService.chunkByKey(source, chunkIdx);
         if (hit.isEmpty()) {
             return R.fail("知识库分片不存在：" + source + "#" + chunkIdx);
         }
-        return R.ok(new KnowledgeSearchResult.Hit(hit.get().source(), hit.get().chunkIdx(), hit.get().content()));
+        return R.ok(new KbChunkView(hit.get().source(), hit.get().chunkIdx(), hit.get().content(),
+                resolveFileName(source)));
+    }
+
+    /**
+     * `chat:{conversationId}:{attachmentId}` → 附件原始文件名；其它来源（管理端 ingest 的手册等）返回 null。
+     *
+     * <p>纯展示用途，best-effort：解析失败 / 附件已删 / 非会话附件来源一律返回 null，
+     * 前端回落到通用标题。**不得因此让分片正文取不出来**——正文才是这个接口的价值。</p>
+     *
+     * <p>复用 {@code listByConversation} 而不是新增按 id 查询的服务方法：会话附件数量是个位数，
+     * 一次列表查询比给契约加方法更省；也避免为「取个文件名」引入 getByIdRequired 的 404 抛错路径。</p>
+     */
+    private String resolveFileName(String source) {
+        if (source == null || !source.startsWith("chat:")) {
+            return null;
+        }
+        String[] parts = source.split(":");
+        if (parts.length < 3) {
+            return null;
+        }
+        try {
+            Long conversationId = Long.valueOf(parts[1]);
+            Long attachmentId = Long.valueOf(parts[2]);
+            return chatAttachmentService.listByConversation(conversationId).stream()
+                    .filter(a -> attachmentId.equals(a.getId()))
+                    .map(ChatAttachment::getFileName)
+                    .filter(name -> name != null && !name.isBlank())
+                    .findFirst()
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            log.debug("分片来源解析文件名失败（回落通用标题）: source={}, err={}", source, e.toString());
+            return null;
+        }
     }
 }
