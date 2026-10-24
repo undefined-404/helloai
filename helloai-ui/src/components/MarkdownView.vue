@@ -77,7 +77,9 @@ const citeContent = ref('')
 
 const html = computed(() => {
   // 剥离 HTML 注释（模板脚手架/元信息）：正常 Markdown 中注释不可见，但 html:false 下 <!-- --> 会作为纯文本露出
-  const raw = normalizeHeadings((props.content || '').replace(/<!--[\s\S]*?-->/g, ''))
+  const raw = normalizeGluedTableHeader(
+    normalizeHeadings((props.content || '').replace(/<!--[\s\S]*?-->/g, ''))
+  )
   if (!raw.trim()) return '<span class="md-empty">-</span>'
 
   // 1) 收集并屏蔽引用 token → ASCII 占位符（@@ 无 markdown 语义，DOMPurify 视作文本）
@@ -276,6 +278,88 @@ function charCount(s: string): number {
   let n = 0
   for (const _ of s) n++
   return n
+}
+
+/**
+ * 表头粘连修复（2026-10-24）：`小节名|表头 |表头 |表头 |` + `|---|---|---|`。
+ *
+ * <p><b>为什么必须做</b>：GFM 要求分隔行的列数与表头行<b>完全一致</b>，否则整张表不成立。
+ * 中文大模型极常把小节名直接粘在表头前面且不带 `#`：
+ * <pre>
+ * 一、逐条核对|原文表述 |判断 |说明 |
+ * |---|---|---|
+ * |每个 Thread 对象…| ✅正确 |…|
+ * </pre>
+ * 表头被数成 4 列、分隔行 3 列 ⇒ <b>表头与分隔行双双降级为段落</b>，下面所有行跟着塌成
+ * 一坨纯文本（用户截图里的「格式不对，没有出现表格」）。</p>
+ *
+ * <p><b>为什么不靠提示词解决</b>：`normalizeHeadings` 已处理带 `#` 的同类粘连（规则②认 `|` 为边界），
+ * 但这里根本没有 `#`——它是一行普通文本。模型输出格式属于不可控输入，渲染层必须能自愈。</p>
+ *
+ * <p><b>判定证据（不靠猜前缀像不像标题）</b>：表头列数 &gt; 分隔行列数 <b>且</b> 后续数据行的列数
+ * 恰等于分隔行列数 ⇒ 表头多出来的左侧片段就是粘上来的引导语。这样「真的 4 列表格」不会被误拆
+ * （那种情况数据行也是 4 列）。</p>
+ */
+function normalizeGluedTableHeader(src: string): string {
+  const lines = src.split('\n')
+  const out: string[] = []
+  let inFence = false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence
+      out.push(line)
+      continue
+    }
+    const next = lines[i + 1]
+    if (!inFence && next && line.includes('|') && isDelimiterRow(next)) {
+      const cols = tableCells(next).length
+      const headerCells = tableCells(line)
+      const extra = headerCells.length - cols
+      if (extra > 0 && bodyRowColumnCount(lines, i + 2) === cols) {
+        const prefix = headerCells.slice(0, extra).join('|').trim()
+        const rest = headerCells.slice(extra)
+        if (prefix && charCount(prefix) <= MD_HEADING_MAX) {
+          // 引导语独立成段；表头重建为标准 `|a|b|c|` 形态
+          out.push(prefix)
+          out.push('|' + rest.join('|') + '|')
+          continue
+        }
+      }
+    }
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
+/** 去掉首尾竖线后按 `|` 切列（与 markdown-it 的表格切分口径一致）。 */
+function tableCells(line: string): string[] {
+  let t = line.trim()
+  if (t.startsWith('|')) t = t.slice(1)
+  if (t.endsWith('|')) t = t.slice(0, -1)
+  return t.split('|')
+}
+
+/** GFM 分隔行：每列都是 `-` / `:-` / `-:` / `:-:`（且至少有一条分隔线）。 */
+function isDelimiterRow(line: string): boolean {
+  const t = line.trim()
+  if (!t.includes('-') || !t.includes('|')) return false
+  const cells = tableCells(t)
+  return cells.length > 0 && cells.every((c) => /^\s*:?-+:?\s*$/.test(c))
+}
+
+/**
+ * 表头下方**第一行非空数据**的列数：用它确认「表头多出的左侧片段」确实是引导语。
+ * 表格末尾（没有数据行）返回 -1 ⇒ 不触发修复，避免把「只有表头 + 分隔行」的残缺表拆坏。
+ */
+function bodyRowColumnCount(lines: string[], from: number): number {
+  for (let i = from; i < lines.length; i++) {
+    const t = lines[i].trim()
+    if (!t) continue
+    if (!t.includes('|')) return -1
+    return tableCells(t).length
+  }
+  return -1
 }
 
 /** 视图内点击统一分发：引用卡片（REF-4.3）/ 代码块复制。 */
