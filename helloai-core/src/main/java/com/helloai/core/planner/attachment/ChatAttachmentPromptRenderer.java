@@ -261,6 +261,10 @@ public class ChatAttachmentPromptRenderer {
                     .collect(Collectors.toMap(ChatAttachment::getKbSource,
                             a -> safe(a.getFileName()), (x, y) -> x));
             StringBuilder sb = new StringBuilder();
+            // 2026-10-24 实测：片段标题里的「第 N 片」会被模型照抄进正文，变成
+            // 「正文层…检索层另外召回了第 31–37 片」这类面向工程师的过程汇报。
+            // 片号对用户无意义，故在数据处直接声明用途——比只写进模板更靠近注意力焦点。
+            sb.append("（以下片段供你取用：只在句末标注锚点，不要向用户复述片号、块标题、召回条数或检索过程）\n");
             for (KnowledgeSearchResult.Hit hit : result.hits()) {
                 String fileName = nameBySource.getOrDefault(hit.source(), "未知文件");
                 sb.append("### [").append(fileName).append(" 第 ").append(hit.chunkIdx() + 1).append(" 片]")
