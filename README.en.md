@@ -338,15 +338,30 @@ More screenshots in [`doc/images/`](doc/images/).
 
 - [x] Dual-mode Planner (CHAT / CLARIFY + web search) and automatic task decomposition
 - [x] Elastic scheduling: external-first + idle-first + on-duty-first + LLM fallback + circuit-breaker degradation
-- [x] MCP external agent onboarding (12 tools) + duty lease + task-aware polling
+- [x] MCP external agent onboarding (13 tools) + duty lease + task-aware polling
 - [x] Reviewer dual-track discipline + multi-round rework + dual-model consensus + sampled re-review
 - [x] Production-grade reliability: 4-state Outbox + three-layer idempotency + dead-letter human fallback + Reconcile
 - [x] End-to-end visibility: dependency DAG / timeline / sequence diagram / event stream workbench / quality dashboard
-- [x] Final merged report (4-state re-entry guard) + one-click zip of all artifacts
+- [x] Final merged report (state machine + 3-level fault tolerance + version rollback) + one-click zip of all artifacts
+- [x] RBAC permission system: Sa-Token login + user / role / menu / department + action-level permission codes + data permissions
 - [x] Fully private deployment via Docker Compose
+- [x] Internal LLM execution chain: tool surface (read attachments / submit deliverables / self-report blocked) + lazy skill loading + cancel/timeout tree + explicit truncation terminal state + usage breakdown (REF-8 / G-021 / G-023)
+- [x] Sandbox execution chain: OpenSandbox controlled verification channel + per-subtask lifecycle reuse + workspace read-back fallback (ADR-005 / S-7~S-9)
+- [x] Domain-agnostic task decomposition: six task archetypes + four acceptance kinds + archetype-branched prompts + clarify stall guard + single-draft expand / regenerate (TD-1~TD-9 / TD-11)
+- [x] Web search optimization: dynamic freshness + parallel search + search term quality (W-1~W-4)
+- [x] Attachment-aware clarification: 3-state attachment intent + text / PDF injection + multi-variant search (ATT-1 / ATT-5 / ATT-6)
+- [x] Vendor / model catalog enrichment: model catalog + capability predicates + multi-key primary/backup (M-1~M-9)
+- [x] Multi-model executor field test: DeepSeek / MiniMax / Qwen internal LLM executors benchmarked (2026-10-25)
 
 **Planned 🔜**
 
+- [ ] Sandbox Provider-based real isolation: Docker / Remote / K8s execution environments (execution chain landed as an internal LLM controlled verification channel; Provider isolation remains conditional, see gap table G-005)
+- [ ] Quality Gate automation: unified Rule + Test + LLM decisions (G-007)
+- [ ] Agent Fleet capability-based routing: cost dimension in comparison chain, awaiting a 2nd LLM agent sample (G-008)
+- [ ] Attachment visual reading & large-file RAG (ATT-2 / ATT-3)
+- [ ] External agent work-detail snapshot: opt-in post-hoc evidence channel (G-020)
+- [ ] CLI push channel: adapter / output parsing / session continuation (Paperclip phase 2)
+- [ ] Dynamic Workflow: dynamic branching & runtime orchestration (long-term)
 - [ ] Domain template marketplace (technical proposals / code review / doc generation)
 - [ ] Real browser-based agent (WEB_BROWSER) integration path
 - [ ] Multi-tenancy and permission isolation

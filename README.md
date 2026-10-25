@@ -451,19 +451,28 @@ sudo bash scripts/ci/host-prepare.sh --swap 2G   # 4G 内存机器建议加 2G s
 - [x] 弹性调度：外部优先 + 空闲优先 + 值班优先 + LLM 保底 + 熔断降级 + 多外部执行者同台按分排序
 - [x] MCP 外部 Agent 接入（13 个工具）+ 值班租约 + 任务感知轮询 + 子任务上下文三通道供给
 - [x] Reviewer 双轨纪律制 + 多轮驳回返工（缺失证据清单）+ 双审共识 + 抽检复审
-- [x] V2 执行体系：统一事件流（Run / Turn / Step）+ AgentRuntime 八件套 + Replay / Audit 事件流工作台
+- [x] V2 执行体系：统一事件流（Run / Turn / Step）+ AgentRuntime 八件套 + Replay / Audit 事件流工作台 + **Recovery 恢复面**（只读恢复点投影 + 续跑注入兜底）
 - [x] 生产级可靠性：Outbox 四态 + 三层幂等 + 死信人工兜底 + Reconcile
 - [x] 全链路可视化：依赖 DAG / 时间线 / 时序图 / 事件流工作台 / 质量看板
 - [x] 最终整合报告（五态状态机 + 三级容错 L1/L2/L3 + 版本回滚）+ 交付物 zip 一键下载
 - [x] RBAC 权限体系：Sa-Token 登录 + 用户 / 角色 / 菜单 / 部门 + 动作级权限码 + 数据权限
 - [x] Docker Compose 完全私有化部署
+- [x] 内部 LLM 执行链：工具面解封（读附件 / 交付登记 / 自报阻塞）+ 技能惰性加载 + 取消 / 超时树 + 截断显式终态 + 用量拆分（REF-8 / G-021 / G-023）
+- [x] 沙箱执行链：OpenSandbox 受控验证通道 + 按子任务生命周期复用 + 工作区回读兜底（ADR-005 / S-7~S-9）
+- [x] 任务拆解领域无关化：六类任务原型 + 四类验收判据 + 拆解提示词分档 + 澄清停滞守卫 + 单条草案细拆 / 重写（TD-1~TD-9 / TD-11）
+- [x] 联网搜索效果优化：动态 freshness + 并行搜索 + 搜索词质量（W-1~W-4）
+- [x] 需求对话附件：附件意图三态 + 文本 / PDF 注入 + 检索多变体（ATT-1 / ATT-5 / ATT-6）
+- [x] 供应商 / 模型注册信息完善：模型目录 + 能力谓词 + 多 Key 主备（M-1~M-9）
+- [x] 多模型执行者实测：DeepSeek / MiniMax / Qwen 三个内部 LLM 执行者真机对照画像（2026-10-25）
 
 **待办 🔜**
 
-- [ ] Sandbox 真实隔离：Docker / Remote / K8s 执行环境（Provider 契约已就绪；**2026-10-09 起为条件触发**——平台当前只负责拆分与派单、不执行子任务的具体工作，故暂无可隔离的执行体，触发条件见 `doc/HelloAI 目标架构.md` §7）
-- [ ] Event 消费面补齐：Recovery 恢复（Fork 分支消费已于 2026-10-09 裁定不做，见 `doc/HelloAI 实现差距表.md` §7.1.2）
-- [ ] Quality Gate 自动化门槛：Rule + Test + LLM 统一决策
-- [ ] Agent Fleet 能力化选人：Health / Load / Cost 完整选路 + 外部执行成本回传
+- [ ] Sandbox Provider 化真实隔离：Docker / Remote / K8s 执行环境（执行链已作为内部 LLM 受控验证通道落地；Provider 化隔离仍条件触发，见 `doc/HelloAI 实现差距表.md` G-005）
+- [ ] Quality Gate 自动化门槛：Rule + Test + LLM 统一决策（G-007）
+- [ ] Agent Fleet 能力化选人：成本维度已入比较链，候选间比较待第 2 个 LLM agent 样本（G-008）
+- [ ] 需求对话附件视觉直读与大文件 RAG（ATT-2 / ATT-3）
+- [ ] 外部 Agent 工作详情快照：事后经审批的可选取证通道（G-020）
+- [ ] CLI 推通道：适配器 / 输出解析 / 会话续接（Paperclip 借鉴阶段二）
 - [ ] Dynamic Workflow：动态分支与运行期编排（远期）
 - [ ] 领域模板市场（技术方案 / 代码审查 / 文档生成）
 - [ ] 浏览器型 Agent（WEB_BROWSER）真实接入链路
