@@ -102,7 +102,7 @@ class PlannerAnalysisServiceTest {
 
     private TaskView taskView(TaskStatus status, Integer slaMinutes) {
         return new TaskView(TASK_ID, "搭建报表模块", "需要一个日报统计模块", null, null, null, null, null,
-                status, slaMinutes, null, null, null, null, null);
+                status, slaMinutes, null, null, null, null, null, null);
     }
 
     private TaskView pendingTask() {

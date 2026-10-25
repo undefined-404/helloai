@@ -4,7 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.UncertaintyKind;
 import com.helloai.core.agent.port.SubTaskClaimConstraint;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
@@ -101,7 +103,8 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void updateDraft(Long id, List<String> requiredSkills, String constraints, List<Uncertainty> uncertainties) {
+    public void updateDraft(Long id, List<String> requiredSkills, String constraints, List<Uncertainty> uncertainties,
+                            String acceptanceKind) {
         SubTask subTask = getById(id);
         if (subTask == null) {
             throw new BizException("草案不存在: " + id);
@@ -117,21 +120,54 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             subTask.setConstraints(constraints);
         }
         if (uncertainties != null) {
-            // G-011：人工编辑为权威输入不做 kind 强校验，但落库侧保持数据不变量——
-            // 空白 note 条目丢弃（无信息量）、非法 kind 降级 UNCONFIRMED（D3 fail-close 同口径）
+            // G-011 / TD-7：人工编辑为权威输入不做 kind 强校验，但落库侧保持数据不变量——
+            // 空白 note 条目丢弃（无信息量）、非法 kind 降级 UNCONFIRMED（D3 fail-close 同口径，
+            // 值域白名单单一来源 UncertaintyKind）
             List<Uncertainty> normalized = new ArrayList<>();
             for (Uncertainty u : uncertainties) {
                 if (u == null || u.getNote() == null || u.getNote().isBlank()) {
                     continue;
                 }
-                if (!Uncertainty.KIND_ASSUMPTION.equals(u.getKind())
-                        && !Uncertainty.KIND_UNCONFIRMED.equals(u.getKind())) {
+                if (!UncertaintyKind.isKnown(u.getKind())) {
                     u.setKind(Uncertainty.KIND_UNCONFIRMED);
                 }
                 normalized.add(u);
             }
             subTask.setUncertainties(normalized);
         }
+        if (acceptanceKind != null && !acceptanceKind.isBlank()) {
+            // TD-2：人工编辑为权威输入，不做强校验；非法值回落 AUTOMATED（AcceptanceKind.parse 收口）
+            subTask.setAcceptanceKind(AcceptanceKind.parse(acceptanceKind));
+        }
+        updateById(subTask);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void updateDraftContent(Long id, String content, String deliverable, String acceptance,
+                                   String acceptanceKind) {
+        SubTask subTask = getById(id);
+        if (subTask == null) {
+            throw new BizException("草案不存在: " + id);
+        }
+        // fail-close：仅草案态可编辑（与 updateDraft 同口径，TD-9 门禁复用）
+        if (subTask.getStatus() != SubTaskStatus.PENDING_PLAN_REVIEW) {
+            throw new BizException("仅草案待审状态可编辑，当前状态: " + subTask.getStatus());
+        }
+        if (content != null) {
+            subTask.setContent(content);
+        }
+        if (deliverable != null) {
+            subTask.setDeliverable(deliverable);
+        }
+        if (acceptance != null) {
+            subTask.setAcceptance(acceptance);
+        }
+        if (acceptanceKind != null && !acceptanceKind.isBlank()) {
+            // TD-2：人工/LLM 重生成产物为权威输入，非法值回落 AUTOMATED（AcceptanceKind.parse 收口）
+            subTask.setAcceptanceKind(AcceptanceKind.parse(acceptanceKind));
+        }
+        // title / id / dependsOn 不变量白名单：本方法不触碰这三项（regenerate 语义）
         updateById(subTask);
     }
 

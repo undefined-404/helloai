@@ -50,6 +50,22 @@ public final class VerificationFence {
     }
 
     /**
+     * 取<b>结尾处的围栏段</b>（自最后一个 {@code VERIFICATION:} 标记起至末尾）；无标记返回空串。
+     *
+     * <p>与 {@link #bodyWithoutFence} 互为补充（一个是「去掉围栏留正文」，一个是「只取围栏」）。
+     * 收敛在此是为了让「沙箱正文回传」与「收尾轮回退」共用同一段提取逻辑——
+     * 回传时若原对话里有自审围栏，需把它接在回传正文末尾，否则评审侧看不到证据声明
+     * （`LOG-20261025-010`）。</p>
+     */
+    public static String fenceBlock(String output) {
+        if (output == null) {
+            return "";
+        }
+        int idx = output.lastIndexOf(MARKER);
+        return idx < 0 ? "" : output.substring(idx).trim();
+    }
+
+    /**
      * 剥离<b>结尾处</b>的自检围栏段（交付物净化，2026-10-16）。
      *
      * <p>与 {@link #bodyWithoutFence}（无条件结构切分，供完整性判据用）不同，本方法是

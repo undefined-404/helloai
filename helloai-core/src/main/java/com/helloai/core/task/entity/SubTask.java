@@ -3,6 +3,7 @@ package com.helloai.core.task.entity;
 import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import com.baomidou.mybatisplus.annotation.*;
 import com.helloai.common.base.BaseEntity;
+import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.SubTaskStatus;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -25,6 +26,22 @@ public class SubTask extends BaseEntity {
     private String deliverable;
     private String acceptance;
     private String priority;
+
+    /**
+     * 验收判据（`TD-2` / `V125`）：{@code AUTOMATED} / {@code STRUCTURAL} / {@code REVIEWED} /
+     * {@code ATTESTED}，默认 {@code AUTOMATED}。
+     *
+     * <p><b>它管的是「谁来判、怎么判」，不参与「怎么拆」</b>——拆解维度由
+     * {@code task.task_archetype} 在任务级统一决定，子任务级差异只影响验收方式。
+     * 落库前按本值分流校验 （`TD-5`）：{@code AUTOMATED} 须含命令 / 断言 + 预期结果；
+     * {@code STRUCTURAL} 须含可数量词；{@code REVIEWED} 须可拆 ≥2 条独立检查项；
+     * {@code ATTESTED} 须含判定人 + 时点 + 留痕方式。</p>
+     *
+     * <p><b>不从 {@code acceptance} 文本自动推断</b>：推断错会让校验走错分支，
+     * 比显式声明更危险。在 {@code TD-5} 落地前本列恒为 {@code AUTOMATED}，行为不变。</p>
+     */
+    @TableField("acceptance_kind")
+    private AcceptanceKind acceptanceKind;
 
     @TableField("status")
     private SubTaskStatus status;

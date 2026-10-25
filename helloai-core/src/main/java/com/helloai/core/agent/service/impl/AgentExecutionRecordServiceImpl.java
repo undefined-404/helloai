@@ -1,5 +1,6 @@
 package com.helloai.core.agent.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.constant.AgentAccessType;
@@ -143,6 +144,20 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
     }
 
     /**
+     * 「平台内在飞记录」的唯一匹配器（{@link #hasPendingOrRunning} 与 {@link #closeInFlight} 共用）。
+     *
+     * <p><b>必须共用一处</b>：这两件事是同一判定的正反两面——「判得出有没有」却「清不掉」，
+     * 就会出现「改派被永久挡住」的僵尸态（2026-10-25 实测现场）。各写一份条件必然漂移。</p>
+     */
+    private LambdaQueryWrapper<AgentExecutionRecord> inFlightFilter(Long subTaskId) {
+        return new LambdaQueryWrapper<AgentExecutionRecord>()
+                .eq(AgentExecutionRecord::getSubTaskId, subTaskId)
+                .in(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING, ExecutionStatus.RUNNING)
+                .and(w -> w.isNull(AgentExecutionRecord::getAccessType)
+                        .or().eq(AgentExecutionRecord::getAccessType, AgentAccessType.API_KEY_LLM));
+    }
+
+    /**
      * 子任务是否存在<b>平台内</b>的 PENDING/RUNNING 记录（防重复发命令）。
      *
      * <p><b>G-006 口径收窄</b>：本方法的原始语义是「这条子任务是否已有一条<b>待消费/执行中的执行命令</b>」，
@@ -154,12 +169,46 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
      */
     @Override
     public boolean hasPendingOrRunning(Long subTaskId) {
-        return lambdaQuery()
-                .eq(AgentExecutionRecord::getSubTaskId, subTaskId)
-                .in(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING, ExecutionStatus.RUNNING)
-                .and(w -> w.isNull(AgentExecutionRecord::getAccessType)
-                        .or().eq(AgentExecutionRecord::getAccessType, AgentAccessType.API_KEY_LLM))
-                .count() > 0;
+        return count(inFlightFilter(subTaskId)) > 0;
+    }
+
+    /**
+     * 收口子任务在飞的平台执行记录（PENDING/RUNNING → FAILED）。
+     *
+     * <p>逐条带 status CAS（{@code in(PENDING, RUNNING)}）更新，与 {@code markFailed} 同范式：
+     * 收口过程中若某条已被他路推进到终态，CAS 失败即跳过并计数差，不覆盖别人的终态。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int closeInFlight(Long subTaskId, String reason) {
+        if (subTaskId == null) {
+            return 0;
+        }
+        List<AgentExecutionRecord> inFlight = list(inFlightFilter(subTaskId));
+        if (inFlight.isEmpty()) {
+            return 0;
+        }
+        String truncated = reason != null && reason.length() > 500 ? reason.substring(0, 500) : reason;
+        OffsetDateTime now = OffsetDateTime.now();
+        int closed = 0;
+        for (AgentExecutionRecord record : inFlight) {
+            AgentExecutionRecord patch = new AgentExecutionRecord();
+            patch.setId(record.getId());
+            patch.setStatus(ExecutionStatus.FAILED);
+            patch.setEndTime(now);
+            patch.setErrorMsg(truncated);
+            if (update(patch, new LambdaUpdateWrapper<AgentExecutionRecord>()
+                    .eq(AgentExecutionRecord::getId, record.getId())
+                    .in(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING, ExecutionStatus.RUNNING))) {
+                closed++;
+            }
+        }
+        if (closed < inFlight.size()) {
+            log.warn("在飞执行记录收口部分跳过（已被他路推进，不覆盖其终态）: subTaskId={}, 目标={}, 实际={}",
+                    subTaskId, inFlight.size(), closed);
+        }
+        log.info("收口在飞执行记录: subTaskId={}, closed={}, reason={}", subTaskId, closed, truncated);
+        return closed;
     }
 
     /**

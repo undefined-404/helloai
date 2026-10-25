@@ -43,6 +43,9 @@ TURN_EXEC="$CORE/agent/runtime/RuntimeTurnExecutor.java"
 # S-7~S-9 执行链落点
 EXEC_SVC="$CORE/agent/runtime/sandbox/SandboxExecutionService.java"
 EXEC_IMPL="$CORE/agent/runtime/sandbox/impl/OpenSandboxExecutionService.java"
+# ADR-005（2026-10-25）：同 subTask 复用的两个新锚点
+EXEC_SLOT_POOL="$CORE/agent/runtime/sandbox/impl/SandboxSlotPool.java"
+LOCAL_CONSUMER="$CORE/agent/mqconsumer/LocalExecutionCommandConsumer.java"
 EXEC_RESP="$CORE/agent/runtime/sandbox/ExecuteResponse.java"
 EXEC_CONTRIB="$CORE/agent/runtime/sandbox/SandboxExecutionToolContributor.java"
 INTERNAL_TOOLS="$CORE/agent/runtime/tool/InternalLlmExecutorTools.java"
@@ -156,11 +159,28 @@ if [ -f "$EXEC_IMPL" ]; then
   else
     bad "S-7 执行通道三要素缺失（MAX_TIMEOUT_SECONDS / MAX_OUTPUT_CHARS / EXIT_CODE_ERROR）"
   fi
-  # finally 无条件 kill：SDK close() 不删远端沙箱，必须显式 kill
+  # 远端沙箱销毁语义：SDK close() 不删远端沙箱，必须显式 kill（ADR-005 后仍在 destroy() 内）
   if grep -q 'sandbox.kill()' "$EXEC_IMPL"; then
-    ok "S-7 执行通道 finally 无条件 kill（远端沙箱销毁语义）"
+    ok "S-7 执行通道保留 sandbox.kill()（远端沙箱销毁语义，防泄漏）"
   else
     bad "S-7 执行通道缺失 sandbox.kill()——远端沙箱泄漏风险"
+  fi
+  # ADR-005（2026-10-25）：生命周期改为「同 subTask 复用」，守卫必须跟语义走——
+  # 否则断言的仍是已被取代的「即建即毁」，变成保护旧口径的假绿灯。
+  reuse_ok=0
+  if [ -f "$EXEC_SLOT_POOL" ] && grep -q 'release(Long subTaskId)' "$EXEC_SVC" \
+    && grep -q 'renew(' "$EXEC_IMPL" && grep -q 'isReuseEnabled()' "$EXEC_IMPL"; then
+    reuse_ok=1
+    ok "S-7 生命周期 = 同 subTask 复用（槽池 + renew 续期 + release 出口 + reuse 开关退路）"
+  fi
+  if [ "$reuse_ok" -eq 0 ]; then
+    bad "S-7 生命周期契约不完整（需 SandboxSlotPool + SandboxExecutionService.release + renew + reuseEnabled）"
+  fi
+  # turn 边界释放：必须是「消费边界 finally 调用」，否则复用会跨尝试残留
+  if [ -f "$LOCAL_CONSUMER" ] && grep -q 'sandboxExecutionService.release(' "$LOCAL_CONSUMER"; then
+    ok "工作区在消费边界释放（LocalExecutionCommandConsumer finally → release）"
+  else
+    bad "未在消费边界释放复用沙箱——工作区会跨执行尝试残留"
   fi
 fi
 

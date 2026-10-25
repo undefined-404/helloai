@@ -44,6 +44,14 @@
         <div class="head-actions">
           <el-button
             size="small"
+            :icon="Refresh"
+            :loading="refreshing"
+            @click="refreshDetail"
+          >
+            刷新
+          </el-button>
+          <el-button
+            size="small"
             @click="goEventStream"
           >
             事件流
@@ -641,7 +649,7 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, onActivated
 import type { ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, Clock } from '@element-plus/icons-vue'
+import { ArrowRight, Clock, Refresh } from '@element-plus/icons-vue'
 import { subTaskApi } from '@/api/subTask'
 import { taskMemberApi, type TaskMemberView } from '@/api/task'
 import { agentApi } from '@/api/agent'
@@ -673,6 +681,8 @@ const eventCatalog = useEventCatalogStore()
 eventCatalog.ensureLoaded()
 const item = ref<SubTask | null>(null)
 const loading = ref(false)
+/** 手动刷新态：与整页 v-loading 遮罩（loading）分开，避免点一下就把整页压白 */
+const refreshing = ref(false)
 const timeline = ref<TaskTimelineItem[]>([])
 const conversation = ref<ConversationMessageItem[]>([])
 let pollTimer: number | null = null
@@ -1041,6 +1051,18 @@ function eventDescription(ev: TaskTimelineItem): string {
   if (ev.eventType === 'sub_task_dual_review_degraded' && p.available !== undefined) {
     return base + '（可用核验候选 ' + p.available + ' 个）'
   }
+  // 核验驳回（B1b，`LOG-20261025-014`）：payload 一直带 score/issues/analysis，
+  // 但此前前端不渲染 ⇒ 时间线上只有字典兜底文案「核验驳回，需要返工」，
+  // 用户看不到「为什么被驳回」，只能去会话流里翻 verdict 卡片。
+  // 这里把评分 + 问题摘要摆到事件行上，与 §6.41 的 reviewHistory 口径一致。
+  if (ev.eventType === 'sub_task_auto_review_rejected') {
+    const parts: string[] = []
+    if (p.score !== undefined && p.score !== null && p.score !== '') {
+      parts.push('评分 ' + p.score + '/5')
+    }
+    if (p.issues) parts.push(abbreviateText(String(p.issues), 160))
+    if (parts.length) return base + '（' + parts.join('；') + '）'
+  }
   const extras: string[] = []
   if (p.trigger) extras.push('触发方式：' + (TRIGGER_LABEL[p.trigger] || p.trigger))
   // 准备分发：具体到 Agent 名字——有原负责人先标原负责人，否则标首选目标（如自动分配）
@@ -1052,6 +1074,13 @@ function eventDescription(ev: TaskTimelineItem): string {
     extras.push('目标 Agent：' + resolveAgentName(targetAgent))
   }
   if (p.reason) extras.push('原因：' + reasonText(p.reason))
+  // 派单失败的真实原因在 payload.message（如「子任务已有进行中的执行记录」），
+  // 而 reason 只是异常类名（BizException）——此前 message 完全不渲染，用户只能看到
+  // 事件字典里的兜底文案「暂时没有空闲的执行 Agent」，把「前一次执行未收口」误读成「没人可用」。
+  // 仅收敛到本事件码（payload.message 只由 SubTaskAutoExecutionDispatcher 写入），不影响其他事件。
+  if (ev.eventType === 'sub_task_auto_execute_dispatch_fail' && p.message) {
+    extras.push('详情：' + abbreviateText(String(p.message), 120))
+  }
   if (p.error) extras.push('错误：' + p.error)
   const attempt = p.attempt ?? p.reassignAttemptCount
   if (attempt) extras.push('第 ' + attempt + ' 次尝试')
@@ -1579,16 +1608,54 @@ const POLL_INTERVAL = 5000
 // 连续失败次数：整轮失败才累加，整轮成功即复位（见 utils/pollBackoff）
 let pollFailStreak = 0
 
+/**
+ * 重新拉取子任务详情的全部数据源（详情 / 参与成员 / 兄弟子任务 / 时间线 / 对话流 / 附件）。
+ *
+ * <p>页面初始化、5s 轮询、手动刷新三处共用同一个加载序列——保证「手动刷新看到的」
+ * 与「轮询看到的」口径完全一致，不会出现刷新了但某一栏仍是旧数据的半刷新状态。</p>
+ *
+ * @returns 最新子任务；详情拉取失败时为 null（失败提示由 loadDetail 内部弹出）
+ */
+async function reloadAllData(id: string): Promise<SubTask | null> {
+  const fresh = await loadDetail(id)
+  // 详情拉取失败：后续数据源没有有效主键（taskId），继续拉只会把兄弟子任务列表清空
+  if (!fresh) return null
+  await loadTaskMembers(fresh.taskId)
+  await loadSiblings(fresh.taskId)
+  await loadTimeline(id)
+  await loadConversation(id)
+  await loadAttachments(id)
+  return fresh
+}
+
+/**
+ * 手动刷新：重新拉取全部数据。
+ *
+ * <p>刻意不碰轮询状态——非终态时 5s 轮询本来就在跑，手动刷新与轮询并发最坏结果只是
+ * 「刷新结果被下一轮轮询覆盖」；而在这里停/启轮询反而可能与 pollOnce 末尾的
+ * scheduleNextPoll 撞出双定时器。</p>
+ */
+async function refreshDetail() {
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    const id = String(route.params.id)
+    const fresh = await reloadAllData(id)
+    // 详情拉取失败时 loadDetail 内部已弹过错误提示，这里不重复报成功
+    if (!fresh) return
+    ElMessage.success('已刷新')
+  } catch {
+    ElMessage.error('刷新子任务失败')
+  } finally {
+    refreshing.value = false
+  }
+}
+
 async function pollOnce() {
   pollTimer = null
   try {
     const id = String(route.params.id)
-    const fresh = await loadDetail(id)
-    await loadTaskMembers(fresh?.taskId)
-    await loadSiblings(fresh?.taskId)
-    await loadTimeline(id)
-    await loadConversation(id)
-    await loadAttachments(id)
+    const fresh = await reloadAllData(id)
     pollFailStreak = 0
     if (fresh && TERMINAL_STATUSES.includes(fresh.status)) {
       stopPolling()
@@ -1628,13 +1695,10 @@ async function initPage() {
   try {
     // v1.1 修复：路由参数是 string，不要 Number() 转 LongID（>2^53 会丢精度）
     const id = String(route.params.id)
-    await loadDetail(id)
-    await loadTaskMembers(item.value?.taskId)
-    await loadSiblings(item.value?.taskId)
-    await loadTimeline(id)
-    await loadConversation(id)
-    await loadAttachments(id)
+    await reloadAllData(id)
     // 进入页面时启动 5s 轮询；进入终态后停止
+    // 判据用 item.value（而非本次拉取结果）：详情拉取失败时 item.value 仍是上一条，
+    // 此时继续轮询才能自愈；用本次结果会直接停摆。
     if (item.value && !TERMINAL_STATUSES.includes(item.value.status)) {
       startPolling()
     }

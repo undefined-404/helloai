@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.Version;
 import com.helloai.common.base.BaseEntity;
 import com.helloai.common.constant.FinalReportStatus;
+import com.helloai.common.constant.TaskArchetype;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import lombok.Data;
@@ -96,6 +97,20 @@ public class Task extends BaseEntity {
      * 调度候选取数按优先级出队（C4 设计 §3.1/§3.2）。</p>
      */
     private String priority;
+
+    /**
+     * 交付物原型（拆解维度，`TD-1` / `V124`）：{@code BUILD} / {@code DOCUMENT} /
+     * {@code RESEARCH} / {@code DATA} / {@code OPERATE} / {@code DECIDE}，默认 {@code BUILD}。
+     *
+     * <p><b>它管的是「按什么维度拆」，与 {@code GRANULARITY}（拆多细）正交</b>——拆解提示词
+     * 按本值取用对应的拆分维度块（`TD-3`）。</p>
+     *
+     * <p><b>判定时机在澄清终稿产出（`TD-4`），不在拆解时判</b>：拆解阶段模型只见
+     * title + description，判不准（设计 §3.2）。判不出回落 {@code BUILD}，人工为权威输入。
+     * 在 {@code TD-3} 落地前本列恒为 {@code BUILD}，系统行为与改造前完全一致。</p>
+     */
+    @TableField("task_archetype")
+    private TaskArchetype taskArchetype;
 
     /**
      * 乐观锁版本号（`V114` 新增列，与 {@code SubTask} / {@code AgentExecutionRecord} 同口径）。

@@ -8,6 +8,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TaskArchetype;
 import com.helloai.common.constant.TaskPriority;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.common.constant.TeamStatus;
@@ -61,6 +62,9 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements TaskService {
 
+    /** {@code listRecentViews} 的默认条数（与拆解期快照「历史任务 ≤5 条」预算一致）。 */
+    private static final int DEFAULT_RECENT_TASK_LIMIT = 5;
+
     private final SubTaskMapper subTaskMapper;
     private final ModuleMapper moduleMapper;
     private final TaskRunningSpecMapper taskRunningSpecMapper;
@@ -99,6 +103,14 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     @Transactional(rollbackFor = Exception.class)
     public Task createTask(String title, String description, Integer slaMinutes,
                            Map<String, Object> agentPolicy, List<String> requiredSkills) {
+        return createTask(title, description, slaMinutes, agentPolicy, requiredSkills, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Task createTask(String title, String description, Integer slaMinutes,
+                           Map<String, Object> agentPolicy, List<String> requiredSkills,
+                           String taskArchetype) {
         Task task = new Task();
         task.setTitle(title);
         task.setDescription(description);
@@ -107,9 +119,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setRequiredSkills(requiredSkills);
         task.setPriority(TaskPriority.DEFAULT().name());
         task.setStatus(TaskStatus.PENDING);
+        task.setTaskArchetype(TaskArchetype.parse(taskArchetype));
         save(task);
-        log.info("任务创建: id={}, title={}, slaMinutes={}, agentPolicy={}, requiredSkills={}",
-                task.getId(), title, slaMinutes, agentPolicy, requiredSkills);
+        log.info("任务创建: id={}, title={}, slaMinutes={}, agentPolicy={}, requiredSkills={}, taskArchetype={}",
+                task.getId(), title, slaMinutes, agentPolicy, requiredSkills, task.getTaskArchetype());
         return task;
     }
 
@@ -201,13 +214,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Task updateTask(Long id, String title, String description) {
-        return updateTask(id, title, description, null, null, null);
+        return updateTask(id, title, description, null, null, null, null);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Task updateTask(Long id, String title, String description, Integer slaMinutes,
-                           Map<String, Object> agentPolicy, List<String> requiredSkills) {
+                           Map<String, Object> agentPolicy, List<String> requiredSkills, String taskArchetype) {
         Task task = getById(id);
         if (task == null) {
             return null;
@@ -227,9 +240,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if (requiredSkills != null) {
             task.setRequiredSkills(requiredSkills);
         }
+        if (taskArchetype != null && !taskArchetype.isBlank()) {
+            // TD-1：人工编辑为权威输入，不做强校验；非法值回落 BUILD（TaskArchetype.parse 收口）
+            task.setTaskArchetype(TaskArchetype.parse(taskArchetype));
+        }
         updateById(task);
-        log.info("任务更新: id={}, slaMinutes={}, agentPolicy={}, requiredSkills={}",
-                id, slaMinutes, agentPolicy, requiredSkills);
+        log.info("任务更新: id={}, slaMinutes={}, agentPolicy={}, requiredSkills={}, taskArchetype={}",
+                id, slaMinutes, agentPolicy, requiredSkills, taskArchetype);
         return task;
     }
 
@@ -409,11 +426,23 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     @Override
     public TaskView getView(Long taskId) {
         Task t = getById(taskId);
-        return t == null ? null
-                : new TaskView(t.getId(), t.getTitle(), t.getDescription(), t.getFinalReport(),
-                        t.getFinalReportStatus(), t.getFinalReportAgentId(), t.getFinalReportTime(),
-                        t.getAgentPolicy(), t.getStatus(), t.getSlaMinutes(), t.getPriority(), t.getContext(),
-                        t.getRequiredSkills(), t.getCreateTime(), t.getUpdateTime());
+        return t == null ? null : toView(t);
+    }
+
+    @Override
+    public List<TaskView> listRecentViews(int limit) {
+        int size = limit > 0 ? limit : DEFAULT_RECENT_TASK_LIMIT;
+        IPage<Task> page = page(new Page<>(1, size), lambdaQuery().orderByDesc(Task::getCreateTime));
+        List<Task> records = page != null ? page.getRecords() : null;
+        return records == null ? List.of() : records.stream().map(TaskServiceImpl::toView).toList();
+    }
+
+    /** 实体 → 只读快照（`getView` / `listRecentViews` 共用，防两处字段集漂移）。 */
+    private static TaskView toView(Task t) {
+        return new TaskView(t.getId(), t.getTitle(), t.getDescription(), t.getFinalReport(),
+                t.getFinalReportStatus(), t.getFinalReportAgentId(), t.getFinalReportTime(),
+                t.getAgentPolicy(), t.getStatus(), t.getSlaMinutes(), t.getPriority(), t.getContext(),
+                t.getRequiredSkills(), t.getCreateTime(), t.getUpdateTime(), t.getTaskArchetype());
     }
 
     // ── 写命令（RM5 批 5a）──
@@ -434,6 +463,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setDescription(draft.description());
         task.setStatus(draft.status());
         task.setContext(draft.context());
+        // TD-4：archetype 由消费方（澄清链路终稿判定）显式传入；null/非法值回落 BUILD（TaskArchetype.parse 收口）
+        task.setTaskArchetype(com.helloai.common.constant.TaskArchetype.parse(draft.taskArchetype()));
         save(task);
         return getView(task.getId());
     }

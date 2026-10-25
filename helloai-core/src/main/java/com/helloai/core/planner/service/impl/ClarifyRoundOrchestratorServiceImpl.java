@@ -7,6 +7,7 @@ import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.clarify.ChatRoundDecisionParser;
 import com.helloai.core.planner.clarify.ClarifyReplyParser;
+import com.helloai.core.planner.clarify.ClarifyStallGuard;
 import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
 import com.helloai.core.planner.clarify.ConfirmCardProtocol;
 import com.helloai.core.planner.entity.RequirementConversation;
@@ -28,6 +29,7 @@ import com.helloai.core.planner.service.RequirementMessageService;
 import com.helloai.core.task.port.TaskView;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -69,6 +71,18 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     private final ConfirmCardProtocol confirmCardProtocol;
     private final ChatRoundDecisionParser decisionParser;
     private final ClarifyWebSearchOrchestrator webSearchOrchestrator;
+
+    /** TD-8 澄清侧 stall 守卫（用户信息量判据，纯函数）。 */
+    private final ClarifyStallGuard stallGuard;
+
+    /** TD-8 收敛阈值：连续无信息用户回答 ≥ 本值即强制收敛出终稿（首期 2，可配置）。 */
+    @Value("${helloai.planner.clarify.stall-converge-rounds:2}")
+    private int stallConvergeRounds;
+
+    /** {@link #stallConvergeRounds} 的读取封装（null 安全 + 非法值兜底 2）。 */
+    int stallConvergeRounds() {
+        return stallConvergeRounds > 0 ? stallConvergeRounds : 2;
+    }
 
     /** 会话附件认领（新建会话时把 clientToken 下的临时附件挂到会话上）。 */
     private final ChatAttachmentService chatAttachmentService;
@@ -525,6 +539,54 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         // P1-3：description 四小节不全 → 同轮纠偏重试一次（fail-open，不阻断终稿落库）
         reply = promptRenderService.applyDescriptionSectionGuard(conversation, planner, prompt,
                 "requirement_clarify", reply);
+        // TD-8（2026-10-24）：LLM 产出追问 + 用户连续 N 轮无新信息 ⇒ 收敛轮（强制按现有
+        // 信息出终稿，不再追问）。判据客观：用户回答是否携带新信息（selections/纯文本），
+        // progress 自评不参与门控（计划「不做的」）。
+        if (!"final".equals(reply.getType())
+                && stallGuard.shouldConverge(messageService.listByConversation(conversationId),
+                stallConvergeRounds())) {
+            log.info("澄清轮 stall 收敛: conversationId={}, 连续无信息用户回答 ≥{} 轮，强制出终稿",
+                    conversationId, stallConvergeRounds());
+            return runConvergeRound(conversation, webSearchOutcome);
+        }
+        persistClarifyOutcome(conversation, reply, webSearchOutcome);
+        return new ClarifyConversationDetail(conversation,
+                messageService.listByConversation(conversationId));
+    }
+
+    /**
+     * TD-8 收敛轮：用户连续 N 轮无新信息 → 用 finalize 提示词让 LLM 按现有信息出终稿。
+     *
+     * <p>产出 final → {@code persistClarifyOutcome} 落终稿（不建任务，与普通终稿轮一致，
+     * 用户确认后建任务）；产出 question（信息仍严重不足）→ 正常落追问，不强行建任务。
+     * 与 {@code /task} 直出轮（{@code runFinalizeLlmRound}）的区别：后者 final 即自动建任务，
+     * 收敛轮不建任务——stall 不代表用户已确认需求，自动建任务会放大误判。</p>
+     */
+    private ClarifyConversationDetail runConvergeRound(RequirementConversation conversation,
+                                                       WebSearchOutcome webSearchOutcome) {
+        Long conversationId = conversation.getId();
+        String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
+        AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        String prompt = promptRenderService.renderFinalizePrompt(conversationId, webSearchContext);
+        AgentTask agentTask = AgentTask.builder()
+                .systemPrompt("")
+                .userPrompt(prompt)
+                .context(Map.of("conversationId", conversationId, "scene", "requirement_finalize"))
+                .requiredCapabilities(Map.of())
+                .build();
+        AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
+        if (!result.isSuccess()) {
+            throw new BizException("澄清收敛终稿 LLM 调用失败: " + result.getErrorMessage());
+        }
+        ClarifyReply reply = replyParser.parseReply(result.getOutput());
+        reply = promptRenderService.applyDescriptionSectionGuard(conversation, planner, prompt,
+                "requirement_finalize", reply);
+        if ("final".equals(reply.getType())) {
+            log.info("澄清收敛产出终稿: conversationId={}, finalTitle={}", conversationId, reply.getTitle());
+        } else {
+            // 信息严重不足：LLM 仍出追问（不建任务、不阻断，会话保持 ACTIVE）
+            log.info("澄清收敛 LLM 仍判信息不足，回落追问: conversationId={}", conversationId);
+        }
         persistClarifyOutcome(conversation, reply, webSearchOutcome);
         return new ClarifyConversationDetail(conversation,
                 messageService.listByConversation(conversationId));

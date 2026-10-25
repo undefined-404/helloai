@@ -111,6 +111,50 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
+    @DisplayName("改派前先作废在飞旧执行，且作废发生在状态重置之前")
+    void shouldReleaseInFlightExecutionBeforeResetWhenReassigning() {
+        SubTask subTask = new SubTask();
+        subTask.setId(21L);
+        subTask.setTaskId(31L);
+
+        when(taskDispatchPort.releaseInFlightExecution(eq(21L), any(String.class))).thenReturn(1);
+        when(subTaskService.resetToPendingForDispatch(21L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
+
+        subTaskDispatchService.dispatchBlockedSubTask(21L, 11L);
+
+        // 顺序契约：先收口旧记录，再改状态 —— 反过来会给「旧记录仍在飞」留出竞态窗口
+        InOrder inOrder = inOrder(taskDispatchPort, subTaskService);
+        inOrder.verify(taskDispatchPort).releaseInFlightExecution(eq(21L), any(String.class));
+        inOrder.verify(subTaskService).resetToPendingForDispatch(21L, Set.of(SubTaskStatus.BLOCKED));
+        // 收口成功要留痕（用户在时间线能看到「旧执行已作废」，而不是只看到一次静默改派）
+        verify(taskTimelineService).recordEvent(
+                31L, 21L, "sub_task_execute_result_discarded", AgentRole.SYSTEM, 11L,
+                Map.of("supersededRecords", 1, "cause", "manual"));
+        verify(taskDispatchPort).assignNext(11L, 21L, null);
+    }
+
+    @Test
+    @DisplayName("作废在飞旧执行失败时不阻断改派，也不写作废事件")
+    void shouldStillReassignWhenReleaseInFlightFails() {
+        SubTask subTask = new SubTask();
+        subTask.setId(21L);
+        subTask.setTaskId(31L);
+
+        when(taskDispatchPort.releaseInFlightExecution(eq(21L), any(String.class)))
+                .thenThrow(new RuntimeException("db down"));
+        when(subTaskService.resetToPendingForDispatch(21L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
+
+        subTaskDispatchService.dispatchBlockedSubTask(21L, 11L);
+
+        verify(taskTimelineService, never()).recordEvent(
+                anyLong(), anyLong(), eq("sub_task_execute_result_discarded"),
+                any(AgentRole.class), any(), anyMap());
+        verify(taskDispatchPort).assignNext(11L, 21L, null);
+    }
+
+    @Test
     @DisplayName("离线任务重分配走弹性调度 fallback")
     void shouldRedispatchOfflineSubTaskThroughResilientDispatcher() {
         SubTask subTask = new SubTask();
@@ -950,17 +994,45 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
-    @DisplayName("退避窗口内（last_attempt_time 新鲜）→ 拦截 + 落 sub_task_redispatch_skipped（不再静默）")
-    void shouldBlockAndRecordSkipWhenWithinBackoffByLastAttemptTime() {
+    @DisplayName("★人工换人豁免退避（2026-10-25，7443 事故）：last_attempt_time 新鲜但 MANUAL → 放行并派发")
+    void shouldNotBlockManualRedispatchByBackoff() {
         when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
 
         SubTask subTask = subTaskWithTaskId(72L, 82L);
         subTask.setStatus(SubTaskStatus.BLOCKED);
         subTask.setAttemptTotal(1);                       // 第 1 档退避 60s
-        subTask.setLastAttemptTime(OffsetDateTime.now()); // 刚累加 → 窗口内
+        subTask.setLastAttemptTime(OffsetDateTime.now()); // 刚被自动重派累加 → AUTO 窗口内
         when(subTaskService.getById(72L)).thenReturn(subTask);
+        when(subTaskService.resetToPendingForDispatch(72L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
 
+        // 人工入口：不被「自动路径点着的冷却」拦住
         var result = subTaskDispatchService.dispatchBlockedSubTask(72L, 11L);
+
+        assertThat(result.applied()).isTrue();
+        verify(subTaskMapper).incrementAttemptTotal(eq(72L), any(OffsetDateTime.class));
+        verify(taskDispatchPort).assignNext(11L, 72L, null);
+        // 既然放行就不该落 skipped 时间线
+        verify(taskTimelineService, never()).recordEvent(
+                anyLong(), anyLong(), eq("sub_task_redispatch_skipped"), any(), any(), anyMap());
+    }
+
+    @Test
+    @DisplayName("★自动重派仍受退避约束（7443 事故回归锁）：同一 last_attempt_time 下 AUTO 被拦且不消耗预算")
+    void shouldStillBlockAutoRedispatchByBackoff() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = subTaskWithTaskId(78L, 88L);
+        subTask.setStatus(SubTaskStatus.BLOCKED);
+        subTask.setAttemptTotal(4);                       // 第 4 档 1800s（7443 实测档位）
+        subTask.setLastAttemptTime(OffsetDateTime.now());
+        when(subTaskService.getById(78L)).thenReturn(subTask);
+
+        Agent preferred = new Agent();
+        preferred.setId(11L);
+        when(agentSelector.pickPreferred(any(), any())).thenReturn(preferred);
+
+        var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(78L, false);
 
         assertThat(result.applied()).isFalse();
         assertThat(result.reason()).isEqualTo("backoff");
@@ -969,9 +1041,6 @@ class SubTaskDispatchServiceTest {
         verify(subTaskMapper, never()).incrementAttemptTotal(anyLong(), any());
         verify(subTaskService, never()).resetToPendingForDispatch(anyLong(), any());
         verify(taskDispatchPort, never()).assignNext(any(), any(), any());
-        // 可观测性：落 sub_task_redispatch_skipped（reason=backoff）
-        verify(taskTimelineService).recordEvent(
-                eq(82L), eq(72L), eq("sub_task_redispatch_skipped"), eq(AgentRole.SYSTEM), isNull(), anyMap());
     }
 
     @Test
@@ -996,31 +1065,28 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
-    @DisplayName("换人：确在退避窗口内 → 不改动状态（不 block）+ 返回 skipped + 落 skip 时间线")
-    void shouldRedispatchInProgressSkipWithoutBlockingWhenWithinBackoff() {
+    @DisplayName("★换人豁免退避（2026-10-25）：确在自动退避窗口内 → MANUAL 仍 block + 派发，不返回 backoff")
+    void shouldRedispatchInProgressIgnoreBackoffForManualCommand() {
         when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
 
         SubTask subTask = subTaskWithTaskId(74L, 84L);
         subTask.setStatus(SubTaskStatus.IN_PROGRESS);
         subTask.setAttemptTotal(2);                       // 第 2 档 180s
-        subTask.setLastAttemptTime(OffsetDateTime.now()); // 窗口内
+        subTask.setLastAttemptTime(OffsetDateTime.now()); // 自动路径窗口内
         when(subTaskService.getById(74L)).thenReturn(subTask);
+        when(subTaskService.resetToPendingForDispatch(74L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
 
         var result = subTaskDispatchService.redispatchInProgress(74L, 11L);
 
-        assertThat(result.applied()).isFalse();
-        assertThat(result.reason()).isEqualTo("backoff");
-        // 关键：闸门判定在 block() 之前 → 被拦时不 block、不 resume、不派发
-        verify(subTaskService, never()).block(anyLong(), any(), any());
-        verify(subTaskService, never()).resume(anyLong());
-        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
-        verify(taskTimelineService).recordEvent(
-                eq(84L), eq(74L), eq("sub_task_redispatch_skipped"), eq(AgentRole.SYSTEM), isNull(), anyMap());
+        assertThat(result.applied()).isTrue();
+        verify(subTaskService).block(74L, "人工判定执行停滞，改派新执行者", null);
+        verify(taskDispatchPort).assignNext(11L, 74L, null);
     }
 
     @Test
-    @DisplayName("预算耗尽（熔断转死信）→ 拦截 + 落 sub_task_redispatch_skipped（reason=circuit_open）")
-    void shouldEscalateToDeadLetterAndRecordSkipWhenBudgetExhausted() {
+    @DisplayName("★人工入口命中熔断（2026-10-25）：只拒绝 + 落 skip，**不**把子任务转死信（判定函数无副作用）")
+    void shouldRejectManualRedispatchWithoutEscalatingToDeadLetter() {
         when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
 
         SubTask subTask = subTaskWithTaskId(75L, 85L);
@@ -1032,9 +1098,32 @@ class SubTaskDispatchServiceTest {
 
         assertThat(result.applied()).isFalse();
         assertThat(result.reason()).isEqualTo("circuit_open");
-        verify(subTaskService).changeStatus(eq(75L), eq(SubTaskStatus.DEAD_LETTER), isNull(), anyMap());
+        // 用户点「换人」不该实际执行「打进死信池」——交人工决定下一步
+        verify(subTaskService, never()).changeStatus(anyLong(), any(), any(), anyMap());
         verify(taskTimelineService).recordEvent(
                 eq(85L), eq(75L), eq("sub_task_redispatch_skipped"), eq(AgentRole.SYSTEM), isNull(), anyMap());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("★自动 BLOCKED 重派命中熔断：仍转 DEAD_LETTER（自动路径原语义不变）")
+    void shouldEscalateToDeadLetterWhenAutoRedispatchHitsCircuit() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = subTaskWithTaskId(79L, 89L);
+        subTask.setStatus(SubTaskStatus.BLOCKED);
+        subTask.setAttemptTotal(5);
+        when(subTaskService.getById(79L)).thenReturn(subTask);
+
+        Agent preferred = new Agent();
+        preferred.setId(11L);
+        when(agentSelector.pickPreferred(any(), any())).thenReturn(preferred);
+
+        var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(79L, false);
+
+        assertThat(result.applied()).isFalse();
+        assertThat(result.reason()).isEqualTo("circuit_open");
+        verify(subTaskService).changeStatus(eq(79L), eq(SubTaskStatus.DEAD_LETTER), isNull(), anyMap());
     }
 
     @Test

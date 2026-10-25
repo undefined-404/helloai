@@ -5,12 +5,16 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.SubTaskContextKeys;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TaskArchetype;
 import com.helloai.common.constant.TaskPriority;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.common.constant.TimelineEventCode;
+import com.helloai.common.constant.UncertaintyKind;
 import com.helloai.core.agent.SkillNormalizer;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
@@ -20,10 +24,15 @@ import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.context.ArchetypeDimensionsSection;
+import com.helloai.core.planner.context.DecomposeContextSnapshotRenderer;
+import com.helloai.core.planner.policy.AcceptanceKindValidator;
+import com.helloai.core.planner.policy.AcceptanceSatisfiabilityChecker;
 import com.helloai.core.planner.policy.PlannerGranularity;
 import com.helloai.core.planner.policy.PlannerGranularityResolver;
 import com.helloai.core.planner.policy.RequirementPackage;
 import com.helloai.core.planner.policy.RequirementPackageParser;
+import com.helloai.core.planner.policy.TaskContextKeys;
 import com.helloai.core.planner.service.PlannerAnalysisService.PlanDraftItem;
 import com.helloai.core.planner.service.PlannerDecomposeAsyncService;
 import com.helloai.core.task.port.SubTaskDraft;
@@ -40,6 +49,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -84,6 +94,12 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
 
     private static final String PROMPT_TEMPLATE_PATH = "prompts/planner-decompose.md";
 
+    /** `TD-9` expand：单条草案 FINE 粒度细拆专用模板（不复用整任务模板，避免重拆整任务）。 */
+    private static final String EXPAND_PROMPT_TEMPLATE_PATH = "prompts/planner-expand.md";
+
+    /** `TD-9` regenerate：单条草案同粒度重写专用模板。 */
+    private static final String REGENERATE_PROMPT_TEMPLATE_PATH = "prompts/planner-regenerate.md";
+
     private static final Set<String> VALID_PRIORITIES = Set.of("HIGH", "MEDIUM", "LOW");
 
     private final TaskService taskService;
@@ -93,6 +109,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     private final TaskTimelineService taskTimelineService;
     private final AgentService agentService;
     private final AgentSkillSpecService agentSkillSpecService;
+    private final DecomposeContextSnapshotRenderer contextSnapshotRenderer;
     private final ObjectMapper objectMapper;
 
     /**
@@ -119,6 +136,314 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                     Map.of("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
             log.error("任务拆解失败，已回退 PENDING: taskId={}", taskId, e);
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  `TD-9` 单条草案 expand / regenerate（同步，用户等待结果）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * `TD-9` 单条草案细拆：一条草案 → N 条 FINE 粒度子草案（同步）。
+     *
+     * <p>门禁复用 {@code updateDraft} 口径（仅 PENDING_PLAN_REVIEW）；被其他草案依赖的
+     * 草案拒绝展开（删除后引用成幽灵依赖，fail-close）。事务内完成：LLM/校验失败回滚，
+     * 原草案不被破坏。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public List<SubTaskView> expandById(Long subTaskId) {
+        SubTaskView draft = subTaskService.getView(subTaskId);
+        if (draft == null) {
+            throw new BizException("草案不存在: " + subTaskId);
+        }
+        if (draft.status() != SubTaskStatus.PENDING_PLAN_REVIEW) {
+            throw new BizException("仅草案待审状态可展开，当前状态: " + draft.status());
+        }
+        Long taskId = draft.taskId();
+        TaskView task = taskService.getView(taskId);
+        if (task == null) {
+            throw new BizException("草案所属任务不存在: " + taskId);
+        }
+        // 幽灵依赖预防：其他草案 dependsOn 含本草案 → 拒绝（本草案删除会让引用悬空）
+        List<Long> referencing = referencingDrafts(taskId, subTaskId);
+        if (!referencing.isEmpty()) {
+            throw new BizException("该草案被其他草案依赖（ids=" + referencing
+                    + "），无法展开；请先处理依赖关系");
+        }
+        log.info("单条草案展开开始: subTaskId={}, taskId={}, title={}",
+                subTaskId, taskId, draft.title());
+        PlannerAgentRef planner = plannerAgentPicker.pickForTask(taskId);
+        String prompt = renderExpandPrompt(task, draft, planner);
+        AgentResult result = executeLlmForSingleDraft(planner, prompt, taskId, "planner_expand");
+        List<PlanDraftItem> items = parseDraftItems(taskId, planner, result.getOutput());
+        // expand 组内依赖校验（Kahn 环检测；序号 1-based 指向本批）
+        validateDependencies(items);
+        // FINE 粒度固定：expand 语义就是细拆，不随任务粒度决策漂移
+        PlannerGranularityResolver.GranularityDecision decision =
+                new PlannerGranularityResolver.GranularityDecision(PlannerGranularity.FINE, "单条展开（FINE）");
+        List<SubTaskDraft> drafts = buildDrafts(task, items, planner, decision);
+        List<SubTaskView> persisted = subTaskService.saveDrafts(drafts);
+        // 依赖序号回写真实 id（组内）；重加载顺序与 items 一致
+        List<SubTaskView> reloaded = subTaskService.listDraftsInInsertOrder(
+                taskId, SubTaskStatus.PENDING_PLAN_REVIEW);
+        List<SubTaskView> newlyCreated = reloaded.stream()
+                .filter(v -> v.createTime() != null && persisted.stream()
+                        .anyMatch(p -> p.id() != null && p.id().equals(v.id())))
+                .toList();
+        // 用「新增的 N 条」做依赖回写：从 reloaded 里按 persisted id 定位
+        applyDependsOn(reloaded.stream()
+                .filter(v -> persisted.stream().anyMatch(p -> p.id() != null && p.id().equals(v.id())))
+                .toList(), items);
+        // 删除原草案（逻辑删，审计保留）
+        subTaskService.removeById(subTaskId);
+        taskTimelineService.recordEvent(taskId, subTaskId, TimelineEventCode.TASK_PLAN_DRAFT_EXPANDED.code(),
+                AgentRole.PLANNER, planner.id(),
+                Map.of("originalSubTaskId", subTaskId, "draftCount", items.size(),
+                        "newSubTaskIds", newlyCreated.stream().map(SubTaskView::id).toList()));
+        log.info("单条草案展开完成: subTaskId={}, taskId={}, newCount={}",
+                subTaskId, taskId, items.size());
+        return newlyCreated;
+    }
+
+    /**
+     * `TD-9` 单条草案重生成：同粒度重写四要素（同步），title/id/dependsOn 不变量白名单。
+     *
+     * <p>LLM 输出单条对象；服务端只取 {@code content} / {@code deliverable} /
+     * {@code acceptance} / {@code acceptanceKind} 四字段落库（走 {@code updateDraftContent}），
+     * 其余字段（title/priority/skills/constraints/dependsOn/contract）一律保持原值。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public SubTaskView regenerateById(Long subTaskId) {
+        SubTaskView draft = subTaskService.getView(subTaskId);
+        if (draft == null) {
+            throw new BizException("草案不存在: " + subTaskId);
+        }
+        if (draft.status() != SubTaskStatus.PENDING_PLAN_REVIEW) {
+            throw new BizException("仅草案待审状态可重生成，当前状态: " + draft.status());
+        }
+        Long taskId = draft.taskId();
+        TaskView task = taskService.getView(taskId);
+        if (task == null) {
+            throw new BizException("草案所属任务不存在: " + taskId);
+        }
+        log.info("单条草案重生成开始: subTaskId={}, taskId={}, title={}",
+                subTaskId, taskId, draft.title());
+        PlannerAgentRef planner = plannerAgentPicker.pickForTask(taskId);
+        String prompt = renderRegeneratePrompt(task, draft, planner);
+        AgentResult result = executeLlmForSingleDraft(planner, prompt, taskId, "planner_regenerate");
+        // 输出为单条 JSON 对象（非数组），解析为单条 PlanDraftItem
+        PlanDraftItem item = parseSingleRegenerateOutput(taskId, planner, result.getOutput());
+        // 不变量白名单：只取四要素；title / dependsOn 用原草案值（LLM 输出被忽略）
+        String newAcceptance = requireChanged(item.getAcceptance(), draft.acceptance(), "acceptance");
+        subTaskService.updateDraftContent(subTaskId,
+                requireChanged(item.getContent(), draft.content(), "content"),
+                requireChanged(item.getDeliverable(), draft.deliverable(), "deliverable"),
+                newAcceptance,
+                item.getAcceptanceKind());
+        // TD-11：验收文本被改写 ⇒ 旧标注（按旧文本算出来的）必须清掉，不能留着。
+        // 留着 = 拿过期证据去放宽核验，比「没标注」更危险（计划 §6 风险 8「解析不到即不豁免」）。
+        // 未改写则保留——重写正文/交付物不动判定依据，重算只会白烧一次判定。
+        clearStaleAcceptancePreconditions(subTaskId, draft, newAcceptance);
+        SubTaskView updated = subTaskService.getView(subTaskId);
+        taskTimelineService.recordEvent(taskId, subTaskId, TimelineEventCode.TASK_PLAN_DRAFT_REGENERATED.code(),
+                AgentRole.PLANNER, planner.id(),
+                Map.of("subTaskId", subTaskId, "title", draft.title()));
+        log.info("单条草案重生成完成: subTaskId={}, taskId={}, title={}",
+                subTaskId, taskId, draft.title());
+        return updated;
+    }
+
+    /**
+     * `TD-11`：重生成改写了验收文本时，清掉按旧文本算出的 {@code acceptancePreconditions}。
+     *
+     * <p>为什么是「清」而不是「重算」：重算需要归一化后的 uncertainties（含 {@code ref}）与
+     * dependsOn 的上游文本，而 {@code SubTaskView} 目前不带 {@code ref}；为一条低频路径扩
+     * 快照契约的收益不足。**清掉 = 回落到「无标注」= 核验侧不豁免 = 保持现状严格**，
+     * 这正是计划 §6 风险 8 定下的 fail-safe 方向。要恢复标注，重新拆解一次即可。</p>
+     */
+    private void clearStaleAcceptancePreconditions(Long subTaskId, SubTaskView draft, String newAcceptance) {
+        Map<String, Object> ctx = draft.context();
+        if (ctx == null || !ctx.containsKey(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS)) {
+            return;
+        }
+        String oldAcceptance = draft.acceptance() == null ? "" : draft.acceptance().trim();
+        if (oldAcceptance.equals(newAcceptance == null ? "" : newAcceptance.trim())) {
+            return;
+        }
+        try {
+            Map<String, Object> updated = new HashMap<>(ctx);
+            updated.remove(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS);
+            subTaskService.updateContext(subTaskId, updated);
+            log.info("验收文本已改写，清除 TD-11 旧标注（回落为不豁免）: subTaskId={}", subTaskId);
+        } catch (Exception e) {
+            log.warn("清除 TD-11 旧标注失败（不阻断重生成）: subTaskId={}, err={}", subTaskId, e.getMessage());
+        }
+    }
+
+    /**
+     * regenerate 不变量白名单：LLM 输出的四要素若为空/blank，保留原值（不因 LLM 少字段而清空）。
+     */
+    private static String requireChanged(String llmValue, String original, String field) {
+        return llmValue != null && !llmValue.isBlank() ? llmValue : original;
+    }
+
+    /** 查找 dependsOn 列表中含指定 id 的其他草案（expand 幽灵依赖预防）。 */
+    private List<Long> referencingDrafts(Long taskId, Long subTaskId) {
+        List<SubTaskView> siblings = subTaskService.listDraftsInInsertOrder(
+                taskId, SubTaskStatus.PENDING_PLAN_REVIEW);
+        List<Long> referencing = new ArrayList<>();
+        for (SubTaskView v : siblings) {
+            if (v.id() != null && v.id().equals(subTaskId)) {
+                continue; // 自己
+            }
+            if (v.dependsOn() != null && v.dependsOn().contains(subTaskId)) {
+                referencing.add(v.id());
+            }
+        }
+        return referencing;
+    }
+
+    /** 渲染 expand 提示词（单条草案四要素 + 任务快照 + 技能目录 + 需求包）。 */
+    private String renderExpandPrompt(TaskView task, SubTaskView draft, PlannerAgentRef planner) {
+        ClassPathResource resource = new ClassPathResource(EXPAND_PROMPT_TEMPLATE_PATH);
+        if (!resource.exists()) {
+            throw new BizException("未找到展开 Prompt 模板: " + EXPAND_PROMPT_TEMPLATE_PATH);
+        }
+        String template;
+        try (InputStream in = resource.getInputStream()) {
+            template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new BizException("读取展开 Prompt 模板失败: " + e.getMessage());
+        }
+        TaskArchetype archetype = task.taskArchetype() != null
+                ? task.taskArchetype() : TaskArchetype.DEFAULT();
+        String skills = draft.requiredSkills() != null && !draft.requiredSkills().isEmpty()
+                ? String.join(", ", draft.requiredSkills()) : "（草案未指派技能）";
+        String constraints = draft.constraints() != null && !draft.constraints().isBlank()
+                ? draft.constraints() : "（草案无约束）";
+        return template
+                .replace("{{TASK_TITLE}}", task.title() != null ? task.title() : "")
+                .replace("{{TASK_ARCHETYPE}}", archetype.name())
+                .replace("{{TASK_DESCRIPTION}}",
+                        task.description() != null && !task.description().isBlank()
+                                ? task.description() : "（无补充描述）")
+                .replace("{{DRAFT_TITLE}}", draft.title() != null ? draft.title() : "")
+                .replace("{{DRAFT_CONTENT}}", draft.content() != null ? draft.content() : "")
+                .replace("{{DRAFT_DELIVERABLE}}", draft.deliverable() != null ? draft.deliverable() : "")
+                .replace("{{DRAFT_ACCEPTANCE}}", draft.acceptance() != null ? draft.acceptance() : "")
+                .replace("{{DRAFT_ACCEPTANCE_KIND}}",
+                        draft.acceptanceKind() != null ? draft.acceptanceKind().name() : "AUTOMATED")
+                .replace("{{DRAFT_PRIORITY}}", draft.priority() != null ? draft.priority() : "MEDIUM")
+                .replace("{{DRAFT_SKILLS}}", skills)
+                .replace("{{DRAFT_CONSTRAINTS}}", constraints)
+                .replace("{{SKILL_CATALOG}}", renderSkillCatalog())
+                .replace("{{TASK_CONTEXT_SNAPSHOT}}", renderSnapshotSafely(task))
+                .replace("{{REQUIREMENT_PACKAGE}}", renderRequirementPackage(task))
+                .replace("{{SUBTASK_COUNT_RULE}}", renderSubtaskCountRule(task));
+    }
+
+    /** 渲染 regenerate 提示词（同 expand 基础 + 重写语义）。 */
+    private String renderRegeneratePrompt(TaskView task, SubTaskView draft, PlannerAgentRef planner) {
+        ClassPathResource resource = new ClassPathResource(REGENERATE_PROMPT_TEMPLATE_PATH);
+        if (!resource.exists()) {
+            throw new BizException("未找到重生成 Prompt 模板: " + REGENERATE_PROMPT_TEMPLATE_PATH);
+        }
+        String template;
+        try (InputStream in = resource.getInputStream()) {
+            template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new BizException("读取重生成 Prompt 模板失败: " + e.getMessage());
+        }
+        TaskArchetype archetype = task.taskArchetype() != null
+                ? task.taskArchetype() : TaskArchetype.DEFAULT();
+        String skills = draft.requiredSkills() != null && !draft.requiredSkills().isEmpty()
+                ? String.join(", ", draft.requiredSkills()) : "（草案未指派技能）";
+        String constraints = draft.constraints() != null && !draft.constraints().isBlank()
+                ? draft.constraints() : "（草案无约束）";
+        return template
+                .replace("{{TASK_TITLE}}", task.title() != null ? task.title() : "")
+                .replace("{{TASK_ARCHETYPE}}", archetype.name())
+                .replace("{{TASK_DESCRIPTION}}",
+                        task.description() != null && !task.description().isBlank()
+                                ? task.description() : "（无补充描述）")
+                .replace("{{DRAFT_TITLE}}", draft.title() != null ? draft.title() : "")
+                .replace("{{DRAFT_CONTENT}}", draft.content() != null ? draft.content() : "")
+                .replace("{{DRAFT_DELIVERABLE}}", draft.deliverable() != null ? draft.deliverable() : "")
+                .replace("{{DRAFT_ACCEPTANCE}}", draft.acceptance() != null ? draft.acceptance() : "")
+                .replace("{{DRAFT_ACCEPTANCE_KIND}}",
+                        draft.acceptanceKind() != null ? draft.acceptanceKind().name() : "AUTOMATED")
+                .replace("{{DRAFT_PRIORITY}}", draft.priority() != null ? draft.priority() : "MEDIUM")
+                .replace("{{DRAFT_SKILLS}}", skills)
+                .replace("{{DRAFT_CONSTRAINTS}}", constraints)
+                .replace("{{SKILL_CATALOG}}", renderSkillCatalog())
+                .replace("{{TASK_CONTEXT_SNAPSHOT}}", renderSnapshotSafely(task))
+                .replace("{{REQUIREMENT_PACKAGE}}", renderRequirementPackage(task));
+    }
+
+    /** 单条草案 LLM 调用（expand/regenerate 共用；不记 TASK_PLAN_LLM_CALL_START 事件，用轻量日志）。 */
+    private AgentResult executeLlmForSingleDraft(PlannerAgentRef planner, String prompt, Long taskId,
+                                                 String scene) {
+        AgentTask agentTask = AgentTask.builder()
+                .systemPrompt("")
+                .userPrompt(prompt)
+                .context(Map.of("taskId", taskId, "subTaskScene", scene))
+                .requiredCapabilities(Map.of())
+                .skills(List.of())
+                .build();
+        long startMs = System.currentTimeMillis();
+        AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
+        long costMs = System.currentTimeMillis() - startMs;
+        if (!result.isSuccess()) {
+            throw new BizException("Planner LLM 调用失败: " + result.getErrorMessage());
+        }
+        log.info("单条草案 LLM 调用完成: taskId={}, scene={}, costMs={}, success={}",
+                taskId, scene, costMs, result.isSuccess());
+        return result;
+    }
+
+    /** regenerate 输出解析：单条 JSON 对象 → PlanDraftItem（必填四要素 + acceptanceKind 校验）。 */
+    private PlanDraftItem parseSingleRegenerateOutput(Long taskId, PlannerAgentRef planner, String rawOutput) {
+        if (rawOutput == null || rawOutput.isBlank()) {
+            throw new BizException("Planner LLM 返回内容为空");
+        }
+        String cleaned = rawOutput.trim();
+        // 兼容 markdown fence 包裹
+        if (cleaned.startsWith("```")) {
+            int firstNewline = cleaned.indexOf('\n');
+            if (firstNewline > 0) {
+                cleaned = cleaned.substring(firstNewline + 1);
+            }
+            int fenceEnd = cleaned.lastIndexOf("```");
+            if (fenceEnd >= 0) {
+                cleaned = cleaned.substring(0, fenceEnd);
+            }
+            cleaned = cleaned.trim();
+        }
+        PlanDraftItem item;
+        try {
+            item = objectMapper.readValue(cleaned, PlanDraftItem.class);
+        } catch (Exception e) {
+            throw new BizException("Planner LLM 重生成输出 JSON 解析失败: " + e.getMessage()
+                    + "; 原始输出摘要: " + summarize(rawOutput));
+        }
+        if (item == null) {
+            throw new BizException("Planner LLM 未输出草案内容");
+        }
+        String missing = missingRequiredField(item);
+        if (missing != null) {
+            taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_DRAFT_FIELD_MISSING.code(),
+                    AgentRole.PLANNER, planner.id(),
+                    Map.of("draftSeq", 1, "field", missing,
+                            "title", item.getTitle() != null ? item.getTitle() : "",
+                            "rawOutputSummary", summarize(rawOutput)));
+            throw new BizException("重生成结果缺少 " + missing + " 字段; 原始输出摘要: "
+                    + summarize(rawOutput));
+        }
+        // acceptanceKind 校验（单条）：显式声明走 fail-close
+        validateAcceptanceKinds(taskId, planner, List.of(item));
+        validateFieldLengths(taskId, planner, List.of(item));
+        return item;
     }
 
     /** LLM 拆解主流程（从同步 decompose 迁出，行为不变）。 */
@@ -198,7 +523,9 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
 
     /** 加载 classpath 模板并替换占位符。G-004 增量 B：注入任务技能要求（task.required_skills，
      * 与执行侧 resolve 命中注入、审查侧核验同一清单——拆解规划须与技能规范对齐）。
-     * G-011：注入需求包段（{{REQUIREMENT_PACKAGE}}，防御式读取 task.context.requirementPackage）。 */
+     * G-011：注入需求包段（{{REQUIREMENT_PACKAGE}}，防御式读取 task.context.requirementPackage）。
+     * `TD-3`：注入 {{TASK_ARCHETYPE}} 与 {{SUBTASK_COUNT_RULE}}，并按原型择一拆分维度小节。
+     * `TD-6`：注入 {{TASK_CONTEXT_SNAPSHOT}}（附件 / 知识库 / 历史任务骨架，只给「有什么」）。 */
     private String renderPrompt(TaskView task, PlannerGranularityResolver.GranularityDecision decision) {
         ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
         if (!resource.exists()) {
@@ -210,17 +537,24 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         } catch (Exception e) {
             throw new BizException("读取拆解 Prompt 模板失败: " + e.getMessage());
         }
-        return template
+        TaskArchetype archetype = task.taskArchetype() != null
+                ? task.taskArchetype() : TaskArchetype.DEFAULT();
+        String rendered = template
                 .replace("{{TASK_TITLE}}", task.title() != null ? task.title() : "")
                 .replace("{{TASK_DESCRIPTION}}",
                         task.description() != null && !task.description().isBlank()
                                 ? task.description() : "（无补充描述，请依据标题拆解）")
+                .replace("{{TASK_ARCHETYPE}}", archetype.name())
                 .replace("{{TASK_REQUIRED_SKILLS}}", renderRequiredSkills(task.requiredSkills()))
                 .replace("{{SKILL_CATALOG}}", renderSkillCatalog())
                 .replace("{{EXECUTOR_PROFILE}}", decision.profile())
                 .replace("{{TASK_DIFFICULTY}}", TaskAgentPolicy.difficulty(task.agentPolicy()).name())
                 .replace("{{GRANULARITY}}", decision.granularity().name())
-                .replace("{{REQUIREMENT_PACKAGE}}", renderRequirementPackage(task));
+                .replace("{{REQUIREMENT_PACKAGE}}", renderRequirementPackage(task))
+                .replace("{{TASK_CONTEXT_SNAPSHOT}}", renderSnapshotSafely(task))
+                .replace("{{SUBTASK_COUNT_RULE}}", renderSubtaskCountRule(task));
+        // TD-3：六个拆分维度块全在模板内，此处只保留当前原型那一块（缺块即抛，不静默降级）
+        return ArchetypeDimensionsSection.select(rendered, archetype);
     }
 
     /** G-011：需求包段渲染——task.context.requirementPackage 经防御式解析后五字段逐项列表；
@@ -228,6 +562,74 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     private String renderRequirementPackage(TaskView task) {
         return RequirementPackageParser.render(
                 RequirementPackageParser.fromContext(task.context()));
+    }
+
+    /**
+     * `TD-6`：上下文快照渲染，**任何异常只降级为空快照，绝不击穿拆解**。
+     *
+     * <p>渲染器内部已对三类取数各自 try/catch，这里再包一层是因为「附加价值」不该有否决权：
+     * 快照取不到只是拆得糙一点，拆解失败则整件事做不了——代价不对等。</p>
+     */
+    private String renderSnapshotSafely(TaskView task) {
+        try {
+            String snapshot = contextSnapshotRenderer.render(task);
+            return snapshot != null && !snapshot.isBlank()
+                    ? snapshot : "- （本次无可用上下文快照）";
+        } catch (Exception e) {
+            log.warn("拆解期上下文快照渲染失败，已降级为空快照（不阻断拆解）: taskId={}, err={}",
+                    task.id(), e.getMessage());
+            return "- （上下文快照渲染失败，按无额外材料处理）";
+        }
+    }
+
+    /**
+     * `TD-3`：数量规则句——**门槛与数量分离**（设计 §3.3，借鉴 task-master 的四级回退链）。
+     *
+     * <p>本方法<b>只做渲染层</b>：{@code task.context.subtaskCount} 有人工显式传入就渲染成
+     * 「恰好 N 个」，没传则沿用改造前的 3~10 区间。数量决策链路（谁该传、传多少）不在本项范围
+     * ——`GRANULARITY` 仍是唯一的粒度档位来源（`G-010`）。</p>
+     */
+    private String renderSubtaskCountRule(TaskView task) {
+        Integer pinned = pinnedSubtaskCount(task);
+        if (pinned == null) {
+            return "子任务数量必须在 3~10 个之间；任务简单时宁少勿滥，不要为凑数而拆。";
+        }
+        return "子任务数量必须恰好 " + pinned + " 个（上游已钉死数量，不得增减）；"
+                + "若确有必要偏离该数量，请在对应条目的 uncertainties 中说明理由，不要自行改数量。";
+    }
+
+    /**
+     * 读取人工钉死的子任务数量。
+     *
+     * <p>越界钳制到 {@link #MAX_DRAFT_COUNT}：提示词要求「恰好 N 个」而服务端硬上限是 10 时，
+     * 若 N &gt; 10 则模型无论如何都会触发落库前拒绝——那是必然失败，不是校验。钳制并告警
+     * 比让整批拆解失败更有用（真实的意图是「多拆一些」，10 已经是能落库的上限）。</p>
+     */
+    private Integer pinnedSubtaskCount(TaskView task) {
+        Map<String, Object> context = task.context();
+        if (context == null) {
+            return null;
+        }
+        Object raw = context.get(TaskContextKeys.SUBTASK_COUNT);
+        Integer value = null;
+        if (raw instanceof Number number) {
+            value = number.intValue();
+        } else if (raw instanceof String str && !str.isBlank()) {
+            try {
+                value = Integer.parseInt(str.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        if (value == null || value <= 0) {
+            return null;
+        }
+        if (value > MAX_DRAFT_COUNT) {
+            log.warn("子任务数量钉死值超服务端上限，已钳制: taskId={}, pinned={}, capped={}",
+                    task.id(), value, MAX_DRAFT_COUNT);
+            return MAX_DRAFT_COUNT;
+        }
+        return value;
     }
 
     /** G-010：按任务执行者画像 + 难度定位拆解粒度；白名单内 accessType 一次批量查询，避免 N+1。 */
@@ -317,7 +719,87 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                         + " 字段; 原始输出摘要: " + summarize(rawOutput));
             }
         }
+        // TD-5：验收判据按 kind 分流校验（设计 §4.2）。显式声明的 kind 与文本写法不匹配
+        // → fail-close（挡在落库前）；kind 缺失回落 AUTOMATED 但文本写法不符 → WARN 放行
+        // （存量零新失败，见 LOG-20261024-039 观察项与计划 §6 风险 2）
+        validateAcceptanceKinds(taskId, planner, items);
+        // TD-5：acceptance / deliverable 字符下限质量闸（[实测] 借鉴 expand-task.json 的
+        // 字符数下限设计，纯长度判定挡「空话型子任务」）。阈值远低于存量真实样本下限
+        // （2026-10-24 实测 50 条存量：acceptance 最短 39 字符 / deliverable 最短 17 字符），
+        // 只拦 1~2 字符的空话桩（"a" / "d"），正常产物零误伤。
+        validateFieldLengths(taskId, planner, items);
         return items;
+    }
+
+    /** TD-5：acceptance / deliverable 字符下限。阈值来自存量真实样本（见上方调用处注释）。 */
+    private static final int ACCEPTANCE_MIN_LENGTH = 10;
+    private static final int DELIVERABLE_MIN_LENGTH = 8;
+
+    /**
+     * TD-5：acceptance / deliverable 字符下限校验（fail-close：长度不足即整批拒绝）。
+     *
+     * <p>必填校验（P1）只保证字段存在（"a" 也非空），本条保证字段有实质内容——长度不足的
+     * acceptance 无法支撑验收（执行侧/审查侧无标准可核），与 {@code missingRequiredField}
+     * 同属落库前围栏，失败可经 republish / planById 重触发。</p>
+     */
+    private void validateFieldLengths(Long taskId, PlannerAgentRef planner, List<PlanDraftItem> items) {
+        for (int i = 0; i < items.size(); i++) {
+            PlanDraftItem item = items.get(i);
+            String acceptance = item.getAcceptance() == null ? "" : item.getAcceptance().trim();
+            String deliverable = item.getDeliverable() == null ? "" : item.getDeliverable().trim();
+            if (acceptance.length() < ACCEPTANCE_MIN_LENGTH || deliverable.length() < DELIVERABLE_MIN_LENGTH) {
+                throw new BizException("拆解结果第 " + (i + 1) + " 条验收判据/交付物过短（acceptance="
+                        + acceptance.length() + " 字符 < " + ACCEPTANCE_MIN_LENGTH
+                        + " 或 deliverable=" + deliverable.length() + " 字符 < " + DELIVERABLE_MIN_LENGTH
+                        + "）——空话型子任务，落库前拒绝");
+            }
+        }
+    }
+
+    /**
+     * TD-5：逐条校验 acceptanceKind ↔ acceptance 文本写法匹配。
+     *
+     * <p>显式声明（LLM 给了结构化字段）走 fail-close：不匹配即整批拒绝（拆解失败回退
+     * PENDING 可重拆）；kind 缺失（回落 {@code AUTOMATED}）但文本写法不符走 WARN：
+     * timeline 记录 hint，不阻断落库——首期以观测为主，避免大面积误伤存量与 flash 产物。</p>
+     */
+    private void validateAcceptanceKinds(Long taskId, PlannerAgentRef planner, List<PlanDraftItem> items) {
+        for (int i = 0; i < items.size(); i++) {
+            PlanDraftItem item = items.get(i);
+            // ★显式声明判定必须基于原始字符串，不能用 parse() 结果：
+            // parse(null/非法值) 回落 AUTOMATED（非 null），直接拿来判断会把「缺失/非法值」
+            // 误判成「显式声明 AUTOMATED」→ 普通文本触发 Fail 误伤存量（LOG-20261024-040 踩坑）。
+            // 只有「非空且是合法枚举」才算显式声明；缺失/非法值按未声明处理（Warn 放行）。
+            String rawKind = item.getAcceptanceKind();
+            AcceptanceKind declared = null;
+            if (rawKind != null && !rawKind.isBlank()) {
+                try {
+                    declared = AcceptanceKind.valueOf(rawKind.trim().toUpperCase());
+                } catch (IllegalArgumentException e) {
+                    // 非法值：不视为显式声明（模型乱填，按未声明 Warn 放行，避免误伤）
+                }
+            }
+            AcceptanceKindValidator.Result result =
+                    AcceptanceKindValidator.validate(declared, item.getAcceptance());
+            String title = item.getTitle() != null ? item.getTitle() : "";
+            String acceptance = item.getAcceptance() != null ? item.getAcceptance() : "";
+            // Java 17 兼容：instanceof 模式匹配，避免 switch patterns（需 21+ preview）
+            if (result instanceof AcceptanceKindValidator.Result.Fail f) {
+                // ★携带 acceptance 摘要：fail-close 抛错时把原文带进错误信息，排障可直接定位
+                // （2026-10-25 事故 LOG-20261024-049：只有 title 无原文，翻日志才能猜命中词）
+                throw new BizException("拆解结果第 " + (i + 1) + " 条验收判据与写法不匹配: "
+                        + f.reason() + "（title=" + title + "; acceptance=" + acceptance + "）");
+            } else if (result instanceof AcceptanceKindValidator.Result.Warn w) {
+                taskTimelineService.recordEvent(taskId, null,
+                        TimelineEventCode.TASK_PLAN_ACCEPTANCE_KIND_MISMATCH.code(),
+                        AgentRole.PLANNER, planner.id(),
+                        Map.of("draftSeq", i + 1, "title", title,
+                                "kind", w.kind(), "hint", w.hint()));
+                log.warn("拆解草案 acceptance 写法与 kind 疑似错配（放行）: draftSeq={}, title={}, hint={}",
+                        i + 1, title, w.hint());
+            }
+            // Pass：无需处理
+        }
     }
 
     /**
@@ -376,7 +858,15 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         String generatedAt = OffsetDateTime.now().toString();
         // G-022 拆解侧前置校验：在岗 Agent 技能集合只查一次（避免逐草案 N+1）
         List<List<String>> activeAgentSkillSets = activeAgentSkillSets();
+        // TD-11 准确率修正（2026-10-25 LOG-20261025-016）：先汇总任务级 uncertainties，
+        // 供「任务级判据」使用——模型可能把 UNCONFIRMED 只申报在下游草案，而真正需要它的
+        // 上游草案报成 TO_LOOK_UP，单条口径会漏标。
+        List<UncertaintyDraft> taskLevelUncertainties = new ArrayList<>();
         for (PlanDraftItem item : items) {
+            taskLevelUncertainties.addAll(normalizeUncertainties(taskId, resolveUncertainties(item), planner));
+        }
+        for (int idx = 0; idx < items.size(); idx++) {
+            PlanDraftItem item = items.get(idx);
             List<UncertaintyDraft> uncertainties =
                     normalizeUncertainties(taskId, resolveUncertainties(item), planner);
             // G-010 缺口④清偿：COARSE 粒度 constraints 缺失记 timeline WARN（不阻断落库）
@@ -393,16 +883,88 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             context.put("plannerAgentId", planner.id());
             context.put("plannerAgentName", planner.name());
             context.put("planGeneratedAt", generatedAt);
+            // TD-11：验收契约可满足性标注（**只标注，不改任何既有字段、不阻断落库**）。
+            // 挂在此处 = 「validateAcceptanceKinds 之后、落库之前」——那时 uncertainties 已归一化、
+            // dependsOn 已可解析。TD-5 的校验器物理上看不到 uncertainties（签名里就没有），
+            // 所以「验收要求取回外部实证」× 「该外部事实仍未确认」这个死锁只能在这一层发现。
+            // 2026-10-25 准确率修正：传入任务级 uncertainties，判据从「本条有 UNCONFIRMED」
+            // 改为「任务级存在 UNCONFIRMED ∧ 本条 acceptance 命中实证型来源」。
+            AcceptanceSatisfiabilityChecker.Result satisfiability =
+                    checkAcceptanceSatisfiability(taskId, planner, items, idx, item, uncertainties,
+                            taskLevelUncertainties);
+            if (satisfiability.unmet()) {
+                context.put(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS, satisfiability.preconditionRefs());
+            }
             drafts.add(new SubTaskDraft(taskId, item.getTitle().trim(), item.getContent(),
                     item.getDeliverable(), item.getAcceptance(),
                     resolveSubTaskPriority(item.getPriority(), task.priority()),
                     Boolean.TRUE.equals(item.getContract()) ? 1 : 0,
                     keptSkills,
-                    item.getConstraints(), SubTaskStatus.PENDING_PLAN_REVIEW, context, uncertainties));
+                    item.getConstraints(), SubTaskStatus.PENDING_PLAN_REVIEW, context, uncertainties,
+                    // TD-3 / TD-2：LLM 未给或给了非法值一律回落 AUTOMATED（= 改造前唯一语义）
+                    AcceptanceKind.parse(item.getAcceptanceKind())));
         }
         // D5 兜底审计：任务 openQuestions 非空但拆解产物无任何 UNCONFIRMED 继承 → WARN（不阻断）
         auditOpenQuestionsInheritance(task, drafts, planner);
         return drafts;
+    }
+
+    /**
+     * `TD-11`：验收契约可满足性标注（**只标注，不阻断**）。
+     *
+     * <p>判据与取舍见 {@link AcceptanceSatisfiabilityChecker} 类注释；本方法只负责
+     * 「取上游文本 → 调纯函数 → 命中则记一条 WARN 级时间线事件」。写进
+     * {@code sub_task.context.acceptancePreconditions} 的动作在 {@code buildDrafts} 里
+     * （那里才有 context 变量），本方法只返回结果。</p>
+     *
+     * <p><b>异常一律吞掉</b>：标注是纯增量观测，任何异常都不得让整批拆解失败——
+     * 那是 `TD-5` 风险 2 的反面教训（校验过严会阻塞主链路）。</p>
+     */
+    private AcceptanceSatisfiabilityChecker.Result checkAcceptanceSatisfiability(
+            Long taskId, PlannerAgentRef planner, List<PlanDraftItem> items, int idx,
+            PlanDraftItem item, List<UncertaintyDraft> uncertainties,
+            List<UncertaintyDraft> taskLevelUncertainties) {
+        try {
+            AcceptanceSatisfiabilityChecker.Result result = AcceptanceSatisfiabilityChecker.check(
+                    item.getAcceptance(), uncertainties, upstreamTexts(items, item),
+                    taskLevelUncertainties);
+            if (result.unmet()) {
+                taskTimelineService.recordEvent(taskId, null,
+                        TimelineEventCode.TASK_PLAN_ACCEPTANCE_PRECONDITION_UNMET.code(),
+                        AgentRole.PLANNER, planner.id(),
+                        Map.of("draftSeq", idx + 1,
+                                "title", item.getTitle() == null ? "" : item.getTitle(),
+                                "preconditionRefs", result.preconditionRefs(),
+                                "uncertaintyNotes", result.uncertaintyNotes()));
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("验收可满足性标注失败（不阻断拆解）: taskId={}, draftSeq={}, err={}",
+                    taskId, idx + 1, e.getMessage());
+            return AcceptanceSatisfiabilityChecker.Result.NONE;
+        }
+    }
+
+    /**
+     * 取该条草案 {@code dependsOn} 指向的草案标题 + 正文（供判「缺输入是否已由 DAG 表达」）。
+     *
+     * <p>{@code dependsOn} 存的是**本批草案的 1-based 序号**（不是 id），越界序号直接跳过——
+     * 越界本身由 {@code validateDependencies} 另行 fail-close，这里不重复报错。</p>
+     */
+    private static List<String> upstreamTexts(List<PlanDraftItem> items, PlanDraftItem item) {
+        if (item.getDependsOn() == null || item.getDependsOn().isEmpty()) {
+            return List.of();
+        }
+        List<String> texts = new ArrayList<>();
+        for (Integer seq : item.getDependsOn()) {
+            if (seq == null || seq < 1 || seq > items.size()) {
+                continue;
+            }
+            PlanDraftItem up = items.get(seq - 1);
+            texts.add((up.getTitle() == null ? "" : up.getTitle()) + " "
+                    + (up.getContent() == null ? "" : up.getContent()));
+        }
+        return texts;
     }
 
     /**
@@ -439,7 +1001,8 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                 continue;
             }
             String kind = u.kind();
-            if (!UncertaintyDraft.KIND_ASSUMPTION.equals(kind) && !UncertaintyDraft.KIND_UNCONFIRMED.equals(kind)) {
+            // TD-7：值域白名单单一来源 UncertaintyKind（四值），非法值仍降级 UNCONFIRMED
+            if (!UncertaintyKind.isKnown(kind)) {
                 taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_UNCERTAINTY_DEGRADED.code(),
                         AgentRole.PLANNER, planner.id(),
                         Map.of("note", u.note(), "rawKind", String.valueOf(kind),
@@ -448,7 +1011,9 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             }
             kept.add(new UncertaintyDraft(kind, u.note()));
         }
-        return kept;
+        // TD-11：ref 补齐走 `AcceptanceSatisfiabilityChecker#ensureRefs`（全项目唯一实现，
+        // 判据侧读 ref 用的也是它——两处各写一份编号逻辑必然分叉）
+        return AcceptanceSatisfiabilityChecker.ensureRefs(kept);
     }
 
     /**

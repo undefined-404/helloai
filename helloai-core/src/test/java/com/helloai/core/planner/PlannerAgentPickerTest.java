@@ -226,7 +226,7 @@ class PlannerAgentPickerTest {
     void shouldPreferPolicyPlannerOverConversationPinned() {
         TaskView task = new TaskView(TASK_ID, null, null, null, null, null, null,
                 TaskAgentPolicy.build(9L, null, null, null, null), TaskStatus.PLANNING, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
         when(taskService.getView(TASK_ID)).thenReturn(task);
         AgentProfileSnapshot policyPlanner = llmPlanner(9L);
         when(agentService.getProfileById(9L)).thenReturn(policyPlanner);
@@ -241,7 +241,7 @@ class PlannerAgentPickerTest {
     void shouldFallbackToAutoWhenPolicyPlannerDisabled() {
         TaskView task = new TaskView(TASK_ID, null, null, null, null, null, null,
                 TaskAgentPolicy.build(9L, null, null, null, null), TaskStatus.PLANNING, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
         when(taskService.getView(TASK_ID)).thenReturn(task);
         AgentProfileSnapshot disabled = snapshot(9L, "planner-9", AgentRole.PLANNER,
                 AgentAccessType.API_KEY_LLM, AgentStatus.DISABLED, AgentOnlineStatus.IDLE);

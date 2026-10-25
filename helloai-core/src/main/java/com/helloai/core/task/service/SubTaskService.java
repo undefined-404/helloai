@@ -61,8 +61,32 @@ public interface SubTaskService extends IService<SubTask> {
      * @param constraints    执行约束；null=不修改
      * @param uncertainties  不确定性申报（G-011）；null=不修改，非 null（含空数组）=覆盖（空数组=清空）；
      *                       空白 note 条目丢弃、非法 kind 降级 UNCONFIRMED（D3 fail-close 同口径）
+     * @param acceptanceKind 验收判据（`TD-2`）：AUTOMATED / STRUCTURAL / REVIEWED / ATTESTED；
+     *                       null / 空白=不修改，非法值回落 AUTOMATED（人工为权威输入，不做强校验）
      */
-    void updateDraft(Long id, List<String> requiredSkills, String constraints, List<Uncertainty> uncertainties);
+    void updateDraft(Long id, List<String> requiredSkills, String constraints, List<Uncertainty> uncertainties,
+                     String acceptanceKind);
+
+    /**
+     * `TD-9` 单条草案重生成写命令（regenerateById 专用）：只改四要素
+     * {@code content} / {@code deliverable} / {@code acceptance} / {@code acceptanceKind}。
+     *
+     * <p><b>不变量白名单</b>：{@code title} / {@code id} / {@code dependsOn} 一律不动
+     * （改了审计线索就断了——外部引用、依赖图、时间线全对不上，参考实现 update-task.json
+     * 「NEVER change the title」「Maintain the same ID, status, and dependencies」）。
+     * 与 {@link #updateDraft} 分工：updateDraft 改技能/约束/不确定性/验收判据（G-010 草案
+     * 确认 UI）；本方法改内容四要素（LLM 重生成产物落库）。</p>
+     *
+     * <p>fail-close：仅 PENDING_PLAN_REVIEW 状态允许，其余状态抛业务异常。</p>
+     *
+     * @param id             草案子任务 ID
+     * @param content        目标内容（null=不修改，非 null=覆盖）
+     * @param deliverable    目标交付物（null=不修改，非 null=覆盖）
+     * @param acceptance     目标验收标准（null=不修改，非 null=覆盖）
+     * @param acceptanceKind 目标验收判据（null/空白=不修改，非法值回落 AUTOMATED）
+     */
+    void updateDraftContent(Long id, String content, String deliverable, String acceptance,
+                            String acceptanceKind);
 
     @Transactional(rollbackFor = Exception.class)
     SubTask create(SubTask subTask, Long assignedAgentId);

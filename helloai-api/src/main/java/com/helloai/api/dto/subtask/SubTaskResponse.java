@@ -1,5 +1,6 @@
 package com.helloai.api.dto.subtask;
 
+import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.entity.Uncertainty;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
@@ -23,6 +24,13 @@ public class SubTaskResponse {
     private String title;
     private String deliverable;
     private String acceptance;
+    /**
+     * 验收判据（`TD-2`）：AUTOMATED / STRUCTURAL / REVIEWED / ATTESTED，默认 AUTOMATED。
+     *
+     * <p>「谁来判、怎么判」的显式声明。落库前按本值分流校验文本写法（`TD-5`）；
+     * 前端只在草案态展示与可编辑（{@code PENDING_PLAN_REVIEW}）。</p>
+     */
+    private AcceptanceKind acceptanceKind;
     private String priority;
     private SubTaskStatus status;
     @JsonSerialize(using = ToStringSerializer.class)

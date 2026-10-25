@@ -41,6 +41,9 @@ export const paths = {
     getById: (id: string | number) => `/sub-tasks/getById/${enc(id)}`,
     // G-010 草案人工修订：确认前编辑技能指派与执行约束（仅 PENDING_PLAN_REVIEW 可编辑）
     updateDraft: (id: string | number) => `/sub-tasks/updateDraftById/${enc(id)}`,
+    // TD-9 单条草案细拆 / 重生成（同步等待 LLM，原草案不被破坏）
+    expandDraft: (id: string | number) => `/sub-tasks/expandDraftById/${enc(id)}`,
+    regenerateDraft: (id: string | number) => `/sub-tasks/regenerateDraftById/${enc(id)}`,
     create: '/sub-tasks',
     batch: '/sub-tasks/batch',
     timeline: (id: string | number) => `/sub-tasks/listTimelineBySubTaskId/${enc(id)}`,

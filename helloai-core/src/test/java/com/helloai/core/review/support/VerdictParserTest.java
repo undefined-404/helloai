@@ -76,4 +76,28 @@ class VerdictParserTest {
         assertThat(parser.parseVerdict(null)).isNull();
         assertThat(parser.parseVerdict("   ")).isNull();
     }
+
+    @Test
+    @DisplayName("TD-5 验收③: formatReviewResult 含逐条核验（analysis）——REVIEWED 子任务审查逐条可见")
+    void formatReviewResultCarriesPerItemAnalysis() {
+        SubTaskReviewService.ReviewVerdict verdict = parser.parseVerdict(
+                "{\"pass\": true, \"score\": 4, \"issues\": \"\", \"comment\": \"全部达标\", "
+                        + "\"analysis\": \"①证据可追溯 pass；②决策覆盖 pass；③反向结论 pass\"}");
+        assertThat(verdict).isNotNull();
+        String text = VerdictParser.formatReviewResult(verdict);
+        assertThat(text).contains("结果: 通过");
+        assertThat(text).contains("逐条核验");
+        assertThat(text).contains("①证据可追溯 pass");
+    }
+
+    @Test
+    @DisplayName("TD-5 验收③: analysis 为空时 formatReviewResult 不带逐条段（兼容存量）")
+    void formatReviewResultSkipsAnalysisWhenAbsent() {
+        SubTaskReviewService.ReviewVerdict verdict = parser.parseVerdict(
+                "{\"pass\": true, \"score\": 5, \"issues\": \"无\", \"comment\": \"很好\"}");
+        assertThat(verdict).isNotNull();
+        String text = VerdictParser.formatReviewResult(verdict);
+        assertThat(text).contains("结果: 通过");
+        assertThat(text).doesNotContain("逐条核验");
+    }
 }

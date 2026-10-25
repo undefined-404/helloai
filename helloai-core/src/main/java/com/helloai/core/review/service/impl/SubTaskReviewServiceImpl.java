@@ -317,30 +317,27 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             return;
         }
 
-        // 执行密集无能力提交者预检：提交者无本机执行能力时，产出可信度存疑，
-        // 跳过自动核验（避免核验 LLM 无法辨别幻觉证据而放行），打人工介入标记等人工处置。
+        // 执行密集 × 无本机能力提交者：**只观测，不阻断**（★2026-10-25 修正）。
+        // 历史做法是「跳过自动核验 + 标记人工介入 + return」，理由是「核验 LLM 无法辨别幻觉证据」。
+        // 实测证明这条护栏会必然卡死：子任务 2114355728453206020「字数与合规机器终检」的
+        // content 里「对定稿执行脚本化终检」命中旧词条「执行脚本」被判执行密集；提交者
+        // inner-MiniMax-M3 是 API_KEY_LLM + supportsMCP=false ⇒ 判无本机能力 ⇒ 跳过核验。
+        // 而该轮执行是 3 次 internal_run_in_sandbox 实测（exitCode=0 / truncated=false）、
+        // 附件已物化 8747B、验收项逐字对上——恰恰是最该被机器核验放行的一类，却成了唯一被拦的。
+        // 真正的防线是紧邻的证据硬检查（ReviewEvidenceAssembler：执行密集任务无可读物化附件
+        // 一律 fail-close，且带物化竞态补偿等待），能力闸在此处是错位复刻——判的是「能不能接」
+        // （派发侧语义），而非「证据够不够」（核验侧语义），且比证据闸更早返回、更硬。
+        // 故降级为「只记日志」：保留排障可见性，不再改状态、不再吞掉核验。
+        // 另注：「无本机能力」≠「无执行能力」——内部 LLM 可经 internal_run_in_sandbox（OpenSandbox）
+        // 执行命令，判据口径的彻底修订属独立改造（需同时拆分「沙箱可做 / 必须本机」两档信号）。
         Long submitterId = executorAgentId != null ? executorAgentId : subTask.assignedAgentId();
         if (dispatchProperties.isFallbackSkipExecutionDense()
                 && SubTaskDispatchService.isExecutionDense(subTask)
                 && submitterId != null) {
             AgentProfileSnapshot submitter = agentService.getProfileById(submitterId);
-            // 现状 hasLocalExecutionCapability(null)==true 表示「不跳过」：缺失提交者（快照 null）不跳过；
-            // 提交者存在但无本机执行能力才跳过（等价改写，杜绝反向误跳过）
             if (submitter != null && !submitter.localExecutionCapable()) {
-                log.warn("自动核验跳过：执行密集任务由无本机能力 Agent 提交, subTaskId={}, submitterAgentId={}",
-                        subTaskId, submitterId);
-                taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                        TimelineEventCode.SUB_TASK_REVIEW_SKIP_NO_CAPABILITY.code(), AgentRole.REVIEWER, submitterId,
-                        Map.of("reason", "execution_dense_submitter_no_local_capability",
-                                "submitterAgentId", submitterId));
-                subTaskService.markManualIntervention(subTaskId, TimelineEventCode.REVIEW_SKIP_EXECUTION_DENSE_NO_CAPABILITY.code(),
-                        Map.of("submitterAgentId", submitterId));
-                recordReviewSkipConversation(subTaskId, submitterId,
-                        "自动核验跳过：执行密集任务由无本机执行能力的 Agent 提交"
-                                + "（reason=execution_dense_submitter_no_local_capability，submitterAgentId="
-                                + submitterId + "），产出可信度存疑；已标记人工介入，等待人工核验处置。",
-                        TimelineEventCode.SUBTASK_REVIEW_SKIP_NO_CAPABILITY.code());
-                return;
+                log.warn("核验观测：执行密集任务由无本机能力 Agent 提交——仍照常核验（证据闸为真正防线）, "
+                        + "subTaskId={}, submitterAgentId={}", subTaskId, submitterId);
             }
         }
 
@@ -463,7 +460,12 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             recordAutoReviewQuietly(subTaskId, reviewer.id(), ReviewResult.APPROVED, verdict);
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
                     TimelineEventCode.SUB_TASK_AUTO_REVIEW_PASSED.code(), AgentRole.REVIEWER, reviewer.id(),
-                    VerdictParser.safeMap("score", verdict.getScore(), "comment", verdict.getComment()));
+                    // TD-5 验收③（2026-10-24）：payload 补 acceptanceKind（REVIEWED kind 子任务
+                    // 审查逐条可见）+ analysis（逐条对照验收标准的核验分析），仅增强观测不改变判定
+                    VerdictParser.safeMap("score", verdict.getScore(), "comment", verdict.getComment(),
+                            "acceptanceKind", subTask.acceptanceKind() == null ? null
+                                    : subTask.acceptanceKind().name(),
+                            "analysis", verdict.getAnalysis()));
             log.info("自动核验通过: subTaskId={}, reviewerAgentId={}, score={}",
                     subTaskId, reviewer.id(), verdict.getScore());
             recordReviewEventSafely(subTask, reviewer.id(), AgentEventType.REVIEW_APPROVED, verdict, channel);
@@ -704,16 +706,30 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         // LOG-20260904-007：rework 返回 false = 共享预算耗尽（attempt_total 达
         // max-reassign-attempts），子任务已转 DEAD_LETTER 待人工——不再补发执行命令，
         // 避免给死信子任务触发新一轮执行尝试（执行预算已封顶）。
+        //
+        // B1a（`LOG-20261025-014`）：写 review_record 与发 SUB_TASK_AUTO_REVIEW_REJECTED 事件
+        // **必须前置到 rework() 之前**。原实现把两件事放在 `if (!rework(...)) return;` 之后，
+        // 导致「预算耗尽」这个分支把整条评审结论整体吞掉——库里查不到驳回记录、时间线上
+        // 也没有驳回事件，用户只能看到「任务进了死信」，看不到「为什么被驳回」。
+        // 判据：**「评审驳回」是一个与后续处置无关的既成事实**，处置（返工/死信）可以有分支，
+        // 事实记录不能有分支。重复失败短路路径（`shortCircuitRepeatedFailure`）本就遵守这条，
+        // 只有本方法漏了。
+        recordAutoReviewQuietly(subTaskId, reviewerAgentId, ReviewResult.REJECTED, verdict);
+        taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
+                TimelineEventCode.SUB_TASK_AUTO_REVIEW_REJECTED.code(), AgentRole.REVIEWER, reviewerAgentId,
+                // TD-5 验收③（2026-10-24）：payload 补 acceptanceKind + analysis（逐条核验可见），
+                // 与 PASSED 路径同口径——仅增强观测不改变判定
+                VerdictParser.safeMap("score", verdict.getScore(), "issues", verdict.getIssues(),
+                        "comment", verdict.getComment(),
+                        "acceptanceKind", subTask.acceptanceKind() == null ? null
+                                : subTask.acceptanceKind().name(),
+                        "analysis", verdict.getAnalysis()));
+
         if (!subTaskService.rework(subTaskId, targetExecutor)) {
             log.warn("自动核验驳回跳过执行命令补发（返工预算已耗尽，子任务转死信）: subTaskId={}, executorAgentId={}",
                     subTaskId, targetExecutor);
             return;
         }
-        recordAutoReviewQuietly(subTaskId, reviewerAgentId, ReviewResult.REJECTED, verdict);
-        taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                TimelineEventCode.SUB_TASK_AUTO_REVIEW_REJECTED.code(), AgentRole.REVIEWER, reviewerAgentId,
-                VerdictParser.safeMap("score", verdict.getScore(), "issues", verdict.getIssues(),
-                        "comment", verdict.getComment()));
         log.info("自动核验驳回返工: subTaskId={}, reviewerAgentId={}, issues={}",
                 subTaskId, reviewerAgentId, VerdictParser.summarize(verdict.getIssues(), 200));
 

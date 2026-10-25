@@ -12,6 +12,7 @@ import com.helloai.core.agent.runtime.AgentExecutionResult;
 import com.helloai.core.agent.runtime.AgentRuntime;
 import com.helloai.core.agent.runtime.ExecutionEnvironmentProvider;
 import com.helloai.core.agent.runtime.LocalProcessEnvironment;
+import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentRuntimeContextAssembler;
@@ -89,6 +90,10 @@ class LocalExecutionCommandConsumerTest {
 
     @Mock
     private AgentRuntime agentRuntime;
+
+    /** 沙箱执行通道（turn 末工作区正文回传，`LOG-20261025-010`）。 */
+    @Mock
+    private SandboxExecutionService sandboxExecutionService;
 
     @InjectMocks
     private LocalExecutionCommandConsumer localExecutionCommandConsumer;
@@ -338,6 +343,109 @@ class LocalExecutionCommandConsumerTest {
 
             verify(agentExecutionRecordService, never()).markRunning(any());
             verify(agentRuntime, never()).execute(any(AgentContext.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("沙箱正文回传（turn 末，`LOG-20261025-010`）")
+    class WorkspaceDraftRecovery {
+
+        /** 实测形态：MiniMax 的 604 字节写作过程叙述 + 围栏。 */
+        private static final String NARRATIVE = "Only saved 1 char. Let me make real deletions.\n\n"
+                + "VERIFICATION:\n- 核实说明：正文不含实质内容\nSTATUS: BLOCKED\nNEXT_STEPS: 继续删减";
+
+        /** 工作区里真正写好的正文。 */
+        private static final String WORKSPACE_BODY = """
+                # OA 接入 AI 的第一件事：先 RAG，再 MCP
+
+                OA 系统里散落着审批意见、公文、会议纪要，模型看不到这些上下文，接 MCP 只能拿到空壳工具。
+                所以顺序是先建 RAG 索引、再做 MCP 工具调用：先让模型读得懂，再让模型动得了。
+
+                1. 建索引：把审批流与公文库抽成 chunks，按部门与密级打标签。
+                2. 接检索：在对话入口前挂检索节点，命中即注入上下文。
+                3. 上工具：MCP 只暴露写操作与流程跳转，读走 RAG，边界清晰。
+                结论：这个顺序由风险控制决定——先解决"读错"，再解决"写错"。
+                """;
+
+        private void stubHappyPath(AgentExecutionResult runtimeResult) {
+            setAgentRuntime();
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask());
+            when(agentService.getById(11L)).thenReturn(agent());
+            when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
+            when(contextAssembler.assemble(any(), any(), any(), any(), any())).thenReturn(assembledContext());
+            when(agentRuntime.execute(any(AgentContext.class))).thenReturn(runtimeResult);
+        }
+
+        @Test
+        @DisplayName("对话正文非交付物 + 工作区有真正文 ⇒ 用工作区正文提交（并拼回原围栏）")
+        void shouldSubmitWorkspaceDraftWhenConversationBodyIsNotDeliverable() {
+            stubHappyPath(AgentExecutionResult.builder()
+                    .status(ExecutionStatus.SUCCESS).output(NARRATIVE).finishReason("STOP").build());
+            when(sandboxExecutionService.readWorkspaceFile(22L)).thenReturn(WORKSPACE_BODY);
+
+            localExecutionCommandConsumer.consume(baseCommand());
+
+            verify(executionResultHandler).applyResultAtomically(eq(44L), eq(22L), eq(11L), argThat(r ->
+                    r.isSuccess()
+                            && r.getOutput().startsWith("# OA 接入 AI 的第一件事")
+                            // 原对话里的自审围栏要接在末尾，否则评审侧看不到证据声明
+                            && r.getOutput().contains("STATUS: BLOCKED")
+                            && !r.getOutput().startsWith("Only saved 1 char")));
+        }
+
+        @Test
+        @DisplayName("对话正文已是交付物 ⇒ 一个字都不动，不触发回读")
+        void shouldKeepConversationalBodyWhenDeliverable() {
+            String goodBody = "# 说明\n\n" + "正文".repeat(900);
+            stubHappyPath(AgentExecutionResult.builder()
+                    .status(ExecutionStatus.SUCCESS).output(goodBody).finishReason("STOP").build());
+
+            localExecutionCommandConsumer.consume(baseCommand());
+
+            verify(sandboxExecutionService, never()).readWorkspaceFile(any());
+            verify(executionResultHandler).applyResultAtomically(eq(44L), eq(22L), eq(11L),
+                    argThat(r -> goodBody.equals(r.getOutput())));
+        }
+
+        @Test
+        @DisplayName("工作区正文不比对话正文显著更长（短交付类验收）⇒ 不替换")
+        void shouldNotReplaceWhenWorkspaceDraftIsNotSubstantiallyLarger() {
+            // 350 字合格短答 vs 400 字沙箱草稿：判据「2 倍」拦下，避免合格短答被草稿顶掉
+            String shortAnswer = "先说结论：先 RAG 后 MCP。".repeat(30);
+            stubHappyPath(AgentExecutionResult.builder()
+                    .status(ExecutionStatus.SUCCESS).output(shortAnswer).finishReason("STOP").build());
+            when(sandboxExecutionService.readWorkspaceFile(22L))
+                    .thenReturn("# 草稿\n\n" + "草稿内容".repeat(90));
+
+            localExecutionCommandConsumer.consume(baseCommand());
+
+            verify(executionResultHandler).applyResultAtomically(eq(44L), eq(22L), eq(11L),
+                    argThat(r -> shortAnswer.equals(r.getOutput())));
+        }
+
+        @Test
+        @DisplayName("回读抛异常 / 工作区无文件 ⇒ 原样提交，不影响执行结果")
+        void shouldFallBackSilentlyWhenReadFails() {
+            stubHappyPath(AgentExecutionResult.builder()
+                    .status(ExecutionStatus.SUCCESS).output(NARRATIVE).finishReason("STOP").build());
+            when(sandboxExecutionService.readWorkspaceFile(22L))
+                    .thenThrow(new IllegalStateException("sandbox gone"));
+
+            localExecutionCommandConsumer.consume(baseCommand());
+
+            verify(executionResultHandler).applyResultAtomically(eq(44L), eq(22L), eq(11L),
+                    argThat(r -> NARRATIVE.equals(r.getOutput())));
+        }
+
+        @Test
+        @DisplayName("执行失败（非 SUCCESS）⇒ 不做回传")
+        void shouldNotRecoverForFailedExecution() {
+            stubHappyPath(AgentExecutionResult.builder()
+                    .status(ExecutionStatus.FAILED).output("boom").finishReason("ERROR").build());
+
+            localExecutionCommandConsumer.consume(baseCommand());
+
+            verify(sandboxExecutionService, never()).readWorkspaceFile(any());
         }
     }
 

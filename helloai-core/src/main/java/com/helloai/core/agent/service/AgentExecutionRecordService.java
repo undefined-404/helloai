@@ -51,6 +51,30 @@ public interface AgentExecutionRecordService extends IService<AgentExecutionReco
     boolean markTimeout(Long id);
 
     /**
+     * 收口子任务<b>在飞</b>的平台执行记录（PENDING/RUNNING → FAILED，落 {@code errorMsg}）。
+     *
+     * <p><b>为什么需要（2026-10-25 实测 2113947248843329537）</b>：人工把停滞子任务
+     * {@code block()} 后改派，{@code SubTaskAutoExecutionDispatcher} 建命令时被
+     * {@link #hasPendingOrRunning} 挡下——旧记录仍是 {@code RUNNING}（模型进程还在跑，4 分 45 秒），
+     * 于是「改派」100% 失败，子任务停在 ASSIGNED 无命令可消费，只能干等 10 分钟
+     * {@code AssignedSubTaskTimeoutTask} 回收；回收后依然被同一条记录挡住 ⇒ 二次失败。</p>
+     *
+     * <p><b>口径与 {@link #hasPendingOrRunning} 完全一致</b>（只动 {@code access_type}
+     * 为空或 {@link AgentAccessType#API_KEY_LLM} 的行）：外部路径的 attempt 记录不对应任何平台命令，
+     * 不在平台可收口范围内。两处必须共用同一匹配条件，否则「判有没有」和「清不清得掉」会分叉。</p>
+     *
+     * <p><b>语义 = 「这次执行的结果作废」</b>，不是「执行失败」。旧进程（若有）仍会跑完，
+     * 其终态写入被 {@code ExecutionStatus} 的 CAS（只从 RUNNING 迁移）拒绝，
+     * 结果回写被 {@code sub_task} 状态守卫丢弃（{@code subtask_status_not_in_progress}），
+     * 与既有的超时补偿路径同一套语义，不引入新分支。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @param reason    作废原因（落 {@code error_msg}，截断 500 字符）
+     * @return 实际收口的记录条数；0 表示本来就没有在飞记录
+     */
+    int closeInFlight(Long subTaskId, String reason);
+
+    /**
      * 子任务是否存在<b>平台内</b>的 PENDING/RUNNING 记录（防重复消费）。
      *
      * <p>只统计 {@code access_type} 为空或 {@link AgentAccessType#API_KEY_LLM} 的行：

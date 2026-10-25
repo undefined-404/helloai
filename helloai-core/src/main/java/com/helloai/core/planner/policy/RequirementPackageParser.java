@@ -47,6 +47,13 @@ public final class RequirementPackageParser {
     public static final String CONTEXT_KEY_REQUIREMENT_PACKAGE = "requirementPackage";
 
     /**
+     * 需求包键：交付物原型（TD-4，六值：BUILD / DOCUMENT / RESEARCH / DATA / OPERATE / DECIDE）。
+     * 存于 final_package / task.context.requirementPackage 的顶层，与五字段并列。
+     * 判不出 / 未给 / 非法值 → {@code TaskArchetype.parse} 回落 BUILD（不做猜测性判定）。
+     */
+    public static final String CONTEXT_KEY_ARCHETYPE = "archetype";
+
+    /**
      * 防御式六字段读取：source 为 null / 键缺失 / 类型异常回落空集合（goal 回落 null），
      * 永不抛异常。数组元素仅保留字符串，其余类型丢弃。
      *

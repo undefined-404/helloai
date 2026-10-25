@@ -13,6 +13,7 @@ import com.helloai.core.agent.runtime.AgentExecutionResult;
 import com.helloai.core.agent.runtime.AgentRuntime;
 import com.helloai.core.agent.runtime.ExecutionEnvironment;
 import com.helloai.core.agent.runtime.ExecutionEnvironmentProvider;
+import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.event.ExecutionCommandCreatedEvent;
@@ -22,6 +23,8 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.service.AgentRuntimeContextAssembler;
+import com.helloai.core.shared.util.DeliverableDraft;
+import com.helloai.core.shared.util.VerificationFence;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -83,6 +86,15 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
      */
     private final List<AgentRuntime> agentRuntimes;
 
+    /**
+     * 沙箱执行通道（`ADR-005`，2026-10-25）：仅用于 turn 结束时释放复用工作沙箱。
+     *
+     * <p>放在命令消费边界而非 Runtime 内部，是因为「一次消费 = 一次执行尝试」正是
+     * 「工作区该不该保留」的天然分界：同一次尝试内的多轮工具调用共享沙箱（文件跨调用保留），
+     * 尝试结束即释放（防上一次尝试的残留文件影响下一次尝试）。</p>
+     */
+    private final SandboxExecutionService sandboxExecutionService;
+
     @Async("executionCommandExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCommandCreated(ExecutionCommandCreatedEvent event) {
@@ -140,7 +152,26 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
      * record CAS（先占执行记录）→ startIfNeeded 状态推进 → 消费 timeline → 上下文装配 →
      * 真身 execute + afterTurn 会话推进 → record CAS 终态 → ExecutionResultHandler 回写。
      */
+    /**
+     * Turn 边界包装：执行完成后<b>释放该子任务的复用工作沙箱</b>（`ADR-005`）。
+     *
+     * <p>无论成功 / 失败 / 异常 / 取消都释放（{@code finally}）——保证「一次执行尝试的
+     * 工作区不跨尝试残留」，也保证不跨子任务共享。释放失败不影响执行结果（实现内部幂等且吞异常）。</p>
+     */
     private void runViaRuntime(ExecutionCommand command, SubTaskSnapshot subTask, Agent agent) {
+        try {
+            runViaRuntimeInner(command, subTask, agent);
+        } finally {
+            try {
+                sandboxExecutionService.release(command.getSubTaskId());
+            } catch (Exception e) {
+                log.warn("释放复用沙箱失败（不阻断）: subTaskId={}, cause={}",
+                        command.getSubTaskId(), e.getMessage());
+            }
+        }
+    }
+
+    private void runViaRuntimeInner(ExecutionCommand command, SubTaskSnapshot subTask, Agent agent) {
         // 1. 执行记录 CAS：PENDING → RUNNING（**先占执行记录，再推进子任务状态**）。
         //    ⚠ 顺序契约（2026-10-05 修 804 双消费假阻塞）：MQ 主路径与 DB Poller 兜底路径
         //    可能同时消费同一命令（同一 recordId），两者都读到 sub_task(ASSIGNED) 快照。
@@ -216,6 +247,9 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             ExecutionEnvironment environment = executionEnvironmentProvider.resolve(command.getAccessType());
             AgentContext ctx = contextAssembler.assemble(command, subTask, agent, tools, environment);
             result = agentRuntimes.get(0).execute(ctx);
+            // ★①沙箱正文回传（2026-10-25，`LOG-20261025-010`）：必须在 release 之前、在
+            //   结果落地之前——前者决定工作区还在不在，后者决定交出去的是哪份正文。
+            result = recoverDraftFromWorkspace(command.getSubTaskId(), result);
             contextAssembler.afterTurn(subTask, agent, ctx.getTurn(), result);
         } catch (Exception e) {
             // 装配 / 真身违约异常契约化：回写失败（含归属校验）+ record CAS 终态
@@ -245,9 +279,82 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
                 command.getSubTaskId(), command.getAgentId(), command.getRecordId(), result.getStatus());
     }
 
+    /**
+     * turn 末「沙箱正文回传」：对话正文不是交付物时，用工作区里最大的 {@code .md} 顶替它。
+     *
+     * <p><b>为什么需要</b>（`LOG-20261025-009` 实测）：MiniMax-M3 两次执行都是
+     * {@code STOP} + 20 轮全在 {@code internal_run_in_sandbox} 里写 {@code /workspace/draft.md}，
+     * 对话正文只剩 604 字节<b>写作过程叙述</b>（「先写第一段…」「已补足到 1800 字」）。
+     * 平台只采集对话正文 ⇒ 真正文（3008 字）一个字没交出去 ⇒ 评审连驳 3 轮 ⇒ 死信。
+     * <b>正文本来就写出来了</b>，缺的只是「交出来」这一步。</p>
+     *
+     * <p><b>判据（三个都过才替换）</b>：</p>
+     * <ol>
+     *   <li>对话正文<b>不是</b>可交付正文（{@link DeliverableDraft#isDeliverable}：剔除自检围栏后
+     *       无骨架且不足 {@value DeliverableDraft#MIN_BODY_CHARS} 字符）——已经是好正文就一个字都不动；</li>
+     *   <li>工作区文件的正文<b>是</b>可交付正文——不回传比现状更差的东西；</li>
+     *   <li>工作区正文<b>至少是对话正文的 2 倍</b>——防「短交付类验收」被误伤：本事故同批任务的
+     *       验收就是 300~400 字，一份 350 字的合格短答在判据 ① 下同样算「不可交付」
+     *       （350 &lt; 1500），若无本条，模型顺手写在沙箱里的 400 字草稿就会把合格短答顶掉。
+     *       「写得多」才值得替换，「差不多」就以对话正文为准。</li>
+     * </ol>
+     *
+     * <p><b>零额外 LLM 成本</b>：只是一次沙箱内 {@code find + base64}（<20ms），不追加模型轮。
+     * 「不回传」侧一律保守：{@code status != SUCCESS}、回读异常、解码失败都原样返回。</p>
+     *
+     * <p><b>围栏拼接</b>：原对话正文若带 {@code VERIFICATION:} 自审围栏，把围栏段接在回传正文末尾——
+     * 否则评审侧看到的是一份「没有自证声明」的交付物（证据信号缺失，可能换一种方式被驳回）。</p>
+     *
+     * @param subTaskId 子任务 ID（沙箱工作区键）
+     * @param result    真身结果（可为 null）
+     * @return 回传后的结果（不需要 / 不成功 回传时原样返回同一对象）
+     */
+    private AgentExecutionResult recoverDraftFromWorkspace(Long subTaskId, AgentExecutionResult result) {
+        if (result == null || result.getStatus() != ExecutionStatus.SUCCESS) {
+            return result;
+        }
+        String conversational = result.getOutput();
+        if (DeliverableDraft.isDeliverable(conversational)) {
+            return result;
+        }
+        String fromWorkspace;
+        try {
+            fromWorkspace = sandboxExecutionService.readWorkspaceFile(subTaskId);
+        } catch (Exception e) {
+            // 回读是锦上添花：它失败绝不能影响执行结果
+            log.warn("沙箱正文回传异常（忽略，按原对话正文提交）: subTaskId={}, cause={}",
+                    subTaskId, e.getMessage());
+            return result;
+        }
+        if (!DeliverableDraft.isDeliverable(fromWorkspace)) {
+            return result;
+        }
+        int bodyChars = DeliverableDraft.bodyChars(conversational);
+        int workspaceChars = DeliverableDraft.bodyChars(fromWorkspace);
+        if (workspaceChars < bodyChars * 2L) {
+            log.debug("沙箱正文回传跳过：工作区正文（{} 字）未显著多于对话正文（{} 字）subTaskId={}",
+                    workspaceChars, bodyChars, subTaskId);
+            return result;
+        }
+        String fence = VerificationFence.fenceBlock(conversational);
+        String submitted = fence.isBlank() ? fromWorkspace : fromWorkspace + "\n\n" + fence;
+        log.warn("沙箱正文回传：对话正文非交付物（{} 字）→ 改用工作区文件（{} 字）"
+                        + "subTaskId={}, finishReason={}, 围栏={}",
+                bodyChars, submitted.length(), subTaskId, result.getFinishReason(),
+                fence.isBlank() ? "无" : "已拼接");
+        return AgentExecutionResult.builder()
+                .status(result.getStatus())
+                .output(submitted)
+                .thinking(result.getThinking())
+                .finishReason(result.getFinishReason())
+                .tokenUsage(result.getTokenUsage())
+                .eventTypes(result.getEventTypes())
+                .artifacts(result.getArtifacts())
+                .build();
+    }
+
     /** Runtime 真身结果 → 旧 AgentResult 契约映射（成功带正文/思考/结束原因；失败带错误正文）。 */
-    private AgentResult toAgentResult(AgentExecutionResult result) {
-        if (result.getStatus() == ExecutionStatus.SUCCESS) {
+    private AgentResult toAgentResult(AgentExecutionResult result) {        if (result.getStatus() == ExecutionStatus.SUCCESS) {
             return AgentResult.success(result.getOutput(), result.getThinking(), result.getFinishReason(),
                     "RuntimeTurnExecutor", result.getTokenUsage());
         }

@@ -75,6 +75,9 @@ class ResilientDispatcherTest {
     @Mock
     private TaskTimelinePort taskTimelinePort;
 
+    @Mock
+    private com.helloai.core.agent.service.AgentExecutionRecordService agentExecutionRecordService;
+
     private CircuitBreakerRegistry circuitBreakerRegistry;
     private ResilientDispatcher resilientDispatcher;
 
@@ -93,7 +96,8 @@ class ResilientDispatcherTest {
                 agentService,
                 agentSelector,
                 agentDispatchProperties,
-                taskTimelinePort);
+                taskTimelinePort,
+                agentExecutionRecordService);
         // assignNext fast-fail 段新增心跳新鲜度检查，默认桩为“新鲜”，
         // 心跳陈旧场景在具体用例中单独覆盖
         lenient().when(agentSelector.isHeartbeatFresh(any())).thenReturn(true);
@@ -232,6 +236,22 @@ class ResilientDispatcherTest {
     }
 
     @Nested
+    @DisplayName("派发前置：作废在飞旧执行")
+    class ReleaseInFlight {
+
+        @Test
+        @DisplayName("直接委派执行记录服务，并原样返回收口条数")
+        void shouldDelegateToExecutionRecordService() {
+            when(agentExecutionRecordService.closeInFlight(100L, "改派顶替旧执行")).thenReturn(2);
+
+            int closed = resilientDispatcher.releaseInFlightExecution(100L, "改派顶替旧执行");
+
+            assertThat(closed).isEqualTo(2);
+            verify(agentExecutionRecordService).closeInFlight(100L, "改派顶替旧执行");
+        }
+    }
+
+    @Nested
     @DisplayName("正常分配")
     class NormalDispatch {
 
@@ -259,7 +279,8 @@ class ResilientDispatcherTest {
                     agentService,
                     agentSelector,
                     agentDispatchProperties,
-                    taskTimelinePort);
+                    taskTimelinePort,
+                    agentExecutionRecordService);
             Agent online = onlineAgent(1L);
             when(agentService.getById(1L)).thenReturn(online);
 

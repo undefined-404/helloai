@@ -170,7 +170,8 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                     ctx.getEventRecorder(),
                     ctx.getLoopCheckpointListener(),
                     ctx.getAccessType(),
-                    resolveCancellation()));
+                    resolveCancellation(),
+                    null));
         } catch (AgentCancelledException e) {
             // REF-8.6：取消是独立终态（不是「模型/工具出错」）——明确落 finishReason=CANCELLED，
             // 让消费侧能按取消来源决定后续动作（而非当成普通失败退避重派）。

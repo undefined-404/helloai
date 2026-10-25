@@ -67,23 +67,73 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * {@code resetToPendingForDispatch()} 都会 {@code updateById} 刷新它，导致「换人」入口
      * 先 {@code block()} 再重派时闸门读到被自身刷新的 now，{@code nextAllowed = now + 600s}
      * 必然拦截（attempt_total ≥ 1 时「换人」100% 静默失败）。</p>
+     *
+     * <p><b>★2026-10-25 起本表只作用于 {@link GatePurpose#AUTO}</b>：人工「换人」豁免退避。
+     * 实测 7443——12:14:42 由 {@code job-scheduler} 的自动重派写入 {@code last_attempt_time}
+     * （attempt_total=4 ⇒ 第 4 档 1800s），随后人工 5 次点击全被判 {@code backoff}，只能干等 30 分钟；
+     * 而退避本身<b>不消耗预算</b>，豁免它对熔断零副作用。</p>
      */
     private static final int[] REASSIGN_BACKOFF_SECONDS = {60, 180, 600, 1800};
 
     @Override
     public RedispatchResult dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId) {
+        // 人工显式指令（前端「换人 / 重新调度」）
+        return dispatchBlockedSubTask(subTaskId, preferredAgentId, GatePurpose.MANUAL);
+    }
+
+    /**
+     * BLOCKED 重派主链（人工 / 自动共用），差异仅在闸门用途 {@link GatePurpose}。
+     *
+     * <p><b>为什么必须区分（2026-10-25）</b>：退避是给「自动巡检探测心跳抖动」用的时间冷却，
+     * 本意是「别在 3 分钟内烧完 5 次预算」。人工「换人」是显式指令、天然不会空转，却被同一道冷却挡在门外——
+     * 实测 7443：12:14:42 由 {@code job-scheduler} 的**自动**重派写入 {@code last_attempt_time}，
+     * 随后人工在 12:16:58 / 12:17:06 / 12:17:32 / 12:36:03 / 12:41:00 五次点击全部被拦，
+     * 每次只换来一句「最早可于 12:44:42 重试」。<b>自动路径点着的火，烧掉了人工的自救权。</b></p>
+     *
+     * <p>退避**不消耗预算**，故人工豁免它对熔断零副作用；熔断（预算耗尽）对人工仍生效，
+     * 但**不再顺手转死信**——判定函数不该有副作用（见 {@code LOG-20261025-006} §四）。</p>
+     */
+    private RedispatchResult dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId, GatePurpose purpose) {
         // 重分配闸门（熔断 + 退避）：命中则落 sub_task_redispatch_skipped + 返回明确语义，
         // 不再静默 return（2026-10-05 修 804 可观测性）。
-        ReassignGateDecision gate = evaluateReassignGate(subTaskId);
+        ReassignGateDecision gate = evaluateReassignGate(subTaskId, purpose);
         if (gate.blocked()) {
             recordRedispatchSkipped(subTaskId, gate);
-            log.info("BLOCKED 重派被闸门拦截，未改动子任务: subTaskId={}, reason={}, nextAllowed={}",
-                    subTaskId, gate.reason(), gate.nextAllowed());
+            log.info("BLOCKED 重派被闸门拦截，未改动子任务: subTaskId={}, purpose={}, reason={}, nextAllowed={}",
+                    subTaskId, purpose, gate.reason(), gate.nextAllowed());
             return RedispatchResult.ofSkipped(gate.reason(), gate.nextAllowed());
         }
         accumulateReassignAttempt(subTaskId);
+        // ── 派发前置：作废在飞的旧执行记录（2026-10-25，D1）──
+        // 现场（子任务 2113947248843329537）：人工 block() 后改派，旧记录仍 RUNNING
+        //（模型进程还在跑，已 4 分 45 秒），createAssignedCommand 的
+        //「子任务已有进行中的执行记录」守卫直接拒建命令 ⇒ 改派 100% 失败，
+        // 子任务停在 ASSIGNED 无命令可消费；10 分钟后 AssignedSubTaskTimeoutTask 回收，
+        // 仍被同一条记录二次挡住 ⇒ 用户反复点「改派」都只得到「暂时没有空闲的执行 Agent」。
+        // 语义 = 「这次执行作废」而非「执行失败」：旧进程跑完的回写会被记录 CAS 与
+        // 子任务状态守卫双重丢弃，与既有超时补偿路径同一套语义（不新增分支）。
+        // best-effort：收口本身失败不阻断改派（与同链路其他观测写同口径），
+        // 失败会以「派单失败 + 真实 message」暴露在时间线上，不再伪装成「没有空闲 Agent」。
+        int superseded = 0;
+        try {
+            superseded = taskDispatchPort.releaseInFlightExecution(
+                    subTaskId, "改派顶替旧执行（" + purpose + "）");
+        } catch (Exception e) {
+            log.warn("改派前作废在飞旧执行失败（不阻断改派）: subTaskId={}, err={}", subTaskId, e.getMessage());
+        }
         SubTask subTask = subTaskService.resetToPendingForDispatch(
                 subTaskId, Set.of(SubTaskStatus.BLOCKED));
+        if (superseded > 0) {
+            taskTimelineService.recordEvent(
+                    subTask.getTaskId(),
+                    subTask.getId(),
+                    TimelineEventCode.SUB_TASK_EXECUTE_RESULT_DISCARDED.code(),
+                    AgentRole.SYSTEM,
+                    preferredAgentId,
+                    Map.of("supersededRecords", superseded,
+                            "cause", purpose.name().toLowerCase(java.util.Locale.ROOT)));
+            log.info("改派前作废在飞旧执行: subTaskId={}, 记录数={}, purpose={}", subTaskId, superseded, purpose);
+        }
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
@@ -127,7 +177,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             return RedispatchResult.ofSkipped("no_candidate", null);
         }
 
-        RedispatchResult result = dispatchBlockedSubTask(subTaskId, preferred.getId());
+        RedispatchResult result = dispatchBlockedSubTask(subTaskId, preferred.getId(), GatePurpose.AUTO);
         if (result.applied() && selfReported) {
             // 平台已接管「自报阻塞」的处置 ⇒ 清除人工介入标记，避免前端仍显示「等待人工介入」
             // 却与自动重派自相矛盾（同款语义见 redispatchDeadLetter 的人工拍板清理）
@@ -590,7 +640,8 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         // 均不收 ASSIGNED ⇒ 人工无法介入，只能干等 dispatch.assigned-timeout-minutes（默认 10 分钟）
         // 自动回收。block() 早已允许 ASSIGNED（SubTaskServiceImpl#block），状态机亦允许
         // ASSIGNED→BLOCKED，故此处放开不涉及状态机改动。
-        // 仍受下方重派闸门（熔断 + 退避）统一约束，人工入口不享受特权。
+        // 闸门（熔断 + 退避）仍统一约束，但**人工入口按 MANUAL 用途判定**（2026-10-25）：
+        // 退避豁免（它是给自动巡检降噪的时间冷却，且不消耗预算），熔断保留但不再顺手转死信。
         if (subTask.getStatus() != SubTaskStatus.ASSIGNED
                 && subTask.getStatus() != SubTaskStatus.IN_PROGRESS
                 && subTask.getStatus() != SubTaskStatus.PAUSED) {
@@ -602,7 +653,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         // 刷新（nextAllowed = now + 600s 必然拦截「换人」）。退避时钟现已改绑 last_attempt_time
         // （updateById 不写），此处仍显式前置判定——一旦被拦：不改动任务状态、不 block，
         // 落 sub_task_redispatch_skipped 并回传明确语义（消除静默 return）。
-        ReassignGateDecision gate = evaluateReassignGate(subTaskId);
+        ReassignGateDecision gate = evaluateReassignGate(subTaskId, GatePurpose.MANUAL);
         if (gate.blocked()) {
             recordRedispatchSkipped(subTaskId, gate);
             log.info("执行停滞改派被闸门拦截，未改动子任务: subTaskId={}, reason={}, nextAllowed={}",
@@ -619,7 +670,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         // 再走既有 BLOCKED 重调度链（熔断计数/选人/fallback 全部复用，语义一致）。
         // 两步各自事务：block 先落库，重派失败时任务停在 BLOCKED 可再人工重试。
         subTaskService.block(subTaskId, "人工判定执行停滞，改派新执行者", null);
-        RedispatchResult result = dispatchBlockedSubTask(subTaskId, preferredAgentId);
+        RedispatchResult result = dispatchBlockedSubTask(subTaskId, preferredAgentId, GatePurpose.MANUAL);
         log.info("执行停滞改派: subTaskId={}, preferredAgentId={}, applied={}",
                 subTaskId, preferredAgentId, result.applied());
         return result;
@@ -711,7 +762,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * @return true = 跳过本次重分配（已达熔断阈值 / 处于退避窗口 / 已终态死信）；false = 继续重分配
      */
     private boolean checkReassignCircuitBreaker(Long subTaskId) {
-        ReassignGateDecision gate = evaluateReassignGate(subTaskId);
+        ReassignGateDecision gate = evaluateReassignGate(subTaskId, GatePurpose.AUTO);
         if (gate.blocked()) {
             // 可观测性（2026-10-05 修 804）：闸门拦截不再静默。但这几个入口由周期巡检驱动
             // （离线巡检 / 超时回收 / N11 回退），退避窗口内的 backoff 每 tick 都会命中——
@@ -732,13 +783,31 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * （{@link #dispatchPendingSubTaskAuto}）复用：只需"是否拦截"、不需要拦截原因，
      * 且**不落 skip 时间线**（避免逐 tick 刷屏）。
      *
-     * <p>完整判定语义见 {@link #evaluateReassignGate(Long)}。</p>
+     * <p>完整判定语义见 {@link #evaluateReassignGate(Long, GatePurpose)}。</p>
      *
      * @param subTaskId 待检查的子任务 ID
      * @return true = 跳过本次重分配（已达熔断阈值 / 处于退避窗口 / 已终态死信）
      */
     private boolean isReassignBlockedOrEscalate(Long subTaskId) {
-        return evaluateReassignGate(subTaskId).blocked();
+        return evaluateReassignGate(subTaskId, GatePurpose.AUTO).blocked();
+    }
+
+    /**
+     * 闸门用途 —— 区分「谁在发起重派」（2026-10-25 由 7443 事故引入）。
+     *
+     * <p>两类发起方的诉求根本不同，混用一道闸门必然互相伤害：</p>
+     * <ul>
+     *   <li><b>自动</b>：周期巡检无条件高频探测，需要<b>时间维度</b>降噪（退避）+
+     *       预算耗尽后自动转入死信池兜底（熔断带副作用）；</li>
+     *   <li><b>人工</b>：用户看日志后显式下达的指令，天然稀疏，需要的是<b>预算维度</b>保护。
+     *       退避对它无意义（豁免且零副作用），熔断仍生效但<b>只拒绝、不改状态</b>。</li>
+     * </ul>
+     */
+    private enum GatePurpose {
+        /** 系统自动路径：周期巡检 / 超时回收 / N11 回退 / BLOCKED 自动重派。 */
+        AUTO,
+        /** 人工显式指令：前端「换人」「重新调度」。 */
+        MANUAL
     }
 
     /**
@@ -779,9 +848,12 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      *   <li>{@code max-reassign-attempts <= 0} → 熔断禁用（逃生口），放行；</li>
      *   <li>子任务不存在 → 放行（交由调用方后续校验）；</li>
      *   <li>已是终态/死信（DONE/CANCELLED/DEAD_LETTER）→ 拦截；</li>
-     *   <li>{@code attempt_total >= max-reassign-attempts} → 标记 DEAD_LETTER + timeline，拦截；</li>
-     *   <li><b>退避窗口未过</b>（距上次尝试不足 {@link #REASSIGN_BACKOFF_SECONDS} 对应时长）→ 拦截。
-     *       与"熔断"的区别：退避**不改变子任务状态**、不消耗预算，只是本轮不重派，窗口过后自然恢复；</li>
+     *   <li>{@code attempt_total >= max-reassign-attempts} → 拦截。
+     *       {@code AUTO}：同时标记 DEAD_LETTER + timeline；{@code MANUAL}：<b>只拒绝、不改状态</b>
+     *       （判定函数不带副作用，否则「换人」会变成「打进死信」）；</li>
+     *   <li><b>退避窗口未过</b>（距上次尝试不足 {@link #REASSIGN_BACKOFF_SECONDS} 对应时长）→ 拦截，
+     *       <b>仅 {@code AUTO}</b>。与"熔断"的区别：退避**不改变子任务状态**、不消耗预算，只是本轮不重派，
+     *       窗口过后自然恢复。人工指令豁免——它不消耗预算，而自动路径点着的冷却不该锁死人工自救权；</li>
      *   <li>否则放行（调用方随后应调用 {@link #accumulateReassignAttempt}）。</li>
      * </ol>
      *
@@ -794,9 +866,10 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * 导致「换人」被自身刷新的时钟拦截）。</p>
      *
      * @param subTaskId 待检查的子任务 ID
+     * @param purpose   闸门用途（人工显式指令 / 系统自动路径），决定退避与熔断副作用的适用性
      * @return 闸门决策（含拦截原因与退避结束时刻）
      */
-    private ReassignGateDecision evaluateReassignGate(Long subTaskId) {
+    private ReassignGateDecision evaluateReassignGate(Long subTaskId, GatePurpose purpose) {
         int maxAttempts = agentDispatchProperties.getMaxReassignAttempts();
         if (maxAttempts <= 0) {
             // 熔断禁用（逃生口，不推荐生产使用）
@@ -821,32 +894,42 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                 ? subTask.getAttemptTotal() : 0;
 
         if (RetryPolicy.exceedsMax(currentCount, maxAttempts)) {
-            log.warn("子任务重分配熔断触发: subTaskId={}, attemptTotal={}, maxReassignAttempts={}, 将子任务转入 DEAD_LETTER 死信池待人工兜底",
-                    subTaskId, currentCount, maxAttempts);
-            try {
-                subTaskService.changeStatus(subTaskId, SubTaskStatus.DEAD_LETTER, null,
-                        Map.of("dead_letter_reason", "reassign_attempt_exceeded",
-                                "attempt_total", String.valueOf(currentCount),
-                                "max_reassign_attempts", String.valueOf(maxAttempts)));
-                taskTimelineService.recordEvent(
-                        subTask.getTaskId(),
-                        subTask.getId(),
-                        TimelineEventCode.SUB_TASK_DEAD_LETTER.code(),
-                        AgentRole.SYSTEM,
-                        null,
-                        Map.of(
-                                "reason", "reassign_attempt_exceeded",
-                                "attempt_total", currentCount,
-                                "max_reassign_attempts", maxAttempts));
-            } catch (Exception e) {
-                log.error("子任务重分配熔断-转死信失败: subTaskId={}", subTaskId, e);
+            // ★人工入口不转死信（2026-10-25）：判定函数不该有副作用——
+            // 否则用户点「换人」实际触发的是「打进死信池」，与按钮语义完全相反
+            // （前端文案也自相矛盾：一边说重派被拦，一边说已转死信）。
+            if (purpose == GatePurpose.AUTO) {
+                log.warn("子任务重分配熔断触发: subTaskId={}, attemptTotal={}, maxReassignAttempts={}, 将子任务转入 DEAD_LETTER 死信池待人工兜底",
+                        subTaskId, currentCount, maxAttempts);
+                try {
+                    subTaskService.changeStatus(subTaskId, SubTaskStatus.DEAD_LETTER, null,
+                            Map.of("dead_letter_reason", "reassign_attempt_exceeded",
+                                    "attempt_total", String.valueOf(currentCount),
+                                    "max_reassign_attempts", String.valueOf(maxAttempts)));
+                    taskTimelineService.recordEvent(
+                            subTask.getTaskId(),
+                            subTask.getId(),
+                            TimelineEventCode.SUB_TASK_DEAD_LETTER.code(),
+                            AgentRole.SYSTEM,
+                            null,
+                            Map.of(
+                                    "reason", "reassign_attempt_exceeded",
+                                    "attempt_total", currentCount,
+                                    "max_reassign_attempts", maxAttempts));
+                } catch (Exception e) {
+                    log.error("子任务重分配熔断-转死信失败: subTaskId={}", subTaskId, e);
+                }
+            } else {
+                log.warn("人工重派命中重派预算熔断（不转死信，交人工决定下一步）: subTaskId={}, attemptTotal={}, maxReassignAttempts={}",
+                        subTaskId, currentCount, maxAttempts);
             }
             return ReassignGateDecision.circuitOpen(taskId);
         }
 
         // G-015 B2.2 退避窗口：距上次尝试（incrementAttemptTotal 写入的 last_attempt_time）不足本档
         // 退避时长则跳过本轮重派，且不消耗预算。只推迟不终止，窗口过后自然恢复。
-        if (currentCount > 0 && subTask.getLastAttemptTime() != null) {
+        // ★仅约束自动路径（2026-10-25）：退避是「防机器空转」的时间冷却，人工点击天然稀疏且不消耗预算，
+        // 豁免它对熔断零副作用；反之让自动路径的冷却锁死人工自救权（LOG-20261025-006）。
+        if (purpose == GatePurpose.AUTO && currentCount > 0 && subTask.getLastAttemptTime() != null) {
             int backoffSeconds = REASSIGN_BACKOFF_SECONDS[
                     Math.min(currentCount - 1, REASSIGN_BACKOFF_SECONDS.length - 1)];
             OffsetDateTime nextAllowed = subTask.getLastAttemptTime().plusSeconds(backoffSeconds);

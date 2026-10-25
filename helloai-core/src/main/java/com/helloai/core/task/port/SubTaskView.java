@@ -1,5 +1,6 @@
 package com.helloai.core.task.port;
 
+import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.SubTaskStatus;
 
 import java.time.OffsetDateTime;
@@ -23,6 +24,11 @@ import java.util.Map;
  * review 不直接读——按 W6 由 {@code SubTaskService#mergeSkills(Long)} 提供方自读，避免为单一
  * 内部用途膨胀快照面。</p>
  *
+ * <p><b>`TD-2` 增列 {@code acceptanceKind}</b>：验收判据（{@code AUTOMATED} / {@code STRUCTURAL} /
+ * {@code REVIEWED} / {@code ATTESTED}）。当前唯一消费方是拆解侧落库前校验（`TD-5`）；
+ * {@code REVIEWED} 将来会在审查侧分流，故纳入本契约而非仅落库。review 域的既有兼容构造
+ * 传 {@code null}（该域尚未按 kind 分流，行为不变）。</p>
+ *
  * <p><b>写侧不入本契约</b>：review 需要改 {@code context} 时走不透明命令
  * {@code SubTaskService#updateContext(Long, Map)}（W10），契约不携带 {@code version} 等
  * 乐观锁字段。</p>
@@ -37,6 +43,7 @@ public record SubTaskView(
         String content,
         String deliverable,
         String acceptance,
+        AcceptanceKind acceptanceKind,
         String constraints,
         Map<String, Object> context,
         List<UncertaintyView> uncertainties,
@@ -59,7 +66,8 @@ public record SubTaskView(
                        String title, String content, String deliverable, String acceptance, String constraints,
                        Map<String, Object> context, List<UncertaintyView> uncertainties) {
         this(id, taskId, status, assignedAgentId, reworkCount, title, content, deliverable, acceptance,
-                constraints, context, uncertainties, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, constraints, context, uncertainties,
+                null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /**

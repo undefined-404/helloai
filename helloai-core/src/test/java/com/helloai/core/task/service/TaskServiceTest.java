@@ -162,7 +162,7 @@ class TaskServiceTest {
         doReturn(existing).when(service).getById(9L);
         doReturn(true).when(service).updateById(any(Task.class));
 
-        Task result = service.updateTask(9L, "新标题", "新描述", null, Map.of(), List.of());
+        Task result = service.updateTask(9L, "新标题", "新描述", null, Map.of(), List.of(), null);
 
         assertThat(result).isSameAs(existing);
         assertThat(result.getTitle()).isEqualTo("新标题");
@@ -188,7 +188,7 @@ class TaskServiceTest {
         doReturn(existing).when(service).getById(9L);
         doReturn(true).when(service).updateById(any(Task.class));
 
-        Task result = service.updateTask(9L, "新标题", "新描述", null, null, null);
+        Task result = service.updateTask(9L, "新标题", "新描述", null, null, null, null);
 
         assertThat(result.getTitle()).isEqualTo("新标题");
         assertThat(result.getAgentPolicy()).containsEntry("plannerAgentId", 101L);
@@ -207,7 +207,7 @@ class TaskServiceTest {
         TaskService service = newSpyService();
         doReturn(null).when(service).getById(999L);
 
-        Task result = service.updateTask(999L, "标题", "描述", null, null, null);
+        Task result = service.updateTask(999L, "标题", "描述", null, null, null, null);
 
         assertThat(result).isNull();
         verify(service, never()).updateById(any(Task.class));

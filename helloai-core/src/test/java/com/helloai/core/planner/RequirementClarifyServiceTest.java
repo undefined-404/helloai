@@ -17,11 +17,14 @@ import com.helloai.core.agent.tool.ToolExecutor;
 import com.helloai.common.config.WebSearchProperties;
 import com.helloai.core.planner.clarify.ChatRoundDecisionParser;
 import com.helloai.core.planner.clarify.ClarifyReplyParser;
+import com.helloai.core.planner.clarify.ClarifyStallGuard;
 import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
 import com.helloai.core.planner.clarify.ConfirmCardProtocol;
 import com.helloai.core.planner.clarify.RelativeTimeNormalizer;
 import com.helloai.core.planner.clarify.SearchGapAssessor;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
+import com.helloai.core.planner.policy.RequirementPackageParser;
+import com.helloai.core.planner.policy.TaskContextKeys;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.mapper.RequirementConversationMapper;
@@ -197,7 +200,8 @@ class RequirementClarifyServiceTest {
                 commandSearch, promptRenderService, finalizeService, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
                 new ChatRoundDecisionParser(new ObjectMapper()), webSearchOrchestrator,
-                mock(ChatAttachmentService.class));
+                // TD-8：stall 守卫（用户信息量判据）接入后新增的构造参数
+                new ClarifyStallGuard(new ObjectMapper()), mock(ChatAttachmentService.class));
         streamService = new ClarifyStreamServiceImpl(
                 orchestrator, promptRenderService, commandSearch, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
@@ -823,7 +827,8 @@ class RequirementClarifyServiceTest {
         when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
             TaskDraft d = inv.getArgument(0);
             return new TaskView(300L, d.title(), d.description(), null, null, null, null, null,
-                    d.status(), null, null, d.context(), null, null, null);
+                    d.status(), null, null, d.context(), null, null, null,
+                    com.helloai.common.constant.TaskArchetype.parse(d.taskArchetype()));
         });
         when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
 
@@ -832,8 +837,12 @@ class RequirementClarifyServiceTest {
         assertThat(task.id()).isEqualTo(300L);
         assertThat(task.title()).isEqualTo("搭建日报模块");
         assertThat(task.status()).isEqualTo(TaskStatus.PENDING);
-        // 无需求包会话：不初始化 context（行为零变化）
-        assertThat(task.context()).isNull();
+        // TD-6：context 由「可空」改为恒初始化并写入 conversationId——拆解期上下文快照
+        // 据此取会话附件清单（此前无来源）；无需求包时候不写 requirementPackage 键，
+        // 故对既有消费方的语义等价于改造前的「无包」
+        assertThat(task.context())
+                .containsEntry(TaskContextKeys.CONVERSATION_ID, CONV_ID)
+                .doesNotContainKey(RequirementPackageParser.CONTEXT_KEY_REQUIREMENT_PACKAGE);
         assertThat(conversation.getTaskId()).isEqualTo(300L);
         assertThat(conversation.getStatus()).isEqualTo(RequirementClarifyService.STATUS_FINALIZED);
         // CAS 推进 + task_id 定点回填各走一次 lambdaUpdate（不再有全字段 updateById）
@@ -844,6 +853,60 @@ class RequirementClarifyServiceTest {
         verify(taskTimelineService).recordEvent(
                 eq(300L), isNull(), eq("task_created_from_clarify"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-4 finalize：终稿 package 带 archetype → 建任务 TaskDraft 透传")
+    void shouldCarryArchetypeFromFinalPackage() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setFinalTitle("Q3 竞品分析报告");
+        conversation.setFinalDescription("## 背景\n做竞品分析");
+        conversation.setFinalPackage(Map.of(
+                "goal", "输出竞品分析报告",
+                "archetype", "DOCUMENT"));
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
+            TaskDraft d = inv.getArgument(0);
+            return new TaskView(300L, d.title(), d.description(), null, null, null, null, null,
+                    d.status(), null, null, d.context(), null, null, null,
+                    com.helloai.common.constant.TaskArchetype.parse(d.taskArchetype()));
+        });
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
+
+        clarifyService.finalize(CONV_ID);
+
+        ArgumentCaptor<TaskDraft> captor = ArgumentCaptor.forClass(TaskDraft.class);
+        verify(taskService).createFromDraft(captor.capture());
+        // TD-4：package.archetype 透传到 TaskDraft，落 task.task_archetype
+        assertThat(captor.getValue().taskArchetype()).isEqualTo("DOCUMENT");
+        // context 仍写 conversationId + requirementPackage
+        assertThat(captor.getValue().context())
+                .containsEntry(TaskContextKeys.CONVERSATION_ID, CONV_ID)
+                .containsEntry(RequirementPackageParser.CONTEXT_KEY_REQUIREMENT_PACKAGE,
+                        conversation.getFinalPackage());
+    }
+
+    @Test
+    @DisplayName("TD-4 finalize：终稿无 package / 无 archetype → 回落 BUILD（不做猜测性判定）")
+    void shouldFallbackArchetypeToBuildWhenAbsent() {
+        // 无 finalPackage（终稿走纯文本路径）
+        RequirementConversation conversation = activeConversation();
+        conversation.setFinalTitle("搭建日报模块");
+        conversation.setFinalDescription("## 背景\n做日报");
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
+            TaskDraft d = inv.getArgument(0);
+            return new TaskView(300L, d.title(), d.description(), null, null, null, null, null,
+                    d.status(), null, null, d.context(), null, null, null,
+                    com.helloai.common.constant.TaskArchetype.parse(d.taskArchetype()));
+        });
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
+
+        clarifyService.finalize(CONV_ID);
+
+        ArgumentCaptor<TaskDraft> captor = ArgumentCaptor.forClass(TaskDraft.class);
+        verify(taskService).createFromDraft(captor.capture());
+        assertThat(captor.getValue().taskArchetype()).isEqualTo("BUILD");
     }
 
     @Test
@@ -869,7 +932,7 @@ class RequirementClarifyServiceTest {
         conversation.setTaskId(300L);
         when(conversationService.getById(CONV_ID)).thenReturn(conversation);
         when(taskService.getView(300L)).thenReturn(new TaskView(300L, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null));
+                null, null, null, null, null, null, null, null, null));
 
         assertThatThrownBy(() -> clarifyService.finalize(CONV_ID))
                 .isInstanceOf(BizException.class)
@@ -892,7 +955,7 @@ class RequirementClarifyServiceTest {
         when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
             TaskDraft d = inv.getArgument(0);
             return new TaskView(300L, d.title(), d.description(), null, null, null, null, null,
-                    d.status(), null, null, d.context(), null, null, null);
+                    d.status(), null, null, d.context(), null, null, null, null);
         });
         when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
 
@@ -915,7 +978,7 @@ class RequirementClarifyServiceTest {
         when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
             TaskDraft d = inv.getArgument(0);
             return new TaskView(301L, d.title(), d.description(), null, null, null, null, null,
-                    d.status(), null, null, d.context(), null, null, null);
+                    d.status(), null, null, d.context(), null, null, null, null);
         });
         when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenThrow(new RuntimeException("inbox down"));
 
@@ -942,7 +1005,7 @@ class RequirementClarifyServiceTest {
         when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
             TaskDraft d = inv.getArgument(0);
             return new TaskView(301L, d.title(), d.description(), null, null, null, null, null,
-                    d.status(), null, null, d.context(), null, null, null);
+                    d.status(), null, null, d.context(), null, null, null, null);
         });
         when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
 
@@ -1040,7 +1103,7 @@ class RequirementClarifyServiceTest {
         when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
             TaskDraft d = inv.getArgument(0);
             return new TaskView(300L, d.title(), d.description(), null, null, null, null, null,
-                    d.status(), null, null, d.context(), null, null, null);
+                    d.status(), null, null, d.context(), null, null, null, null);
         });
         when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
     }
@@ -2649,5 +2712,147 @@ class RequirementClarifyServiceTest {
         // 历史层保留窗口内消息（含需求起点与助手追问）
         assertThat(mainPrompt).contains("用户：需求起点：做一个报表")
                 .contains("助手：追问：范围多大？");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  TD-8 澄清侧 stall 收敛（用户信息量判据）
+    //  ══════════════════════════════════════════════════════════════
+
+    /** TD-8：构造 CLARIFY 模式会话（关闭联网，避免搜索编排干扰本组断言）。 */
+    private RequirementConversation clarifyConversationNoSearch() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setMode(RequirementClarifyService.MODE_CLARIFY);
+        conversation.setWebSearchEnabled(false);
+        return conversation;
+    }
+
+    /** TD-8：用户消息携带 structured selections payload（有信息）辅助构造。 */
+    private RequirementMessage messageWithSelections(String role, String content, int seq,
+                                                     String selectionsJson) {
+        RequirementMessage msg = message(role, content, seq);
+        msg.setPayload(selectionsJson);
+        return msg;
+    }
+
+    /** 有效 selections payload（有信息：values 非空）。 */
+    private static String selectionsPayload(String value) {
+        return "{\"selections\":[{\"values\":[\"" + value + "\"]}]}";
+    }
+
+    /** 空 selections payload（无信息：values 空 + 无 customText）。 */
+    private static String emptySelectionsPayload() {
+        return "{\"selections\":[{\"values\":[],\"customText\":\"\"}]}";
+    }
+
+    @Test
+    @DisplayName("TD-8 验收①：连续两轮无信息回答 → 第 3 轮不再追问，走收敛轮出终稿（且不自动建任务）")
+    void shouldConvergeToFinalAfterTwoUninformativeRounds() throws Exception {
+        RequirementConversation conversation = clarifyConversationNoSearch();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        // 历史：seq=1 需求描述（有信息，首轮保护）→ seq=3 空选择（无信息）→ seq=5 敷衍词（无信息）
+        when(messageService.listByConversation(CONV_ID)).thenReturn(List.of(
+                message("user", "做一个报表", 1),
+                message("assistant", "追问：范围多大？", 2),
+                messageWithSelections("user", "范围", 3, emptySelectionsPayload()),
+                message("assistant", "追问：验收标准？", 4),
+                message("user", "随便", 5)));
+        // 第 1 次 executeSync（澄清轮）：LLM 仍出追问 → 触发 stall 判断 → 收敛轮
+        // 第 2 次 executeSync（收敛轮 finalize）：LLM 按现有信息出终稿（四小节齐全，不触发描述守卫纠偏）
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"type\":\"question\",\"message\":\"还要什么信息？\"}", "stop", "llm", 100),
+                        AgentResult.success(
+                                "{\"type\":\"final\",\"title\":\"报表终稿\","
+                                        + "\"description\":\"## 背景与目标\\n做报表\\n## 范围与边界\\n核心报表"
+                                        + "\\n## 交付物\\n报表文件\\n## 验收标准\\n数据正确\","
+                                        + "\"message\":\"按现有信息收敛出终稿\","
+                                        + "\"package\":{\"goal\":\"输出报表\",\"openQuestions\":[\"数据源未确认\"]}}",
+                                "stop", "llm", 100));
+
+        clarifyService.sendMessage(CONV_ID, "嗯");
+
+        // 两次 executeSync：澄清轮（scene=requirement_clarify）+ 收敛轮（scene=requirement_finalize）
+        ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), taskCaptor.capture());
+        // 第 2 次 = 收敛轮：finalize 提示词（scene=requirement_finalize）
+        assertThat(taskCaptor.getAllValues().get(1).getContext())
+                .containsEntry("scene", "requirement_finalize");
+        // 终稿落库（定点写字段）+ 落 assistant 终稿消息（无 webSearch payload，3 参形态）
+        verify(requirementConversationMapper).updateFinalDraftFields(eq(CONV_ID), eq("报表终稿"),
+                any(), any());
+        verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), eq("按现有信息收敛出终稿"));
+        // 收敛轮不自动建任务（stall 不代表用户已确认需求）：与 /task 直出轮的差异点
+        verify(taskService, never()).createFromDraft(any(TaskDraft.class));
+    }
+
+    @Test
+    @DisplayName("TD-8 验收②：收敛终稿未决项（openQuestions）非空且完整落库")
+    void convergeFinalCarriesOpenQuestions() throws Exception {
+        RequirementConversation conversation = clarifyConversationNoSearch();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        when(messageService.listByConversation(CONV_ID)).thenReturn(List.of(
+                message("user", "做一个报表", 1),
+                message("assistant", "追问：范围多大？", 2),
+                message("user", "好的", 3),
+                message("assistant", "追问：验收标准？", 4),
+                message("user", "行", 5)));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"type\":\"question\",\"message\":\"还要什么信息？\"}", "stop", "llm", 100),
+                        AgentResult.success(
+                                "{\"type\":\"final\",\"title\":\"报表终稿\","
+                                        + "\"description\":\"## 背景与目标\\n做报表\\n## 范围与边界\\n核心报表"
+                                        + "\\n## 交付物\\n报表文件\\n## 验收标准\\n数据正确\","
+                                        + "\"package\":{\"goal\":\"输出报表\","
+                                        + "\"openQuestions\":[\"数据源未确认\",\"报表周期未确认\"]}}",
+                                "stop", "llm", 100));
+
+        clarifyService.sendMessage(CONV_ID, "嗯嗯");
+
+        // 终稿 package 定点落库：openQuestions 两条未决项完整保留（参数为 JSON 字符串，解析后断言）
+        ArgumentCaptor<String> pkgCaptor = ArgumentCaptor.forClass(String.class);
+        verify(requirementConversationMapper).updateFinalDraftFields(eq(CONV_ID), any(), any(),
+                pkgCaptor.capture());
+        Map<String, Object> pkg = new ObjectMapper().readValue(pkgCaptor.getValue(),
+                new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
+        assertThat(pkg)
+                .containsEntry("goal", "输出报表")
+                .containsKey("openQuestions");
+        // 未决项非空且逐条完整（验收②：出终稿时未决项完整列出）
+        @SuppressWarnings("unchecked")
+        List<String> openQuestions = (List<String>) pkg.get("openQuestions");
+        assertThat(openQuestions)
+                .isNotEmpty()
+                .containsExactly("数据源未确认", "报表周期未确认");
+    }
+
+    @Test
+    @DisplayName("TD-8 验收③：每轮回答都携带新信息 → stall 不触发，正常追问路径行为不变")
+    void stallNotTriggeredWhenEachRoundCarriesInfo() {
+        RequirementConversation conversation = clarifyConversationNoSearch();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        // 历史：每轮用户回答都带 selections 信息（values 有内容）
+        when(messageService.listByConversation(CONV_ID)).thenReturn(List.of(
+                message("user", "做一个报表", 1),
+                message("assistant", "追问：范围多大？", 2),
+                messageWithSelections("user", "范围", 3, selectionsPayload("核心报表")),
+                message("assistant", "追问：验收标准？", 4),
+                messageWithSelections("user", "验收", 5, selectionsPayload("数据正确"))));
+        // 单次 executeSync：LLM 出追问 → 因最近回答有信息，不触发收敛
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"type\":\"question\",\"message\":\"数据源用哪个？\"}", "stop", "llm", 100));
+
+        clarifyService.sendMessage(CONV_ID, "数据源待定");
+
+        // 只调一次 executeSync（无收敛轮）
+        verify(platformAgentExecutionService, times(1)).executeSync(anyLong(), any(AgentTask.class));
+        // 正常追问落库（question 分支），终稿字段不被写
+        verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), eq("数据源用哪个？"), any());
+        verify(requirementConversationMapper, never()).updateFinalDraftFields(anyLong(), any(), any(), any());
+        verify(taskService, never()).createFromDraft(any(TaskDraft.class));
     }
 }

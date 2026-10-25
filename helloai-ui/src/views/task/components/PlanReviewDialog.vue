@@ -214,7 +214,7 @@
         </el-table-column>
         <el-table-column
           label="操作"
-          width="70"
+          width="200"
           fixed="right"
         >
           <template #default="{ row }">
@@ -226,6 +226,28 @@
               @click="openEdit(row)"
             >
               编辑
+            </el-button>
+            <!-- TD-9 单条草案细拆：一条草案 → N 条 FINE 粒度子草案（同步等待 LLM） -->
+            <el-button
+              v-auth="'subtask:edit'"
+              link
+              type="primary"
+              size="small"
+              :loading="expandingId === String(row.id)"
+              @click="handleExpand(row)"
+            >
+              展开
+            </el-button>
+            <!-- TD-9 单条草案重生成：同粒度重写四要素（title/dependsOn 不变） -->
+            <el-button
+              v-auth="'subtask:edit'"
+              link
+              type="primary"
+              size="small"
+              :loading="regeneratingId === String(row.id)"
+              @click="handleRegenerate(row)"
+            >
+              重生成
             </el-button>
           </template>
         </el-table-column>
@@ -296,6 +318,22 @@
             placeholder="不许改的事（边界/红线）；COARSE 粒度建议必填，其余可空"
           />
         </el-form-item>
+        <el-form-item label="验收判据">
+          <el-select
+            v-model="editForm.acceptanceKind"
+            style="width:100%"
+          >
+            <el-option
+              v-for="o in acceptanceKindOptions"
+              :key="o.value"
+              :label="o.label"
+              :value="o.value"
+            />
+          </el-select>
+          <div style="font-size:12px;color:var(--ha-ink-2);line-height:1.6;margin-top:4px">
+            「谁来判、怎么判」：机器判须写命令/断言 + 预期结果；结构判须写可数结构（章节/条目/字数）；审查 agent 判须可逐条打勾；人判须写清谁/何时/留什么痕。
+          </div>
+        </el-form-item>
         <!-- G-011 不确定性申报逐条编辑：kind 分级 + note；未填 note 的条目保存时由服务端丢弃 -->
         <el-form-item label="不确定性">
           <div style="width:100%">
@@ -315,6 +353,14 @@
                 <el-option
                   label="假设"
                   value="ASSUMPTION"
+                />
+                <el-option
+                  label="待检索"
+                  value="TO_LOOK_UP"
+                />
+                <el-option
+                  label="待推导"
+                  value="TO_DERIVE"
                 />
               </el-select>
               <el-input
@@ -363,7 +409,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { subTaskApi } from '@/api/subTask'
 import { useSkillCatalogStore } from '@/stores/skillCatalog'
-import type { Task, SubTask, LongId, Uncertainty } from '@/types'
+import type { Task, SubTask, LongId, Uncertainty, AcceptanceKind } from '@/types'
 
 const props = defineProps<{ modelValue: boolean; task: Task | null }>()
 const emit = defineEmits<{ 'update:modelValue': [v: boolean]; close: []; done: [] }>()
@@ -388,6 +434,9 @@ const drafts = ref<SubTask[]>([])
 // 拆解异步化：草案由后台生成，弹窗打开即进入轮询等待态
 const generating = ref(false)
 const emptyText = ref('未找到待审阅草案（可能为异常残留），建议「拒绝重拆」使任务回到待规划状态')
+// TD-9：单条草案细拆 / 重生成进行中（按 id 记录，防止并发触发同一草案）
+const expandingId = ref<string | null>(null)
+const regeneratingId = ref<string | null>(null)
 
 const POLL_INTERVAL_MS = 3000
 const MAX_WAIT_MS = 5 * 60 * 1000
@@ -468,24 +517,34 @@ function fmtDepends(dependsOn?: LongId[] | null): string {
   return seqs.length ? `依赖 #${seqs.join(',')}` : '-'
 }
 
-// G-011 不确定性压缩展示：「N 项待确认 · M 项假设」（全空时显示 -）
+// G-011 不确定性压缩展示：「N 项待确认 · M 项假设 · K 项待查/待推」（全空时显示 -）
 function fmtUncertainties(uncertainties?: Uncertainty[] | null): string {
   if (!uncertainties?.length) return '-'
   const pending = uncertainties.filter(u => u.kind === 'UNCONFIRMED').length
   const assumed = uncertainties.filter(u => u.kind === 'ASSUMPTION').length
+  const lookup = uncertainties.filter(u => u.kind === 'TO_LOOK_UP' || u.kind === 'TO_DERIVE').length
   const parts: string[] = []
   if (pending > 0) parts.push(`${pending} 项待确认`)
   if (assumed > 0) parts.push(`${assumed} 项假设`)
+  if (lookup > 0) parts.push(`${lookup} 项待查/待推`)
   return parts.length ? parts.join(' · ') : `${uncertainties.length} 项`
 }
+
+// TD-2 验收判据下拉（「谁来判、怎么判」；默认 AUTOMATED = 改造前行为）
+const acceptanceKindOptions = [
+  { value: 'AUTOMATED', label: '机器判（命令/断言）' },
+  { value: 'STRUCTURAL', label: '结构判（章节/条目/字数）' },
+  { value: 'REVIEWED', label: '审查 agent 判（逐条打勾）' },
+  { value: 'ATTESTED', label: '人判（谁/何时/留什么痕）' }
+]
 
 // --- G-010 草案人工修订（技能指派 + 执行约束） ---
 // --- G-011 扩展：不确定性逐条编辑（kind + note，空行保存时由服务端丢弃） ---
 const editVisible = ref(false)
 const savingDraft = ref(false)
 const editingRow = ref<SubTask | null>(null)
-const editForm = ref<{ requiredSkills: string[]; constraints: string; uncertainties: { kind: string; note: string }[] }>(
-  { requiredSkills: [], constraints: '', uncertainties: [] }
+const editForm = ref<{ requiredSkills: string[]; constraints: string; acceptanceKind: string; uncertainties: { kind: string; note: string }[] }>(
+  { requiredSkills: [], constraints: '', acceptanceKind: 'AUTOMATED', uncertainties: [] }
 )
 
 // 技能下拉候选：平台技能目录（服务端下发，REF-1.2c）+ 全部草案已指派标签的并集（allow-create 兜自由输入）
@@ -501,6 +560,7 @@ function openEdit(row: SubTask) {
   editForm.value = {
     requiredSkills: [...(row.requiredSkills ?? [])],
     constraints: row.constraints ?? '',
+    acceptanceKind: row.acceptanceKind ?? 'AUTOMATED',
     uncertainties: (row.uncertainties ?? []).map(u => ({ kind: u.kind ?? 'UNCONFIRMED', note: u.note ?? '' }))
   }
   editVisible.value = true
@@ -520,18 +580,20 @@ async function saveEdit() {
   if (!row) return
   savingDraft.value = true
   try {
-    // 保存前过滤空行（与服务端空白 note 丢弃口径一致），kind 下拉限定两值无需强校验
+    // 保存前过滤空行（与服务端空白 note 丢弃口径一致），kind 下拉限定四值无需强校验
     const uncertainties = editForm.value.uncertainties
       .filter(u => u.note.trim() !== '')
       .map(u => ({ kind: u.kind, note: u.note }))
     await subTaskApi.updateDraft(row.id, {
       requiredSkills: editForm.value.requiredSkills,
       constraints: editForm.value.constraints,
-      uncertainties
+      uncertainties,
+      acceptanceKind: editForm.value.acceptanceKind as AcceptanceKind
     })
     // 本地同步，免整表重拉
     row.requiredSkills = [...editForm.value.requiredSkills]
     row.constraints = editForm.value.constraints
+    row.acceptanceKind = editForm.value.acceptanceKind as AcceptanceKind
     row.uncertainties = uncertainties
     ElMessage.success('草案已修订')
     editVisible.value = false
@@ -575,6 +637,60 @@ async function handleReject() {
     emit('done')
   } catch { /* 拦截器已弹错 */ }
   finally { rejecting.value = false }
+}
+
+// --- TD-9 单条草案细拆（expand）：一条草案 → N 条 FINE 粒度子草案（同步等待 LLM） ---
+// 被其他草案依赖的草案后端拒绝展开（幽灵依赖 fail-close）；成功后端逻辑删原草案并返回新列表
+async function handleExpand(row: SubTask) {
+  if (expandingId.value) { ElMessage.warning('已有草案在展开中，请稍候'); return }
+  try {
+    await ElMessageBox.confirm(
+      `将「${row.title}」细拆为多条更小粒度的子草案（原草案将被替换）。是否继续？`,
+      '细拆草案',
+      { type: 'warning', confirmButtonText: '展开', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  expandingId.value = String(row.id)
+  try {
+    const created = await subTaskApi.expandDraft(row.id)
+    ElMessage.success(`已展开为 ${created.length} 条子草案`)
+    await reloadDrafts()
+  } catch { /* 拦截器已弹错 */ }
+  finally { expandingId.value = null }
+}
+
+// --- TD-9 单条草案重生成（regenerate）：同粒度重写四要素（title/dependsOn 不变量） ---
+// 后端只取 content/deliverable/acceptance/acceptanceKind 四字段，其余保持原值
+async function handleRegenerate(row: SubTask) {
+  if (regeneratingId.value) { ElMessage.warning('已有草案在重生成中，请稍候'); return }
+  try {
+    await ElMessageBox.confirm(
+      `将按同粒度重新生成「${row.title}」的内容/交付物/验收标准（标题与依赖关系保持不变）。是否继续？`,
+      '重生成草案',
+      { type: 'warning', confirmButtonText: '重生成', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  regeneratingId.value = String(row.id)
+  try {
+    const updated = await subTaskApi.regenerateDraft(row.id)
+    ElMessage.success('草案已按新内容重生成')
+    // 局部刷新：替换重生成后的四要素（title/dependsOn 不变量由后端保证）
+    const idx = drafts.value.findIndex(d => String(d.id) === String(row.id))
+    if (idx >= 0) {
+      const merged = { ...row, ...updated }
+      drafts.value.splice(idx, 1, merged)
+    }
+  } catch { /* 拦截器已弹错 */ }
+  finally { regeneratingId.value = null }
+}
+
+// TD-9 展开成功后整表重拉（新草案 id 与依赖关系已变化，本地补丁不可靠）
+async function reloadDrafts() {
+  if (!props.task) return
+  try {
+    const list = await taskApi.planDrafts(String(props.task.id))
+    drafts.value = list
+  } catch { /* 拦截器已弹错 */ }
 }
 </script>
 

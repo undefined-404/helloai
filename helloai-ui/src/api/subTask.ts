@@ -1,6 +1,6 @@
 import request from './request'
 import { paths } from './paths'
-import type { SubTask, ChangeStatusRequest, PageResult, LongId, CreateSubTaskPayload, TaskTimelineItem, ConversationMessageItem, Uncertainty, RedispatchResult } from '@/types'
+import type { SubTask, ChangeStatusRequest, PageResult, LongId, CreateSubTaskPayload, TaskTimelineItem, ConversationMessageItem, Uncertainty, AcceptanceKind, RedispatchResult } from '@/types'
 
 export const subTaskApi = {
   // taskId: 按主任务过滤（任务管理页跳转携带），LongId 传 string 防精度丢
@@ -18,8 +18,22 @@ export const subTaskApi = {
   },
   // G-010 草案人工修订：确认前编辑技能指派与执行约束（null=不修改该字段）
   // G-011 不确定性逐条编辑同入口下发；空数组=清空，null=不修改
-  updateDraft(id: LongId, data: { requiredSkills?: string[] | null; constraints?: string | null; uncertainties?: Uncertainty[] | null }) {
+  // TD-2 验收判据同入口下发（acceptanceKind，null=不修改；非法值服务端降级 AUTOMATED）
+  updateDraft(id: LongId, data: {
+    requiredSkills?: string[] | null
+    constraints?: string | null
+    uncertainties?: Uncertainty[] | null
+    acceptanceKind?: AcceptanceKind | null
+  }) {
     return request.put(paths.subTasks.updateDraft(id), data)
+  },
+  // TD-9 单条草案细拆：一条草案 → N 条 FINE 粒度子草案（同步等待 LLM；原草案被替换）
+  expandDraft(id: LongId) {
+    return request.post<any, SubTask[]>(paths.subTasks.expandDraft(id))
+  },
+  // TD-9 单条草案重生成：同粒度重写四要素（title/id/dependsOn 不变量白名单，服务端忽略 LLM 改动）
+  regenerateDraft(id: LongId) {
+    return request.post<any, SubTask>(paths.subTasks.regenerateDraft(id))
   },
   // M4.5: 快速派发单建（QuickDispatchDialog 逐项调用）
   create(data: CreateSubTaskPayload) {

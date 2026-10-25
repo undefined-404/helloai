@@ -186,7 +186,8 @@ public class BusinessSurfaceLoopRunner {
                         runId, taskId, subTaskId, 1, agent.getId(),
                         null, null, agent.getAccessType(),
                         LoopCancellation.of(executionProperties.getTurnDeadlineSeconds(),
-                                executionProperties.getToolCallTimeoutMillis())));
+                                executionProperties.getToolCallTimeoutMillis()),
+                        scene));
             } finally {
                 ToolInvocationContext.unbind();
             }

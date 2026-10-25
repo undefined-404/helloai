@@ -39,6 +39,28 @@ public interface TaskDispatchPort {
     void assignNext(Long agentId, Long subTaskId, DispatchConstraints constraints);
 
     /**
+     * 派发前置：作废该子任务<b>在飞</b>的平台执行记录（旧执行的结果不再被采信）。
+     *
+     * <p><b>为什么挂在本端口</b>：这是「派发」这一动作的前置条件，不是通用执行记录管理——
+     * 只有准备<b>顶替</b>旧执行时才需要。端口方向与 {@link #assignNext} 相同
+     * （agent 域提供、task 域消费），不新增反向依赖。</p>
+     *
+     * <p><b>不做的后果（2026-10-25 实测）</b>：子任务被 {@code block()} 后改派，
+     * 旧记录仍 RUNNING ⇒ {@code ExecutionCommandService} 的「已有进行中的执行记录」守卫
+     * 直接拒建命令 ⇒ 改派 100% 失败，子任务停在 ASSIGNED 无命令可消费，
+     * 连 10 分钟的 {@code AssignedSubTaskTimeoutTask} 回收也会被同一条记录二次挡住。</p>
+     *
+     * <p>实现侧口径（{@code ResilientDispatcher}）：只收口平台内记录
+     * （{@code access_type} 为空或 {@code API_KEY_LLM}），外部 Agent 的 attempt 行不碰；
+     * 旧进程若仍在跑，其终态写入会被执行记录的 CAS 拒绝、结果回写会被子任务状态守卫丢弃。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @param reason    作废原因（审计口径，落执行记录 error_msg）
+     * @return 实际收口的记录条数；0 表示本就没有在飞记录（正常路径）
+     */
+    int releaseInFlightExecution(Long subTaskId, String reason);
+
+    /**
      * 任务级选人约束（纯数据，端口契约）。
      *
      * <p>由任务 {@code agent_policy.executorAgentIds} 与 {@code required_skills}

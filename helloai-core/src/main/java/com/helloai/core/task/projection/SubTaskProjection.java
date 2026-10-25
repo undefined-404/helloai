@@ -44,11 +44,11 @@ public final class SubTaskProjection {
         List<UncertaintyView> uncertainties = st.getUncertainties() == null ? List.of()
                 : st.getUncertainties().stream()
                         .filter(u -> u != null)
-                        .map(u -> new UncertaintyView(u.getKind(), u.getNote()))
+                        .map(u -> new UncertaintyView(u.getKind(), u.getNote(), u.getRef()))
                         .toList();
         return new SubTaskView(st.getId(), st.getTaskId(), st.getStatus(), st.getAssignedAgentId(),
                 st.getReworkCount(), st.getTitle(), st.getContent(), st.getDeliverable(),
-                st.getAcceptance(), st.getConstraints(), st.getContext(), uncertainties,
+                st.getAcceptance(), st.getAcceptanceKind(), st.getConstraints(), st.getContext(), uncertainties,
                 st.dependsOnIdList(), st.getDeadline(), st.getPriority(), st.getIsContract(),
                 st.getRequiredSkills(), st.getModuleId(), st.getScoreFactors(), st.getCompositeScore(),
                 st.getScoreGrade(), st.getTimeoutCount(), st.getCreateTime(), st.getUpdateTime());
@@ -62,6 +62,8 @@ public final class SubTaskProjection {
         st.setContent(d.content());
         st.setDeliverable(d.deliverable());
         st.setAcceptance(d.acceptance());
+        // TD-2：验收判据随草案落库；null 原样透传（DB 默认值 + CHECK 兜底 AUTOMATED）
+        st.setAcceptanceKind(d.acceptanceKind());
         st.setPriority(d.priority());
         st.setIsContract(d.isContract());
         st.setRequiredSkills(d.requiredSkills());
@@ -74,6 +76,10 @@ public final class SubTaskProjection {
                     Uncertainty entity = new Uncertainty();
                     entity.setKind(u.kind());
                     entity.setNote(u.note());
+                    // TD-11：`ref` 必须一起落库——`acceptancePreconditions` 存的是标签（U1/U2），
+                    // 标签本身不落到 JSONB 里，核验侧就永远「解析不到引用 ⇒ 不豁免」，
+                    // 等于把「fail-safe 保持严格」变成常态。2026-10-25 实测发生（`LOG-20261025-016`）。
+                    entity.setRef(u.ref());
                     return entity;
                 })
                 .toList());

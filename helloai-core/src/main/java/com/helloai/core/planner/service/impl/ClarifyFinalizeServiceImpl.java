@@ -13,6 +13,8 @@ import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.mapper.RequirementConversationMapper;
 import com.helloai.core.planner.memory.service.LongTermMemoryService;
 import com.helloai.core.planner.policy.RequirementPackageParser;
+import com.helloai.core.planner.policy.TaskArchetypeResolver;
+import com.helloai.core.planner.policy.TaskContextKeys;
 import com.helloai.core.planner.service.ClarifyCommandSearchService;
 import com.helloai.core.planner.service.ClarifyFinalizeService;
 import com.helloai.core.planner.service.RequirementClarifyService;
@@ -115,25 +117,66 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
     }
 
     /**
+     * `B3`：记录 archetype 回落时间线事件（**观测位，不阻断建任务**）。
+     *
+     * <p>事件语义 = 「本任务的交付物原型不是模型判出来的，是兜底的」。下游看时间线即可判断
+     * 拆解维度是否可能错位（{@code BUILD} 与 {@code DOCUMENT} 的拆分维度不同），
+     * 不必再去猜 {@code task_archetype} 那个值是判断还是兜底。</p>
+     */
+    private void recordArchetypeFallback(Long taskId, Long conversationId, TaskArchetypeResolver.Decision decision) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("conversationId", conversationId);
+        payload.put("fallbackTo", decision.value());
+        payload.put("reason", decision.fallbackReason());
+        if (decision.rawValue() != null) {
+            payload.put("rawValue", decision.rawValue());
+        }
+        log.warn("终稿未给出合法 archetype，回落 {}: taskId={}, conversationId={}, reason={}, raw={}",
+                decision.value(), taskId, conversationId, decision.fallbackReason(), decision.rawValue());
+        // 事件写失败不得让建任务回滚：整条链路是 fail-open，B3 只加可见性
+        try {
+            taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_ARCHETYPE_FALLBACK.code(),
+                    AgentRole.PLANNER, null, payload);
+        } catch (Exception e) {
+            log.warn("记录 archetype 回落事件失败（不阻断建任务）: taskId={}, reason={}, err={}",
+                    taskId, decision.fallbackReason(), e.getMessage());
+        }
+    }
+
+    /**
      * 复用会话终稿创建 PENDING Task、best-effort 通知全部 PLANNER、回填 task_id 并写 timeline。
      * 状态由调用方提前推进（finalize / /task 直达走 CAS，regenerate 保持 FINALIZED）；
      * task_id 定点字段写入，避免全字段 updateById 用陈旧快照覆盖并发写入。
+     *
+     * <p>`B3`：{@code archetype} 的判定抽到 {@link TaskArchetypeResolver}（纯函数、可单测），
+     * 本方法只负责「回落时记一条时间线事件」——回落允许，但不能不可见。</p>
      */
     private TaskView buildTaskFromDraft(RequirementConversation conversation, String timelineEvent) {
         Long conversationId = conversation.getId();
         // G-011 双写：会话终稿需求包原样进 task.context.requirementPackage（S3 拆解链经
-        // RequirementPackageParser.fromContext 防御式读取；无需求包不初始化 context，
-        // 行为零变化；与 runningSpec 键空间隔离互不影响）
-        Map<String, Object> context = null;
+        // RequirementPackageParser.fromContext 防御式读取；与 runningSpec 键空间隔离互不影响）。
+        // TD-6：本方法同时写入 conversationId（拆解期上下文快照据此取会话附件清单）。
+        // 注：context 因此恒非空——原「无需求包则不初始化 context」的口径随之取消；
+        // 下游读取方一律防御式取值（缺键与 null 行为一致），故不改变既有语义。
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put(TaskContextKeys.CONVERSATION_ID, conversationId);
         if (conversation.getFinalPackage() != null && !conversation.getFinalPackage().isEmpty()) {
-            context = new LinkedHashMap<>();
             context.put(RequirementPackageParser.CONTEXT_KEY_REQUIREMENT_PACKAGE,
                     conversation.getFinalPackage());
         }
+        // TD-4 / B3：终稿 package.archetype（六值）→ task.task_archetype；判不出 / 未给 / 非法
+        // 一律回落 BUILD（与改造前语义一致，不做猜测性判定）。B3 只补「回落必须可见」。
+        TaskArchetypeResolver.Decision archetypeDecision =
+                TaskArchetypeResolver.resolve(conversation.getFinalPackage());
+        String archetype = archetypeDecision.value();
         TaskView task = taskService.createFromDraft(new TaskDraft(conversation.getFinalTitle(),
-                conversation.getFinalDescription(), TaskStatus.PENDING, context));
-        log.info("澄清终稿建任务: conversationId={}, taskId={}, title={}, event={}",
-                conversationId, task.id(), task.title(), timelineEvent);
+                conversation.getFinalDescription(), TaskStatus.PENDING, context, archetype));
+        log.info("澄清终稿建任务: conversationId={}, taskId={}, title={}, event={}, archetype={}, fallback={}",
+                conversationId, task.id(), task.title(), timelineEvent, archetype,
+                archetypeDecision.fallbackReason());
+        if (archetypeDecision.fallback()) {
+            recordArchetypeFallback(task.id(), conversationId, archetypeDecision);
+        }
 
         // 照 TaskController.create 的通知段：best-effort 通知全部 PLANNER，失败不阻断
         try {

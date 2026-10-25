@@ -48,11 +48,11 @@ class ReviewPromptRenderTest {
                 mock(SubTaskService.class));
     }
 
-    /** 24 位全量构造：只有 requiredSkills 是本次被测字段，其余取最小可用值。 */
+    /** 25 位全量构造：只有 requiredSkills 是本次被测字段，其余取最小可用值。 */
     private SubTaskView view(List<String> requiredSkills, String constraints) {
         return new SubTaskView(
                 1L, 2L, SubTaskStatus.REVIEW, 3L, 0,
-                "标题", "执行内容", "交付物", "验收标准", constraints,
+                "标题", "执行内容", "交付物", "验收标准", null, constraints,
                 Map.of(), List.of(),
                 List.of(), null, "HIGH", 0,
                 requiredSkills, null, null, null, null, 0,

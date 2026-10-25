@@ -6,6 +6,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TimelineEventCode;
+import com.helloai.common.constant.UncertaintyKind;
 import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.chat.AgentProviderResolver;
 import com.helloai.core.agent.domain.ExecutionCommand;
@@ -445,10 +446,14 @@ public class AgentRuntimeContextAssembler {
                 if (u.note() == null || u.note().isBlank()) {
                     continue;
                 }
-                // assumption 由 task 侧映射器判定（常量单源留 task 域，避免 agent 侧复制或硬编码 kind）
-                String suffix = u.assumption()
-                        ? "（可自行验证，推翻即上报）"
-                        : "（须先验证再动手，无法验证则 BLOCKED 上报）";
+                // kind 值域单源在 helloai-common（agent 可直依，无实体泄漏、无字面量复制）；
+                // assumption 布尔仍由 task 侧映射器派生，与 kind 枚举判定等价（TD-7）
+                String suffix = switch (UncertaintyKind.parse(u.kind())) {
+                    case ASSUMPTION -> "（可自行验证，推翻即上报）";
+                    case TO_LOOK_UP -> "（先检索确认：联网 / 附件 / 知识库；检索不到再 BLOCKED 上报）";
+                    case TO_DERIVE -> "（先推导出中间结论再动手；推不出再 BLOCKED 上报）";
+                    case UNCONFIRMED -> "（须先验证再动手，无法验证则 BLOCKED 上报）";
+                };
                 sb.append("- [").append(u.kind()).append("] ").append(u.note())
                         .append(suffix).append("\n");
             }
@@ -1019,6 +1024,22 @@ public class AgentRuntimeContextAssembler {
                     .append("- 在你的正文之外登记独立的交付文件（internal_register_output_attachment）；\n")
                     .append("- 查看平台全部可用技能目录（internal_list_skills），并按需加载某个技能的完整规范正文")
                     .append("（internal_load_skill）——任务涉及特定专业规范时，先查技能库再按规范执行。\n")
+                    // ★2026-10-25（MiniMax 轮数耗尽事故）：模型把 21211 字节正文写进沙箱 /tmp/work/sc.md
+                    // 并反复自查，平台一条都没收到 ⇒ 必须显式告知「沙箱文件不构成交付物」——
+                    // 这是模型缺的领域知识，不是措辞强度问题（此前已有「正文优先」仍照写文件）。
+                    // ★同日二次修正（ADR-005 沙箱改为同子任务复用）：沙箱不再是「一次性环境」——
+                    // 文件跨调用保留、可增量编辑；但「沙箱文件 ≠ 交付物」这条硬约束不变（平台只采集
+                    // 对话正文）。两条必须同时说清：只说「一次性」会让模型整篇重写（实测 20 轮不收敛），
+                    // 只说「可编辑」会让它以为文件就是交付。
+                    .append("- 沙箱（internal_run_in_sandbox）是**本子任务的工作区**：同一子任务内多次调用**复用同一沙箱**，")
+                    .append("**上一轮写入的文件这一轮还在**（路径不变即同一文件）。因此：\n")
+                    .append("  · 需要改稿时用 `sed -i` / `python` 对**已有文件**做**定点修改**，")
+                    .append("**不要每轮把整篇正文重新 heredoc 一遍**——整篇重写既烧轮次，也会让内容漂移；\n")
+                    .append("  · 需要多步操作（写文件 → 校验）时，**写在同一条命令里**（`cat > f && wc -c f`）最稳；\n")
+                    .append("  · 建议把草稿放在固定路径（如 `/workspace/draft.md`），跨轮沿用。\n")
+                    .append("  ⚠ 但**沙箱内文件不是交付物**：平台只采集**对话正文**，")
+                    .append("沙箱文件**不会被采集、不进评审**——**交付物正文必须写在你的对话正文里**。")
+                    .append("沙箱只用于「落草稿 / 跑校验 / 算一遍」；子任务执行结束后沙箱销毁。\n")
                     .append("当任务需要原始字段 / 实际文件内容，而上下文中仅给了摘要时，应先用工具核验，")
                     .append("不要仅凭摘要臆测补全。确认自己**无法完成**本子任务时（输入/原始附件不可得、")
                     .append("需要本机环境而你没有、验收要求的证据拿不到），调用 internal_report_blocked ")
@@ -1028,6 +1049,31 @@ public class AgentRuntimeContextAssembler {
         sb.append("输出契约：\n")
                 .append("- 用 Markdown 输出交付物正文，具体、可检查、紧扣验收标准；\n")
                 .append("- 若任务要求（见任务描述末尾的「产出回填要求」），按 EXECUTION_RECORD 结构回填；\n")
+                .append("- **交付物正文必须在工具调研完成后立即写出**：调研 / 检索 / 验证工具调用是手段，")
+                .append("正文才是交付物——本轮循环的最后一轮务必输出完整正文，不要把「我先看看 / 开场白」当正文；\n")
+                // ★2026-10-25（MiniMax 14 轮耗尽事故）：实测「沙箱写文件 + 反复跑校验脚本」会吃掉全部轮次，
+                // 耗尽时正文一个字都没产出。轮次是有限资源，必须显式给出预算口径与优先级。
+                .append("- **轮次是有限资源，交付优先**：调研 2~4 轮、成文 1 轮即可，自查 / 自验**最多 1 次**；")
+                .append("反复写脚本校验同一条结论会耗尽轮次、导致正文来不及产出而被判失败——")
+                .append("**先写出正文永远是第一优先级**，未复核项写进正文末尾的 VERIFICATION 里说明即可；\n")
+                // ★2026-10-25（MiniMax 竞品分析 MAX_ITERATIONS 事故）：模型把 20 轮全花在沙箱 curl
+                // 逐页抓取 ClickUp 定价页上（18 次沙箱调用、23 次工具调用），正文零产出。
+                // 根因：web_search 授权缺失 → 唯一联网通道 = 沙箱 curl；但模型不知道「抓取也有预算」。
+                // 必须显式给出「调研抓取轮次上限」与「正文优先」的硬约束。
+                .append("- **调研抓取轮次上限**：联网检索 / 沙箱 curl 抓取**最多 6 轮**；")
+                .append("第 6 轮后无论数据是否齐，都必须停止抓取、开始写正文——")
+                .append("数据缺口写进 VERIFICATION 的 NEXT_STEPS 里说明，不要继续抓；\n")
+                .append("- **链接抽查即可**：验收要求「N 条真实可打开来源」时，**抽查 2~3 条验证可达即可**，")
+                .append("不必逐条 curl 验证——逐条验证会耗尽轮次；\n")
+                // ★2026-10-25（MiniMax 第 6 次事故，7443）：验收要求「正文 1800~2300 字」，模型首稿写 3227 字
+                // （超 70%），之后 20 轮只把 3227 削到 3008，每轮 20~50 字，缺口 708 字 ⇒ 数学上不可能收敛。
+                // 根因不是模型懒，而是策略错：它先追求「写得好」再「砍得短」。必须让它首稿就按区间写。
+                .append("- **字数区间类验收：首稿就要命中，不要「写超再砍」**：验收写「A~B 字」时，")
+                .append("按 B 的**下沿**（约 B×0.85）一次写到位；若已写超，用增量删减")
+                .append("（`python3` 读文件 → 定位删段/删句 → 写回）**一次删够到区间内**，")
+                .append("不要每轮只删几十字——实测该速率（20~50 字/轮）下 900 字缺口需 18~45 轮，必然耗尽轮次；\n")
+                .append("- 统计字数时**排除代码块 / Mermaid / 表格原始字段**（除实验收明确要求计入），")
+                .append("并把统计命令与输出写进 VERIFICATION，不要只写结论；\n")
                 .append("- 结尾必须附 `VERIFICATION:` 验证证据围栏（证据 / STATUS / NEXT_STEPS）——")
                 .append("缺失会被评审从严核验，仅凭正文无法确认验收标准时会判不通过；\n")
                 .append("- 不确定或能力达不到的事，如实说明，不得伪造文件 / 数据充当交付物。");

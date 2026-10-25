@@ -84,9 +84,16 @@ public class AgentExecutionProperties {
      * 内部 LLM 执行者（API_KEY_LLM）的 AgentLoop 最大循环轮数（REF-8.2 分档）。
      *
      * <p>内部执行者要多步调工具、读附件、写产物，故独立分档默认高于外部一次性。
+     * 默认 20（2026-10-25 二次调高）：10 轮在「web_search 资料调研 + 沙箱验证」上
+     * 耗尽迭代、正文没来得及写（草稿仅开场白）的实测事故表明，文档写作类任务
+     * 「调研 + 成文」合计需要 12~14 轮；但同日 MiniMax 实测出现更强形态——
+     * 14 轮被「沙箱写文件 + 反复跑校验脚本」全部吃掉（toolCalls=17、outputTokens=24563，
+     * 正文只存在于沙箱文件里），仍以 MAX_ITERATIONS 失败。故再留 6 轮余量；
+     * 同时 turnDeadlineSeconds（默认 1800s）仍兜住异常长跑，且提示词侧已明确
+     * 「自查最多 1 次、正文优先」（{@code AgentRuntimeContextAssembler} 输出契约）。
      * 单元测试可直接观测该档位；配置项语义与 {@link #maxExternalIterations()} 正交。</p>
      */
-    private int internalMaxIterations = 10;
+    private int internalMaxIterations = 20;
 
     /**
      * 内部 LLM 执行者之外的 AgentLoop 最大循环轮数（REF-8.2 分档的默认档）。

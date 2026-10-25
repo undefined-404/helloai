@@ -58,7 +58,7 @@ public class TaskController {
     @PostMapping
     public R<Task> create(@Valid @RequestBody CreateTaskRequest req) {
         Task task = taskService.createTask(req.getTitle(), req.getDescription(), req.getSlaMinutes(),
-                req.getAgentPolicy(), req.getRequiredSkills());
+                req.getAgentPolicy(), req.getRequiredSkills(), req.getTaskArchetype());
 
         // 修复: 创建任务后通知所有 PLANNER
         try {
@@ -158,7 +158,7 @@ public class TaskController {
     @PutMapping("/updateById/{id}")
     public R<Task> update(@PathVariable("id") Long id, @RequestBody CreateTaskRequest req) {
         Task task = taskService.updateTask(id, req.getTitle(), req.getDescription(), req.getSlaMinutes(),
-                req.getAgentPolicy(), req.getRequiredSkills());
+                req.getAgentPolicy(), req.getRequiredSkills(), req.getTaskArchetype());
         if (task == null) return R.fail("任务不存在");
         return R.ok(task);
     }

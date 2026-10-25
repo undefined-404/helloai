@@ -18,6 +18,7 @@ public record TaskDraft(
         String title,
         String description,
         TaskStatus status,
-        Map<String, Object> context
+        Map<String, Object> context,
+        String taskArchetype
 ) {
 }

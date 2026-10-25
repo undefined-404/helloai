@@ -1,5 +1,6 @@
 package com.helloai.core.task.port;
 
+import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.SubTaskStatus;
 
 import java.util.List;
@@ -18,7 +19,7 @@ import java.util.Map;
  *
  * <p><b>字段对应原 {@code PlannerDecomposeAsyncServiceImpl#buildDrafts} 的全部 setter</b>：
  * taskId / title / content / deliverable / acceptance / priority / isContract / requiredSkills /
- * constraints / status / context / uncertainties。</p>
+ * constraints / status / context / uncertainties / acceptanceKind。</p>
  */
 public record SubTaskDraft(
         Long taskId,
@@ -32,6 +33,15 @@ public record SubTaskDraft(
         String constraints,
         SubTaskStatus status,
         Map<String, Object> context,
-        List<UncertaintyDraft> uncertainties
+        List<UncertaintyDraft> uncertainties,
+        /**
+         * 验收判据（`TD-2` / `TD-3`）：LLM 在草案里声明「谁来判、怎么判」。
+         * 追加在末尾而非插在 {@code acceptance} 之后——位置化构造点唯一
+         * （{@code PlannerDecomposeAsyncServiceImpl#buildDrafts}），扩尾部对既有调用零影响；
+         * 语义归属由本注释固定，不依赖字段顺序。
+         * <p>{@code null} 由投影层原样落库，DB 默认值与 CHECK 约束兜底为 {@code AUTOMATED}
+         * （= 改造前行为）。</p>
+         */
+        AcceptanceKind acceptanceKind
 ) {
 }

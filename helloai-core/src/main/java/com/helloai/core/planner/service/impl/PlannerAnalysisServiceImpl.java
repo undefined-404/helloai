@@ -267,6 +267,22 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  `TD-9` 单条草案 expand / regenerate（委托 PlannerDecomposeAsyncService 同步执行）
+    // ══════════════════════════════════════════════════════════════
+
+    /** `TD-9` expand：单条草案细拆为 N 条 FINE 粒度子草案（同步，编排委托异步服务实现）。 */
+    @Override
+    public List<SubTaskView> expandDraft(Long subTaskId) {
+        return plannerDecomposeAsyncService.expandById(subTaskId);
+    }
+
+    /** `TD-9` regenerate：单条草案同粒度重写四要素（同步，编排委托异步服务实现）。 */
+    @Override
+    public SubTaskView regenerateDraft(Long subTaskId) {
+        return plannerDecomposeAsyncService.regenerateById(subTaskId);
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  内部实现
     // ══════════════════════════════════════════════════════════════
 

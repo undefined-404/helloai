@@ -32,7 +32,13 @@ export interface Task {
   agentPolicy?: TaskAgentPolicy | null
   // V47: 任务要求的能力列表（AND 语义；空=不限制）
   requiredSkills?: string[]
+  // TD-1: 交付物原型（拆解维度）——决定「按什么维度拆」；与 GRANULARITY（拆多细）正交。
+  // 默认 BUILD；未走澄清链路或判不出时回落 BUILD，人工可改。
+  taskArchetype?: TaskArchetype
 }
+
+// TD-1 交付物原型六类（对齐后端 TaskArchetype）
+export type TaskArchetype = 'BUILD' | 'DOCUMENT' | 'RESEARCH' | 'DATA' | 'OPERATE' | 'DECIDE'
 
 // V47 任务级 Agent 指定策略（task.agent_policy JSONB；全空=不指定，各键缺省即回落默认）
 export interface TaskAgentPolicy {
@@ -122,6 +128,8 @@ export interface SubTask {
   // V26 拆解产出字段（后端已返回，草案审阅展示用）
   deliverable?: string | null
   acceptance?: string | null
+  // TD-2 验收判据：谁来判、怎么判（默认 AUTOMATED）。落库前按此分流校验 acceptance 写法。
+  acceptanceKind?: AcceptanceKind | null
   priority?: string | null
   // G-010 能力感知：子任务级技能标签（拆解侧指派/草案编辑修订）与执行约束
   requiredSkills?: string[] | null
@@ -141,13 +149,22 @@ export interface SubTask {
   updateTime: string
 }
 
-// G-011 不确定性申报条目（对齐后端 Uncertainty 实体）：
-// kind=ASSUMPTION 可自行验证、推翻即上报；kind=UNCONFIRMED 须先验证再动手，无法验证则 BLOCKED 上报
+// G-011 / TD-7 不确定性申报条目（对齐后端 Uncertainty 实体）：
+//   ASSUMPTION  已申报假设 —— 可自行验证、推翻即上报
+//   UNCONFIRMED 待确认缺口 —— 不知去哪查/怎么算，须先验证再动手，无法验证则 BLOCKED 上报
+//   TO_LOOK_UP  待检索事实 —— 知道去哪查（联网/附件/知识库），先检索再动手
+//   TO_DERIVE   待推导事实 —— 知道怎么算，先推导出中间结论再动手
 // 草案编辑侧不做 kind 强校验（授权输入），非法值由服务端降级 UNCONFIRMED
 export interface Uncertainty {
-  kind: 'ASSUMPTION' | 'UNCONFIRMED' | string
+  kind: UncertaintyKind | string
   note: string
 }
+
+// G-011 / TD-7 不确定性类别（对齐后端 UncertaintyKind）
+export type UncertaintyKind = 'ASSUMPTION' | 'UNCONFIRMED' | 'TO_LOOK_UP' | 'TO_DERIVE'
+
+// TD-2 验收判据（对齐后端 AcceptanceKind）
+export type AcceptanceKind = 'AUTOMATED' | 'STRUCTURAL' | 'REVIEWED' | 'ATTESTED'
 
 // --- Agent ---
 export interface Agent {

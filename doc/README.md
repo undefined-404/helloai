@@ -44,6 +44,7 @@
 | `Requirement_Package_Uncertainty.md` | `Implemented` | G-011 |
 | `HelloAI Task-Team 与附件可见性设计.md` | `Partial` | G-014 |
 | `HelloAI 需求对话附件设计.md` | `Partial` | G-016 · G-017 · G-024 |
+| `HelloAI 任务拆解领域无关化设计.md` | `Planned` | G-025 |
 | `design/adr/ADR-001-run-turn-step-model.md` | （ADR） | — |
 | `design/adr/ADR-002-embedding-provider.md` | （ADR · Accepted 2026-10-11） | `G-019` |
 | `design/adr/ADR-003-opensandbox-deployment-topology.md` | （ADR · Accepted 2026-10-17） | OpenSandbox 集成（S-5） |
@@ -119,6 +120,7 @@
 | `HelloAI 计划编排与排期总览.md` | 各计划之间的**依赖与冲突视图 + 统一执行次序**（编排视图，**不承载状态**）；含 2026-10-12 横向比对（陈旧快照冲突 / 无编号待排项 `D1~D4`·`E1`）与 `T0~T3` 分层排期 |
 | `HelloAI OpenSandbox 沙箱集成计划.md` | **OpenSandbox 沙箱专项**（`S-1`~`S-6`，2026-10-17 建号，已登记进《差距表》§0 编号口径表）：**能力预研 + 契约落地**（用户裁定）——声明式 spec（`S-1`）+ 诚实五边界策略（`S-2`）+ `OpenSandboxSandboxProvider`（`S-3`，Kotlin SDK `com.alibaba.opensandbox:sandbox:1.1.1`）+ 探针（`S-4`）+ 部署拓扑（`S-5`，独立网络、app 不加入）+ 验证集（`S-6`）。**不触发 `G-005` 重新排期**（三触发条件均未命中）、不接业务执行链、不宣称「安全沙箱已完成」；`enabled=false` 默认关闭。调研支撑：`research/沙箱运作机制与HelloAI沙箱设计分析（2026-10-17）.md` |
 | `HelloAI Paperclip 借鉴落地计划（2026-10-21）.md` | **Paperclip 借鉴落地专项**（`PC-1`~`PC-19`，2026-10-23 建号，已登记进《差距表》§0 编号口径表）：`PC-1`~`PC-6` 现有机制补硬（唤醒原因入响应 / checkout 409 / 三配额分离 / env 不可覆盖运行时 key / MCP 薄封装复核 / 成本双阈值闸门）· `PC-7`~`PC-11` CLI 推通道（含**开工四前置**，未定则 `PC-7` 挂起、`PC-8`~`PC-10` 可先行）· `PC-12`~`PC-19` 有条件再做 · 明确不借 6 条 · 执行次序与前置待决。**2026-10-23 改号**：旧稿用「阶段 + 序号」寻址（不可被外部引用，且违反治理规则 §6.5 分期标签冻结令），现全部改为 `PC-x`。调研支撑：`research/Paperclip 外部Agent接入与CLI适配器借鉴分析（2026-10-21）.md` |
+| `HelloAI 任务拆解领域无关化实施计划（2026-10-24）.md` | **任务拆解领域无关化专项**（`TD-1`~`TD-10`，2026-10-24 建号，已登记进《差距表》§0 编号口径表）：`TD-1` `task.task_archetype` 六类拆分维度（BUILD/DOCUMENT/RESEARCH/DATA/OPERATE/DECIDE）· `TD-2` `sub_task.acceptance_kind` 四类验收判据（AUTOMATED/STRUCTURAL/REVIEWED/ATTESTED）· `TD-3` 拆解提示词按 archetype 分支（**生效开关**）· `TD-4` archetype 判定链 · `TD-5` 验收校验按 kind 分流（**生效开关**）· `TD-6` 拆解期上下文快照 · `TD-7` `uncertainties` 扩两类 · `TD-8` 澄清侧 stall 计数 · `TD-9` 单条 expand+regenerate · `TD-10` ledger 通道（**登记不启动**）。设计见 `design/HelloAI 任务拆解领域无关化设计.md`；差距判定见 `review/HelloAI 任务拆解方案对照与领域无关化设计（2026-10-24）.md`。**不触发 `G-005`**、不改 `sub_task` 四要素契约与 DAG 校验 |
 | `HelloAI 需求对话附件实施计划（2026-10-22）.md` | **需求对话附件专项**（`ATT-1`~`ATT-7`，2026-10-23 建号，已登记进《差距表》§0 编号口径表）：`ATT-1` 文本 + PDF 文本层 + 两层 Prompt 注入（清单恒注入 + 正文按预算注入，**已落地**）；`ATT-2` 视觉直读（图片与扫描件共用一条通道）；`ATT-3` 大文件 RAG + 引用回源；`ATT-4` 版面增强（Docling sidecar，**登记不启动**）。**不新增 `G-` 差距项**——能力缺口由 `PRODUCT.md` 与 `G-016` / `G-017` 承载；关联 `ADR-002`（RAG 选型） |
 
 > **2026-10-09 出列记录（`plan/` 只留在办项）**：3 份**已执行完成**的方案 / 清单迁入 `archive/implemented/` 并标 `Done` —— `HelloAI_V2回归测试方案（2026-10-04）.md`、`HelloAI_全面复测清单（2026-10-06）.md`、`deploy-checklist-arch-collect-2026-10.md`。

@@ -150,6 +150,11 @@ public class VerdictParser {
         if (verdict.getComment() != null && !verdict.getComment().isBlank()) {
             sb.append("- 评语: ").append(verdict.getComment()).append("\n");
         }
+        // TD-5 验收③（2026-10-24）：逐条对照验收标准的核验分析（REVIEWED kind 子任务
+        // 「逐条 pass/fail 可见」的对话流主通道）——仅增强展示，不参与判定
+        if (verdict.getAnalysis() != null && !verdict.getAnalysis().isBlank()) {
+            sb.append("- 逐条核验: ").append(verdict.getAnalysis()).append("\n");
+        }
         return sb.toString().trim();
     }
 

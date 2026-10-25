@@ -2,6 +2,7 @@ package com.helloai.core.task.service.impl;
 
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.UncertaintyKind;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
@@ -355,9 +356,12 @@ public class SubTaskNotificationServiceImpl implements SubTaskNotificationServic
             if (uncertainty == null || uncertainty.getNote() == null || uncertainty.getNote().isBlank()) {
                 continue;
             }
-            String suffix = Uncertainty.KIND_ASSUMPTION.equals(uncertainty.getKind())
-                    ? "（可自行验证，推翻即上报）"
-                    : "（须先验证再动手，无法验证则 reportBlocked 上报）";
+            String suffix = switch (UncertaintyKind.parse(uncertainty.getKind())) {
+                case ASSUMPTION -> "（可自行验证，推翻即上报）";
+                case TO_LOOK_UP -> "（先检索确认：联网 / 附件 / 知识库；检索不到再 reportBlocked 上报）";
+                case TO_DERIVE -> "（先推导出中间结论再动手；推不出再 reportBlocked 上报）";
+                case UNCONFIRMED -> "（须先验证再动手，无法验证则 reportBlocked 上报）";
+            };
             sb.append("\n- [").append(uncertainty.getKind()).append("] ")
                     .append(uncertainty.getNote()).append(suffix);
         }

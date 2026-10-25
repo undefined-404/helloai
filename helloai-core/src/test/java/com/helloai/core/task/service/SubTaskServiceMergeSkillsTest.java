@@ -1,6 +1,7 @@
 package com.helloai.core.task.service;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
@@ -117,7 +118,7 @@ class SubTaskServiceMergeSkillsTest {
             doReturn(stored).when(subTaskService).getById(1L);
             doReturn(true).when(subTaskService).updateById(any(SubTask.class));
 
-            subTaskService.updateDraft(1L, List.of("eng-doc-standard"), "不得改接口", null);
+            subTaskService.updateDraft(1L, List.of("eng-doc-standard"), "不得改接口", null, null);
 
             assertThat(stored.getRequiredSkills()).containsExactly("eng-doc-standard");
             assertThat(stored.getConstraints()).isEqualTo("不得改接口");
@@ -131,7 +132,7 @@ class SubTaskServiceMergeSkillsTest {
             doReturn(stored).when(subTaskService).getById(1L);
             doReturn(true).when(subTaskService).updateById(any(SubTask.class));
 
-            subTaskService.updateDraft(1L, null, null, null);
+            subTaskService.updateDraft(1L, null, null, null, null);
 
             assertThat(stored.getRequiredSkills()).containsExactly("keep");
             assertThat(stored.getConstraints()).isEqualTo("keep-c");
@@ -139,12 +140,11 @@ class SubTaskServiceMergeSkillsTest {
 
         @Test
         @DisplayName("非草案态 fail-close 拒绝编辑")
-        void shouldRejectNonDraftStatus() {
-            SubTask assigned = draft(null);
+        void shouldRejectNonDraftStatus() {            SubTask assigned = draft(null);
             assigned.setStatus(SubTaskStatus.ASSIGNED);
             doReturn(assigned).when(subTaskService).getById(1L);
 
-            assertThatThrownBy(() -> subTaskService.updateDraft(1L, List.of("x"), null, null))
+            assertThatThrownBy(() -> subTaskService.updateDraft(1L, List.of("x"), null, null, null))
                     .isInstanceOf(BizException.class)
                     .hasMessageContaining("仅草案待审状态可编辑");
         }
@@ -154,7 +154,7 @@ class SubTaskServiceMergeSkillsTest {
         void shouldRejectMissingDraft() {
             doReturn(null).when(subTaskService).getById(2L);
 
-            assertThatThrownBy(() -> subTaskService.updateDraft(2L, null, null, null))
+            assertThatThrownBy(() -> subTaskService.updateDraft(2L, null, null, null, null))
                     .isInstanceOf(BizException.class)
                     .hasMessageContaining("草案不存在");
         }
@@ -181,7 +181,7 @@ class SubTaskServiceMergeSkillsTest {
 
             // List.of 拒 null 元素，用 Arrays.asList 覆盖「null 条目丢弃」分支（同 L126 全限定风格）
             subTaskService.updateDraft(1L, null, null,
-                    java.util.Arrays.asList(ok, assumed, blank, weird, null));
+                    java.util.Arrays.asList(ok, assumed, blank, weird, null), null);
 
             assertThat(stored.getUncertainties())
                     .extracting(Uncertainty::getKind, Uncertainty::getNote)
@@ -202,7 +202,7 @@ class SubTaskServiceMergeSkillsTest {
             doReturn(stored).when(subTaskService).getById(1L);
             doReturn(true).when(subTaskService).updateById(any(SubTask.class));
 
-            subTaskService.updateDraft(1L, null, null, null);
+            subTaskService.updateDraft(1L, null, null, null, null);
 
             assertThat(stored.getUncertainties())
                     .extracting(Uncertainty::getNote)
@@ -220,9 +220,69 @@ class SubTaskServiceMergeSkillsTest {
             doReturn(stored).when(subTaskService).getById(1L);
             doReturn(true).when(subTaskService).updateById(any(SubTask.class));
 
-            subTaskService.updateDraft(1L, null, null, List.of());
+            subTaskService.updateDraft(1L, null, null, List.of(), null);
 
             assertThat(stored.getUncertainties()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("TD-7：四类 kind 均可落库（TO_LOOK_UP / TO_DERIVE 不再被降级）")
+        void shouldKeepFourKinds() {
+            SubTask stored = draft(List.of());
+            doReturn(stored).when(subTaskService).getById(1L);
+            doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+
+            Uncertainty assumption = new Uncertainty(Uncertainty.KIND_ASSUMPTION, "假设可自证");
+            Uncertainty unconfirmed = new Uncertainty(Uncertainty.KIND_UNCONFIRMED, "只能问人");
+            Uncertainty lookUp = new Uncertainty(Uncertainty.KIND_TO_LOOK_UP, "查历史报告");
+            Uncertainty derive = new Uncertainty(Uncertainty.KIND_TO_DERIVE, "按口径算差额");
+
+            subTaskService.updateDraft(1L, null, null,
+                    java.util.Arrays.asList(assumption, unconfirmed, lookUp, derive), null);
+
+            assertThat(stored.getUncertainties())
+                    .extracting(Uncertainty::getKind)
+                    .containsExactly(Uncertainty.KIND_ASSUMPTION, Uncertainty.KIND_UNCONFIRMED,
+                            Uncertainty.KIND_TO_LOOK_UP, Uncertainty.KIND_TO_DERIVE);
+        }
+
+        @Test
+        @DisplayName("TD-2：acceptanceKind 合法值覆盖落库")
+        void shouldUpdateAcceptanceKind() {
+            SubTask stored = draft(List.of());
+            stored.setAcceptanceKind(AcceptanceKind.AUTOMATED);
+            doReturn(stored).when(subTaskService).getById(1L);
+            doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+
+            subTaskService.updateDraft(1L, null, null, null, "REVIEWED");
+
+            assertThat(stored.getAcceptanceKind()).isEqualTo(AcceptanceKind.REVIEWED);
+        }
+
+        @Test
+        @DisplayName("TD-2：acceptanceKind 非法值降级 AUTOMATED")
+        void shouldDowngradeIllegalAcceptanceKind() {
+            SubTask stored = draft(List.of());
+            stored.setAcceptanceKind(AcceptanceKind.STRUCTURAL);
+            doReturn(stored).when(subTaskService).getById(1L);
+            doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+
+            subTaskService.updateDraft(1L, null, null, null, "MAYBE");
+
+            assertThat(stored.getAcceptanceKind()).isEqualTo(AcceptanceKind.AUTOMATED);
+        }
+
+        @Test
+        @DisplayName("TD-2：acceptanceKind null / 空白不覆盖（局部更新语义）")
+        void shouldKeepAcceptanceKindWhenBlank() {
+            SubTask stored = draft(List.of());
+            stored.setAcceptanceKind(AcceptanceKind.ATTESTED);
+            doReturn(stored).when(subTaskService).getById(1L);
+            doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+
+            subTaskService.updateDraft(1L, null, null, null, "  ");
+
+            assertThat(stored.getAcceptanceKind()).isEqualTo(AcceptanceKind.ATTESTED);
         }
     }
 }

@@ -157,6 +157,36 @@ class ChatModelToolLoopTest {
     }
 
     @Test
+    @DisplayName("★Anthropic 协议：正文与 tool_use 分居两个 Generation ⇒ 仍执行工具并回喂（2026-10-25 事故回归）")
+    void shouldExecuteToolWhenAnthropicSplitsTextAndToolUseIntoTwoGenerations() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(responseWithSplitToolCall("toolu_1", "internal_get_sub_task_detail", "{}"))
+                .enqueue(responseWithText("done"));
+        when(toolExecutor.execute("internal_get_sub_task_detail", "{}"))
+                .thenReturn(ToolExecutionResult.success("internal_get_sub_task_detail", "{\"title\":\"x\"}"));
+
+        AgentLoopResult result = loop.run(input(model));
+
+        // 事故现场：只读 getResult()（第 0 个=正文）⇒ toolCalls 空 ⇒ 1 轮 STOP、0 次调用
+        assertThat(result.iterations()).isEqualTo(2);
+        assertThat(result.toolCallCount()).isEqualTo(1);
+        assertThat(result.finishReason()).isEqualTo("STOP");
+
+        List<Message> sent = model.lastMessages();
+        // 历史里的 assistant 消息必须同时带正文与 tool_use，否则下一轮 tool_result 无主（provider 会拒答）
+        AssistantMessage assistant = sent.stream()
+                .filter(AssistantMessage.class::isInstance)
+                .map(AssistantMessage.class::cast)
+                .reduce((first, second) -> second)
+                .orElseThrow();
+        assertThat(assistant.getToolCalls()).hasSize(1);
+        assertThat(assistant.getToolCalls().get(0).name()).isEqualTo("internal_get_sub_task_detail");
+        assertThat(assistant.getText()).isEqualTo("我先查一下子任务详情。");
+        // 末位仍是工具响应（回喂顺序未被打乱）
+        assertThat(sent.get(sent.size() - 1)).isInstanceOf(ToolResponseMessage.class);
+    }
+
+    @Test
     @DisplayName("TOOL_CALL 事件 payload 带 callId（与模型 tool_call.id 一致，供调用/返回硬关联）")
     @SuppressWarnings("unchecked")
     void shouldRecordCallIdInToolCallEvents() {
@@ -419,6 +449,19 @@ class ChatModelToolLoopTest {
                 .toolCalls(List.of(new AssistantMessage.ToolCall(id, "function", name, args)))
                 .build();
         return new ChatResponse(List.of(new Generation(message)), null);
+    }
+
+    /**
+     * 复刻 {@code AnthropicChatModel.toChatResponse} 的真实形态：
+     * 正文在 Generation[0]（无工具调用），{@code tool_use} 追加为 Generation[1]。
+     */
+    private static ChatResponse responseWithSplitToolCall(String id, String name, String args) {
+        AssistantMessage textOnly = AssistantMessage.builder().content("我先查一下子任务详情。").build();
+        AssistantMessage toolOnly = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(id, "function", name, args)))
+                .build();
+        return new ChatResponse(List.of(new Generation(textOnly), new Generation(toolOnly)), null);
     }
 
     private static ChatResponse responseWithToolCallAndUsage(String id, String name, String args, int totalTokens) {

@@ -37,6 +37,25 @@ public class OpenSandboxProperties {
     private Spec spec = new Spec();
 
     /**
+     * 是否启用<b>同子任务复用</b>沙箱（`ADR-005`，2026-10-25；默认 true）。
+     *
+     * <p>对齐 deepseek-harness `dsh-tool-bash-persistent` 的产品级口径：同一子任务内的多次
+     * `internal_run_in_sandbox` 调用复用同一沙箱，<b>写入的文件跨调用保留</b>，模型可对上一轮
+     * 产物做增量编辑（`sed -i` / `python` 定点改），而不是每轮整篇重写。</p>
+     *
+     * <p>置 false ⇒ 回落原「每次调用新建 + 无条件 kill」的一次性语义（行为零变化，
+     * 用于排障 / 需要绝对隔离的场景）。</p>
+     */
+    private boolean reuseEnabled = true;
+
+    /**
+     * 复用沙箱的空闲上限（秒，默认 900 = 15min）。每次执行成功即 {@code renew} 续期；
+     * 空闲超时后再次访问会被淘汰重建。turn 结束另有显式 {@code release}，
+     * 本值只作「进程异常退出 / 未走 release」的兜底。
+     */
+    private long idleTtlSeconds = 900L;
+
+    /**
      * 声明式沙箱规格字段（与 OpenSandbox API 请求体逐字对齐，S-1）。
      */
     @Data

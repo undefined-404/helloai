@@ -137,6 +137,20 @@ class AgentMcpServerServiceImplTest {
                 .containsExactlyElementsOf(INTERNAL_LLM_TOOLS);
     }
 
+    @Test
+    @DisplayName("enableDefaultsForAgent：默认授权含 13 个 MCP 工具 + 2 个 contributor 工具（2026-10-25 事故修）")
+    void shouldEnableContributorToolsByDefault() {
+        // 模拟 DB 无既有行（新 agent 注册场景）
+        when(chain.list()).thenReturn(rowsOf(List.of()));
+        // 拦截 save()：enableDefaultsForAgent 会逐条插入，返回插入成功数
+        doReturn(true).when(service).save(any(AgentMcpServer.class));
+
+        int inserted = service.enableDefaultsForAgent(11L);
+
+        // 13 个 MCP 会话工具 + 2 个 contributor 工具（web_search / search_knowledge）
+        assertThat(inserted).isEqualTo(15);
+    }
+
     // #region REF-1.3b 不可关闭清单（CRITICAL_TOOLS）
 
     /** 不可关闭三要素（与实现同名常量同集合，逐个列出以冻结清单）。 */

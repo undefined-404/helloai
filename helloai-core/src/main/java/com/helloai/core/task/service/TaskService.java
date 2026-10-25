@@ -64,6 +64,24 @@ public interface TaskService extends IService<Task> {
                     Map<String, Object> agentPolicy, List<String> requiredSkills);
 
     /**
+     * 创建任务（初始状态 PENDING），可指定交付物原型（`TD-1`）。
+     *
+     * <p>{@code taskArchetype} 可空：null / 空白=不设置，落库走 DB 默认值 {@code BUILD}
+     * （等于改造前行为）；非法值回落 {@code BUILD}。**创建路径必须走本重载**——
+     * 走上面的五参重载会把请求里的 {@code taskArchetype} 静默丢弃。</p>
+     *
+     * @param title          任务标题
+     * @param description    任务描述
+     * @param slaMinutes     任务 SLA 分钟数，null=无时限
+     * @param agentPolicy    任务级 Agent 指定策略，null=不设置
+     * @param requiredSkills 任务要求的能力列表，null=不设置
+     * @param taskArchetype  交付物原型，null / 空白=不设置
+     * @return 已创建的任务
+     */
+    Task createTask(String title, String description, Integer slaMinutes,
+                    Map<String, Object> agentPolicy, List<String> requiredSkills, String taskArchetype);
+
+    /**
      * 任务条件查询（状态过滤 + 创建时间倒序）。
      *
      * <p>按 §6.3 分层红线从 TaskController 收口：条件构造归 Service 层。
@@ -87,7 +105,7 @@ public interface TaskService extends IService<Task> {
 
     /**
      * 更新任务标题与描述；任务不存在时返回 null（由 Controller 转 R.fail）。
-     * 等价于 {@code updateTask(id, title, description, null, null, null)}。
+     * 等价于 {@code updateTask(id, title, description, null, null, null, null)}。
      *
      * @param id          任务 ID
      * @param title       新标题
@@ -115,10 +133,13 @@ public interface TaskService extends IService<Task> {
      * @param slaMinutes     新 SLA 分钟数，null 不更新
      * @param agentPolicy    新执行策略，null 不更新
      * @param requiredSkills 新能力列表，null 不更新
+     * @param taskArchetype  新交付物原型（`TD-1`）：BUILD / DOCUMENT / RESEARCH / DATA / OPERATE /
+     *                       DECIDE；null 或空白不更新，非法值回落 BUILD（人工为权威输入，
+     *                       对齐 {@code updateDraft} 的既有口径）
      * @return 更新后的任务，或 null
      */
     Task updateTask(Long id, String title, String description, Integer slaMinutes,
-                    Map<String, Object> agentPolicy, List<String> requiredSkills);
+                    Map<String, Object> agentPolicy, List<String> requiredSkills, String taskArchetype);
 
     /**
      * 关联统计（删除前风险提示）。
@@ -219,6 +240,18 @@ public interface TaskService extends IService<Task> {
 
     /** 按主键查询顶层任务只读快照（语义与 {@link #getById} 一致：不存在返回 null）。 */
     TaskView getView(Long taskId);
+
+    /**
+     * 最近创建的任务只读快照（`TD-6` 拆解期上下文快照的「历史同类任务」数据源）。
+     *
+     * <p><b>为什么按「最近」而不是按「相似」</b>：当前没有任何任务相似度索引（无向量列、
+     * 无关键词倒排），按相似度取名不副实。这里只提供「最近 N 个任务」这一客观口径，
+     * 渲染侧据此给出「骨架参考」——**不宣称是同类任务**。等有相似度能力再换实现，
+     * 调用方签名不变。</p>
+     *
+     * @param limit 取几条（≤0 时按实现默认值），仅返回快照字段，不含子任务
+     */
+    List<TaskView> listRecentViews(int limit);
 
     // ── 写命令（RM5 批 5a）：供 planner 域消费 ──
 

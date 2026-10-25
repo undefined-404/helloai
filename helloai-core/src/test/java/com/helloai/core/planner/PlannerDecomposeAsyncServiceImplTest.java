@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.SubTaskContextKeys;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
@@ -15,6 +16,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
+import com.helloai.core.planner.context.DecomposeContextSnapshotRenderer;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.policy.RequirementPackageParser;
 import com.helloai.core.planner.service.PlannerAnalysisService;
@@ -36,6 +38,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -90,6 +93,10 @@ class PlannerDecomposeAsyncServiceImplTest {
     @Mock
     private AgentSkillSpecService agentSkillSpecService;
 
+    /** `TD-6` 快照渲染器：本测试只关心「拆解不因快照失败而失败」，故不打桩（默认返回 null 已验证降级路径）。 */
+    @Mock
+    private DecomposeContextSnapshotRenderer contextSnapshotRenderer;
+
     private PlannerDecomposeAsyncServiceImpl asyncService;
 
 
@@ -99,25 +106,25 @@ class PlannerDecomposeAsyncServiceImplTest {
         asyncService = new PlannerDecomposeAsyncServiceImpl(
                 taskService, subTaskService, plannerAgentPicker,
                 platformAgentExecutionService, taskTimelineService,
-                agentService, agentSkillSpecService, new ObjectMapper());
+                agentService, agentSkillSpecService, contextSnapshotRenderer, new ObjectMapper());
 
     }
 
     private TaskView planningTask() {
         return new TaskView(TASK_ID, "搭建报表模块", "需要一个日报统计模块", null, null, null, null, null,
-                TaskStatus.PLANNING, null, null, null, null, null, null);
+                TaskStatus.PLANNING, null, null, null, null, null, null, null);
     }
 
     /** 任务快照（不可变，等价原 setStatus/setPriority 写法）。 */
     private TaskView taskView(TaskStatus status, String priority) {
         return new TaskView(TASK_ID, "搭建报表模块", "需要一个日报统计模块", null, null, null, null, null,
-                status, null, priority, null, null, null, null);
+                status, null, priority, null, null, null, null, null);
     }
 
     /** 重加载草案快照（含优先级与 context，等价原 setPriority/setContext 写法）。 */
     private SubTaskView draftFull(long id, String priority, Map<String, Object> context) {
         return new SubTaskView(id, TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null,
-                null, null, null, null, null, context, List.of(), null, null, priority, null, null,
+                null, null, null, null, null, null, context, List.of(), null, null, priority, null, null,
                 null, null, null, null, null, null, null);
     }
 
@@ -128,7 +135,7 @@ class PlannerDecomposeAsyncServiceImplTest {
     /** 带 agent_policy 的任务快照（不可变，等价原 setAgentPolicy 写法）。 */
     private TaskView taskWithPolicy(Map<String, Object> agentPolicy) {
         return new TaskView(TASK_ID, "搭建报表模块", "需要一个日报统计模块", null, null, null, null,
-                agentPolicy, TaskStatus.PLANNING, null, null, null, null, null, null);
+                agentPolicy, TaskStatus.PLANNING, null, null, null, null, null, null, null);
     }
 
     /**
@@ -184,7 +191,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
                         ```json
-                        [{"title":"仅标题","content":"c","deliverable":"d","acceptance":"a"}]
+                        [{"title":"仅标题","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         ```
                         """, "stop", "llm", 100));
         SubTaskView reloaded = draftWithPriority(11L, "HIGH");
@@ -208,8 +215,8 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         ```json
                         [
-                          {"title":"设计表结构","content":"建表","deliverable":"DDL","acceptance":"评审通过","priority":"high"},
-                          {"title":"实现统计接口","content":"实现接口","deliverable":"接口代码","acceptance":"返回 200","priority":"不合法优先级"}
+                          {"title":"设计表结构","content":"建表","deliverable":"DDL 建表脚本","acceptance":"评审通过且无语法错误","priority":"high"},
+                          {"title":"实现统计接口","content":"实现接口","deliverable":"接口代码实现文件","acceptance":"接口返回 200 状态码","priority":"不合法优先级"}
                         ]
                         ```
                         """, "stop", "llm", 100));
@@ -250,7 +257,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a"}]
+                        [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
 
@@ -277,12 +284,12 @@ class PlannerDecomposeAsyncServiceImplTest {
     void shouldInjectRequiredSkillsIntoDecomposePrompt() {
         TaskView task = new TaskView(TASK_ID, "搭建报表模块", "需要一个日报统计模块", null, null, null,
                 null, null, TaskStatus.PLANNING, null, null, null,
-                List.of("eng-doc-standard", "eng-verification"), null, null);
+                List.of("eng-doc-standard", "eng-verification"), null, null, null);
         when(taskService.getView(TASK_ID)).thenReturn(task);
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"文档产出","content":"c","deliverable":"d","acceptance":"a"}]
+                        [{"title":"文档产出","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
 
@@ -305,7 +312,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"普通执行","content":"c","deliverable":"d","acceptance":"a"}]
+                        [{"title":"普通执行","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
 
@@ -335,7 +342,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
                         [
-                          {"title":"文档产出","content":"c","deliverable":"d","acceptance":"a",
+                          {"title":"文档产出","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                            "requiredSkills":["eng-doc-standard","幻觉技能"],"constraints":"不得改对外接口"}
                         ]
                         """, "stop", "llm", 100));
@@ -369,7 +376,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a"}]
+                        [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
 
@@ -396,10 +403,10 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
                         [
-                          {"title":"契约定义","content":"接口签名","deliverable":"契约文档","acceptance":"下游可照做","contract":true,"dependsOn":[]},
-                          {"title":"下游实现","content":"照契约实现","deliverable":"实现代码","acceptance":"契约用例通过","contract":false,"dependsOn":[1]},
-                          {"title":"普通子任务","content":"缺省 contract","deliverable":"交付物","acceptance":"验证点通过","dependsOn":[1]},
-                          {"title":"字符串布尔","content":"contract 给字符串","deliverable":"交付物","acceptance":"验证点通过","contract":"true","dependsOn":[1]}
+                          {"title":"契约定义","content":"接口签名","deliverable":"契约文档完整版本","acceptance":"下游可照做且无歧义之处","contract":true,"dependsOn":[]},
+                          {"title":"下游实现","content":"照契约实现","deliverable":"实现代码完整版本","acceptance":"契约用例全部通过验收","contract":false,"dependsOn":[1]},
+                          {"title":"普通子任务","content":"缺省 contract","deliverable":"交付物产物完整清单","acceptance":"验证点全部通过确认完成","dependsOn":[1]},
+                          {"title":"字符串布尔","content":"contract 给字符串","deliverable":"交付物产物完整清单","acceptance":"验证点全部通过确认完成","contract":"true","dependsOn":[1]}
                         ]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(
@@ -452,8 +459,8 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
                         [
-                          {"title":"完整条目","content":"内容","deliverable":"交付物","acceptance":"运行 X 输出 Y"},
-                          {"title":"残缺条目","content":"内容","deliverable":"交付物","acceptance":"   "}
+                          {"title":"完整条目","content":"内容","deliverable":"交付物产物完整清单","acceptance":"运行 X 命令输出预期 Y"},
+                          {"title":"残缺条目","content":"内容","deliverable":"交付物产物完整清单","acceptance":"   "}
                         ]
                         """, "stop", "llm", 100));
 
@@ -481,8 +488,8 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
                         [
-                          {"title":"条目一","content":"内容一","deliverable":"交付物一","acceptance":"运行 X 输出 Y"},
-                          {"title":"条目二","content":"内容二","deliverable":"交付物二","acceptance":"接口 Z 返回 200"}
+                          {"title":"条目一","content":"内容一","deliverable":"交付物一完整产出","acceptance":"运行 X 命令输出预期 Y"},
+                          {"title":"条目二","content":"内容二","deliverable":"交付物二完整产出","acceptance":"接口 Z 返回 200 状态码"}
                         ]
                         """, "stop", "llm", 100));
         when(subTaskService.saveDrafts(any())).thenReturn(List.of());
@@ -560,8 +567,8 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         ```json
                         [
-                          {"title":"第一步","content":"准备","deliverable":"d","acceptance":"a","dependsOn":[]},
-                          {"title":"第二步","content":"执行","deliverable":"d","acceptance":"a","dependsOn":[1]}
+                          {"title":"第一步","content":"准备","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容","dependsOn":[]},
+                          {"title":"第二步","content":"执行","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容","dependsOn":[1]}
                         ]
                         ```
                         """, "stop", "llm", 100));
@@ -591,8 +598,8 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         ```json
                         [
-                          {"title":"第一步","content":"准备","deliverable":"d","acceptance":"a","dependsOn":[]},
-                          {"title":"第二步","content":"执行","deliverable":"d","acceptance":"a","dependsOn":[1]}
+                          {"title":"第一步","content":"准备","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容","dependsOn":[]},
+                          {"title":"第二步","content":"执行","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容","dependsOn":[1]}
                         ]
                         ```
                         """, "stop", "llm", 100));
@@ -663,7 +670,7 @@ class PlannerDecomposeAsyncServiceImplTest {
     private TaskView taskWithRequirementPackage(Map<String, Object> pkgFields) {
         return new TaskView(TASK_ID, "搭建报表模块", "需要一个日报统计模块", null, null, null, null, null,
                 TaskStatus.PLANNING, null, null,
-                Map.of(RequirementPackageParser.CONTEXT_KEY_REQUIREMENT_PACKAGE, pkgFields), null, null, null);
+                Map.of(RequirementPackageParser.CONTEXT_KEY_REQUIREMENT_PACKAGE, pkgFields), null, null, null, null);
     }
 
     /** COARSE 粒度用例：白名单内全部 CLI_CLIENT（外部强执行者）执行者。 */
@@ -694,7 +701,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a"}]
+                        [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
 
@@ -723,7 +730,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a"}]
+                        [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
 
@@ -745,7 +752,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a",
+                        [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "uncertainties":[
                             {"kind":"ASSUMPTION","note":"数据源可达"},
                             {"kind":"UNCONFIRMED","note":"接口是否有存量调用方未确认"}
@@ -767,13 +774,75 @@ class PlannerDecomposeAsyncServiceImplTest {
     }
 
     @Test
+    @DisplayName("TD-11：验收要求取回 URL 证据 × 缺口 UNCONFIRMED → 只标注不阻断（写 context + WARN 事件）")
+    void shouldAnnotateAcceptancePreconditionsWithoutBlocking() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"竞品证据台账","content":"三家竞品 A/B/C 各采集公开功能与定价，未确认对应真实产品时先用代号建档，不要自行替换",
+                          "deliverable":"证据台账表（每条含来源 URL 与原文摘录）",
+                          "acceptance":"STRUCTURAL：证据条目总数 ≥15 条，每条附来源 URL 且页面内容与原文摘录一致",
+                          "uncertainties":[{"kind":"UNCONFIRMED","note":"A/B/C 对应哪三款真实产品待业务方拍板"}]}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
+        verify(subTaskService).saveDrafts(captor.capture());
+        // 只标注：acceptance / acceptanceKind 一字未改，草案照常落库
+        SubTaskDraft saved = captor.getValue().get(0);
+        assertThat(saved.context().get(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS))
+                .isEqualTo(List.of("U1"));
+        assertThat(saved.acceptance()).contains("≥15 条");
+        assertThat(saved.uncertainties()).extracting(UncertaintyDraft::ref).containsExactly("U1");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_acceptance_precondition_unmet"),
+                eq(AgentRole.PLANNER), eq(9L), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+                .containsEntry("draftSeq", 1)
+                .containsEntry("title", "竞品证据台账")
+                .containsEntry("preconditionRefs", List.of("U1"));
+    }
+
+    @Test
+    @DisplayName("TD-11 反例：验收只含结构量词 → context 不带 acceptancePreconditions、无事件")
+    void shouldNotAnnotatePureStructuralAcceptance() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单",
+                          "acceptance":"STRUCTURAL：输出 5 个章节，每章 ≥1 条结论",
+                          "uncertainties":[{"kind":"UNCONFIRMED","note":"接口是否有存量调用方未确认"}]}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
+        verify(subTaskService).saveDrafts(captor.capture());
+        assertThat(captor.getValue().get(0).context())
+                .doesNotContainKey(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS);
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_acceptance_precondition_unmet"),
+                any(), any(), anyMap());
+    }
+
+    @Test
     @DisplayName("G-011 D3：非法 kind 降级 UNCONFIRMED 并审计（不丢弃）；空白 note 丢弃")
     void shouldDegradeIllegalKindAndDropBlankNote() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a",
+                        [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "uncertainties":[
                             {"kind":"MAYBE","note":"猜测性推断"},
                             {"kind":"UNCONFIRMED","note":"   "},
@@ -812,7 +881,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a","uncertainties":"非法形态"}]
+                        [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容","uncertainties":"非法形态"}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
 
@@ -837,7 +906,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"只拆目标","content":"c","deliverable":"d","acceptance":"a"}]
+                        [{"title":"只拆目标","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
 
@@ -863,7 +932,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"只拆目标","content":"c","deliverable":"d","acceptance":"a",
+                        [{"title":"只拆目标","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "constraints":"不得改线上配置"}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
@@ -890,7 +959,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         // LLM 只申报 ASSUMPTION（推断），未按继承规则转出 UNCONFIRMED → 兜底 WARN
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a",
+                        [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "uncertainties":[{"kind":"ASSUMPTION","note":"数据源可达"}]}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
@@ -911,7 +980,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a",
+                        [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "uncertainties":[{"kind":"UNCONFIRMED","note":"接口是否有存量调用方未确认"}]}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
@@ -930,7 +999,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a"}]
+                        [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
 
@@ -960,7 +1029,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"文档产出","content":"c","deliverable":"d","acceptance":"a",
+                        [{"title":"文档产出","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "requiredSkills":["eng-doc-standard"]}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
@@ -991,7 +1060,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"文档产出","content":"c","deliverable":"d","acceptance":"a",
+                        [{"title":"文档产出","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "requiredSkills":["eng-doc-standard"]}]
                         """, "stop", "llm", 100));
         when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
@@ -1002,4 +1071,271 @@ class PlannerDecomposeAsyncServiceImplTest {
                 eq(TASK_ID), isNull(), eq("task_plan_skill_unmatched"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  TD-5 接线：acceptanceKind 显式声明判定 + 分流校验
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("TD-5 接线：acceptanceKind 缺失（回落 AUTOMATED）且文本普通 → Warn 放行，草案照常落库")
+    void shouldWarnAndPersistWhenKindMissing() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        // acceptanceKind 字段缺失 → parse 回落 AUTOMATED；文本「评审通过」无命令/断言 → 应走 Warn 而非 Fail
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"设计表结构","content":"建表","deliverable":"DDL 建表脚本","acceptance":"评审通过且无语法错误"},
+                         {"title":"实现统计接口","content":"实现","deliverable":"接口代码实现文件","acceptance":"接口返回 200 状态码"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L), draft(12L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 不阻断：草案仍落库
+        verify(subTaskService).saveDrafts(any());
+        // Warn 路径：缺失 kind 的「评审通过」记一条审计 hint（不抛异常）
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_acceptance_kind_mismatch"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-5 接线：显式声明 AUTOMATED 但文本不含命令/预期结果 → fail-close 整批拒绝，不落库")
+    void shouldRejectWhenExplicitAutomatedMismatch() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        // 显式 AUTOMATED + 空话「质量良好」→ Fail（fail-close）
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"写文档","content":"c","deliverable":"d","acceptance":"质量良好","acceptanceKind":"AUTOMATED"}]
+                        """, "stop", "llm", 100));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // fail-close：saveDrafts 绝不调用；拆解失败回退 PENDING + task_plan_failed
+        verify(subTaskService, never()).saveDrafts(any());
+        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"),
+                eq(AgentRole.PLANNER), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-5 接线：显式声明 STRUCTURAL + 可数量词 → 通过，草案落库")
+    void shouldPassWhenExplicitStructuralCountable() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"产出报告","content":"c","deliverable":"研究报告成品文档","acceptance":"不少于 5 章完整内容","acceptanceKind":"STRUCTURAL"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(subTaskService).saveDrafts(any());
+        // 显式声明合法 → 无 mismatch 审计
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_acceptance_kind_mismatch"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-5 长度闸：acceptance/deliverable 低于字符下限 → fail-close 整批拒绝，不落库")
+    void shouldRejectWhenFieldLengthBelowFloor() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        // 各字段非空（过必填校验）但 deliverable=3 字符 < 8 下限 → 长度闸拒绝
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"产出物","content":"c","deliverable":"报告","acceptance":"验收判据说明文字内容"}]
+                        """, "stop", "llm", 100));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(subTaskService, never()).saveDrafts(any());
+        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"),
+                eq(AgentRole.PLANNER), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-5 长度闸：acceptance/deliverable 均达到下限 → 正常落库")
+    void shouldPassWhenFieldLengthMeetsFloor() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"产出文档","content":"c","deliverable":"文档成品交付完整版","acceptance":"验收判据说明文字内容"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(subTaskService).saveDrafts(any());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  `TD-9` 单条草案 expand / regenerate
+    //  ══════════════════════════════════════════════════════════════
+
+    private static final Long ORIGINAL_DRAFT_ID = 55L;
+
+    /** `TD-9` 单条草案视图（四要素 + 优先级 + 依赖齐全，PENDING_PLAN_REVIEW）。 */
+    /** `TD-9` 单条草案视图（四要素 + 优先级 + 依赖齐全，PENDING_PLAN_REVIEW；createTime 非 null）。 */
+    private SubTaskView draftFullTD9(long id, String title, String content, String deliverable,
+                                     String acceptance, List<Long> dependsOn) {
+        return new SubTaskView(id, TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null,
+                title, content, deliverable, acceptance, null, null, null, List.of(), dependsOn,
+                null, "MEDIUM", null, List.of(), null, null, null, null, null,
+                OffsetDateTime.now(), null);
+    }
+
+    /** expand 共享打桩：原草案 + 任务 + Planner + LLM 输出数组 + 重加载新增两条。 */
+    private void stubExpandContext(String llmOutput) {
+        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
+                draftFullTD9(ORIGINAL_DRAFT_ID, "原草案标题", "原草案内容", "原交付物产物",
+                        "运行 X 命令输出预期 Y", List.of()));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(llmOutput, "stop", "llm", 100));
+        // 技能目录空（renderSkillCatalog 降级文案）；快照渲染默认 null（renderSnapshotSafely 降级）
+        when(agentSkillSpecService.listPackages()).thenReturn(List.of());
+    }
+
+    @Test
+    @DisplayName("TD-9 expand：组内依赖 Kahn 通过、新增落库、依赖回写、原草案逻辑删")
+    void shouldExpandDraftWithInGroupDependencies() {
+        stubExpandContext("""
+                [
+                  {"title":"子步骤A","content":"先准备","deliverable":"准备产物完整清单","acceptance":"运行 X 命令输出预期 Y","dependsOn":[]},
+                  {"title":"子步骤B","content":"后执行","deliverable":"执行产物完整清单","acceptance":"运行 X 命令输出预期 Y","dependsOn":[1]}
+                ]
+                """);
+        // saveDrafts 返回新增（带真实 id）；重加载同样返回这两条（原草案随后逻辑删）
+        SubTaskView new1 = draftFullTD9(81L, "子步骤A", "先准备", "准备产物完整清单",
+                "运行 X 命令输出预期 Y", null);
+        SubTaskView new2 = draftFullTD9(82L, "子步骤B", "后执行", "执行产物完整清单",
+                "运行 X 命令输出预期 Y", null);
+        when(subTaskService.saveDrafts(any())).thenReturn(List.of(new1, new2));
+        when(subTaskService.listDraftsInInsertOrder(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW))
+                .thenReturn(List.of(new1, new2));
+        // 幽灵依赖防御：依赖回写前校验目标真实存在（new1 存在）
+        when(subTaskService.listViewsByIds(List.of(81L))).thenReturn(List.of(new1));
+
+        List<SubTaskView> created = asyncService.expandById(ORIGINAL_DRAFT_ID);
+
+        // ① 新增落库（PENDING_PLAN_REVIEW，FINE 粒度由实现固定）
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
+        verify(subTaskService).saveDrafts(captor.capture());
+        assertThat(captor.getValue()).hasSize(2)
+                .allSatisfy(d -> assertThat(d.status()).isEqualTo(SubTaskStatus.PENDING_PLAN_REVIEW));
+        // ② 组内依赖回写：第 2 条依赖第 1 条真实 id
+        verify(subTaskService).updateDependsOn(82L, List.of(81L));
+        // ③ 原草案逻辑删（审计保留）
+        verify(subTaskService).removeById(ORIGINAL_DRAFT_ID);
+        // ④ 返回新增两条
+        assertThat(created).extracting(SubTaskView::id).containsExactly(81L, 82L);
+        // ⑤ timeline 记录展开事件
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(ORIGINAL_DRAFT_ID), eq("task_plan_draft_expanded"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-9 expand：被其他草案依赖 → 拒绝展开（幽灵依赖 fail-close），不调 LLM")
+    void shouldRejectExpandWhenReferencedByOtherDraft() {
+        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
+                draftFullTD9(ORIGINAL_DRAFT_ID, "原草案", "内容", "交付物产物完整清单",
+                        "运行 X 命令输出预期 Y", List.of()));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        // 兄弟草案 dependsOn 含原草案 id
+        when(subTaskService.listDraftsInInsertOrder(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW))
+                .thenReturn(List.of(draftFullTD9(99L, "兄弟草案", "内容", "交付物产物完整清单",
+                        "运行 X 命令输出预期 Y", List.of(ORIGINAL_DRAFT_ID))));
+
+        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("被其他草案依赖");
+
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
+        verify(subTaskService, never()).saveDrafts(any());
+        verify(subTaskService, never()).removeById(anyLong());
+    }
+
+    @Test
+    @DisplayName("TD-9 expand：非 PENDING_PLAN_REVIEW 状态 → 拒绝，不调 LLM")
+    void shouldRejectExpandWhenNotDraftStatus() {
+        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
+                new SubTaskView(ORIGINAL_DRAFT_ID, TASK_ID, SubTaskStatus.ASSIGNED, null, null,
+                        "已转正", "内容", "交付物产物完整清单", "运行 X 命令输出预期 Y",
+                        null, null, null, List.of(), null, null, "MEDIUM", null, List.of(),
+                        null, null, null, null, null, null, null));
+
+        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("仅草案待审状态可展开");
+
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
+        verify(subTaskService, never()).removeById(anyLong());
+    }
+
+    @Test
+    @DisplayName("TD-9 expand：LLM 调用失败 → 事务不落库、原草案不被破坏（removeById 绝不调用）")
+    void shouldNotTouchOriginalWhenExpandLlmFails() {
+        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
+                draftFullTD9(ORIGINAL_DRAFT_ID, "原草案标题", "原草案内容", "原交付物产物",
+                        "运行 X 命令输出预期 Y", List.of()));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.failure("provider timeout", "error", "llm"));
+
+        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("Planner LLM 调用失败");
+
+        verify(subTaskService, never()).saveDrafts(any());
+        verify(subTaskService, never()).removeById(anyLong());
+        verify(subTaskService, never()).updateDependsOn(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("TD-9 regenerate：title/id/dependsOn 不变量白名单——LLM 改了也忽略，四要素落库")
+    void shouldRegenerateOnlyFourElements() {
+        SubTaskView original = draftFullTD9(ORIGINAL_DRAFT_ID, "原标题", "原内容", "原交付物产物",
+                "原验收判据内容", List.of(20L));
+        SubTaskView updated = draftFullTD9(ORIGINAL_DRAFT_ID, "原标题", "新内容", "新交付物产物完整清单",
+                "不少于 5 章完整内容且章节编号连续", List.of(20L));
+        // 第 1 次 getView 取原草案，第 2 次（落库后）取更新后的草案
+        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(original, updated);
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        // LLM 恶意改 title / dependsOn / priority —— 服务端必须忽略，只取四要素
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("""
+                        {"title":"LLM 想改标题","content":"新内容","deliverable":"新交付物产物完整清单",
+                         "acceptance":"不少于 5 章完整内容且章节编号连续","acceptanceKind":"STRUCTURAL",
+                         "priority":"LOW","dependsOn":[999]}
+                        """, "stop", "llm", 100));
+        when(agentSkillSpecService.listPackages()).thenReturn(List.of());
+
+        SubTaskView result = asyncService.regenerateById(ORIGINAL_DRAFT_ID);
+
+        // ① updateDraftContent 只收到四要素：content/deliverable/acceptance/acceptanceKind
+        verify(subTaskService).updateDraftContent(eq(ORIGINAL_DRAFT_ID),
+                eq("新内容"), eq("新交付物产物完整清单"), eq("不少于 5 章完整内容且章节编号连续"), eq("STRUCTURAL"));
+        // ② 不变量：返回快照 title / id / dependsOn 保持原值
+        assertThat(result.id()).isEqualTo(ORIGINAL_DRAFT_ID);
+        assertThat(result.title()).isEqualTo("原标题");
+        assertThat(result.dependsOn()).containsExactly(20L);
+        // ③ timeline 记录重生成事件
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(ORIGINAL_DRAFT_ID), eq("task_plan_draft_regenerated"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
 }
+

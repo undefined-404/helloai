@@ -28,12 +28,18 @@
         导致拆解草案的技能指派/执行约束/不确定性申报与租约字段从未真正落库。本次一次性补齐。
         uncertainties 的 typeHandler 同批换为 UncertaintyListTypeHandler（写侧序列化兼容，
         读侧强类型说明见类注释与本文件 subTaskResultMap）。
+
+        2026-10-24 补列（TD-2 接线缺口修复，LOG-20261024-042）：acceptance_kind（V125 新增）此前
+        未同步——拆解侧 TD-5 已按显式 kind 分流校验（STRUCTURAL/REVIEWED 文本命中 Pass 无 Warn），
+        但 INSERT/UPDATE 均不含该列 → 落库恒走 DB 默认 'AUTOMATED'，显式声明被静默丢弃，
+        与 2026-09-10 那批「实体加列后自定义 SQL 未同步」缺陷同型。本次两处补齐。
         attempt_total 保持不写：A3 起由 incrementAttemptTotal 原子累加独占（坑点 3「单一权威」），
         不参与本 SQL 的全列覆盖，避免读改写竞态覆盖累计值。
     -->
     <insert id="insert" parameterType="com.helloai.core.task.entity.SubTask">
         INSERT INTO sub_task (
             id, task_id, module_id, title, deliverable, acceptance, priority, status,
+            acceptance_kind,
             assigned_agent_id, content, context, score_factors,
             composite_score, score_grade, deadline, rework_count, complete_time,
             version, timeout_count, external_fallback_count, reassign_attempt_count,
@@ -43,6 +49,7 @@
         ) VALUES (
             #{id}, #{taskId}, #{moduleId}, #{title}, #{deliverable}, #{acceptance},
             COALESCE(#{priority}, 'MEDIUM'), COALESCE(#{status}, 'PENDING'),
+            COALESCE(#{acceptanceKind}, 'AUTOMATED'),
             #{assignedAgentId}, #{content},
             #{context,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
             #{scoreFactors,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
@@ -82,6 +89,7 @@
             acceptance = #{et.acceptance},
             priority = #{et.priority},
             status = #{et.status},
+            acceptance_kind = #{et.acceptanceKind},
             assigned_agent_id = #{et.assignedAgentId},
             content = #{et.content},
             context = #{et.context,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,

@@ -20,10 +20,12 @@ package com.helloai.core.agent.port;
  * 故由 **task 侧映射器顺带算好**一个布尔透传 —— 与 {@link AttachmentRef#contentLoadable}
  * 完全同款（判定责任留在提供方、消费方零判定、实现细节不外泄）。</p>
  *
- * @param kind       类别（{@code ASSUMPTION} / {@code UNCONFIRMED}；原样透传，不在本域解释）
+ * @param kind       类别（{@code ASSUMPTION} / {@code UNCONFIRMED} / {@code TO_LOOK_UP} / {@code TO_DERIVE}；
+ *                   原样透传，值域单源见 {@code helloai-common} 的 {@code UncertaintyKind}——
+ *                   `TD-7` 起消费方（执行 Prompt 装配）按该枚举分流处置后缀，不再只靠下面的布尔）
  * @param note       描述（自由文本，原样透传）
  * @param assumption 是否「已申报假设」（= {@code Uncertainty.KIND_ASSUMPTION.equals(kind)}，
- *                   由 task 侧映射器判定后透传）
+ *                   由 task 侧映射器判定后透传；保留以兼容 MCP 下行契约与既有消费点）
  */
 public record UncertaintySnapshot(String kind, String note, boolean assumption) {
 }

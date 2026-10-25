@@ -98,6 +98,10 @@ class ResilientDispatcherAopIntegrationTest {
     @MockBean
     private TaskTimelinePort taskTimelinePort;
 
+    /** D1：改派前置的「作废在飞旧执行」依赖（端口新增方法后必须补齐，否则上下文起不来）。 */
+    @MockBean
+    private com.helloai.core.agent.service.AgentExecutionRecordService agentExecutionRecordService;
+
     @Test
     @DisplayName("Bean 是 Spring AOP 代理（不是原生对象）")
     void shouldBeAopProxiedBean() {

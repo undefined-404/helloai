@@ -6,6 +6,7 @@ import com.helloai.common.config.ReviewProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.review.quality.RepeatedFailureGate;
@@ -36,6 +37,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RLock;
@@ -50,6 +52,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -330,6 +333,36 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
+    @DisplayName("TD-5 验收③: REVIEWED kind 子任务通过时，timeline payload 带 acceptanceKind + analysis（逐条核验可见）")
+    void shouldCarryAcceptanceKindAndAnalysisInPassedPayloadForReviewedSubTask() {
+        // REVIEWED kind 子任务（主构造器带 acceptanceKind）
+        Map<String, Object> ctx = new HashMap<>();
+        ctx.put("lastExecution", Map.of("output", "方案已产出，含决策清单与取舍依据。"));
+        SubTaskView reviewed = new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0,
+                "输出差异化方案", "基于对比矩阵推导方案", "方案文档", "审查项（逐条独立判 pass/fail）",
+                AcceptanceKind.REVIEWED, null, ctx, List.of(),
+                null, null, null, null, null, null, null, null, null, null, null, null);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewed);
+        // LLM 输出带 analysis（逐条对照验收标准的核验分析）
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"issues\": \"\", \"comment\": \"全部达标\", "
+                                + "\"analysis\": \"①证据可追溯 pass；②决策覆盖 pass；③反向结论 pass\"}",
+                        "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).complete(SUB_TASK_ID);
+        // payload 断言：acceptanceKind=REVIEWED + analysis 逐条可见
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_passed"),
+                eq(AgentRole.REVIEWER), eq(9L),
+                argThat(payload -> "REVIEWED".equals(payload.get("acceptanceKind"))
+                        && payload.get("analysis") != null
+                        && payload.get("analysis").toString().contains("①证据可追溯 pass")));
+    }
+
+    @Test
     @DisplayName("MED-2: 结论自相矛盾（pass=true 但 score=1）→ 拒收、转人工、不 complete")
     void shouldRejectInconsistentVerdictWhenPassButScoreBelowMinimum() {
         when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
@@ -594,7 +627,7 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("A3 预算耗尽：rework 返回 false → 不补发执行命令（子任务已转死信待人工）")
+    @DisplayName("A3 预算耗尽：rework 返回 false → 不补发执行命令，但驳回结论仍须留痕（B1a）")
     void shouldSkipExecutionCommandWhenReworkBudgetExhausted() {
         when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
@@ -607,6 +640,33 @@ class SubTaskReviewServiceTest {
         verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
         verify(executionCommandService, never()).createAssignedCommand(anyLong(), anyLong(), anyString(), any());
         verify(subTaskService, never()).complete(anyLong());
+
+        // B1a（`LOG-20261025-014`）：预算耗尽分支此前把评审结论整体吞掉，
+        // 导致「进了死信但查不到为什么」。断言两条留痕都必须发生。
+        verify(recordReviewService).recordAutoReview(
+                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.REJECTED), eq(2), anyString(), anyString());
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_rejected"),
+                eq(AgentRole.REVIEWER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("B1a：驳回留痕须早于 rework——否则预算耗尽分支仍会吞掉结论")
+    void shouldRecordRejectionBeforeRework() {
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺 3 个端点\", \"comment\": \"\"}", "stop", "llm", 100));
+        when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(false);
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        InOrder inOrder = inOrder(recordReviewService, subTaskService, taskTimelineService);
+        inOrder.verify(recordReviewService).recordAutoReview(
+                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.REJECTED), eq(2), anyString(), anyString());
+        inOrder.verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_rejected"),
+                eq(AgentRole.REVIEWER), eq(9L), anyMap());
+        inOrder.verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
     }
 
     @Test
@@ -661,8 +721,8 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("执行密集任务 + 提交者无本机能力 → 跳过自动核验 + 标记人工介入")
-    void shouldSkipReviewWhenExecutionDenseSubmitterLacksCapability() {
+    @DisplayName("执行密集 + 提交者无本机能力 → 能力闸不再拦截，由证据闸接管（2026-10-25 解耦）")
+    void shouldNotSkipOnCapabilityAloneButLetEvidenceGateDecide() {
         when(dispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
         SubTaskView dense = denseView("编写 verify-order-expire.ps1 脚本并执行验证", "verify-order-expire.ps1", null);
         when(subTaskService.getView(SUB_TASK_ID)).thenReturn(dense);
@@ -677,16 +737,18 @@ class SubTaskReviewServiceTest {
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
-        verify(subTaskService, never()).complete(anyLong());
-        verify(subTaskService, never()).rework(anyLong(), any());
-        verify(subTaskService).markManualIntervention(
+        // 能力闸只观测：不再以「无本机能力」为由跳过（事件/人工介入/对话流均不得出现）
+        verify(subTaskService, never()).markManualIntervention(
                 eq(SUB_TASK_ID), eq("review_skip_execution_dense_no_capability"), anyMap());
-        verify(taskTimelineService).recordEvent(
+        verify(taskTimelineService, never()).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_skip_no_capability"),
-                eq(AgentRole.REVIEWER), eq(EXECUTOR_ID), anyMap());
-        verify(conversationService).addMessage(eq(SUB_TASK_ID), eq(EXECUTOR_ID), eq("assistant"), eq("agent"),
+                any(), any(), anyMap());
+        verify(conversationService, never()).addMessage(eq(SUB_TASK_ID), any(), anyString(), anyString(),
                 anyString(), eq("subtask_review_skip_no_capability"));
+        // 接管者 = 证据闸：本例 context=null ⇒ 无产出本体（no_output_no_attachment）
+        verify(subTaskService).markManualIntervention(
+                eq(SUB_TASK_ID), eq("review_skip_no_evidence"), anyMap());
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
     }
 
     @Test
@@ -746,8 +808,8 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("执行密集 + 提交者快照存在但 localExecutionCapable=false → 跳过（能力门先于证据门，故造证据齐备仍拦截）")
-    void shouldSkipReviewWhenExecutionDenseSubmitterHasNoLocalCapability() {
+    @DisplayName("执行密集 + 提交者无本机能力 + 证据齐备 → 照常核验并放行（能力闸已解耦）")
+    void shouldReviewWhenExecutionDenseSubmitterHasNoLocalCapabilityButEvidencePresent() {
         when(dispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
         SubTaskView dense = reviewSubTask();
         dense = denseView("编写 verify-order-expire.ps1 脚本并执行验证", "verify-order-expire.ps1",
@@ -762,20 +824,18 @@ class SubTaskReviewServiceTest {
                 .localExecutionCapable(false)
                 .build();
         when(agentService.getProfileById(EXECUTOR_ID)).thenReturn(submitter);
-        // 证据齐备（附件可读）：用以证明拦截来自「能力门」而非「证据门」；
-        // 能力门先于证据门返回，故这两处 stub 不会被触达，用 lenient 规避严格桩校验
+        // 证据齐备（附件可读）：能力闸解耦后由证据闸放行，正常进入核验
         AttachmentView attachment = attachmentView(100L, "verify-order-expire.ps1", "other", null, 2048L, true);
-        lenient().when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(attachment));
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(attachment));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        verify(taskTimelineService).recordEvent(
-                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_skip_no_capability"),
-                eq(AgentRole.REVIEWER), eq(EXECUTOR_ID), anyMap());
-        verify(subTaskService).markManualIntervention(
-                eq(SUB_TASK_ID), eq("review_skip_execution_dense_no_capability"), anyMap());
-        verify(subTaskService, never()).complete(anyLong());
-        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
+        verify(platformAgentExecutionService).executeSync(anyLong(), any(AgentTask.class));
+        verify(subTaskService).complete(SUB_TASK_ID);
+        verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
     }
 
     @Test

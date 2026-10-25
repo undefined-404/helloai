@@ -65,6 +65,28 @@ public interface PlannerAnalysisService {
      */
     int rejectPlan(Long taskId);
 
+    /**
+     * `TD-9` 单条草案细拆（expand）：一条草案 → N 条 FINE 粒度子草案（同步，用户等待）。
+     *
+     * <p>委托 {@link PlannerDecomposeAsyncService#expandById}；被其他草案依赖的草案拒绝展开
+     * （幽灵依赖 fail-close），LLM/校验失败事务回滚、原草案不被破坏。</p>
+     *
+     * @param subTaskId 草案子任务 ID（须 PENDING_PLAN_REVIEW）
+     * @return 展开后的子草案列表（含落库回填的真实 id）
+     */
+    List<SubTaskView> expandDraft(Long subTaskId);
+
+    /**
+     * `TD-9` 单条草案重生成（regenerate）：同粒度重写四要素（同步，用户等待）。
+     *
+     * <p>委托 {@link PlannerDecomposeAsyncService#regenerateById}；title / id / dependsOn
+     * 不变量白名单，LLM 输出中的这些字段被忽略。</p>
+     *
+     * @param subTaskId 草案子任务 ID（须 PENDING_PLAN_REVIEW）
+     * @return 重生成后的草案快照
+     */
+    SubTaskView regenerateDraft(Long subTaskId);
+
     /** LLM 结构化输出条目（未知字段容忍，避免 LLM 多给字段导致整批失败）。 */
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -73,6 +95,17 @@ public interface PlannerAnalysisService {
         private String content;
         private String deliverable;
         private String acceptance;
+
+        /**
+         * 验收判据（`TD-3` 输出契约新增字段，`TD-2` 落库）：`AUTOMATED` / `STRUCTURAL` /
+         * `REVIEWED` / `ATTESTED`，含义见 {@code AcceptanceKind}。
+         *
+         * <p><b>缺失 / 非法值一律回落 {@code AUTOMATED}</b>——它是改造前的唯一语义，
+         * 回落即「零行为变化」；<b>不做按 {@code acceptance} 文本反推 kind</b>（推断错会让校验
+         * 走错分支，比显式声明更危险，见计划 `TD-2`「不做的」）。</p>
+         */
+        private String acceptanceKind;
+
         private String priority;
         /** 依赖的同批草案序号（1-based）；空/null=无依赖。 */
         private List<Integer> dependsOn;

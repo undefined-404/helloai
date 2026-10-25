@@ -155,6 +155,24 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
             "search_knowledge"
     );
 
+    /**
+     * 内部 LLM 执行者（API_KEY_LLM）注册时额外补登的 contributor 工具。
+     *
+     * <p><b>为什么单独列</b>：{@link #DEFAULT_EXECUTOR_TOOLS} 是「外部 Agent 业务循环」最优集，
+     * 不含 contributor 工具（web_search / search_knowledge）。内部 LLM 执行者走进程内 {@code AgentLoop}，
+     * 无 MCP 会话上下文，注入外部 MCP 工具 100% 401（L3 P1-1）；但它需要 contributor 工具作为
+     * 联网检索通道——2026-10-25 MiniMax 事故证明，缺这两条授权会把模型逼进「唯一通道 = 沙箱 curl」
+     * 的死路径（20 轮 MAX_ITERATIONS）。</p>
+     *
+     * <p><b>授权面与可注入面正交</b>：本清单只影响「注册时给哪些工具行」，不影响
+     * {@link #getEnabledToolsForAccess} 的「内部 LLM 可见哪些工具」——后者仍由
+     * {@link #INTERNAL_LLM_TOOLS} + available 判定。</p>
+     */
+    private static final List<String> INTERNAL_LLM_CONTRIBUTOR_TOOLS = List.of(
+            "web_search",
+            "search_knowledge"
+    );
+
     /** 默认启用 is_enabled 值。 */
     private static final int DEFAULT_IS_ENABLED = 1;
     /** 默认 rate_limit（次/分钟，0=不限）。 */
@@ -189,26 +207,42 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
             return 0;
         }
         int inserted = 0;
+        // 外部 MCP 会话工具（13 个）
         for (String toolName : DEFAULT_EXECUTOR_TOOLS) {
-            AgentMcpServer row = new AgentMcpServer();
-            row.setAgentId(agentId);
-            row.setToolName(toolName);
-            row.setIsEnabled(DEFAULT_IS_ENABLED);
-            row.setRateLimit(DEFAULT_RATE_LIMIT);
-            row.setCreateBy(SYSTEM_OPERATOR);
-            row.setUpdateBy(SYSTEM_OPERATOR);
-            try {
-                save(row);
-                inserted++;
-                log.debug("enableDefaultsForAgent: 新增 tool={}, agentId={}", toolName, agentId);
-            } catch (DuplicateKeyException e) {
-                // (agent_id, tool_name) 部分唯一索引冲突 → 已存在，跳过
-                log.debug("enableDefaultsForAgent: tool={} 已存在，跳过, agentId={}", toolName, agentId);
-            }
+            inserted += insertToolRow(agentId, toolName);
         }
-        log.info("enableDefaultsForAgent: agentId={}, 新增 {} 行（共 {} 工具）",
-                agentId, inserted, DEFAULT_EXECUTOR_TOOLS.size());
+        // 内部 LLM contributor 工具（web_search / search_knowledge）
+        // 2026-10-25 MiniMax 事故：缺这两条授权会把模型逼进「唯一通道 = 沙箱 curl」
+        for (String toolName : INTERNAL_LLM_CONTRIBUTOR_TOOLS) {
+            inserted += insertToolRow(agentId, toolName);
+        }
+        log.info("enableDefaultsForAgent: agentId={}, 新增 {} 行（外部 {} + contributor {}）",
+                agentId, inserted, DEFAULT_EXECUTOR_TOOLS.size(), INTERNAL_LLM_CONTRIBUTOR_TOOLS.size());
         return inserted;
+    }
+
+    /**
+     * 插入单条工具授权行（幂等：已存在跳过）。
+     *
+     * @return 实际新增行数（0 或 1）
+     */
+    private int insertToolRow(Long agentId, String toolName) {
+        AgentMcpServer row = new AgentMcpServer();
+        row.setAgentId(agentId);
+        row.setToolName(toolName);
+        row.setIsEnabled(DEFAULT_IS_ENABLED);
+        row.setRateLimit(DEFAULT_RATE_LIMIT);
+        row.setCreateBy(SYSTEM_OPERATOR);
+        row.setUpdateBy(SYSTEM_OPERATOR);
+        try {
+            save(row);
+            log.debug("enableDefaultsForAgent: 新增 tool={}, agentId={}", toolName, agentId);
+            return 1;
+        } catch (DuplicateKeyException e) {
+            // (agent_id, tool_name) 部分唯一索引冲突 → 已存在，跳过
+            log.debug("enableDefaultsForAgent: tool={} 已存在，跳过, agentId={}", toolName, agentId);
+            return 0;
+        }
     }
 
     /**

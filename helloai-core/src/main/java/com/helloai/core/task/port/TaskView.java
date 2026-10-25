@@ -1,6 +1,7 @@
 package com.helloai.core.task.port;
 
 import com.helloai.common.constant.FinalReportStatus;
+import com.helloai.common.constant.TaskArchetype;
 import com.helloai.common.constant.TaskStatus;
 
 import java.time.OffsetDateTime;
@@ -17,6 +18,9 @@ import java.util.Map;
  * <p><b>字段只纳入消费方实际读取项</b>（review 域实测）：{@code id} / {@code title} /
  * {@code description} / {@code finalReport} / {@code finalReportStatus} /
  * {@code finalReportAgentId} / {@code finalReportTime} / {@code agentPolicy}。</p>
+ *
+ * <p><b>`TD-1` 增列</b>：{@code taskArchetype} —— 唯一消费方是 planner 拆解（`TD-3` 按 archetype
+ * 取用拆分维度块）。review 域不读，故不纳入兼容构造。</p>
  */
 public record TaskView(
         Long id,
@@ -33,7 +37,8 @@ public record TaskView(
         Map<String, Object> context,
         List<String> requiredSkills,
         OffsetDateTime createTime,
-        OffsetDateTime updateTime
+        OffsetDateTime updateTime,
+        TaskArchetype taskArchetype
 ) {
 
     /** 兼容构造：不含 planner 侧扩展字段（review 场景）。 */
@@ -41,6 +46,6 @@ public record TaskView(
                     FinalReportStatus finalReportStatus, Long finalReportAgentId,
                     OffsetDateTime finalReportTime, Map<String, Object> agentPolicy) {
         this(id, title, description, finalReport, finalReportStatus, finalReportAgentId,
-                finalReportTime, agentPolicy, null, null, null, null, null, null, null);
+                finalReportTime, agentPolicy, null, null, null, null, null, null, null, null);
     }
 }

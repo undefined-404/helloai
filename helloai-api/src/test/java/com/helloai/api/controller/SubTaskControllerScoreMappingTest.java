@@ -10,6 +10,7 @@ import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.ExecutionCommandService;
+import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
@@ -70,6 +71,8 @@ class SubTaskControllerScoreMappingTest {
     private ConversationService conversationService;
     @Mock
     private SubTaskViewGuard subTaskViewGuard;
+    @Mock
+    private PlannerAnalysisService plannerAnalysisService;
 
     @InjectMocks
     private SubTaskController controller;

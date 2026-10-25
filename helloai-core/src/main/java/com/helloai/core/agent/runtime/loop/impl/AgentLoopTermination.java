@@ -18,7 +18,11 @@ import java.util.List;
  * @param internalLlm 是否内部 LLM 执行链（{@code accessType == API_KEY_LLM}；收尾轮 internal-only 门控）
  * @param draft       自然 STOP 的草稿结果（挂点据此判定是否触发收尾轮）
  * @param maxIterations 本轮最大 LLM 调用轮数（收尾轮计 iterations 时与之取 min，防超配置上限）
+ * @param scene       业务面场景标识（{@code AgentLoopInput.scene} 透传；null = 子任务执行链）。
+ *                    `TD-9` 事故修复：业务面循环（planner_decompose 等）不得触发 VERIFICATION 收尾轮，
+ *                    由 {@code FinalReportFenceHook} 据此门控。
  */
 public record AgentLoopTermination(ChatModel chatModel, List<Message> messages,
-                                   boolean internalLlm, AgentLoopResult draft, int maxIterations) {
+                                   boolean internalLlm, AgentLoopResult draft, int maxIterations,
+                                   String scene) {
 }

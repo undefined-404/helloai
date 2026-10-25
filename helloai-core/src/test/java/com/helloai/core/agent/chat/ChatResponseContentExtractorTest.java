@@ -83,4 +83,95 @@ class ChatResponseContentExtractorTest {
         assertThat(extracted.text()).isEqualTo("正文");
         assertThat(extracted.thinking()).isEmpty();
     }
+
+    // ================================
+    // extractToolCalls：跨 Generation 汇总
+    // （2026-10-25 MiniMax「从不调用工具」事故回归）
+    // ================================
+
+    @Test
+    @DisplayName("★核心回归：Anthropic 协议把正文与 tool_use 拆两个 Generation ⇒ 工具调用不得被第 0 个遮蔽")
+    void toolCallsAggregatedAcrossGenerationsForAnthropicShape() {
+        // 复刻 AnthropicChatModel.toChatResponse 的真实形态：
+        // gen 0 = 正文（无工具），gen 1 = 工具调用（追加在末尾，正文为空）
+        AssistantMessage textOnly = AssistantMessage.builder()
+                .content("我先查一下子任务详情。").build();
+        AssistantMessage toolOnly = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "toolu_01", "function", "internal_get_sub_task_detail", "{\"subTaskId\":\"1\"}")))
+                .build();
+        ChatResponse response = new ChatResponse(
+                List.of(new Generation(textOnly), new Generation(toolOnly)), null);
+
+        // 事故现场：只取第 0 个 ⇒ 永远拿不到工具调用
+        assertThat(response.getResult().getOutput().getToolCalls()).isEmpty();
+
+        // 修复口径：跨 Generation 汇总 ⇒ 拿得到
+        List<AssistantMessage.ToolCall> toolCalls =
+                ChatResponseContentExtractor.extractToolCalls(response);
+        assertThat(toolCalls).hasSize(1);
+        assertThat(toolCalls.get(0).name()).isEqualTo("internal_get_sub_task_detail");
+        assertThat(toolCalls.get(0).id()).isEqualTo("toolu_01");
+    }
+
+    @Test
+    @DisplayName("OpenAI 形态（单 Generation 自带工具调用）行为不变")
+    void singleGenerationToolCallsUnchanged() {
+        AssistantMessage message = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call_1", "function", "web_search", "{\"q\":\"x\"}")))
+                .build();
+
+        List<AssistantMessage.ToolCall> toolCalls =
+                ChatResponseContentExtractor.extractToolCalls(response(message));
+
+        assertThat(toolCalls).hasSize(1);
+        assertThat(toolCalls.get(0).name()).isEqualTo("web_search");
+    }
+
+    @Test
+    @DisplayName("多 Generation 重复 id ⇒ 去重（保持首次出现顺序）")
+    void duplicateToolCallIdDeduplicated() {
+        AssistantMessage.ToolCall first = new AssistantMessage.ToolCall(
+                "id_dup", "function", "a_tool", "{}");
+        AssistantMessage.ToolCall second = new AssistantMessage.ToolCall(
+                "id_b", "function", "b_tool", "{}");
+        ChatResponse response = new ChatResponse(List.of(
+                new Generation(AssistantMessage.builder().content("")
+                        .toolCalls(List.of(first)).build()),
+                new Generation(AssistantMessage.builder().content("")
+                        .toolCalls(List.of(first, second)).build())), null);
+
+        List<AssistantMessage.ToolCall> toolCalls =
+                ChatResponseContentExtractor.extractToolCalls(response);
+
+        assertThat(toolCalls).extracting(AssistantMessage.ToolCall::id)
+                .containsExactly("id_dup", "id_b");
+    }
+
+    @Test
+    @DisplayName("缺 id 的退化情形 ⇒ 按「名字 + 参数」去重")
+    void missingIdFallsBackToNameAndArguments() {
+        AssistantMessage.ToolCall noId = new AssistantMessage.ToolCall(
+                null, "function", "a_tool", "{\"k\":1}");
+        ChatResponse response = new ChatResponse(List.of(
+                new Generation(AssistantMessage.builder().content("")
+                        .toolCalls(List.of(noId)).build()),
+                new Generation(AssistantMessage.builder().content("")
+                        .toolCalls(List.of(noId)).build())), null);
+
+        assertThat(ChatResponseContentExtractor.extractToolCalls(response)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("null / 空响应 ⇒ 空列表（恒非 null）")
+    void extractToolCallsNullSafe() {
+        assertThat(ChatResponseContentExtractor.extractToolCalls(null)).isEmpty();
+        assertThat(ChatResponseContentExtractor.extractToolCalls(new ChatResponse(List.of(), null)))
+                .isEmpty();
+        assertThat(ChatResponseContentExtractor.extractToolCalls(
+                response(AssistantMessage.builder().content("纯文本").build()))).isEmpty();
+    }
 }

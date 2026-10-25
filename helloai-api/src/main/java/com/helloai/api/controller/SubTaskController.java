@@ -27,6 +27,8 @@ import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
+import com.helloai.core.planner.service.PlannerAnalysisService;
+import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.SubTaskViewGuard;
@@ -64,6 +66,8 @@ public class SubTaskController {
     private final ConversationService conversationService;
     /** 子任务视图读权限收口（2026-10-10 统一判据：根任务 Task-Team 成员，与附件读侧同源）。 */
     private final SubTaskViewGuard subTaskViewGuard;
+    /** `TD-9` 单条草案 expand / regenerate 编排收口（core 层，Controller 只做薄转发）。 */
+    private final PlannerAnalysisService plannerAnalysisService;
 
     @SaCheckPermission("subtask:add")
     @PostMapping
@@ -253,21 +257,52 @@ public class SubTaskController {
     }
 
     /**
-     * 草案人工修订（G-010 草案确认 UI）：确认前编辑技能指派、执行约束与不确定性申报。
+     * 草案人工修订（G-010 草案确认 UI）：确认前编辑技能指派、执行约束、不确定性申报与验收判据。
      *
      * <p>仅 PENDING_PLAN_REVIEW 状态可编辑（fail-close 由 Service 层门禁校验）；
-     * requiredSkills/constraints/uncertainties 传 null 表示不修改该字段（局部更新语义）。
-     * 人工指派的标签不做目录强校验（人工编辑为权威输入），执行侧 resolve 两层过滤兜底；
-     * uncertainties 非法 kind 由 Service 落库侧降级 UNCONFIRMED（D3 fail-close 同口径）。</p>
+     * requiredSkills/constraints/uncertainties/acceptanceKind 传 null 表示不修改该字段
+     * （局部更新语义）。人工指派的标签不做目录强校验（人工编辑为权威输入），执行侧 resolve
+     * 两层过滤兜底；uncertainties 非法 kind 由 Service 落库侧降级 UNCONFIRMED（D3 fail-close
+     * 同口径）；acceptanceKind 非法值回落 AUTOMATED（`TD-2`）。</p>
      */
     @SaCheckPermission("subtask:edit")
     @PutMapping("/updateDraftById/{id}")
     public R<Void> updateDraft(@PathVariable("id") Long id,
                                @Valid @RequestBody DraftUpdateRequest req) {
-        subTaskService.updateDraft(id, req.getRequiredSkills(), req.getConstraints(), req.getUncertainties());
-        log.info("草案修订: id={}, requiredSkills={}, constraintsEdited={}, uncertaintiesEdited={}",
-                id, req.getRequiredSkills(), req.getConstraints() != null, req.getUncertainties() != null);
+        subTaskService.updateDraft(id, req.getRequiredSkills(), req.getConstraints(), req.getUncertainties(),
+                req.getAcceptanceKind());
+        log.info("草案修订: id={}, requiredSkills={}, constraintsEdited={}, uncertaintiesEdited={}, acceptanceKind={}",
+                id, req.getRequiredSkills(), req.getConstraints() != null, req.getUncertainties() != null,
+                req.getAcceptanceKind());
         return R.ok();
+    }
+
+    /**
+     * `TD-9` 单条草案细拆（expand）：一条草案 → N 条 FINE 粒度子草案（同步）。
+     *
+     * <p>门禁 / 幽灵依赖拒绝 / 事务回滚均在 core 编排侧收敛；失败抛 BizException
+     * 由全局异常处理器转 400，前端可展示原因（原草案不被破坏）。</p>
+     */
+    @SaCheckPermission("subtask:edit")
+    @PostMapping("/expandDraftById/{id}")
+    public R<List<SubTaskView>> expandDraft(@PathVariable("id") Long id) {
+        List<SubTaskView> created = plannerAnalysisService.expandDraft(id);
+        log.info("草案展开: subTaskId={}, newCount={}", id, created.size());
+        return R.ok(created);
+    }
+
+    /**
+     * `TD-9` 单条草案重生成（regenerate）：同粒度重写四要素（同步）。
+     *
+     * <p>不变量白名单：title / id / dependsOn 一律不动（LLM 输出中这些字段被忽略）；
+     * 只更新 content / deliverable / acceptance / acceptanceKind。</p>
+     */
+    @SaCheckPermission("subtask:edit")
+    @PostMapping("/regenerateDraftById/{id}")
+    public R<SubTaskView> regenerateDraft(@PathVariable("id") Long id) {
+        SubTaskView updated = plannerAnalysisService.regenerateDraft(id);
+        log.info("草案重生成: subTaskId={}, title={}", id, updated != null ? updated.title() : null);
+        return R.ok(updated);
     }
 
     @SaCheckPermission("subtask:status")

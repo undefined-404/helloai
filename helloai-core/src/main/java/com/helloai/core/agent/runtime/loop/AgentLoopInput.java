@@ -45,6 +45,11 @@ import java.util.List;
  * @param loopCheckpointListener 循环进度回调（可空：不落循环检查点）
  * @param accessType           接入类型（REF-8.4 ② 收尾轮 internal-only 门控；null = 非内部）
  * @param cancellation         可取消上下文（REF-8.6；null = {@link LoopCancellation#none()} 不限）
+ * @param scene                业务面场景标识（{@code AgentTask.context.scene} 透传；null = 子任务执行链）。
+ *                             `TD-9` 事故修复（2026-10-24）：{@code FinalReportFenceHook} 收尾轮只对
+ *                             子任务执行链生效，业务面循环（planner_decompose / subtask_review /
+ *                             task_final_report / task_final_report_review，产出为 JSON 结构化结果）
+ *                             不得追加 VERIFICATION 围栏——场景判定经本字段透传。
  */
 public record AgentLoopInput(
         ChatModel chatModel,
@@ -61,7 +66,8 @@ public record AgentLoopInput(
         AgentEventRecorder eventRecorder,
         LoopCheckpointListener loopCheckpointListener,
         AgentAccessType accessType,
-        LoopCancellation cancellation) {
+        LoopCancellation cancellation,
+        String scene) {
 
     /** 默认最大循环轮数（LLM 调用次数硬上限，防死循环）。 */
     public static final int DEFAULT_MAX_ITERATIONS = 5;
@@ -99,6 +105,22 @@ public record AgentLoopInput(
     }
 
     /**
+     * 兼容构造器（旧 15 参签名，REF-8.6 时代末参为 {@link LoopCancellation}，无 scene）：
+     * {@code LoopCancellationWiringTest} 等历史调用点零改动。scene 缺省 null =
+     * 子任务执行链（对该类循环收尾轮仍生效，行为与 REF-8.6 时代逐字一致）。
+     */
+    public AgentLoopInput(ChatModel chatModel, String systemPrompt, String userPrompt,
+                          ToolExecutor toolExecutor, List<ToolCallback> enabledToolCallbacks,
+                          Integer maxIterations, String runId, Long taskId, Long subTaskId,
+                          int turn, Long agentId, AgentEventRecorder eventRecorder,
+                          LoopCheckpointListener loopCheckpointListener, AgentAccessType accessType,
+                          LoopCancellation cancellation) {
+        this(chatModel, systemPrompt, userPrompt, toolExecutor, enabledToolCallbacks, maxIterations,
+                runId, taskId, subTaskId, turn, agentId, eventRecorder, loopCheckpointListener,
+                accessType, cancellation, null);
+    }
+
+    /**
      * 兼容构造器（旧 14 参签名，可取消上下文缺省「不限」）：现有调用点零改动
      * ——REF-8.6 接入前只有执行链与业务面入口两处生产调用点，均在本批显式传
      * {@link LoopCancellation}；本构造器保留供单测 / 历史接点使用（行为与改造前逐字一致）。
@@ -110,7 +132,7 @@ public record AgentLoopInput(
                           LoopCheckpointListener loopCheckpointListener, AgentAccessType accessType) {
         this(chatModel, systemPrompt, userPrompt, toolExecutor, enabledToolCallbacks, maxIterations,
                 runId, taskId, subTaskId, turn, agentId, eventRecorder, loopCheckpointListener,
-                accessType, LoopCancellation.none());
+                accessType, LoopCancellation.none(), null);
     }
 
     /**
@@ -124,7 +146,7 @@ public record AgentLoopInput(
                           LoopCheckpointListener loopCheckpointListener) {
         this(chatModel, systemPrompt, userPrompt, toolExecutor, enabledToolCallbacks, maxIterations,
                 runId, taskId, subTaskId, turn, agentId, eventRecorder, loopCheckpointListener,
-                null, LoopCancellation.none());
+                null, LoopCancellation.none(), null);
     }
 
     /**
@@ -136,6 +158,6 @@ public record AgentLoopInput(
                           int turn, Long agentId, AgentEventRecorder eventRecorder) {
         this(chatModel, systemPrompt, userPrompt, toolExecutor, enabledToolCallbacks, maxIterations,
                 runId, taskId, subTaskId, turn, agentId, eventRecorder, null, null,
-                LoopCancellation.none());
+                LoopCancellation.none(), null);
     }
 }

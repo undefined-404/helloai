@@ -76,4 +76,44 @@ class OpenSandboxExecutionServiceTest {
         // SDK 异常不算成功
         assertThat(new ExecuteResponse("err", ExecuteResponse.EXIT_CODE_ERROR, false).succeeded()).isFalse();
     }
+
+    // ===== ADR-005：同子任务复用的生命周期出口（2026-10-25） =====
+
+    @Test
+    @DisplayName("release：null / 未登记子任务 ⇒ 静默返回（幂等，不抛异常）")
+    void releaseShouldBeIdempotent() {
+        OpenSandboxExecutionService service = new OpenSandboxExecutionService(props(true));
+
+        service.release(null);
+        service.release(999L);
+
+        assertThat(service.activeSandboxes()).isZero();
+    }
+
+    @Test
+    @DisplayName("复用默认开启，且可配置关闭（关闭 ⇒ 回落一次性语义）")
+    void reuseEnabledShouldBeConfigurable() {
+        OpenSandboxProperties props = props(true);
+        // 默认值：对齐 DSH dsh-tool-bash-persistent 的「同子任务工作区持久」口径
+        assertThat(props.isReuseEnabled()).isTrue();
+        assertThat(props.getIdleTtlSeconds()).isEqualTo(900L);
+
+        props.setReuseEnabled(false);
+        assertThat(props.isReuseEnabled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("未启用 / 命令空白时不得登记任何沙箱（守卫先于建沙箱）")
+    void guardShouldNotRegisterSandbox() {
+        OpenSandboxExecutionService disabled = new OpenSandboxExecutionService(props(false));
+        disabled.execute(10L, "echo hi", 30);
+        disabled.release(10L);
+
+        OpenSandboxExecutionService enabled = new OpenSandboxExecutionService(props(true));
+        enabled.execute(10L, "   ", 30);
+        enabled.release(10L);
+
+        assertThat(disabled.activeSandboxes()).isZero();
+        assertThat(enabled.activeSandboxes()).isZero();
+    }
 }

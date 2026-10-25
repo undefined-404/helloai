@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.observability.CircuitBreakerEventRecorder;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.AgentCapability;
 import com.helloai.core.agent.port.SubTaskCommandPort;
@@ -75,6 +76,7 @@ public class ResilientDispatcher implements TaskDispatchPort {
     private final AgentSelector agentSelector;
     private final AgentDispatchProperties agentDispatchProperties;
     private final TaskTimelinePort taskTimelinePort;
+    private final AgentExecutionRecordService agentExecutionRecordService;
 
     private static final String DISPATCH_CB_NAME = "agentDispatch";
 
@@ -120,6 +122,17 @@ public class ResilientDispatcher implements TaskDispatchPort {
     public void assignNext(Long agentId, Long subTaskId, TaskDispatchPort.DispatchConstraints constraints) {
         doAssignNext(agentId, subTaskId, constraints == null ? null
                 : AgentSelectionConstraints.of(constraints.allowedAgentIds(), constraints.requiredSkills()));
+    }
+
+    /**
+     * 派发前置：作废该子任务在飞的平台执行记录。
+     *
+     * <p>不进熔断器：这是本地幂等写（按 status CAS 更新），失败应直接暴露给调用方，
+     * 由调用方决定是否继续改派——不像 {@link #assignNext} 那样可以「换个人再试」。</p>
+     */
+    @Override
+    public int releaseInFlightExecution(Long subTaskId, String reason) {
+        return agentExecutionRecordService.closeInFlight(subTaskId, reason);
     }
 
     private void doAssignNext(Long agentId, Long subTaskId, AgentSelectionConstraints constraints) {

@@ -80,6 +80,7 @@ public final class SubTaskResponseMapper {
         response.setTitle(subTask.getTitle());
         response.setDeliverable(subTask.getDeliverable());
         response.setAcceptance(subTask.getAcceptance());
+        response.setAcceptanceKind(subTask.getAcceptanceKind());
         response.setContent(subTask.getContent());
         response.setPriority(subTask.getPriority());
         response.setStatus(subTask.getStatus());

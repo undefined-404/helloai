@@ -4,7 +4,8 @@
 #       并可通过人工兜底接口 /api/sub-tasks/redispatchDeadLetterById/{id}
 #       清零计数直接指派 ASSIGNED。
 # 链路：创建子任务(ASSIGNED→CLI源Agent) → blockById → [SQL 预置 attempt_total=max]
-#       → reassignById 触发熔断 → DEAD_LETTER → 人工兜底指派目标 Agent
+#       → reassignById（**人工入口**）命中熔断 ⇒ 只拒绝、**不转死信**（2026-10-25 语义变更）
+#       → [SQL 置 DEAD_LETTER，模拟**自动路径**熔断结果] → 人工兜底指派目标 Agent
 #       → 断言 ASSIGNED 且 attempt_total 清零。
 #
 # 【2026-10-05 订正四处过期口径】
@@ -16,11 +17,15 @@
 #        注意角色内模型唯一约束（仅 API_KEY_LLM）：deepseek-v4-flash 已被内建
 #        inner-deepseek-flash-excutor 占用，故这里选 v4-pro；同名复用兜底见 Get-AgentByName。
 #   3) 熔断计数语义（G-015 B2.2）：共享预算列是 sub_task.attempt_total
-#        （Phase 0 A3 起替代 reassign_attempt_count）；isReassignBlockedOrEscalate 在
+#        （Phase 0 A3 起替代 reassign_attempt_count）；闸门在
 #        「未达阈值且处于退避窗口 60/180/600/1800s」时只跳过本轮、不累加预算——
 #        故**连续快速 reassign 不会累加**，靠连点无法打满预算。
+#        ★2026-10-25 起退避**只约束自动路径**，人工 reassign 豁免（退避不消耗预算，
+#        而让自动路径点着的冷却锁死人工自救权正是 7443 事故的根因，见 LOG-20261025-006）。
 #        本脚本改为直接 SQL 预置 attempt_total = max-reassign-attempts，
 #        再调一次 reassignById 精确触发熔断（确定、可重复）。
+#        ★同日起人工入口命中熔断**只拒绝、不转死信**（判定函数不带副作用）；
+#        DEAD_LETTER 由自动路径产生，脚本以 SQL 直接造出以继续验证死信兜底链路。
 #   4) 计数读取：详情响应无 reassignAttemptCount 字段，改按真实列 attempt_total 校验
 #        （redispatchDeadLetter 会 resetAttemptTotal 清零，并清除 context 残留信号）。
 #
@@ -185,7 +190,7 @@ Assert-True ($blockResp.code -eq 200) ("block code=" + $blockResp.code)
 
 # 熔断触发（G-015 B2.2）：退避窗口使「连续快速 reassign」不累加预算，
 # 故直接 SQL 预置 attempt_total = max-reassign-attempts，再调一次 reassignById：
-# 入口 isReassignBlockedOrEscalate 读 attempt_total >= max → 转 DEAD_LETTER（确定性触发）。
+# 闸门读 attempt_total >= max → 命中熔断。**人工入口只拒绝、不转死信**（2026-10-25）。
 Write-Host ("STEP6: seed attempt_total=" + $MaxReassignAttempts + " via SQL, then single reassignById")
 Invoke-Psql ("UPDATE sub_task SET attempt_total = " + $MaxReassignAttempts + " WHERE id = " + $subTaskId + ";") | Out-Null
 # 注意 @(...)：Invoke-Psql 返回单值时会退化为标量字符串，直接 [0] 会取到「首字符」，
@@ -199,7 +204,19 @@ $r = Invoke-JsonAllowFail -Method "Post" -Url ($BaseUrl + "/api/sub-tasks/reassi
 } -Headers @{ "X-Admin-Token" = $adminToken }
 Write-Host ("  reassign httpOk=" + $r.Ok)
 
-Write-Host "STEP7: assert DEAD_LETTER"
+Write-Host "STEP7: assert manual reassign rejected WITHOUT escalating to DEAD_LETTER"
+# ★2026-10-25 语义变更（LOG-20261025-006 §四）：人工入口命中预算熔断时**只拒绝、不改状态**。
+#   旧行为是「判定函数顺手 changeStatus→DEAD_LETTER」，导致用户点「换人」实际把子任务打进死信池，
+#   与按钮语义、与前端提示文案（「请走重新指派」）全部矛盾。判定函数不再带副作用。
+$blockedDetail = Get-SubTask -SubTaskId $subTaskId -AdminToken $adminToken
+Assert-True ($blockedDetail.status -eq "BLOCKED") `
+    ("manual reassign must NOT change status when circuit open, actual=" + $blockedDetail.status)
+Write-Host "manual reassign rejected, status stayed BLOCKED confirmed"
+
+# 自动路径（周期巡检 / 超时回收）仍会转 DEAD_LETTER；此处用 SQL 直接造出该结果，
+# 以便继续验证「死信 → 人工兜底指派」这条链路本身（本次改动的验证目标是语义分割，不是巡检时序）。
+Write-Host "STEP7b: seed DEAD_LETTER via SQL (simulating auto-path circuit result)"
+Invoke-Psql ("UPDATE sub_task SET status = 'DEAD_LETTER' WHERE id = " + $subTaskId + ";") | Out-Null
 $deadDetail = Get-SubTask -SubTaskId $subTaskId -AdminToken $adminToken
 Assert-True ($deadDetail.status -eq "DEAD_LETTER") ("expected DEAD_LETTER, actual=" + $deadDetail.status)
 Write-Host "DEAD_LETTER confirmed"

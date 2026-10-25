@@ -161,9 +161,19 @@ public class ChatModelToolLoop implements AgentLoop {
 
         int overflowRetries = 0;
         int summarizeBudget = compactor.maxSummarizationsPerRun();
+        // ★2026-10-25（MiniMax 竞品分析 MAX_ITERATIONS 事故）：轮次护栏——最后 2 轮强制收尾。
+        // 根因：模型把 20 轮全花在沙箱 curl 抓取上，正文零产出。提示词侧已加「调研抓取最多 6 轮」，
+        // 但模型可能不遵从。故在循环层加硬护栏：第 maxIterations-1 轮起禁用工具调用，强制模型输出正文。
+        int forceFinalizeFromIteration = Math.max(1, input.maxIterations() - 1);
         for (int i = 0; i < input.maxIterations(); i++) {
             iterations = i + 1;
             DefaultToolCallingChatOptions options = buildOptions(input);
+            // 轮次护栏：最后 2 轮禁用工具调用（强制模型输出正文，不再抓取）
+            if (iterations >= forceFinalizeFromIteration) {
+                options.setToolCallbacks(List.of());
+                log.info("ChatModelToolLoop: 轮次护栏触发（第 {}/{} 轮），禁用工具调用强制收尾",
+                        iterations, input.maxIterations());
+            }
             // REF-8.4 挂点骨架：请求前经 beforeRequest 挂点（对齐 DSH `agent/pre-step` 压力触发）
             // 默认 CompactionHook 剪枝 → 仍超预算才摘要（额度受 summarizeBudget 约束）
             CompactionOutcome pressure = runBeforeRequest(input, messages, options, summarizeBudget);
@@ -208,17 +218,22 @@ public class ChatModelToolLoop implements AgentLoop {
             ChatResponseContentExtractor.ExtractedContent extracted =
                     ChatResponseContentExtractor.extract(response);
             lastText = extracted.text();
-            AssistantMessage assistant = response.getResult() != null ? response.getResult().getOutput() : null;
+            // 2026-10-25（MiniMax「从不调用工具」事故）：Anthropic 协议下 AnthropicChatModel 把
+            // 文本块与 tool_use 块映射为**两个独立 Generation**（正文在索引 0、工具调用追加在末尾），
+            // 而 getResult() 恒取索引 0 ⇒ 只读 getResult() 时工具调用被系统性遮蔽，
+            // 循环误判「模型没要工具」而按 STOP 收尾。故一律跨 Generation 汇总。
+            List<AssistantMessage.ToolCall> toolCalls = ChatResponseContentExtractor.extractToolCalls(response);
+            AssistantMessage assistant = assistantForHistory(response, extracted, toolCalls);
             if (assistant != null) {
                 messages.add(assistant);
             }
-            if (assistant == null || !assistant.hasToolCalls()) {
+            if (toolCalls.isEmpty()) {
                 return terminate(input, messages, stopDraft(truncated, lastText,
                         extracted.thinking().isBlank() ? null : extracted.thinking(),
                         iterations, toolCallCount, totalTokens), runningUsage, startedNanos);
             }
             List<ToolResponseMessage.ToolResponse> toolResponses = new ArrayList<>();
-            for (AssistantMessage.ToolCall toolCall : assistant.getToolCalls()) {
+            for (AssistantMessage.ToolCall toolCall : toolCalls) {
                 if (toolCall == null) {
                     continue;
                 }
@@ -274,6 +289,33 @@ public class ChatModelToolLoop implements AgentLoop {
     }
 
     /**
+     * 组装本轮要写回会话历史的 AssistantMessage。
+     *
+     * <p><b>为什么不能直接用 {@code getResult().getOutput()}</b>（2026-10-25 MiniMax 事故）：
+     * Anthropic 协议下文本块与 {@code tool_use} 块是两个独立 Generation，直接写回第 0 个会同时
+     * 造成两个后果——① 本轮判定拿不到工具调用（见 {@link ChatResponseContentExtractor#extractToolCalls}）；
+     * ② 历史里没有对应的 {@code tool_use} 块，下一轮追加的 {@code tool_result} 变成「无主」，
+     * provider 会因「tool_result 前无对应 tool_use」直接拒答。</p>
+     *
+     * <p>故：汇总出的工具调用不在原消息里时<b>重新合成</b>「正文 + 全部工具调用」；
+     * 无工具调用、或原消息已自带工具调用（OpenAI / DeepSeek 单 Generation 形态）时<b>原样保留</b>
+     * —— 保住 {@code DeepSeekAssistantMessage} 子类与 metadata，对既有链路零回归。</p>
+     */
+    private static AssistantMessage assistantForHistory(
+            ChatResponse response,
+            ChatResponseContentExtractor.ExtractedContent extracted,
+            List<AssistantMessage.ToolCall> toolCalls) {
+        AssistantMessage raw = response.getResult() != null ? response.getResult().getOutput() : null;
+        if (toolCalls.isEmpty() || (raw != null && raw.hasToolCalls())) {
+            return raw;
+        }
+        return AssistantMessage.builder()
+                .content(extracted.text() != null ? extracted.text() : "")
+                .toolCalls(toolCalls)
+                .build();
+    }
+
+    /**
      * 该结束原因是否表示「输出被 token 上限截断」（REF-8.7）。取值集与容错口径见
      * {@link #TRUNCATION_FINISH_REASONS}；<b>未知取值一律不判截断</b>（降级回改造前语义）。
      */
@@ -319,7 +361,7 @@ public class ChatModelToolLoop implements AgentLoop {
             try {
                 AgentLoopResult revised = hook.beforeTerminate(
                         new AgentLoopTermination(input.chatModel(), messages, internalLlm, current,
-                                input.maxIterations()));
+                                input.maxIterations(), input.scene()));
                 if (revised != null) {
                     current = revised;
                 }
