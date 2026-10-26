@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import com.helloai.api.dto.skill.ChatSkillOption;
 import com.helloai.api.dto.skill.SkillPackageResponse;
 import com.helloai.common.base.R;
 import com.helloai.core.agent.skill.SkillCatalogEntry;
@@ -120,6 +121,39 @@ class SkillCatalogControllerTest {
 
         assertThat(data.get(0).getLabel()).isEqualTo("a（无冒号描述）");
         assertThat(data.get(1).getLabel()).isEqualTo("b");
+    }
+
+    @Test
+    @DisplayName("★ 对话技能菜单只下发「能独立出产物」的包（规范类、依赖类都不出现）")
+    void chatOptionsOnlyRunnableSkills() {
+        SkillPackage archify = new SkillPackage("archify", "3.1.0", "架构图/流程图即代码：出离线单文件 HTML",
+                List.of("internal_run_skill", "internal_read_artifact", "internal_export_artifact"),
+                List.of(), List.of(), Map.of(), Map.of(), List.of(), "archify.md");
+        // 依赖 archify 才渲染得出来：有执行工具但不是独立入口，不能进菜单
+        SkillPackage lifecycle = new SkillPackage("biz-process-lifecycle", "1.0.0", "业务状态机建模：三区分离",
+                List.of("internal_run_skill", "internal_export_artifact"),
+                List.of(), List.of("archify"), Map.of(), Map.of(), List.of(), "biz-process-lifecycle.md");
+        SkillPackage specOnly = new SkillPackage("eng-code-review", "1.0.0", "代码评审规范：接口契约",
+                List.of(), List.of(), List.of(), Map.of(), Map.of(), List.of(), "eng-code-review.md");
+        when(skillPackageCatalog.entries()).thenReturn(List.of(
+                SkillCatalogEntry.healthy(archify),
+                SkillCatalogEntry.healthy(lifecycle),
+                SkillCatalogEntry.healthy(specOnly)));
+
+        List<ChatSkillOption> options = controller.chatOptions().getData();
+
+        assertThat(options).extracting(ChatSkillOption::name).containsExactly("archify");
+        assertThat(options.get(0).version()).isEqualTo("3.1.0");
+        assertThat(options.get(0).description()).contains("离线单文件 HTML");
+    }
+
+    @Test
+    @DisplayName("对话技能菜单不含坏包（corrupt 项即使声明了工具也不下发）")
+    void chatOptionsSkipsCorrupt() {
+        when(skillPackageCatalog.entries())
+                .thenReturn(List.of(SkillCatalogEntry.corrupt("broken.md", "frontmatter 缺失")));
+
+        assertThat(controller.chatOptions().getData()).isEmpty();
     }
 
     /** 与真实 frontmatter 同形的样例（description 含全角冒号）。 */

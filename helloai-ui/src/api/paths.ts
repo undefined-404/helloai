@@ -94,7 +94,10 @@ export const paths = {
   skills: {
     // 平台技能包目录（REF-1.2c）：元数据来自 md frontmatter，label 由服务端派生。
     // 注意与 agents.skillZip（Agent 角色接入手册 ZIP）区分——两者不是一件事。
-    catalog: '/skills/catalog'
+    catalog: '/skills/catalog',
+    // 需求对话「＋→技能」可选清单（2026-10-26）：只含能在沙箱里产出文件的技能包，
+    // 权限面是 conversation:add（不是 skill:view），普通需求方也能拉到。
+    chatOptions: '/skills/chat-options'
   },
   setup: {
     getStatus: '/setup/getStatus',
@@ -174,7 +177,9 @@ export const paths = {
     upload: '/chat-attachments/upload',
     list: '/chat-attachments',
     deleteById: (id: string | number) => `/chat-attachments/deleteById/${enc(id)}`,
-    previewById: (id: string | number) => `/chat-attachments/previewById/${enc(id)}`
+    previewById: (id: string | number) => `/chat-attachments/previewById/${enc(id)}`,
+    // 2026-10-27：产出型技能生成的产物，走 attachment 语义（浏览器落盘而不是内联渲染）
+    downloadById: (id: string | number) => `/chat-attachments/downloadById/${enc(id)}`
   },
   clarifications: {
     create: '/requirement-conversations',

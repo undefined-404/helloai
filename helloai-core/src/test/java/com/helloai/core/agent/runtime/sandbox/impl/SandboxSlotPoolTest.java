@@ -23,13 +23,13 @@ class SandboxSlotPoolTest {
     @Test
     @DisplayName("同一 key 复用同一资源：只创建一次、不销毁")
     void shouldReuseSameResourceForSameKey() {
-        SandboxSlotPool<String> pool = new SandboxSlotPool<>();
+        SandboxSlotPool<Long, String> pool = new SandboxSlotPool<>();
         AtomicInteger created = new AtomicInteger();
         List<String> destroyed = new ArrayList<>();
 
-        SandboxSlotPool.Slot<String> first = pool.acquire(7L, 60_000L, () -> "sb-" + created.incrementAndGet(),
+        SandboxSlotPool.Slot<Long, String> first = pool.acquire(7L, 60_000L, () -> "sb-" + created.incrementAndGet(),
                 destroyed::add);
-        SandboxSlotPool.Slot<String> second = pool.acquire(7L, 60_000L, () -> "sb-" + created.incrementAndGet(),
+        SandboxSlotPool.Slot<Long, String> second = pool.acquire(7L, 60_000L, () -> "sb-" + created.incrementAndGet(),
                 destroyed::add);
 
         assertThat(first).isNotNull();
@@ -43,11 +43,11 @@ class SandboxSlotPoolTest {
     @Test
     @DisplayName("不同 key 各自独立：不共享工作区")
     void shouldNotShareAcrossKeys() {
-        SandboxSlotPool<String> pool = new SandboxSlotPool<>();
+        SandboxSlotPool<Long, String> pool = new SandboxSlotPool<>();
         AtomicInteger created = new AtomicInteger();
 
-        SandboxSlotPool.Slot<String> a = pool.acquire(1L, 60_000L, () -> "sb-" + created.incrementAndGet(), s -> { });
-        SandboxSlotPool.Slot<String> b = pool.acquire(2L, 60_000L, () -> "sb-" + created.incrementAndGet(), s -> { });
+        SandboxSlotPool.Slot<Long, String> a = pool.acquire(1L, 60_000L, () -> "sb-" + created.incrementAndGet(), s -> { });
+        SandboxSlotPool.Slot<Long, String> b = pool.acquire(2L, 60_000L, () -> "sb-" + created.incrementAndGet(), s -> { });
 
         assertThat(a.resource()).isEqualTo("sb-1");
         assertThat(b.resource()).isEqualTo("sb-2");
@@ -58,16 +58,16 @@ class SandboxSlotPoolTest {
     @Test
     @DisplayName("空闲过期 ⇒ 先销毁旧资源再重建")
     void shouldEvictIdleSlotAndRecreate() {
-        SandboxSlotPool<String> pool = new SandboxSlotPool<>();
+        SandboxSlotPool<Long, String> pool = new SandboxSlotPool<>();
         AtomicInteger created = new AtomicInteger();
         List<String> destroyed = new ArrayList<>();
 
-        SandboxSlotPool.Slot<String> first = pool.acquire(9L, 1L, () -> "sb-" + created.incrementAndGet(),
+        SandboxSlotPool.Slot<Long, String> first = pool.acquire(9L, 1L, () -> "sb-" + created.incrementAndGet(),
                 destroyed::add);
         first.touch();
         // idleTtl=1ms：等到判定必然过期（用 0 表示不过期，故这里等 5ms 即可）
         sleep(5);
-        SandboxSlotPool.Slot<String> second = pool.acquire(9L, 1L, () -> "sb-" + created.incrementAndGet(),
+        SandboxSlotPool.Slot<Long, String> second = pool.acquire(9L, 1L, () -> "sb-" + created.incrementAndGet(),
                 destroyed::add);
 
         assertThat(second).isNotSameAs(first);
@@ -79,12 +79,12 @@ class SandboxSlotPoolTest {
     @Test
     @DisplayName("idleTtl<=0 ⇒ 不做过期判定（恒复用）")
     void shouldNeverEvictWhenTtlNonPositive() {
-        SandboxSlotPool<String> pool = new SandboxSlotPool<>();
+        SandboxSlotPool<Long, String> pool = new SandboxSlotPool<>();
         AtomicInteger created = new AtomicInteger();
 
         pool.acquire(3L, 0L, () -> "sb-" + created.incrementAndGet(), s -> { });
         sleep(5);
-        SandboxSlotPool.Slot<String> again = pool.acquire(3L, 0L, () -> "sb-" + created.incrementAndGet(), s -> { });
+        SandboxSlotPool.Slot<Long, String> again = pool.acquire(3L, 0L, () -> "sb-" + created.incrementAndGet(), s -> { });
 
         assertThat(again.resource()).isEqualTo("sb-1");
         assertThat(created.get()).isEqualTo(1);
@@ -93,7 +93,7 @@ class SandboxSlotPoolTest {
     @Test
     @DisplayName("remove ⇒ 调用销毁回调并清空登记（幂等）")
     void shouldDestroyOnRemove() {
-        SandboxSlotPool<String> pool = new SandboxSlotPool<>();
+        SandboxSlotPool<Long, String> pool = new SandboxSlotPool<>();
         List<String> destroyed = new ArrayList<>();
         pool.acquire(5L, 60_000L, () -> "sb", destroyed::add);
 
@@ -108,10 +108,10 @@ class SandboxSlotPoolTest {
     @Test
     @DisplayName("创建失败（opener 返回 null）⇒ 不登记、返回 null，且下次仍会重试创建")
     void shouldNotRegisterWhenOpenerReturnsNull() {
-        SandboxSlotPool<String> pool = new SandboxSlotPool<>();
+        SandboxSlotPool<Long, String> pool = new SandboxSlotPool<>();
         AtomicInteger attempts = new AtomicInteger();
 
-        SandboxSlotPool.Slot<String> failed = pool.acquire(4L, 60_000L, () -> {
+        SandboxSlotPool.Slot<Long, String> failed = pool.acquire(4L, 60_000L, () -> {
             attempts.incrementAndGet();
             return null;
         }, s -> { });
@@ -119,7 +119,7 @@ class SandboxSlotPoolTest {
         assertThat(failed).isNull();
         assertThat(pool.size()).isZero();
 
-        SandboxSlotPool.Slot<String> retried = pool.acquire(4L, 60_000L, () -> {
+        SandboxSlotPool.Slot<Long, String> retried = pool.acquire(4L, 60_000L, () -> {
             attempts.incrementAndGet();
             return "sb-ok";
         }, s -> { });
@@ -132,7 +132,7 @@ class SandboxSlotPoolTest {
     @Test
     @DisplayName("null key ⇒ 返回 null（调用方走一次性路径，不登记）")
     void shouldReturnNullForNullKey() {
-        SandboxSlotPool<String> pool = new SandboxSlotPool<>();
+        SandboxSlotPool<Long, String> pool = new SandboxSlotPool<>();
         assertThat(pool.acquire(null, 60_000L, () -> "sb", s -> { })).isNull();
         assertThat(pool.remove(null, s -> { })).isFalse();
         assertThat(pool.size()).isZero();
@@ -141,8 +141,8 @@ class SandboxSlotPoolTest {
     @Test
     @DisplayName("槽带串行锁：同一槽的命令可被 lock 串行化")
     void slotShouldExposeLock() {
-        SandboxSlotPool<String> pool = new SandboxSlotPool<>();
-        SandboxSlotPool.Slot<String> slot = pool.acquire(8L, 60_000L, () -> "sb", s -> { });
+        SandboxSlotPool<Long, String> pool = new SandboxSlotPool<>();
+        SandboxSlotPool.Slot<Long, String> slot = pool.acquire(8L, 60_000L, () -> "sb", s -> { });
 
         assertThat(slot.lock()).isNotNull();
         slot.lock().lock();
@@ -151,6 +151,55 @@ class SandboxSlotPoolTest {
         } finally {
             slot.lock().unlock();
         }
+    }
+
+    @Test
+    @DisplayName("复合键：同子任务不同规格指纹 ⇒ 两个沙箱，互不复用（SKX-5）")
+    void shouldNotShareAcrossSpecFingerprints() {
+        SandboxSlotPool<String, String> pool = new SandboxSlotPool<>();
+        AtomicInteger created = new AtomicInteger();
+
+        SandboxSlotPool.Slot<String, String> pythonSlot =
+                pool.acquire("1|aaaa", 60_000L, () -> "sb-" + created.incrementAndGet(), s -> { });
+        SandboxSlotPool.Slot<String, String> nodeSlot =
+                pool.acquire("1|bbbb", 60_000L, () -> "sb-" + created.incrementAndGet(), s -> { });
+
+        assertThat(pythonSlot).isNotSameAs(nodeSlot);
+        assertThat(pythonSlot.resource()).isEqualTo("sb-1");
+        assertThat(nodeSlot.resource()).isEqualTo("sb-2");
+        assertThat(created.get()).isEqualTo(2);
+        assertThat(pool.size()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("removeMatching：释放该子任务全部规格槽，不误伤别的子任务（SKX-5）")
+    void shouldRemoveAllSlotsOfSubTask() {
+        SandboxSlotPool<String, String> pool = new SandboxSlotPool<>();
+        List<String> destroyed = new ArrayList<>();
+        pool.acquire("1|aaaa", 60_000L, () -> "py", destroyed::add);
+        pool.acquire("1|bbbb", 60_000L, () -> "node", destroyed::add);
+        pool.acquire("2|aaaa", 60_000L, () -> "other", destroyed::add);
+
+        int removed = pool.removeMatching(key -> key.startsWith("1|"), destroyed::add);
+
+        assertThat(removed).isEqualTo(2);
+        assertThat(destroyed).containsExactlyInAnyOrder("py", "node");
+        assertThat(pool.size()).isEqualTo(1);
+        assertThat(pool.contains("2|aaaa")).isTrue();
+    }
+
+    @Test
+    @DisplayName("findKey / containsMatching：只按谓词探测在册槽，不创建新沙箱（SKX-5）")
+    void shouldFindKeyWithoutCreating() {
+        SandboxSlotPool<String, String> pool = new SandboxSlotPool<>();
+        AtomicInteger created = new AtomicInteger();
+        pool.acquire("7|aaaa", 60_000L, () -> "sb-" + created.incrementAndGet(), s -> { });
+
+        assertThat(pool.containsMatching(key -> key.startsWith("7|"))).isTrue();
+        assertThat(pool.findKey(key -> key.startsWith("7|"))).contains("7|aaaa");
+        assertThat(pool.containsMatching(key -> key.startsWith("8|"))).isFalse();
+        assertThat(pool.findKey(key -> key.startsWith("8|"))).isEmpty();
+        assertThat(created.get()).isEqualTo(1);
     }
 
     private static void sleep(long millis) {

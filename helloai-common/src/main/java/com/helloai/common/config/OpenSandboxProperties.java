@@ -5,7 +5,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * OpenSandbox 沙箱集成配置（S-3 / S-5，沙箱集成计划 §4.2/§4.7）。
@@ -37,6 +39,26 @@ public class OpenSandboxProperties {
     private Spec spec = new Spec();
 
     /**
+     * 命名规格表（`SKX-5`，2026-10-26）：{@code helloai.sandbox.opensandbox.spec-presets.<name>.*}。
+     *
+     * <p><b>为什么需要按调用分层</b>：同一个子任务里可能先跑 python 验算、再跑 node 出图，
+     * 两种容器镜像不同、资源需求也不同。全局单例 {@link #spec} 只能表达一种，故引入命名表；
+     * {@code default} 仍走 {@link #spec}（既有配置零迁移）。</p>
+     *
+     * <p><b>缺省即安全</b>：表为空时所有调用回落到 {@link #spec}，行为与 `SKX-5` 之前完全一致。</p>
+     */
+    private Map<String, Spec> specPresets = new LinkedHashMap<>();
+
+    /**
+     * 技能执行使用的命名规格（`SKX-8`，2026-10-26，默认 {@code node}）。
+     *
+     * <p><b>为什么单独一个键</b>：技能执行的镜像由「技能需要什么运行时」决定（archify 要 node），
+     * 与「验算命令用什么镜像」是两件事。留成一个可配置键，换技能（如 python 类）时只改配置不改代码。
+     * 指向 {@link #specPresets} 的键名；缺失时回落全局 {@link #spec} 并打 warn。</p>
+     */
+    private String skillSpecPreset = "node";
+
+    /**
      * 是否启用<b>同子任务复用</b>沙箱（`ADR-005`，2026-10-25；默认 true）。
      *
      * <p>对齐 deepseek-harness `dsh-tool-bash-persistent` 的产品级口径：同一子任务内的多次
@@ -54,6 +76,32 @@ public class OpenSandboxProperties {
      * 本值只作「进程异常退出 / 未走 release」的兜底。
      */
     private long idleTtlSeconds = 900L;
+
+    /**
+     * 取命名规格；不存在返回 {@code null}（由调用方决定「回落默认还是 fail-close」）。
+     *
+     * <p><b>为什么不在这里静默回落</b>：配置写错名字若被静默当成默认规格，症状是
+     * 「明明配了 node 规格却跑了 python 容器」，排查成本极高。返回 {@code null} 让调用方
+     * 打一条 warn 并显式回落，日志里能看见。</p>
+     *
+     * @param name 规格名（{@code null}/空白 ⇒ {@code null}，表示「未指定」）
+     */
+    public Spec findSpecPreset(String name) {
+        if (name == null || name.isBlank() || specPresets == null) {
+            return null;
+        }
+        return specPresets.get(name.trim());
+    }
+
+    /**
+     * 取生效规格：指定名字且命中 ⇒ 该规格；否则 ⇒ 全局 {@link #spec}。
+     *
+     * @param name 规格名（可为 null）
+     */
+    public Spec resolveSpec(String name) {
+        Spec preset = findSpecPreset(name);
+        return preset != null ? preset : spec;
+    }
 
     /**
      * 声明式沙箱规格字段（与 OpenSandbox API 请求体逐字对齐，S-1）。

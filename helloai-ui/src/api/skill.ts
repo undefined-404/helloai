@@ -27,7 +27,20 @@ export interface SkillPackageView {
   error: string | null
 }
 
+/**
+ * 需求对话「＋→技能」里可选的产出型技能（2026-10-26）。
+ *
+ * 只包含声明了 `internal_run_skill` 的技能包——它们能在沙箱里执行 CLI 并导出可下载产物。
+ */
+export interface ChatSkillOption {
+  name: string
+  version: string
+  description: string
+}
+
 export const skillApi = {
   /** 技能包目录（含 corrupt 项）。调用方须自行处理失败（见 stores/skillCatalog）。 */
-  catalog: () => request.get<any, SkillPackageView[]>(paths.skills.catalog)
+  catalog: () => request.get<any, SkillPackageView[]>(paths.skills.catalog),
+  /** 对话技能菜单选项（权限面 conversation:add；失败时调用方静默降级）。 */
+  chatOptions: () => request.get<any, ChatSkillOption[]>(paths.skills.chatOptions)
 }

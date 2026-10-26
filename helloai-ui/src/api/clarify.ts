@@ -78,6 +78,10 @@ export const clarifyApi = {
   attachmentPreviewUrl(id: LongId) {
     return `${import.meta.env.VITE_API_BASE ?? '/api'}${paths.chatAttachments.previewById(id)}`
   },
+  /** 下载地址（attachment 语义；技能产物卡片「下载」按钮用）。 */
+  attachmentDownloadUrl(id: LongId) {
+    return `${import.meta.env.VITE_API_BASE ?? '/api'}${paths.chatAttachments.downloadById(id)}`
+  },
   // 会话详情（含全部消息按 seq 升序）
   detail(id: LongId) {
     return request.get<any, ClarifyConversationDetail>(paths.clarifications.detail(id))

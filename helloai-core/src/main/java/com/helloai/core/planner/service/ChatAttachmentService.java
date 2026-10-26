@@ -78,6 +78,31 @@ public interface ChatAttachmentService {
     void delete(Long id);
 
     /**
+     * 登记一份<b>对话产物</b>（技能执行生成的文件，2026-10-27）。
+     *
+     * <p><b>为什么要单开一条通道</b>：{@link #uploadBatch} 是「用户上传的输入」——要过大小/类型/数量校验、
+     * 要投递异步解析、要参与 Prompt 注入。产物是<b>输出</b>：内容由平台自己生成（可信），
+     * 不需要解析进上下文（把 840KB HTML 注入 prompt 既无意义又会挤爆预算），
+     * 只需要「能被下载」。</p>
+     *
+     * <p><b>为什么落在 chat_attachment 而不是子任务 attachment</b>：产物属于「这次对话」。
+     * 子任务附件表的每条记录都锚在 {@code sub_task_id} 上，对话轮没有子任务，
+     * 塞进去要么造出假子任务、要么让「交付审计」的判据多出第四种情形。</p>
+     *
+     * <p>解析状态直接置 {@code SKIPPED}：读得出正文但<b>刻意不读</b>（产物不进上下文），
+     * 与「重试也无用」的图片/扫描件共用该状态，语义上都是「不要去注入它的正文」。</p>
+     *
+     * @param conversationId  所属会话（必填——产物必须有归属，否则无法鉴权下载）
+     * @param uploaderUserId  生成者登录用户 id（可空，测试/无登录上下文时）
+     * @param fileName        产物文件名（会做安全清洗）
+     * @param mimeType        产物 MIME（可空 ⇒ 按扩展名兜底）
+     * @param content         产物字节
+     * @return 落库后的附件（含 id，供消息 payload 引用）
+     */
+    ChatAttachment saveArtifact(Long conversationId, Long uploaderUserId,
+                               String fileName, String mimeType, byte[] content);
+
+    /**
      * 预览载荷（内容 + 可用的 Content-Type + 原始文件名，供 Controller 拼响应头）。
      *
      * <p>Content-Type 由 <b>Tika 魔数探测</b>得出，不自己维护后缀→MIME 映射表：

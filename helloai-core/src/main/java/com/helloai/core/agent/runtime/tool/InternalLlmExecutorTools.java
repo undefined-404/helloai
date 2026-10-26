@@ -4,8 +4,13 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.ManualInterventionReasons;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
+import com.helloai.core.agent.runtime.sandbox.SandboxArtifact;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
+import com.helloai.core.agent.runtime.sandbox.SkillInstallResult;
+import com.helloai.core.agent.runtime.sandbox.impl.SkillExecutionSupport;
 import com.helloai.core.agent.service.McpToolService;
+import com.helloai.core.agent.service.SkillArtifactExportService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.agent.tool.ToolInvocationContext;
@@ -78,11 +83,24 @@ public class InternalLlmExecutorTools {
     private final SubTaskCommandPort subTaskCommandPort;
     /** 沙箱执行通道（S-7，沙箱执行链设计方案 §3.3）：{@code internal_run_in_sandbox} 的底层执行。 */
     private final SandboxExecutionService sandboxExecutionService;
+    /** 技能执行编排（`SKX-8`）：{@code internal_run_skill} 的「解析包 → 注入 → 在技能根执行」。 */
+    private final SkillExecutionSupport skillExecutionSupport;
+    /** 产物落地（`SKX-11`）：{@code internal_export_artifact} 的「沙箱字节 → 对象存储 → 附件登记」。 */
+    private final SkillArtifactExportService skillArtifactExportService;
 
     /** 自报阻塞前置：必须先读过子任务详情（知情拒绝闸门，见 {@code internal_report_blocked}）。 */
     private static final String TOOL_GET_SUB_TASK_DETAIL = "internal_get_sub_task_detail";
     /** 阻塞原因最短长度（防敷衍式「做不到」）。 */
     private static final int MIN_BLOCKED_REASON_CHARS = 10;
+
+    /**
+     * 产物正文内联上限（字节）：超过则不内联，只回 size / sha256。
+     *
+     * <p>取 8000 的理由：一次工具返回要留在模型上下文里，820KB 的 HTML 内联会直接吃掉预算；
+     * 而 8KB 足够覆盖回执 JSON、短日志、错误栈这些「模型确实需要读」的场景。</p>
+     */
+    private static final int MAX_INLINE_ARTIFACT_CHARS = 8_000;
+
     /**
      * 人工介入原因码（写入 {@code context.manualIntervention}）。
      *
@@ -403,6 +421,184 @@ public class InternalLlmExecutorTools {
             @ToolParam(description = "命令超时秒数（默认 30，上限 300）", required = false) Integer timeoutSeconds) {
         ToolInvocationContext.Ids ids = requireInternalChain();
         return sandboxExecutionService.execute(ids.subTaskId(), command, timeoutSeconds);
+    }
+
+    /**
+     * 在沙箱内按<b>已入库技能包</b>执行命令（`SKX-8`，2026-10-26）。
+     *
+     * <p><b>为什么需要它，而不是让模型自己 {@code npm install}</b>：沙箱默认禁出网（`SKX-5` 起
+     * 显式 {@code deny}），模型拿不到包；即便能出网，运行时下游下载也不可复现——同一任务今天跑通、
+     * 明天换个上游版本就可能失败。本工具把「包」变成平台的<b>构建产物</b>：随 jar 固化、版本可追溯、
+     * 注入幂等（`SKX-6`）。</p>
+     *
+     * <p><b>触发口径自证（2026-10-26 裁定，本次调查 §4.1 候选 A）</b>：本工具新增了「agent 可调用
+     * 工具」，但判据是<b>是否碰宿主</b>——命令在 OpenSandbox 容器内执行（{@code filesystem=ISOLATED}、
+     * 零平台凭据 env、egress deny、与 app 不共享 env / 网络 / 文件系统），执行的是<b>平台自己的包</b>
+     * 而非任意下载物 ⇒ <b>不碰宿主 ⇒ 不触发条件①</b>。勿因「新增了工具」就误判需重排期。</p>
+     *
+     * @param agentId        执行者 Agent ID（平台自动注入）
+     * @param subTaskId      目标子任务 ID（平台自动注入）
+     * @param skillName      技能包名（须为已入库包，见 internal_list_skills / 平台内置名）
+     * @param command        在技能根目录下执行的命令（如 {@code node bin/archify.mjs doctor}）
+     * @param timeoutSeconds 超时秒数（默认 30，上限 300）
+     * @return {skill, skillDir, installed{files,bytes,skipped}, output, exitCode, truncated}
+     */
+    @Tool(name = "internal_run_skill", description = """
+            【何时使用】需要用平台已入库的技能包（当前：archify，架构图/流程图等图表产出）做实际产出或自检时调用。
+            本工具会自动完成「把技能包放进容器」这一步（幂等，已装则秒级跳过），然后在**技能根目录**下执行你的命令。
+            【工作区与命令语义】
+            - 命令等价于在技能根目录执行：`cd /workspace/skills/<技能名> && <你的命令>`，
+              所以技能自带 CLI 按相对路径写即可，如 `node bin/archify.mjs validate sequence in.json --json`
+            - 与 internal_run_in_sandbox **共用同一容器**：同一子任务内的文件跨调用保留，命令串行执行
+            - 平台已自动导出 `TMPDIR=/workspace/tmp`（技能工具的临时目录需要）
+            - 返回 {skill, skillDir, installed, output, exitCode, truncated}；exitCode=124 表示超时
+            【三条硬边界】
+            - 只能跑**平台已入库的技能包**（构建产物），不接受任意脚本/二进制，也不联网下载
+            - **沙箱内文件不是交付物**：平台只采集对话正文；需要把产物字节拿回来核对（sha256/大小/片段）
+              用 internal_read_artifact，路径用绝对路径（如 /workspace/out/x.html）
+            - 平台不自持浏览器：技能里的 `browser-check` / 截图类子命令**不可用**（不装 Chromium），
+              视觉复核须由人做；`--no-browser` / 跳过浏览器检查的参数按技能文档使用
+            【Gotchas】
+            - 命令在 OpenSandbox 容器内执行：默认禁网、零平台凭据、文件系统受隔离
+            - 首次调用会注入技能包（约 2s，含建容器）；同子任务后续调用毫秒级
+            - 输出超 100KB 会被截断并标注 truncated
+            【相关工具】internal_read_artifact / internal_run_in_sandbox / internal_get_sub_task_detail
+            """)
+    public Object internalRunSkill(
+            @ToolParam(description = "内部执行链鉴定的执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
+            @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId,
+            @ToolParam(description = "技能包名（已入库的技能，如 archify）", required = true) String skillName,
+            @ToolParam(description = "在技能根目录下执行的命令（bash -lc 语义）", required = true) String command,
+            @ToolParam(description = "命令超时秒数（默认 30，上限 300）", required = false) Integer timeoutSeconds) {
+        ToolInvocationContext.Ids ids = requireInternalChain();
+        SkillExecutionSupport.SkillTarget target = skillExecutionSupport.resolve(skillName);
+        if (target == null) {
+            throw new BizException("技能未入库: " + skillName + "（可用: "
+                    + skillExecutionSupport.availableSkillNames() + "）——技能包只能来自平台构建产物，不能现场下载");
+        }
+        SkillInstallResult install = skillExecutionSupport.ensureInstalled(ids.subTaskId(), target);
+        if (!install.success()) {
+            throw new BizException("技能包注入失败（" + target.label() + "）: " + install.message());
+        }
+        ExecuteResponse response = skillExecutionSupport.run(ids.subTaskId(), target, command, timeoutSeconds);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("skill", target.label());
+        result.put("skillDir", install.targetDir());
+        result.put("installed", Map.of(
+                "files", install.fileCount(),
+                "bytes", install.totalBytes(),
+                "skipped", install.skipped()));
+        result.put("output", response.output());
+        result.put("exitCode", response.exitCode());
+        result.put("truncated", response.truncated());
+        return result;
+    }
+
+    /**
+     * 按<b>指定路径</b>回读沙箱内的产物字节摘要（`SKX-7` / `SKX-8`，2026-10-26）。
+     *
+     * <p><b>为什么要有这条通道</b>：技能跑出来的产物在容器里，而平台只采集对话正文。此前模型能
+     * 「声称」产物有多大、内容对不对，平台无从核实。本工具把「回读 + 算 sha256」接出来，
+     * 让「回执里的 {@code artifact.sha256}」与「平台实际读到的字节」可以对账——这是技能执行
+     * 从「声称」变「实证」的那一步。</p>
+     *
+     * <p><b>为什么默认不内联大文件</b>：一份 820KB 的 HTML 内联进对话会直接吃掉上下文预算。
+     * 小文件（≤ {@value #MAX_INLINE_ARTIFACT_CHARS} 字符）内联正文方便模型自检；大文件只给
+     * {@code size} / {@code sha256} / {@code truncated}，要正文就请模型用更小的 {@code maxBytes}
+     * 或换更精确的路径。</p>
+     *
+     * @param agentId  执行者 Agent ID（平台自动注入）
+     * @param subTaskId 目标子任务 ID（平台自动注入）
+     * @param path     容器内绝对路径（如 {@code /workspace/out/archify.html}）
+     * @param maxBytes 回读上限字节数（空/≤0 ⇒ 默认 4MB；超限读前 N 字节并标 truncated）
+     * @return {path, mime, size, sha256, truncated}（小文件额外带 content）
+     */
+    @Tool(name = "internal_read_artifact", description = """
+            【何时使用】需要核对沙箱内某个产物文件的实际字节（大小 / sha256 / 小文件正文）时调用——
+            例如技能 CLI 回执里给了 artifact.sha256，你要证明「回读到的确实是同一份」。
+            【Gotchas】
+            - path 必须是**容器内绝对路径**（如 /workspace/out/archify.html），不接受相对路径
+            - 沙箱被重建（超时 / 异常后丢弃）时旧文件会消失，此时返回「产物不存在」
+            - 超过 maxBytes 会截断并标 truncated=true：**截断结果的 sha256 只代表片段**，
+              不能拿去和完整文件的回执比对
+            - 超过约 8000 字符的产物**不会内联正文**，只给 size / sha256（避免吃掉上下文预算）
+            【相关工具】internal_run_skill / internal_run_in_sandbox
+            """)
+    public Object internalReadArtifact(
+            @ToolParam(description = "内部执行链鉴定的执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
+            @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId,
+            @ToolParam(description = "容器内绝对路径（如 /workspace/out/archify.html）", required = true) String path,
+            @ToolParam(description = "回读上限字节数（空 ⇒ 默认 4MB）", required = false) Integer maxBytes) {
+        ToolInvocationContext.Ids ids = requireInternalChain();
+        SandboxArtifact artifact = sandboxExecutionService.readArtifact(
+                ids.subTaskId(), path, maxBytes == null ? 0 : maxBytes);
+        if (artifact == null) {
+            throw new BizException("产物不存在或不可读: " + path
+                    + "（须为容器内绝对路径；沙箱重建后旧文件会消失）");
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("path", artifact.path());
+        result.put("mime", artifact.mime());
+        result.put("size", artifact.size());
+        result.put("sha256", artifact.sha256());
+        result.put("truncated", artifact.truncated());
+        if (!artifact.truncated() && artifact.size() <= MAX_INLINE_ARTIFACT_CHARS) {
+            result.put("content", artifact.text());
+        } else {
+            result.put("note", "内容过大未内联（" + artifact.size()
+                    + " 字节）：用 size / sha256 做校验，或传更小的 maxBytes 只看开头片段");
+        }
+        return result;
+    }
+
+    /**
+     * 把沙箱内的产物导出为当前子任务的<b>可下载附件</b>（`SKX-11`，2026-10-26）。
+     *
+     * <p><b>为什么需要它</b>：{@link #internalReadArtifact} 只把字节读进<b>本次工具调用</b>里，
+     * 平台能对账、模型能自检，但用户界面上什么都看不到——沙箱文件随子任务结束被销毁，
+     * 「产物」等于没交付。本工具补上最后一段：沙箱字节 → 对象存储 → 附件表，
+     * 用户随后在子任务附件里直接下载。</p>
+     *
+     * <p><b>与 {@code internal_register_output_attachment} 的分工</b>：那个工具要求调用方
+     * <b>自己给 storageUrl</b>（适用于外部执行者已经上传好的场景）；本工具<b>只吃容器路径</b>，
+     * 由平台负责字节搬运。模型手里只有容器路径，所以技能产物必须走本工具。</p>
+     *
+     * @param agentId   执行者 Agent ID（平台自动注入）
+     * @param subTaskId 目标子任务 ID（平台自动注入）
+     * @param path      容器内绝对路径（如 {@code /workspace/out/archify.html}）
+     * @param fileName  附件文件名（空 ⇒ 取路径的文件名部分）
+     * @return {attachmentId, fileName, mime, size, sha256, note}
+     */
+    @Tool(name = "internal_export_artifact", description = """
+            【何时使用】技能/脚本产出了**要给用户看的文件**（如 archify 生成的 HTML 图表）时调用：
+            把沙箱内的产物落地成当前子任务的附件，用户即可在界面上直接下载。
+            【关键区别】
+            - internal_read_artifact 只是**你自己看**（核对大小/哈希/片段），产物仍在容器里、随子任务销毁
+            - internal_export_artifact 是**交付给用户**（写对象存储 + 登记附件），会出现在子任务附件列表
+            - 两个都要时先 export 再 read（或反之），互相不影响
+            【Gotchas】
+            - path 必须是**容器内绝对路径**；沙箱在该子任务结束后被回收，**必须在同一轮执行内导出**
+            - 产物超过单文件上限（默认 5MB）会被**拒绝**（不会导出截断版）——请让技能输出更精简的产物
+            - fileName 可省略，默认取路径的文件名；同名重复导出会把旧版本置为历史版本
+            - 导出成功即表示平台已能读到该文件；返回值里的 sha256 可与技能 CLI 回执对账
+            【相关工具】internal_run_skill / internal_read_artifact / internal_get_sub_task_detail
+            """)
+    public Object internalExportArtifact(
+            @ToolParam(description = "内部执行链鉴定的执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
+            @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId,
+            @ToolParam(description = "容器内绝对路径（如 /workspace/out/archify.html）", required = true) String path,
+            @ToolParam(description = "附件文件名（可空，默认取路径的文件名）", required = false) String fileName) {
+        ToolInvocationContext.Ids ids = requireInternalChain();
+        SkillArtifactExportService.ExportResult result =
+                skillArtifactExportService.export(ids.agentId(), ids.subTaskId(), path, fileName);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("attachmentId", result.attachmentId());
+        out.put("fileName", result.fileName());
+        out.put("mime", result.mimeType());
+        out.put("size", result.size());
+        out.put("sha256", result.sha256());
+        out.put("note", "已登记为子任务附件，用户可在附件列表直接下载");
+        return out;
     }
 
     /**

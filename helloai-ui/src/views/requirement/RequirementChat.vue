@@ -5,7 +5,7 @@
         <div class="card-header chat-header">
           <div class="chat-header-title">
             <span class="chat-header-main">新建对话（AI 助手）</span>
-            <span class="chat-header-sub">与 AI 助手自由对话；需要成体系时点「＋」→ 技能 →「方案整理」，想跳过澄清直接建任务选「直接拆解」</span>
+            <span class="chat-header-sub">与 AI 助手自由对话；点「＋」→ 技能：要成体系选「方案整理」，跳过澄清直接建任务选「直接拆解」，要产出文件（如架构图 / 业务流程图）选对应的产出型技能</span>
           </div>
           <div class="header-actions">
             <!-- 模式 chip + 操作组（刷新 / 分享 / 更多）；新建会话入口收敛在左栏顶部「新建对话」 -->
@@ -301,6 +301,32 @@
                           v-else
                           :content="row.intro"
                         />
+                        <!-- 2026-10-27 技能产物卡片：选「产出型技能」后由平台在对话轮内生成，
+                             产物是会话附件（打开=内联预览 / 下载=attachment 落盘） -->
+                        <div
+                          v-if="row.artifact"
+                          class="msg-artifact"
+                        >
+                          <span class="msg-artifact-icon"><el-icon><Document /></el-icon></span>
+                          <span class="msg-artifact-meta">
+                            <span class="msg-artifact-name">{{ row.artifact.fileName }}</span>
+                            <span class="msg-artifact-sub">
+                              {{ artifactSizeLabel(row.artifact.fileSize) }}<template v-if="row.artifact.chartType"> · {{ row.artifact.chartType }}</template>
+                            </span>
+                          </span>
+                          <span class="msg-artifact-actions">
+                            <a
+                              class="msg-artifact-btn"
+                              :href="clarifyApi.attachmentPreviewUrl(row.artifact.attachmentId)"
+                              target="_blank"
+                              rel="noopener"
+                            >打开</a>
+                            <a
+                              class="msg-artifact-btn is-primary"
+                              :href="clarifyApi.attachmentDownloadUrl(row.artifact.attachmentId)"
+                            >下载</a>
+                          </span>
+                        </div>
                         <!-- 用户消息展示态：hover 出现编辑铅笔（对齐 ChatGPT/DeepSeek 交互） -->
                         <button
                           v-if="row.msg.role === 'user' && editingMsgId !== String(row.msg.id)"
@@ -694,11 +720,12 @@
                       <span
                         v-if="activeSkill"
                         class="skill-token"
-                        :class="`skill-token--${activeSkill}`"
+                        :class="activePackageName ? 'skill-token--package' : `skill-token--${activeSkill}`"
                         :title="activeSkillHint"
                       >
                         <el-icon class="skill-token-icon">
                           <EditPen v-if="activeSkill === 'planner'" />
+                          <Grid v-else-if="activePackageName" />
                           <MagicStick v-else />
                         </el-icon>
                         <span class="skill-token-name">{{ activeSkillLabel }}</span>
@@ -780,6 +807,29 @@
                             </span>
                             <span
                               v-if="activeSkill === 'task'"
+                              class="plus-menu-check"
+                            >
+                              <el-icon><Check /></el-icon>
+                            </span>
+                          </button>
+                          <!-- 产出型技能（2026-10-26）：来自平台技能目录（/api/skills/catalog），
+                               只列「声明了 internal_run_skill」的包——它们是能在沙箱里真跑出产物的技能
+                               （archify 出 HTML、biz-process-lifecycle 出状态机图）；eng-* 规范类不在此列。 -->
+                          <button
+                            v-for="pkg in packageSkills"
+                            :key="pkg.name"
+                            type="button"
+                            class="plus-menu-item"
+                            :class="{ 'is-active': activeSkill === `pkg:${pkg.name}` }"
+                            @click="pickSkill(`pkg:${pkg.name}`)"
+                          >
+                            <span class="plus-menu-icon"><el-icon><Grid /></el-icon></span>
+                            <span class="plus-menu-text">
+                              <span class="plus-menu-name">{{ pkg.name }}</span>
+                              <span class="plus-menu-desc">{{ shortSkillDesc(pkg.description) }}</span>
+                            </span>
+                            <span
+                              v-if="activeSkill === `pkg:${pkg.name}`"
                               class="plus-menu-check"
                             >
                               <el-icon><Check /></el-icon>
@@ -941,16 +991,17 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled } from '@element-plus/icons-vue'
+import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled, Grid } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { promptEnhanceApi } from '@/api/promptEnhance'
 import { taskApi } from '@/api/task'
+import { skillApi, type ChatSkillOption } from '@/api/skill'
 import { streamCreateConversation, streamSendConversation } from '@/api/chatStream'
 import { fmtTime } from '@/utils/tableConfig'
 import StructuredQuestionCard from './StructuredQuestionCard.vue'
 import WebSearchBar from './WebSearchBar.vue'
 import MarkdownView from '@/components/MarkdownView.vue'
-import type { ChatAttachmentItem, ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, RoundProcessTrace, WebSearchTrace } from '@/types'
+import type { ChatAttachmentItem, ClarifyArtifactRef, ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, RoundProcessTrace, WebSearchTrace } from '@/types'
 
 const router = useRouter()
 
@@ -974,6 +1025,7 @@ const inputPlaceholder = computed(() => {
   // 已挂载技能：占位直接说明「补需求 + Enter 会发生什么」，用户不用猜胶囊是什么意思
   if (activeSkill.value === 'planner') return '写一句你想梳理的事，Enter 进入方案整理'
   if (activeSkill.value === 'task') return '写一句需求，Enter 直接拆解并建任务'
+  if (activeSkill.value?.startsWith('pkg:')) return '写一句要画什么（越具体越准），Enter 直接生成文件，产物可在对话里下载'
   if (activeId.value == null) {
     return '描述你想做的事，或直接提问；点左下角「＋」选技能可直接建任务，Enter 发送'
   }
@@ -1001,26 +1053,69 @@ const skillDisabled = computed(() => sending.value
 
 // 「＋」能力菜单展开态（点技能项后先收起，再挂载到输入框）
 const plusMenuVisible = ref(false)
+// 首次展开菜单时拉一次对话技能清单（失败静默降级为只剩流程技能）
+watch(plusMenuVisible, (visible) => {
+  if (visible) void loadPackageSkills()
+})
 
 // 已挂载的技能（2026-10-22，对齐 WorkBuddy「技能 chip + 光标」）：
 // 选技能 ≠ 立即发送——挂成输入框里的胶囊，用户补完需求再 Enter；
 // 发送时才翻译成后端既有协议（planner → /planner，task → /task 前缀），语法始终不外露。
-const activeSkill = ref<'planner' | 'task' | null>(null)
+// 2026-10-26：新增产出型技能（`pkg:<技能包名>`），发送时翻译成 `[skill:<name>] ` 前缀，
+// 后端据此把技能写进任务 required_skills（子任务里真跑技能 CLI 并导出可下载产物）。
+const activeSkill = ref<string | null>(null)
 const composerRef = ref<any>(null)
+
+/**
+ * 菜单里可选的「产出型技能」（2026-10-26）：服务端只下发「能独立出产物」的健康技能包
+ * （`internal_run_skill` ∧ 无依赖）——archify 出 HTML；依赖别人的规范补充包（如
+ * biz-process-lifecycle）不进菜单，改为被依赖时由执行链自动并入。
+ *
+ * <p><b>每次展开菜单都拉一次</b>（不做「一次性缓存」）：菜单项由服务端决定，后端新增/下架技能、
+ * 或调整过滤规则后，不该要求用户刷新整个页面才能看到——一次 GET 几十字节，比「改了看不见」便宜。</p>
+ *
+ * <p>加载失败静默降级为空：菜单只剩两个流程技能，对话主链完全不受影响。</p>
+ */
+const packageSkills = ref<ChatSkillOption[]>([])
+let packageSkillsLoading = false
+
+async function loadPackageSkills(): Promise<void> {
+  if (packageSkillsLoading) return
+  packageSkillsLoading = true
+  try {
+    packageSkills.value = await skillApi.chatOptions()
+  } catch {
+    // 静默：权限未开 / 网络失败时菜单不展示产出型技能，不打断用户
+  } finally {
+    packageSkillsLoading = false
+  }
+}
+
+function shortSkillDesc(desc: string | null | undefined): string {
+  const text = (desc ?? '').trim()
+  return text.length > 46 ? `${text.slice(0, 46)}…` : text
+}
+
+/** 当前挂的是否为产出型技能（`pkg:name`）。 */
+const activePackageName = computed(() => (activeSkill.value?.startsWith('pkg:')
+  ? activeSkill.value.slice(4) : null))
 
 const activeSkillLabel = computed(() => {
   if (activeSkill.value === 'planner') return '方案整理'
   if (activeSkill.value === 'task') return '直接拆解'
+  if (activePackageName.value) return activePackageName.value
   return ''
 })
 const activeSkillHint = computed(() => (activeSkill.value === 'planner'
   ? '方案整理：逐轮问清边界与取舍，再产出可执行方案'
   : activeSkill.value === 'task'
     ? '直接拆解：跳过澄清，按当前描述直接产出方案并建任务'
-    : ''))
+    : activePackageName.value
+      ? `${activePackageName.value}：按该技能当场生成文件，产物在对话里直接下载`
+      : ''))
 
 /** 从「＋」菜单选技能：收起菜单后挂成输入框里的胶囊，光标回到输入框（不发送）。 */
-function pickSkill(kind: 'planner' | 'task') {
+function pickSkill(kind: string) {
   plusMenuVisible.value = false
   if (skillDisabled.value) return
   activeSkill.value = kind
@@ -1379,6 +1474,13 @@ function introOf(content: string) {
   return idx === -1 ? content : content.slice(0, idx).trim()
 }
 
+/** 产物卡片上的大小文案（精确字节数在 payload 里，界面只给人类可读值）。 */
+function artifactSizeLabel(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 KB'
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
+
 // 消息流渲染行：结构化追问→引导语气泡 + 只读卡片（选择快照取下一条 user 消息）；
 // V41 起 assistant 消息 payload 含 webSearch 时随行渲染折叠查验条（实时消息与历史回显统一）；
 // 最后一条 ACTIVE 结构化追问由可交互卡片承接，此处不重复出只读卡；
@@ -1392,7 +1494,9 @@ const renderMessages = computed(() => {
     // 2026-10-18：过程数据（思考 + 检索步骤）随 payload 落库 ⇒ 历史消息也能回看，
     // 这是「思考过程在回复完成后消失」的根治点（此前只存在于 SSE 流里）
     const process: RoundProcessTrace | null = p?.process ?? null
-    if (!structured) return { msg, structured: null, intro: msg.content, selections: null, webSearch, process, liked: false }
+    // 2026-10-27：技能产物（选 archify 等产出型技能时，后端在对话轮内直接跑出文件）
+    const artifact: ClarifyArtifactRef | null = p?.artifact ?? null
+    if (!structured) return { msg, structured: null, intro: msg.content, selections: null, webSearch, process, artifact, liked: false }
     const interactive = i === msgs.length - 1 && activeStructured.value != null
     const next = msgs[i + 1]
     return {
@@ -1402,6 +1506,7 @@ const renderMessages = computed(() => {
       selections: next ? userSelectionsOf(next) : null,
       webSearch,
       process,
+      artifact,
       liked: false
     }
   })
@@ -1562,7 +1667,11 @@ async function handleSend() {
     return
   }
   // 直接拆解：补 /task 前缀走下方同步 create 分支（读 FINALIZED/taskId 联动审阅）
-  const text = activeSkill.value === 'task' ? `/task ${raw}` : raw
+  // 产出型技能：补 [skill:name] 前缀，后端据此剥出技能名、落 payload、建任务时写 required_skills
+  const pkgName = activePackageName.value
+  const text = pkgName
+    ? `[skill:${pkgName}] ${raw}`
+    : (activeSkill.value === 'task' ? `/task ${raw}` : raw)
   const skill = activeSkill.value
   // V40.2 /planner 斜杠命令：显式进入方案澄清模式（命令前缀不落消息）
   const cmd = text.match(PLANNER_COMMAND_RE)
@@ -1582,8 +1691,9 @@ async function handleSend() {
     const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
     // §6.169 /task 直达拆解：必须走同步 create —— 后端在这条路径上「建会话 + 直接建任务 +
     // 终稿直出」，前端要读返回的 FINALIZED/taskId 去联动打开草案审阅；流式通道只吐文本，
-    // 拿不到这个联动信号（服务端也明确拒绝斜杠命令走流式）。
-    if (isTaskCommand(text)) {
+    // 拿不到这个联动信号（服务端也明确拒绝斜杠命令 / 显式技能走流式）。
+    // 产出型技能同理：它也要建任务（技能要写进 required_skills 才会真的被执行链跑起来）。
+    if (isTaskCommand(text) || pkgName) {
       await sendSyncCreate(text, plannerId)
       return
     }
@@ -2506,6 +2616,75 @@ onMounted(() => {
   max-width: 100%;
   box-sizing: border-box;
 }
+/* 技能产物卡片（2026-10-27）：附在 assistant 气泡内的文件行 —— 打开走内联预览，下载走 attachment */
+.msg-artifact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--ha-border);
+  border-radius: var(--ha-radius-md);
+  background: var(--ha-surface);
+}
+.msg-artifact-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ha-radius-sm);
+  background: var(--ha-primary-light);
+  color: var(--ha-primary);
+  font-size: 16px;
+}
+.msg-artifact-meta {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.msg-artifact-name {
+  font-size: 13px;
+  color: var(--ha-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-artifact-sub {
+  font-size: 12px;
+  color: var(--ha-muted);
+}
+.msg-artifact-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.msg-artifact-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--ha-border);
+  border-radius: var(--ha-radius-sm);
+  background: var(--ha-surface-elevated);
+  color: var(--ha-ink);
+  font-size: 12px;
+  text-decoration: none;
+  transition: border-color var(--ha-duration-fast) var(--ha-ease-out),
+              color var(--ha-duration-fast) var(--ha-ease-out);
+}
+.msg-artifact-btn:hover {
+  border-color: var(--ha-primary);
+  color: var(--ha-primary);
+}
+.msg-artifact-btn.is-primary {
+  border-color: var(--ha-primary);
+  background: var(--ha-primary);
+  color: #fff;
+}
+.msg-artifact-btn.is-primary:hover {
+  color: #fff;
+  opacity: 0.9;
+}
 /*
  * 助手回复 = **文档流**，不是卡片（2026-10-18 对齐 DeepSeek / Kimi）
  *
@@ -2931,6 +3110,10 @@ onMounted(() => {
 .skill-token--task .skill-token-icon {
   color: var(--ha-accent-cyan);
 }
+/* 产出型技能（pkg:name）：类名不能直接拼技能名（冒号/连字符），统一用 package 变体 */
+.skill-token--package .skill-token-icon {
+  color: var(--ha-primary);
+}
 .skill-token-icon {
   font-size: 13px;
   color: var(--ha-ink-secondary);
@@ -3006,6 +3189,12 @@ onMounted(() => {
 :global(.plus-menu-popover) {
   padding: 6px !important;
 }
+/* 产出型技能是服务端下发的，条数不可预知（今天 2 个，将来可能更多）：
+   超过视口高度就在菜单内滚动，而不是把菜单顶出屏幕 */
+:global(.plus-menu-popover .plus-menu) {
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+}
 :global(.plus-menu-popover .plus-menu-group-title) {
   padding: 4px 8px 6px;
   font-size: 12px;
@@ -3049,6 +3238,8 @@ onMounted(() => {
   font-size: 13px;
   color: var(--ha-ink);
   line-height: 1.4;
+  /* 技能包名可能较长（biz-process-lifecycle），断行而不是撑宽菜单 */
+  word-break: break-word;
 }
 :global(.plus-menu-popover .plus-menu-desc) {
   font-size: 12px;

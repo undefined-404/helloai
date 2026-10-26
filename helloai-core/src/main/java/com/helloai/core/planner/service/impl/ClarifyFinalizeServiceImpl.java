@@ -8,6 +8,7 @@ import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.planner.clarify.SkillDirective;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.mapper.RequirementConversationMapper;
@@ -54,6 +55,9 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
     private final RequirementConversationMapper requirementConversationMapper;
     private final ObjectMapper objectMapper;
     private final ClarifyCommandSearchService commandSearch;
+
+    /** 显式技能（2026-10-26）：建任务时把用户选中的产出型技能包写进 required_skills。 */
+    private final SkillDirective skillDirective;
 
     @Override
     public TaskView finalize(Long conversationId) {
@@ -117,6 +121,92 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
     }
 
     /**
+     * 建任务时回填「用户显式选中的技能」（2026-10-26）。
+     *
+     * <p><b>为什么沿历史回溯而不存在会话表上</b>：技能是「一句消息」的属性——用户这一轮选了
+     * archify、下一轮可能换成业务流程图。挂 payload 与 {@code /task} 的「命令随消息走」同构，
+     * 建任务时取最近一次即可，且不改表结构。</p>
+     *
+     * <p><b>失败不阻断建任务</b>：技能回填是增强项，读消息/目录异常时退回空列表
+     * （= 与改造前的普通任务完全一致），而不是让用户点了「创建任务」却失败。</p>
+     *
+     * @param conversationId 会话 ID
+     * @return 技能标签（含依赖包，如 biz-process-lifecycle → [archify, biz-process-lifecycle]）
+     */
+    private List<String> skillsForTask(Long conversationId) {
+        try {
+            List<RequirementMessage> messages = messageService.listByConversation(conversationId);
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                RequirementMessage message = messages.get(i);
+                if (!ClarifyCommandSearchServiceImpl.ROLE_USER.equals(message.getRole())) {
+                    continue;
+                }
+                String skill = skillDirective.skillOfPayload(message.getPayload());
+                if (skill != null) {
+                    return skillDirective.requiredSkillsWithDependencies(skill);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("回溯显式技能失败（不阻断建任务）: conversationId={}, err={}", conversationId, e.getMessage());
+        }
+        return List.of();
+    }
+
+    /**
+     * 是否有在班 Agent 能承接这些技能标签（{@code required_skills} 是 AND 硬匹配）。
+     *
+     * <p><b>为什么必须探</b>：{@code AgentSelectionConstraints.denialReason} 对非空
+     * {@code required_skills} 要求 {@code agent.skills} 全部包含，否则拒绝派发。
+     * 平台技能包标签只在 Agent 注册 / 编辑时经
+     * {@code AgentSkillPolicyService#deriveSkillsForRegistration} 并入——新入库的技能包
+     * （如今天的 archify）不会自动出现在<b>存量</b> Agent 的 skills 里。
+     * 直接写进任务就会让子任务永久 PENDING（无人可选），比「不写」更糟。</p>
+     *
+     * <p>探测异常按「接不住」处理（fail-safe）：宁可退化成普通任务，也不制造卡死的任务。</p>
+     *
+     * @param skills 技能标签（含依赖）
+     * @return true=存在一个在班 Agent 的 skills 覆盖全部标签
+     */
+    private boolean anyActiveAgentSupports(List<String> skills) {
+        try {
+            List<List<String>> skillSets = agentService.listActiveSkillSets();
+            if (skillSets == null) {
+                return false;
+            }
+            for (List<String> set : skillSets) {
+                if (set != null && set.containsAll(skills)) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("显式技能承接面探测失败，按「接不住」处理: err={}", e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * 把「交付物须由该技能生成」写进任务描述（无论 required_skills 是否写得进去）。
+     *
+     * <p>为什么要写进描述而不是只靠 required_skills：required_skills 有降级路径（无 Agent 承接时
+     * 不写），但用户「我要一张图 / 一个 HTML」的意图不能因此丢失——拆解与执行都读得到描述。</p>
+     *
+     * @param description 终稿描述
+     * @param skills      技能标签（含依赖；空则原样返回）
+     * @return 追加交付要求后的描述
+     */
+    private String describeWithSkill(String description, List<String> skills) {
+        if (skills == null || skills.isEmpty()) {
+            return description;
+        }
+        // 依赖展开时自身排在最后（依赖在前），取最后一个即用户实际选中的技能
+        String skillName = skills.get(skills.size() - 1);
+        String base = description == null ? "" : description;
+        return base + "\n\n---\n\n**交付物要求**：本任务选定了技能包 `" + skillName + "`，"
+                + "交付物须是该技能生成的文件（如离线单文件 HTML），并在完成时导出为可下载附件，"
+                + "不要只交文字说明。";
+    }
+
+    /**
      * `B3`：记录 archetype 回落时间线事件（**观测位，不阻断建任务**）。
      *
      * <p>事件语义 = 「本任务的交付物原型不是模型判出来的，是兜底的」。下游看时间线即可判断
@@ -169,8 +259,19 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
         TaskArchetypeResolver.Decision archetypeDecision =
                 TaskArchetypeResolver.resolve(conversation.getFinalPackage());
         String archetype = archetypeDecision.value();
+        // 显式技能（2026-10-26）：写进 required_skills 才会被执行链展开成「技能规范 + requiredTools」。
+        // 但 required_skills 在选人处是 AND 硬匹配（agent.skills 必须全部包含），若没有任何在班 Agent
+        // 承接该标签，写进去会让子任务永久 PENDING——那比不写更糟。故先探一次承接面，接不住就降级。
+        List<String> requiredSkills = skillsForTask(conversationId);
+        List<String> effectiveSkills = requiredSkills;
+        if (!requiredSkills.isEmpty() && !anyActiveAgentSupports(requiredSkills)) {
+            log.warn("显式技能无在班 Agent 承接，降级为不写 required_skills（防子任务永久 PENDING）: "
+                    + "conversationId={}, skills={}", conversationId, requiredSkills);
+            effectiveSkills = List.of();
+        }
         TaskView task = taskService.createFromDraft(new TaskDraft(conversation.getFinalTitle(),
-                conversation.getFinalDescription(), TaskStatus.PENDING, context, archetype));
+                describeWithSkill(conversation.getFinalDescription(), requiredSkills),
+                TaskStatus.PENDING, context, archetype, effectiveSkills));
         log.info("澄清终稿建任务: conversationId={}, taskId={}, title={}, event={}, archetype={}, fallback={}",
                 conversationId, task.id(), task.title(), timelineEvent, archetype,
                 archetypeDecision.fallbackReason());

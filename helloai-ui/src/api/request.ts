@@ -18,6 +18,9 @@ const ERROR_BY_CALLER_URL_PREFIXES = [
   // 技能目录（REF-1.2c）：由 skillCatalog store 懒加载并静默降级（未命中回退原始标签），
   // 失败不弹错——否则每打开一次含技能下拉的弹窗就会弹一次红条。
   '/skills/catalog',
+  // 对话「＋→技能」产出型技能清单（2026-10-26）：随菜单懒加载，失败静默降级为空菜单，
+  // 不能因为一次拉取失败在用户正在输入时弹红条。
+  '/skills/chat-options',
   // 事件码目录（REF-6.8）：由 eventCatalog store 懒加载并静默降级（未命中回退原始码），
   // 失败不弹错——否则每个事件时间线渲染都会弹错。baseURL 已含 /api，此处用相对路径（对齐 skills/catalog）。
   '/events/catalog',

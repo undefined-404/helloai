@@ -9,6 +9,7 @@ import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
@@ -22,6 +23,8 @@ import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
 import com.helloai.core.planner.clarify.ConfirmCardProtocol;
 import com.helloai.core.planner.clarify.RelativeTimeNormalizer;
 import com.helloai.core.planner.clarify.SearchGapAssessor;
+import com.helloai.core.planner.clarify.SkillDirective;
+import com.helloai.core.planner.skill.ConversationSkillRunner;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.policy.RequirementPackageParser;
 import com.helloai.core.planner.policy.TaskContextKeys;
@@ -192,20 +195,26 @@ class RequirementClarifyServiceTest {
                 messageService, conversationService, longTermMemoryService, new SystemTimeContextBuilder(),
                 taskTimelineService, platformAgentExecutionService, plannerAgentPicker, replyParser,
                 commandSearch, attachmentPromptRenderer);
+        // 显式技能（2026-10-26）：解析 / 渲染都依赖技能目录；测试只需「无技能前缀」路径，
+        // mock 目录即可（技能正文注入用例见 SkillDirectiveTest）
+        SkillDirective skillDirective = new SkillDirective(mock(AgentSkillSpecService.class), new ObjectMapper());
         finalizeService = new ClarifyFinalizeServiceImpl(
                 conversationService, messageService, taskService, agentService, agentInboxService,
                 taskTimelineService, longTermMemoryService, requirementConversationMapper,
-                new ObjectMapper(), commandSearch);
+                new ObjectMapper(), commandSearch, skillDirective);
         orchestrator = new ClarifyRoundOrchestratorServiceImpl(
                 commandSearch, promptRenderService, finalizeService, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
                 new ChatRoundDecisionParser(new ObjectMapper()), webSearchOrchestrator,
+                skillDirective,
+                // 对话内技能执行（2026-10-27）：主链回归不触发技能轮，mock 即可
+                mock(ConversationSkillRunner.class),
                 // TD-8：stall 守卫（用户信息量判据）接入后新增的构造参数
                 new ClarifyStallGuard(new ObjectMapper()), mock(ChatAttachmentService.class));
         streamService = new ClarifyStreamServiceImpl(
                 orchestrator, promptRenderService, commandSearch, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
-                webSearchOrchestrator);
+                webSearchOrchestrator, skillDirective);
         clarifyService = new RequirementClarifyServiceImpl(
                 conversationService, messageService, taskService, plannerAgentPicker,
                 orchestrator, streamService, finalizeService, commandSearch);

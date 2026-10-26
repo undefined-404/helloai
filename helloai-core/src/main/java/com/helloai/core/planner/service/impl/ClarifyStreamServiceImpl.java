@@ -8,6 +8,7 @@ import com.helloai.core.planner.clarify.ChatRoundDecisionParser;
 import com.helloai.core.planner.clarify.ClarifyReplyParser;
 import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
 import com.helloai.core.planner.clarify.ConfirmCardProtocol;
+import com.helloai.core.planner.clarify.SkillDirective;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.search.WebSearchOutcome;
@@ -64,6 +65,9 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
     private final ConfirmCardProtocol confirmCardProtocol;
     private final ClarifyWebSearchOrchestrator webSearchOrchestrator;
 
+    /** 显式技能判定（2026-10-26）：技能消息不走流式，与 /task 同口径拒绝。 */
+    private final SkillDirective skillDirective;
+
     @Override
     public Flux<ChatStreamEvent> streamRound(Long conversationId, String message,
                                              List<ClarifySelection> selections) {
@@ -90,9 +94,12 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
             throw new BizException("消息不能为空");
         }
         RequirementConversation conversation = commandSearch.requireActive(conversationId);
-        // 斜杠命令（/planner /task）暂不支持流式，保持普通发送（结构化轮次前端走同步）
-        if (commandSearch.isTaskCommand(trimmed) || commandSearch.isPlannerCommand(trimmed)) {
-            throw new BizException("斜杠命令暂不支持流式，请使用普通发送");
+        // 斜杠命令（/planner /task）与显式技能（[skill:name]）暂不支持流式，保持普通发送：
+        // 三者的共同点是「服务端要读返回值做联动」（切模式 / 建任务 / 写 required_skills），
+        // 流式通道只吐文本，带不出这个信号。
+        if (commandSearch.isTaskCommand(trimmed) || commandSearch.isPlannerCommand(trimmed)
+                || skillDirective.isSkillCommand(trimmed)) {
+            throw new BizException("命令与技能暂不支持流式，请使用普通发送");
         }
         // 确认卡前置处理（2026-10-18）：与同步 runLlmRound 共用同一方法——确认即切 CLARIFY
         // 并清标记（随后按 CLARIFY 分支流式出回复），非确认消息仅清标记继续对话。
@@ -278,9 +285,11 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
         if (trimmed.isEmpty()) {
             throw new BizException("首条消息不能为空");
         }
-        // 斜杠命令（/planner /task）由同步链路处理（命令语义依赖同步返回值触发后续流转）
-        if (commandSearch.isTaskCommand(trimmed) || commandSearch.isPlannerCommand(trimmed)) {
-            throw new BizException("斜杠命令暂不支持流式，请使用普通发送");
+        // 斜杠命令（/planner /task）与显式技能（[skill:name]）由同步链路处理：
+        // 三者的后续流转都依赖同步返回值（切模式 / 建任务 / required_skills 落库）。
+        if (commandSearch.isTaskCommand(trimmed) || commandSearch.isPlannerCommand(trimmed)
+                || skillDirective.isSkillCommand(trimmed)) {
+            throw new BizException("命令与技能暂不支持流式，请使用普通发送");
         }
         RequirementConversation conversation =
                 orchestrator.createConversation(trimmed, plannerAgentId, webSearchEnabled, clientToken);

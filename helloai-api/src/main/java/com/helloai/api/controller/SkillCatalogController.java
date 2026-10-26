@@ -1,12 +1,14 @@
 package com.helloai.api.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import com.helloai.api.dto.skill.ChatSkillOption;
 import com.helloai.api.dto.skill.SkillPackageResponse;
 import com.helloai.common.base.R;
 import com.helloai.core.agent.skill.SkillCatalogEntry;
 import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.agent.skill.SkillPackageCatalog;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -30,6 +32,7 @@ import java.util.List;
  * <p>命名：{@code skills} + {@code catalog}（平台能力包），刻意区别于
  * {@code AdminAgentController.getMySkillZipByAgentId}（Agent 角色接入手册 ZIP）。</p>
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/skills")
 @RequiredArgsConstructor
@@ -38,12 +41,51 @@ public class SkillCatalogController {
     /** 描述中用作 label 分隔的全角冒号。 */
     private static final char DESCRIPTION_SEPARATOR = '：';
 
+    /** 「能在沙箱里执行技能 CLI」的工具名（技能包 frontmatter 的 requiredTools 里声明）。 */
+    private static final String RUN_SKILL_TOOL = "internal_run_skill";
+
     private final SkillPackageCatalog skillPackageCatalog;
 
     @SaCheckPermission("skill:view")
     @GetMapping("/catalog")
     public R<List<SkillPackageResponse>> catalog() {
         return R.ok(skillPackageCatalog.entries().stream().map(this::toResponse).toList());
+    }
+
+    /**
+     * 需求对话「＋→技能」可选清单（2026-10-26，2026-10-27 收紧）。
+     *
+     * <p><b>只返回「能独立出产物」的技能包</b>，两条判据同时成立：</p>
+     * <ol>
+     *   <li>{@code requiredTools} 声明了 {@code internal_run_skill}——有它才能在沙箱里跑技能 CLI，
+     *       产物才能经 {@code internal_export_artifact} 变成可下载附件。{@code eng-*} 那批是写作规范，
+     *       混进菜单会让用户以为点了就会出文件。</li>
+     *   <li>{@code dependencies} 为空——声明了依赖的包是「某个技能的规范补充」，不是独立入口。
+     *       典型例子 {@code biz-process-lifecycle}：它只写「状态机该怎么建」，真正渲染靠依赖包
+     *       {@code archify}。单列进菜单会让人以为选它就能出图，实际还要靠 archify 才跑得起来。
+     *       这类包改为「被依赖时自动并入」：用户选 archify，执行链按 {@code SkillDirective}
+     *       的依赖展开把它一起带上（需要建模纪律时仍然拿得到）。</li>
+     * </ol>
+     *
+     * <p><b>权限刻意不同</b>：目录端点要 {@code skill:view}（管理面），本端点只要
+     * {@code conversation:add}——需求方不该为了选个画图技能去申请技能库权限。</p>
+     */
+    @SaCheckPermission("conversation:add")
+    @GetMapping("/chat-options")
+    public R<List<ChatSkillOption>> chatOptions() {
+        List<SkillCatalogEntry> entries = skillPackageCatalog.entries();
+        List<ChatSkillOption> options = entries.stream()
+                .filter(SkillCatalogEntry::healthy)
+                .map(SkillCatalogEntry::spec)
+                .filter(spec -> spec.requiredTools().contains(RUN_SKILL_TOOL))
+                .filter(spec -> spec.dependencies().isEmpty())
+                .map(spec -> new ChatSkillOption(spec.name(), spec.version(), spec.description()))
+                .toList();
+        // 可观测性：菜单内容由服务端决定，「改了看不见」时第一现场就是这条日志
+        // （过滤掉谁也要能看见——否则分不清「没下发」还是「前端没刷新」）。
+        log.info("对话技能菜单下发 {} 项: {}；候选 {} 项（已排除规范类与依赖类）",
+                options.size(), options.stream().map(ChatSkillOption::name).toList(), entries.size());
+        return R.ok(options);
     }
 
     private SkillPackageResponse toResponse(SkillCatalogEntry entry) {

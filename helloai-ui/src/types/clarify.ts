@@ -22,9 +22,27 @@ export interface ClarifyQuestion {
   options: ClarifyOption[]
 }
 
-/** assistant 消息 payload：{mode, progress, questions, webSearch} */
+/**
+ * 对话内技能产物引用（assistant payload.artifact，2026-10-27）。
+ *
+ * 选技能（如 archify）后由平台在对话轮内直接跑出文件并登记为会话附件，
+ * 前端据此渲染「产物卡片」——`attachmentId` 同时可用于内联预览与下载。
+ */
+export interface ClarifyArtifactRef {
+  /** 会话附件 ID（chat_attachment.id），用于 previewById / downloadById */
+  attachmentId: string
+  fileName: string
+  fileSize: number
+  /** SHA-256（与技能 CLI 回执对账用；缺省为空串） */
+  sha256?: string
+  /** 图表类型（lifecycle / workflow / …；其它技能可能为空） */
+  chartType?: string
+}
+
+/** assistant 消息 payload：{mode, progress, questions, webSearch, process, artifact} */
 export interface ClarifyAssistantPayload {
-  mode: 'structured' | 'freeform'
+  // mode 缺失 = 普通文本回复（技能产物消息、纯答疑都不带 mode）
+  mode?: 'structured' | 'freeform'
   // LLM 对澄清程度的 0~100 自评（仅展示）
   progress?: number | null
   questions?: ClarifyQuestion[]
@@ -32,6 +50,10 @@ export interface ClarifyAssistantPayload {
   webSearch?: WebSearchTrace
   // 2026-10-18 过程数据：思考全文 + 平台动作步骤（done 后/刷新后仍可回看）
   process?: RoundProcessTrace
+  // 2026-10-27 技能产物（选「产出型技能」时由后端直接执行技能生成）
+  artifact?: ClarifyArtifactRef
+  /** payload 类型标记（当前仅 'artifact'） */
+  type?: string
 }
 
 /** 一轮对话的过程数据（assistant payload.process，对齐 DeepSeek「已深度思考」/ ChatGPT「Thinking」） */

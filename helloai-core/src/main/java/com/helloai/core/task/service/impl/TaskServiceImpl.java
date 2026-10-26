@@ -465,6 +465,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setContext(draft.context());
         // TD-4：archetype 由消费方（澄清链路终稿判定）显式传入；null/非法值回落 BUILD（TaskArchetype.parse 收口）
         task.setTaskArchetype(com.helloai.common.constant.TaskArchetype.parse(draft.taskArchetype()));
+        // 2026-10-26：对话「＋→技能」选中的技能包随草稿下发；空列表保持库默认值（行为与改造前一致）
+        if (!draft.requiredSkills().isEmpty()) {
+            task.setRequiredSkills(draft.requiredSkills());
+        }
         save(task);
         return getView(task.getId());
     }

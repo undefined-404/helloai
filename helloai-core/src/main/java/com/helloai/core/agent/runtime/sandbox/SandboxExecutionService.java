@@ -28,6 +28,26 @@ public interface SandboxExecutionService {
     ExecuteResponse execute(Long subTaskId, String command, Integer timeoutSeconds);
 
     /**
+     * 按<b>显式规格</b>执行一次命令（`SKX-5`，2026-10-26）。
+     *
+     * <p>与三参版本的唯一差别是「用哪个规格建沙箱」：{@code spec == null} ⇒ 全局默认
+     * （{@code helloai.sandbox.opensandbox.spec}）；非 null ⇒ 按该规格建，且复用槽的键带上
+     * <b>规格指纹</b>，使同一子任务的 python 槽与 node 槽互不串用（否则第二次调用会拿到
+     * 没有目标运行时的旧容器）。</p>
+     *
+     * <p><b>默认实现忽略规格并委托三参版本</b>：不支持分层的实现（未来可能的内存 / 环境沙箱）
+     * 行为不变，调用方无需按实现类型分支。</p>
+     *
+     * @param subTaskId      调用方子任务 ID（可为 null）
+     * @param spec           沙箱规格；null ⇒ 全局默认
+     * @param command        命令（bash -lc 语义）
+     * @param timeoutSeconds 超时秒数；null / <=0 ⇒ 默认 30，上限 300
+     */
+    default ExecuteResponse execute(Long subTaskId, SandboxSpec spec, String command, Integer timeoutSeconds) {
+        return execute(subTaskId, command, timeoutSeconds);
+    }
+
+    /**
      * 释放某子任务的<b>复用</b>工作沙箱（`ADR-005` 生命周期出口，2026-10-25）。
      *
      * <p>对齐 deepseek-harness `dsh-tool-bash-persistent` 的口径：同一子任务内的多次调用
@@ -66,6 +86,75 @@ public interface SandboxExecutionService {
      * @return 文件正文；无工作区 / 无 {@code .md} / 读取失败 ⇒ {@code null}
      */
     default String readWorkspaceFile(Long subTaskId) {
+        return null;
+    }
+
+    /**
+     * 把 classpath 里的技能包注入该子任务的复用工作区（`SKX-6`，2026-10-26）。
+     *
+     * <p><b>为什么是「注入」而不是「让模型自己下载」</b>：沙箱默认禁出网（`SKX-5` 起显式
+     * {@code deny}），模型无法 {@code npm install} / {@code curl} 取包；且执行依赖必须
+     * <b>可复现</b>——同一版本镜像 + 同一版本包，才能让「昨天跑通的东西今天还跑得通」。</p>
+     *
+     * <p><b>落点</b>：{@code /workspace/skills/<packageName>/}，保持包内相对结构不变
+     * （容器内默认<b>没有</b> {@code /workspace}，实现须自行建目录）。</p>
+     *
+     * <p><b>幂等</b>：目标目录已有同版本同内容的标记文件 ⇒ 直接返回
+     * {@code skipped=true} 的成功结果，不重写 122 个文件；内容不同 ⇒ 覆盖写（写是覆盖语义，
+     * 天然可重入）。</p>
+     *
+     * <p><b>规格</b>：注入按 {@code spec} 建/取槽（与 {@link #execute} 同一把键：子任务 + 规格指纹），
+     * 因此「先装包、再跑命令」两次调用会命中<b>同一个</b>容器——这正是技能执行的前提。
+     * 传 {@code null} ⇒ 全局默认规格（python），此时装进去的 node 技能包<b>跑不起来</b>，
+     * 调用方应显式传技能规格。</p>
+     *
+     * <p><b>默认实现返回失败</b>：不支持文件注入的实现（未来可能的内存沙箱）不必假装成功——
+     * 让上层看到「没有技能可用」并降级，比「装了个空包然后命令报 not found」好排查。</p>
+     *
+     * @param subTaskId   子任务 ID（复用槽键的一部分；{@code null} ⇒ 失败，一次性沙箱装完即销毁无意义）
+     * @param spec        建槽用的规格（{@code null} ⇒ 全局默认）
+     * @param packageName 包名（对应 {@code classpath:skills/packages/<packageName>/}）
+     * @param version     版本（对应包目录名）
+     * @return 注入结果（失败也结构化返回，不抛异常）
+     */
+    default SkillInstallResult installSkillPackage(Long subTaskId, SandboxSpec spec,
+                                                   String packageName, String version) {
+        return SkillInstallResult.fail("skill install unsupported by "
+                + getClass().getSimpleName());
+    }
+
+    /**
+     * {@link #installSkillPackage(Long, SandboxSpec, String, String)} 的默认规格重载。
+     *
+     * @param subTaskId   子任务 ID
+     * @param packageName 包名
+     * @param version     版本
+     */
+    default SkillInstallResult installSkillPackage(Long subTaskId, String packageName, String version) {
+        return installSkillPackage(subTaskId, null, packageName, version);
+    }
+
+    /**
+     * 按<b>指定路径</b>回读沙箱内的一份产物（`SKX-7`，2026-10-26）。
+     *
+     * <p><b>为什么不能复用 {@link #readWorkspaceFile}</b>：那条通道是「挑工作区里最大的 .md」，
+     * 只服务「对话正文兜底捞回」一个场景。技能产物是<b>调用方知道确切路径</b>的（{@code /workspace/out/x.html}），
+     * 且必须是<b>字节级原样</b>——回读要能算 {@code sha256} 与工具回执对账。</p>
+     *
+     * <p><b>为什么走 SDK 文件通道而不是命令</b>：命令输出有 100,000 字符全局截断
+     * （{@code MAX_OUTPUT_CHARS}），834KB HTML 的 base64 必然被截断；且单次
+     * {@code commands().run()} 固定开销 ≈1s，而 {@code readByteArray} 读回 823KB 实测 34ms。
+     * 任一理由都足以否掉命令通路（`SKX-3` 实测，计划 §2.4 第 30/33 条）。</p>
+     *
+     * <p><b>只读语义</b>：无活跃槽 ⇒ {@code null}（不为读文件新建沙箱）；路径不存在 ⇒ {@code null}；
+     * 失败一律降级为 {@code null}，不抛异常（与 {@link #readWorkspaceFile} 同一条容错哲学）。</p>
+     *
+     * @param subTaskId 子任务 ID（定位复用槽；{@code null} ⇒ {@code null}）
+     * @param path      容器内<b>绝对路径</b>（如 {@code /workspace/out/archify.html}）；含 {@code ..} 或非绝对 ⇒ {@code null}
+     * @param maxBytes  单次回读上限（字节）；{@code <=0} ⇒ 默认 4MB。超限时读前 N 字节并置 {@code truncated=true}
+     * @return 回读结果；不可读 ⇒ {@code null}
+     */
+    default SandboxArtifact readArtifact(Long subTaskId, String path, int maxBytes) {
         return null;
     }
 }

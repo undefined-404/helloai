@@ -118,6 +118,29 @@ public class ChatAttachmentController {
         return new ResponseEntity<>(payload.content(), headers, HttpStatus.OK);
     }
 
+    /**
+     * 下载附件（{@code attachment} 语义，2026-10-27）。
+     *
+     * <p><b>为什么与 preview 分开而不是加个参数</b>：两者对浏览器的指令不同——
+     * {@code inline} 让 HTML 直接在标签页里渲染（技能产物「看图」的场景），
+     * {@code attachment} 才会落盘（「拿到文件」的场景）。产物卡片上的「下载」按钮
+     * 走这条，避免用户点了之后只能在浏览器里另存为。</p>
+     *
+     * <p>与 preview 共用同一条读取通道与同一把大小尺子（超过 5MB 仍返回 413）：
+     * 不走两套字节通路，才不会出现「能预览但下载不了」的分叉。</p>
+     */
+    @SaCheckPermission("conversation:add")
+    @GetMapping("/downloadById/{id}")
+    public ResponseEntity<byte[]> downloadById(@PathVariable("id") Long id) {
+        PreviewPayload payload = chatAttachmentService.preview(id);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentDisposition(ContentDisposition.attachment()
+                .filename(payload.fileName(), StandardCharsets.UTF_8)
+                .build());
+        headers.setContentType(MediaType.parseMediaType(payload.contentType()));
+        return new ResponseEntity<>(payload.content(), headers, HttpStatus.OK);
+    }
+
     /** MultipartFile → 领域上传对象；读失败属请求层错误，转 400。 */
     private static UploadFile toUploadFile(MultipartFile file) {
         try {

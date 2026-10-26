@@ -103,9 +103,11 @@ class AgentSkillSpecServiceImplTest {
     @DisplayName("listPackages：声明顺序返回全部技能包，元数据字段非空")
     void shouldListAllPackagesInDeclarationOrder() {
         List<SkillPackage> packages = service.listPackages();
-        assertThat(packages).hasSize(4);
+        // archify（SKX-11）与 biz-process-lifecycle（业务状态机建模）均于 2026-10-26 补入。
+        assertThat(packages).hasSize(6);
         assertThat(packages).extracting(SkillPackage::name)
-                .containsExactly("eng-code-review", "eng-doc-standard", "eng-verification", "eng-web-research");
+                .containsExactly("archify", "biz-process-lifecycle", "eng-code-review",
+                        "eng-doc-standard", "eng-verification", "eng-web-research");
         packages.forEach(p -> {
             assertThat(p.version()).isNotBlank();
             assertThat(p.description()).isNotBlank();

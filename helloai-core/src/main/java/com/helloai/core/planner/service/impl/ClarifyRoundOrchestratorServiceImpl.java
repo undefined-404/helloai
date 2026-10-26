@@ -10,10 +10,12 @@ import com.helloai.core.planner.clarify.ClarifyReplyParser;
 import com.helloai.core.planner.clarify.ClarifyStallGuard;
 import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
 import com.helloai.core.planner.clarify.ConfirmCardProtocol;
+import com.helloai.core.planner.clarify.SkillDirective;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.search.WebSearchOutcome;
+import com.helloai.core.planner.skill.ConversationSkillRunner;
 import com.helloai.core.planner.service.ChatAttachmentService;
 import com.helloai.core.planner.service.ClarifyCommandSearchService;
 import com.helloai.core.planner.service.ClarifyFinalizeService;
@@ -71,6 +73,12 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     private final ConfirmCardProtocol confirmCardProtocol;
     private final ChatRoundDecisionParser decisionParser;
     private final ClarifyWebSearchOrchestrator webSearchOrchestrator;
+
+    /** 显式技能指令（2026-10-26）：「＋→技能」里选中的产出型技能包，解析 / 渲染 / 落 required_skills。 */
+    private final SkillDirective skillDirective;
+
+    /** 对话内技能执行（2026-10-27）：选技能即当场跑 CLI 出文件，产物落成会话附件。 */
+    private final ConversationSkillRunner conversationSkillRunner;
 
     /** TD-8 澄清侧 stall 守卫（用户信息量判据，纯函数）。 */
     private final ClarifyStallGuard stallGuard;
@@ -293,6 +301,12 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     public ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage,
                                              String userPayload) {
         Long conversationId = conversation.getId();
+        // 显式技能（2026-10-27 起）：用户在「＋→技能」里选了产出型技能包（[skill:name] 前缀）。
+        // 语义是「这一轮就出文件」——当场注入技能包、跑 CLI、把产物落成会话附件，
+        // **不建任务、不进拆解**（建任务派子任务是 /task 的语义，对「画一张图」全是噪声）。
+        if (skillDirective.isSkillCommand(userMessage)) {
+            return runSkillRound(conversation, userMessage);
+        }
         // /task 直达拆解命令（任意模式优先）：切 CLARIFY + 终稿直出轮，
         // LLM 产出 final 即自动建任务（信息严重不足自动降级追问，不建任务）
         if (commandSearch.isTaskCommand(userMessage)) {
@@ -367,6 +381,62 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     }
 
     /**
+     * 显式技能轮（2026-10-27）：选中的产出型技能<b>当场执行</b>，产物落成会话附件。
+     *
+     * <p><b>与 {@code runTaskDirectRound} 的分工</b>：那边是「把需求变成待拆解的任务」，
+     * 这边是「这一轮就把文件给你」。用户选 archify 说「画一张支付生命周期图」，
+     * 期望的是立刻看到图，而不是一个待拆解任务——后者还要经过 PLANNER 拆解、选人、执行、评审。</p>
+     *
+     * <p><b>失败落到对话里而不是抛给 HTTP</b>：生成失败（模型抽不出输入 / CLI 校验不过）是
+     * 业务上完全可能发生的一种<b>结果</b>，用户在对话里能看到原因才谈得上改需求重试；
+     * 抛出去只会变成一个红色 toast，前一句需求还留在历史里没解释。</p>
+     */
+    private ClarifyConversationDetail runSkillRound(RequirementConversation conversation, String userMessage) {
+        Long conversationId = conversation.getId();
+        SkillDirective.Parsed parsed = skillDirective.parse(userMessage);
+        String skillName = parsed.skillName();
+        String need = parsed.text();
+        if (need.isEmpty()) {
+            throw new BizException("请说明要生成什么内容（例如「画一张分布式支付的生命周期图」）");
+        }
+        // 用户消息：文本剥掉前缀，技能名进 payload（气泡只展示原文，历史仍可回溯选了哪个技能）
+        messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, need,
+                skillDirective.mergePayload(null, skillName));
+        int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
+        conversation.setRoundCount(rounds + 1);
+        conversationService.updateById(conversation);
+        log.info("对话内技能执行开始: conversationId={}, skill={}, needLen={}",
+                conversationId, skillName, need.length());
+
+        ConversationSkillRunner.Result result;
+        try {
+            result = conversationSkillRunner.run(conversationId, conversation.getPlannerAgentId(),
+                    null, skillName, need);
+        } catch (BizException e) {
+            log.warn("对话内技能执行失败: conversationId={}, skill={}, reason={}",
+                    conversationId, skillName, e.getMessage());
+            messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT,
+                    "生成失败：" + e.getMessage() + "\n\n可以补充更具体的描述后重试（例如把节点、状态、事件说清）。");
+            return new ClarifyConversationDetail(conversation,
+                    messageService.listByConversation(conversationId));
+        }
+        String content = "已生成 `" + result.chartType() + "` 图，产物见下方附件（"
+                + readableSize(result.fileSize()) + "）。";
+        messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT, content,
+                conversationSkillRunner.payloadOf(result));
+        return new ClarifyConversationDetail(conversation,
+                messageService.listByConversation(conversationId));
+    }
+
+    /** 人类可读的文件大小（消息正文用；精确字节数在 payload 里）。 */
+    private static String readableSize(long bytes) {
+        if (bytes >= 1024L * 1024L) {
+            return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
+        }
+        return Math.max(1, Math.round(bytes / 1024.0)) + " KB";
+    }
+
+    /**
      * /task 直达拆解轮：需求描述即终稿输入，跳过多轮澄清直接产出终稿并建任务（信息严重不足自动降级追问）。
      */
     private ClarifyConversationDetail runTaskDirectRound(RequirementConversation conversation,
@@ -377,15 +447,19 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
             conversation.setPendingClarifyConfirm(false);
             conversationService.updateById(conversation);
         }
-        String extraText = commandSearch.taskCommandExtra(userMessage);
+        // 2026-10-27 起显式技能不再走本方法（改为 runSkillRound 当场执行）；
+        // 这里保留解析只为「历史消息里带过 [skill:x]」的兼容：旧数据 /task 消息 parse 出 null，行为不变。
+        SkillDirective.Parsed parsed = skillDirective.parse(userMessage);
+        String extraText = parsed.hasSkill() ? parsed.text() : commandSearch.taskCommandExtra(userMessage);
         if (!extraText.isEmpty()) {
-            messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, extraText, null);
+            messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, extraText,
+                    parsed.hasSkill() ? skillDirective.mergePayload(null, parsed.skillName()) : null);
             int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
             conversation.setRoundCount(rounds + 1);
             conversationService.updateById(conversation);
         }
-        log.info("/task 直达拆解轮: conversationId={}, extraLen={}",
-                conversationId, extraText.length());
+        log.info("/task 直达拆解轮: conversationId={}, extraLen={}, skill={}",
+                conversationId, extraText.length(), parsed.skillName());
         WebSearchOutcome webSearchOutcome = null;
         if (commandSearch.isWebSearchEnabled(conversation)) {
             webSearchOutcome = webSearchOrchestrator.doWebSearch(
@@ -400,7 +474,10 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         Long conversationId = conversation.getId();
         String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
-        String prompt = promptRenderService.renderFinalizePrompt(conversationId, webSearchContext);
+        // 显式技能：把技能正文（frontmatter 之外的执行规范）追加到 prompt 末尾。
+        // 追加而非另开参数：模板是完整指令集，末尾段的「本轮显式技能」语义上就是本轮附加约束。
+        String skillInstruction = skillDirective.renderInstruction(latestUserSkill(conversationId));
+        String prompt = promptRenderService.renderFinalizePrompt(conversationId, webSearchContext) + skillInstruction;
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
                 .userPrompt(prompt)
@@ -444,6 +521,30 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         }
         return new ClarifyConversationDetail(conversation,
                 messageService.listByConversation(conversationId));
+    }
+
+    /**
+     * 最近一次用户显式选中的技能（沿消息历史反向找）。
+     *
+     * <p>只认 user 消息：技能是「用户本轮选了什么」，助手消息上的 payload 是过程数据
+     * （检索步骤 / 思考），混读会把历史检索信息误当成技能。</p>
+     *
+     * @param conversationId 会话 ID
+     * @return 技能包名；从未选择过返回 {@code null}
+     */
+    private String latestUserSkill(Long conversationId) {
+        List<RequirementMessage> messages = messageService.listByConversation(conversationId);
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            RequirementMessage message = messages.get(i);
+            if (!ClarifyCommandSearchServiceImpl.ROLE_USER.equals(message.getRole())) {
+                continue;
+            }
+            String skill = skillDirective.skillOfPayload(message.getPayload());
+            if (skill != null) {
+                return skill;
+            }
+        }
+        return null;
     }
 
     @Override
@@ -567,7 +668,10 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         Long conversationId = conversation.getId();
         String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
-        String prompt = promptRenderService.renderFinalizePrompt(conversationId, webSearchContext);
+        // 显式技能：把技能正文（frontmatter 之外的执行规范）追加到 prompt 末尾。
+        // 追加而非另开参数：模板是完整指令集，末尾段的「本轮显式技能」语义上就是本轮附加约束。
+        String skillInstruction = skillDirective.renderInstruction(latestUserSkill(conversationId));
+        String prompt = promptRenderService.renderFinalizePrompt(conversationId, webSearchContext) + skillInstruction;
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
                 .userPrompt(prompt)

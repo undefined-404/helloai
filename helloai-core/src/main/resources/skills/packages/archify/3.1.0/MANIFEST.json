@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "versionAnchor": "skill-release.json",
+  "upstreamCommit": "c21c31ffb879668900c5487ea24993bf45d89b15",
+  "upstreamRetrievedAt": "2026-10-14",
+  "patch": "none",
+  "fileCount": 122,
+  "totalBytes": 4330504,
+  "countsExclude": [
+    "MANIFEST.json"
+  ],
+  "trimmed": {
+    "policy": "blacklist",
+    "removedFileCount": 35,
+    "removedGlobs": [
+      "examples/**"
+    ],
+    "keptExceptions": [
+      "examples/agent-run.lifecycle.json",
+      "examples/agent-tool-call.workflow.json",
+      "examples/cache-miss-request.sequence.json",
+      "examples/checkout-platform.base.architecture.json",
+      "examples/checkout-platform.head.architecture.json",
+      "examples/checkout-request.waterfall.json",
+      "examples/orders.erd.json",
+      "examples/payment-incident.timeline.json",
+      "examples/payment-platform.tree.json",
+      "examples/payments.class.json",
+      "examples/product-analytics.dataflow.json",
+      "examples/web-app.architecture.json"
+    ],
+    "reasons": [
+      "examples/ 只作参考产物（12MB / 47 文件），出图不需要",
+      "但 doctor 与 compare 需要 12 份固件（10 类型样例 + checkout-platform.base/head），删掉会让自检 13 项报 missing",
+      "scripts/ 与其余顶层项一律保留：brand-marks 被 9 个文件引用、delta 被 4 个（archify.mjs 动态 import）、recipes/migrations 各被 1 个"
+    ]
+  },
+  "sha256Tree": "ffe179d2869d7b5c15cf277a87447bedad43c47b76a8955aa0311732f53f515f",
+  "sha256TreeAlgorithm": "sha256 over lines '<file sha256>  <relative path>\\n', sorted by relative path (LC_ALL=C)"
+}

@@ -151,6 +151,12 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
             "internal_load_skill",
             "internal_report_blocked",
             "internal_run_in_sandbox",
+            // SKX-8（2026-10-26）：技能执行面。可用性由 SkillExecutionToolContributor 声明
+            // （沙箱未启用 / 无入库技能包 ⇒ 从模型可见列表摘除），此处只做「授权面」登记。
+            "internal_run_skill",
+            "internal_read_artifact",
+            // SKX-11（2026-10-26）：沙箱产物落地为附件。可用性同 read_artifact（只看沙箱启用）。
+            "internal_export_artifact",
             "web_search",
             "search_knowledge"
     );

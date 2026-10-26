@@ -1,0 +1,320 @@
+{
+  "schema_version": 3,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "分布式支付生命周期",
+    "subtitle": "主进度 / 等待与中断 / 全部终态 —— 一条边一个真实事件",
+    "locale": "zh-CN",
+    "output": "out/payment-lifecycle.html",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "legend": {
+      "mode": "all",
+      "entries": {
+        "start": {
+          "label": "起点"
+        },
+        "active": {
+          "label": "主进度"
+        },
+        "waiting": {
+          "label": "等待 / 中断"
+        },
+        "external": {
+          "label": "外部持有"
+        },
+        "success": {
+          "label": "成功终态"
+        },
+        "failure": {
+          "label": "失败终态"
+        }
+      }
+    }
+  },
+  "mainPath": [
+    "created",
+    "routing",
+    "submitting",
+    "awaiting_result",
+    "settling",
+    "succeeded"
+  ],
+  "states": [
+    {
+      "id": "created",
+      "type": "start",
+      "label": "创建",
+      "tag": "受理",
+      "step": "01"
+    },
+    {
+      "id": "routing",
+      "type": "active",
+      "label": "路由",
+      "tag": "风控",
+      "step": "02"
+    },
+    {
+      "id": "submitting",
+      "type": "active",
+      "label": "提交",
+      "tag": "渠道",
+      "step": "03"
+    },
+    {
+      "id": "awaiting_result",
+      "type": "active",
+      "label": "等结果",
+      "tag": "查单",
+      "step": "04"
+    },
+    {
+      "id": "settling",
+      "type": "active",
+      "label": "记账",
+      "tag": "账务",
+      "step": "05"
+    },
+    {
+      "id": "succeeded",
+      "type": "success",
+      "label": "成功",
+      "tag": "终态",
+      "step": "06"
+    },
+    {
+      "id": "held",
+      "type": "waiting",
+      "label": "风控挂起",
+      "tag": "等待",
+      "icon": "security"
+    },
+    {
+      "id": "awaiting_user",
+      "type": "waiting",
+      "label": "待鉴权",
+      "tag": "等待",
+      "icon": "person"
+    },
+    {
+      "id": "retrying",
+      "type": "waiting",
+      "label": "退避重试",
+      "tag": "等待",
+      "icon": "clock"
+    },
+    {
+      "id": "unknown",
+      "type": "external",
+      "label": "结果未知",
+      "tag": "外部",
+      "icon": "external"
+    },
+    {
+      "id": "failed",
+      "type": "failure",
+      "label": "失败",
+      "tag": "终态",
+      "icon": "stop"
+    },
+    {
+      "id": "cancelled",
+      "type": "failure",
+      "label": "取消",
+      "tag": "终态",
+      "icon": "stop"
+    },
+    {
+      "id": "closed",
+      "type": "failure",
+      "label": "已关闭",
+      "tag": "终态",
+      "icon": "clock"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t-accept",
+      "from": "created",
+      "to": "routing",
+      "label": "受理"
+    },
+    {
+      "id": "t-routed",
+      "from": "routing",
+      "to": "submitting",
+      "label": "选定"
+    },
+    {
+      "id": "t-accepted-by-channel",
+      "from": "submitting",
+      "to": "awaiting_result",
+      "label": "受理"
+    },
+    {
+      "id": "t-channel-ok",
+      "from": "awaiting_result",
+      "to": "settling",
+      "label": "成功"
+    },
+    {
+      "id": "t-posted",
+      "from": "settling",
+      "to": "succeeded",
+      "label": "入账"
+    },
+    {
+      "id": "t-risk-hit",
+      "from": "routing",
+      "to": "held",
+      "label": "命中",
+      "variant": "security"
+    },
+    {
+      "id": "t-review-pass",
+      "from": "held",
+      "to": "routing",
+      "label": "放行",
+      "variant": "dashed"
+    },
+    {
+      "id": "t-risk-reject",
+      "from": "held",
+      "to": "failed",
+      "label": "拒绝",
+      "variant": "security"
+    },
+    {
+      "id": "t-hold-timeout",
+      "from": "held",
+      "to": "closed",
+      "label": "挂起超时",
+      "variant": "security"
+    },
+    {
+      "id": "t-need-auth",
+      "from": "submitting",
+      "to": "awaiting_user",
+      "label": "需鉴权",
+      "variant": "security"
+    },
+    {
+      "id": "t-authorized",
+      "from": "awaiting_user",
+      "to": "awaiting_result",
+      "label": "通过"
+    },
+    {
+      "id": "t-auth-failed",
+      "from": "awaiting_user",
+      "to": "failed",
+      "label": "拒签",
+      "variant": "security"
+    },
+    {
+      "id": "t-auth-timeout",
+      "from": "awaiting_user",
+      "to": "closed",
+      "label": "鉴权超时",
+      "variant": "security"
+    },
+    {
+      "id": "t-user-cancel",
+      "from": "awaiting_user",
+      "to": "cancelled",
+      "label": "用户取消"
+    },
+    {
+      "id": "t-throttled",
+      "from": "submitting",
+      "to": "retrying",
+      "label": "限流",
+      "variant": "dashed"
+    },
+    {
+      "id": "t-backoff-done",
+      "from": "retrying",
+      "to": "submitting",
+      "label": "到期",
+      "variant": "dashed"
+    },
+    {
+      "id": "t-retry-exhausted",
+      "from": "retrying",
+      "to": "failed",
+      "label": "耗尽",
+      "variant": "security"
+    },
+    {
+      "id": "t-callback-timeout",
+      "from": "awaiting_result",
+      "to": "unknown",
+      "label": "回调超时",
+      "variant": "security"
+    },
+    {
+      "id": "t-query-recovered",
+      "from": "unknown",
+      "to": "awaiting_result",
+      "label": "查单恢复",
+      "variant": "dashed"
+    },
+    {
+      "id": "t-reconciled-void",
+      "from": "unknown",
+      "to": "closed",
+      "label": "对账无单",
+      "variant": "dashed"
+    },
+    {
+      "id": "t-channel-failed",
+      "from": "awaiting_result",
+      "to": "failed",
+      "label": "渠道失败",
+      "variant": "security"
+    },
+    {
+      "id": "t-payment-timeout",
+      "from": "awaiting_result",
+      "to": "closed",
+      "label": "支付超时",
+      "variant": "security"
+    },
+    {
+      "id": "t-revoked",
+      "from": "created",
+      "to": "cancelled",
+      "label": "用户撤销"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "主进度：6 步，只有渠道成功才推进",
+      "items": [
+        "创建 → 路由 → 提交 → 等结果 → 记账 → 成功，每一对相邻状态都有真实事件边",
+        "记账失败不画在本图：账务重试是账务子系统内部循环，不是支付单状态的迁移"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "等待与中断：4 个，每一个都能走出去",
+      "items": [
+        "风控挂起 / 待鉴权 / 退避重试都有回边（放行 / 通过 / 到期），不是死路",
+        "结果未知是外部持有：渠道没给终态，平台只能查单恢复或转对账关闭",
+        "重试是真实拓扑（到期回到提交），不是一张写着「会重试」的说明卡"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "终态：4 个节点，来路一条不合并",
+      "items": [
+        "成功 / 失败 / 取消 / 已关闭 —— 四条无出边，画面上都是终点",
+        "失败有 4 条来路（拒绝 / 拒签 / 耗尽 / 渠道失败），各自独立成边",
+        "已关闭有 4 条来路（挂起超时 / 鉴权超时 / 支付超时 / 对账无单）—— 关闭原因不省略",
+        "退款不在本图：退款单有独立生命周期，硬塞进来会把两条状态机混成一团"
+      ]
+    }
+  ]
+}

@@ -41,13 +41,17 @@ class SkillPackageScannerTest {
     }
 
     @Test
-    @DisplayName("生产扫描位置：4 个技能包全部健康，且按 name 升序")
+    @DisplayName("生产扫描位置：6 个技能包全部健康，且按 name 升序")
     void classpathScanIsHealthyAndSorted() {
         List<SkillCatalogEntry> entries = SkillPackageScanner.forClasspath().scan();
-        assertThat(entries).hasSize(4);
+        // archify 于 2026-10-26 补入（SKX-11）：它是「执行层包 + 目录层元数据」两级分工的目录侧，
+        // 正文只写「何时用 / 怎么调 / 边界」，不含 4.13MB 执行包本身；
+        // biz-process-lifecycle 同日补入：讲「状态机该怎么建」（三区分离 / 终态穷举 / 来路不合并）。
+        assertThat(entries).hasSize(6);
         assertThat(entries).allMatch(SkillCatalogEntry::healthy);
         assertThat(entries).extracting(SkillCatalogEntry::name).isSorted()
-                .containsExactly("eng-code-review", "eng-doc-standard", "eng-verification", "eng-web-research");
+                .containsExactly("archify", "biz-process-lifecycle", "eng-code-review",
+                        "eng-doc-standard", "eng-verification", "eng-web-research");
     }
 
     @Test
@@ -70,9 +74,9 @@ class SkillPackageScannerTest {
     @DisplayName("缓存壳懒加载 + refresh 后可重扫")
     void catalogIsLazyAndRefreshable() {
         SkillPackageCatalog catalog = new SkillPackageCatalog(SkillPackageScanner.forClasspath());
-        assertThat(catalog.entries()).hasSize(4);
+        assertThat(catalog.entries()).hasSize(6);
         assertThat(catalog.entries()).isSameAs(catalog.entries());
         catalog.refresh();
-        assertThat(catalog.entries()).hasSize(4);
+        assertThat(catalog.entries()).hasSize(6);
     }
 }

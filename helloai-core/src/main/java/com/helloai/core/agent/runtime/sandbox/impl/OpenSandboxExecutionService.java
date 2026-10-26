@@ -5,16 +5,35 @@ import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.Execution;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.OutputMessage;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.RunCommandRequest;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.filesystem.EntryInfo;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.filesystem.WriteEntry;
+import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.NetworkPolicy;
+import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.NetworkRule;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.OpenSandboxProperties;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
+import com.helloai.core.agent.runtime.sandbox.SandboxArtifact;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
+import com.helloai.core.agent.runtime.sandbox.SandboxSpec;
+import com.helloai.core.agent.runtime.sandbox.SkillInstallResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -80,6 +99,21 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
     /** 回读结果里文件名头的前缀（便于日志定位「到底交回哪份文件」）。 */
     private static final String FILE_HEADER_PREFIX = "FILE:";
 
+    /** 技能包在容器内的落点根（`SKX-6`；容器内默认<b>没有</b> {@code /workspace}，须先建）。 */
+    private static final String SKILL_ROOT_DIR = "/workspace/skills";
+
+    /** 幂等标记文件名（写在包根，记录版本 + 内容哈希树）。 */
+    private static final String SKILL_MARKER_FILE = ".helloai-skill.json";
+
+    /** 技能包文件权限（644）：全是数据文件，不需要可执行位（入口靠 {@code node bin/xxx.mjs} 显式调用）。 */
+    private static final int SKILL_FILE_MODE = 644;
+
+    /** 目录权限（755）。 */
+    private static final int SKILL_DIR_MODE = 755;
+
+    /** 默认单次产物回读上限（字节，4MB）：覆盖 archify 的 ~820KB HTML 及其回执，也不会一次读爆内存。 */
+    private static final int DEFAULT_ARTIFACT_MAX_BYTES = 4 * 1024 * 1024;
+
     /**
      * 回读命令：挑出工作区里<b>最大的 .md</b>，以 <b>base64</b> 单行输出。
      *
@@ -105,20 +139,45 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
 
     private final OpenSandboxProperties properties;
 
+    /** 技能包加载器（classpath 枚举 + 完整性校验，`SKX-6`）。 */
+    private final SkillPackageLoader skillPackageLoader;
+
     /**
-     * 复用槽池（`ADR-005`，2026-10-25）：key = {@code subTaskId}，槽内命令串行执行。
+     * 复用槽池（`ADR-005`，2026-10-25）：key = {@code (subTaskId, 规格指纹)}，槽内命令串行执行。
      *
      * <p>只在 {@code reuse-enabled=true} 且 {@code subTaskId != null} 时使用；
-     * 生命周期出口 = {@link #release(Long)}（turn 结束）/ 空闲超时 / 命令未正常结束。</p>
+     * 生命周期出口 = {@link #release(Long)}（turn 结束，释放该子任务<b>全部规格</b>）/ 空闲超时 /
+     * 命令未正常结束。</p>
      */
-    private final SandboxSlotPool<Sandbox> pool = new SandboxSlotPool<>();
+    private final SandboxSlotPool<SlotKey, Sandbox> pool = new SandboxSlotPool<>();
 
-    public OpenSandboxExecutionService(OpenSandboxProperties properties) {
+    /**
+     * 复用槽键（`SKX-5`）：子任务 + 规格指纹。
+     *
+     * <p>为什么不能只用 {@code subTaskId}：按调用分层规格后，同一子任务会先后要两种镜像
+     * （python 验算 / node 出图）。裸 {@code subTaskId} 当键 ⇒ 第二次命中第一次的槽，
+     * 拿到没有目标运行时的容器，命令以「node: not found」失败，且失败看起来像环境问题。</p>
+     */
+    private record SlotKey(Long subTaskId, String specFingerprint) {
+    }
+
+    /** 标记文件读写用的 JSON 编解码（只处理平台自己写的小对象，不承载业务模型）。 */
+    private final ObjectMapper markerMapper = new ObjectMapper();
+
+    public OpenSandboxExecutionService(OpenSandboxProperties properties,
+                                       SkillPackageLoader skillPackageLoader) {
         this.properties = properties;
+        this.skillPackageLoader = skillPackageLoader;
     }
 
     @Override
     public ExecuteResponse execute(Long subTaskId, String command, Integer timeoutSeconds) {
+        return execute(subTaskId, null, command, timeoutSeconds);
+    }
+
+    @Override
+    public ExecuteResponse execute(Long subTaskId, SandboxSpec spec, String command,
+                                   Integer timeoutSeconds) {
         // 入口守卫（纵深防御：工具已按 enabled 摘除，正常情况下不会被调用）
         if (!properties.isEnabled()) {
             return new ExecuteResponse("sandbox execution disabled (helloai.sandbox.opensandbox.enabled=false)",
@@ -128,20 +187,22 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
             return new ExecuteResponse("command must not be blank", ExecuteResponse.EXIT_CODE_ERROR, false);
         }
         long timeoutSec = resolveTimeoutSeconds(timeoutSeconds);
+        SandboxSpec effective = spec != null ? spec : SandboxSpecMapper.toDomain(properties.getSpec());
         long start = System.currentTimeMillis();
         // 退路：关闭复用 / 无子任务上下文（Reviewer、S-9 判定）⇒ 原「即建即毁」一次性语义
         if (!properties.isReuseEnabled() || subTaskId == null) {
-            return executeOneShot(subTaskId, command, timeoutSec, start);
+            return executeOneShot(subTaskId, effective, command, timeoutSec, start);
         }
-        SandboxSlotPool.Slot<Sandbox> slot =
-                pool.acquire(subTaskId, idleTtlMillis(), () -> openSandbox(subTaskId), this::destroy);
+        SlotKey key = new SlotKey(subTaskId, SandboxSpecMapper.fingerprint(effective));
+        SandboxSlotPool.Slot<SlotKey, Sandbox> slot =
+                pool.acquire(key, idleTtlMillis(), () -> openSandbox(subTaskId, effective), this::destroy);
         if (slot == null) {
             return new ExecuteResponse("sandbox create failed (opener returned null)",
                     ExecuteResponse.EXIT_CODE_ERROR, false);
         }
         slot.lock().lock();
         try {
-            return runInSlot(subTaskId, slot, command, timeoutSec, start);
+            return runInSlot(key, subTaskId, slot, command, timeoutSec, start);
         } finally {
             slot.lock().unlock();
         }
@@ -152,9 +213,10 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
         if (subTaskId == null) {
             return;
         }
-        if (pool.remove(subTaskId, this::destroy)) {
-            log.info("OpenSandboxExecutionService: 复用沙箱已释放 subTaskId={}, 在册={}",
-                    subTaskId, pool.size());
+        int removed = pool.removeMatching(key -> Objects.equals(key.subTaskId(), subTaskId), this::destroy);
+        if (removed > 0) {
+            log.info("OpenSandboxExecutionService: 复用沙箱已释放 subTaskId={}, 释放槽数={}, 在册={}",
+                    subTaskId, removed, pool.size());
         }
     }
 
@@ -178,12 +240,14 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
         if (!properties.isEnabled() || !properties.isReuseEnabled() || subTaskId == null) {
             return null;
         }
-        if (!pool.contains(subTaskId)) {
+        // 回读只知道 subTaskId，不知道当时用的规格 ⇒ 按谓词找在册键（不创建）
+        SlotKey key = pool.findKey(k -> Objects.equals(k.subTaskId(), subTaskId)).orElse(null);
+        if (key == null) {
             log.debug("OpenSandboxExecutionService: 无活跃工作区，跳过回读 subTaskId={}", subTaskId);
             return null;
         }
-        SandboxSlotPool.Slot<Sandbox> slot =
-                pool.acquire(subTaskId, idleTtlMillis(), () -> null, this::destroy);
+        SandboxSlotPool.Slot<SlotKey, Sandbox> slot =
+                pool.acquire(key, idleTtlMillis(), () -> null, this::destroy);
         if (slot == null) {
             log.debug("OpenSandboxExecutionService: 工作区已并发释放，跳过回读 subTaskId={}", subTaskId);
             return null;
@@ -251,11 +315,391 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // 技能包注入（`SKX-6`，2026-10-26）
+    // ---------------------------------------------------------------------
+
+    /**
+     * 把 classpath 里的技能包批量写入该子任务的复用工作区（`SKX-6`）。
+     *
+     * <p><b>为什么走「子任务槽」而不是「新建一个沙箱装包」</b>：技能执行的形态是
+     * 「装包 → 跑 {@code node bin/xxx.mjs}」（`SKX-9`），两步必须在<b>同一个容器</b>里。
+     * 复用槽键与 {@link #execute} 完全一致（子任务 + 规格指纹），所以装完包紧接着执行命令时
+     * 直接命中这个已装好的槽，省掉一次建沙箱（实测 0.7~1.2s）也保证文件在。</p>
+     *
+     * <p><b>失败即丢弃槽</b>：批量写可能「写了一半」，留在容器里的半装包会在后续
+     * {@code node} 运行时报缺模块——那种错误的排查成本远高于重建一个容器。
+     * 与「命令未正常结束即丢弃槽」是同一条口径。</p>
+     */
+    @Override
+    public SkillInstallResult installSkillPackage(Long subTaskId, SandboxSpec spec,
+                                                  String packageName, String version) {
+        if (!properties.isEnabled()) {
+            return SkillInstallResult.fail(
+                    "sandbox execution disabled (helloai.sandbox.opensandbox.enabled=false)");
+        }
+        if (!properties.isReuseEnabled()) {
+            return SkillInstallResult.fail("skill install requires reuse-enabled=true"
+                    + "（一次性沙箱装完即销毁，包无处可用）");
+        }
+        if (subTaskId == null) {
+            return SkillInstallResult.fail("subTaskId must not be null when installing a skill package");
+        }
+        LoadedSkillPackage pkg;
+        try {
+            pkg = skillPackageLoader.load(packageName, version);
+        } catch (Exception e) {
+            log.warn("OpenSandboxExecutionService: 技能包加载失败 name={}, version={}, cause={}",
+                    packageName, version, e.getMessage());
+            return SkillInstallResult.fail("技能包加载失败: " + e.getMessage());
+        }
+
+        SandboxSpec effective = spec != null ? spec : SandboxSpecMapper.toDomain(properties.getSpec());
+        SlotKey key = new SlotKey(subTaskId, SandboxSpecMapper.fingerprint(effective));
+        String targetDir = SKILL_ROOT_DIR + "/" + pkg.name();
+        long start = System.currentTimeMillis();
+        SandboxSlotPool.Slot<SlotKey, Sandbox> slot = pool.acquire(key, idleTtlMillis(),
+                () -> openSandbox(subTaskId, effective), this::destroy);
+        if (slot == null) {
+            return SkillInstallResult.fail("sandbox create failed (opener returned null)");
+        }
+        slot.lock().lock();
+        try {
+            SkillInstallResult result = installInto(subTaskId, slot.resource(), pkg, targetDir, start);
+            if (result.success()) {
+                renewQuietly(slot.resource(), subTaskId);
+                slot.touch();
+            } else {
+                pool.remove(key, this::destroy);
+            }
+            return result;
+        } catch (Exception e) {
+            pool.remove(key, this::destroy);
+            log.warn("OpenSandboxExecutionService: 技能包注入异常，已丢弃沙箱 subTaskId={}, name={}, cause={}",
+                    subTaskId, pkg.name(), e.getMessage());
+            return SkillInstallResult.fail("技能包注入异常: "
+                    + e.getClass().getSimpleName() + ": " + e.getMessage());
+        } finally {
+            slot.lock().unlock();
+        }
+    }
+
+    /**
+     * 在已锁定的槽内完成「建目录 → 幂等探测 → 批量写 → 写标记 → 校验」。
+     *
+     * <p><b>为什么先建目录再探测</b>：SDK 的 {@code readFileInfo} 对不存在的路径会抛 404，并在
+     * <b>ERROR 级别</b>打一行 {@code Failed to get file info}——而「首次安装、标记还不存在」是
+     * 完全正常的路径。把它留在日志里，等于每次正常安装都印一条假错误，告警迟早会误报。
+     * 先 {@code createDirectories}（幂等）再 {@code listDirectory} 找标记，探测就永不 404。</p>
+     *
+     * <p><b>标记最后写</b>：让「标记存在」等价于「整包已写完并通过校验」。若先写标记，
+     * 进程中途退出会留下「标记说有、文件不全」的容器，下次进来直接跳过 ⇒ 永久坏包。</p>
+     */
+    private SkillInstallResult installInto(Long subTaskId, Sandbox sandbox, LoadedSkillPackage pkg,
+                                           String targetDir, long start) {
+        sandbox.files().createDirectories(directoryEntries(pkg, targetDir));
+        if (alreadyInstalled(sandbox, targetDir, pkg)) {
+            long costMs = System.currentTimeMillis() - start;
+            log.info("OpenSandboxExecutionService: 技能包已存在同内容，跳过注入 subTaskId={}, name={}, "
+                            + "version={}, files={}, costMs={}",
+                    subTaskId, pkg.name(), pkg.version(), pkg.fileCount(), costMs);
+            return SkillInstallResult.ok(pkg.fileCount(), pkg.totalBytes(), targetDir, true,
+                    "已存在同版本同内容（" + pkg.name() + "@" + pkg.version() + "），跳过写入");
+        }
+
+        writePayload(subTaskId, sandbox, pkg, targetDir);
+        sandbox.files().writeFile(markerEntry(targetDir + "/" + SKILL_MARKER_FILE, pkg));
+        verifyInstalled(sandbox, pkg, targetDir);
+
+        long costMs = System.currentTimeMillis() - start;
+        log.info("OpenSandboxExecutionService: 技能包注入完成 subTaskId={}, name={}, version={}, "
+                        + "files={}, bytes={}, target={}, costMs={}",
+                subTaskId, pkg.name(), pkg.version(), pkg.fileCount(), pkg.totalBytes(), targetDir, costMs);
+        return SkillInstallResult.ok(pkg.fileCount(), pkg.totalBytes(), targetDir, false,
+                "注入完成 files=" + pkg.fileCount() + " bytes=" + pkg.totalBytes() + " costMs=" + costMs);
+    }
+
+    /**
+     * 幂等探测：目标目录里存在标记文件且哈希树一致 ⇒ 已装好。
+     *
+     * <p>用 {@code listDirectory} 而不是直接读标记：目录已在上一步建好，列目录不会 404，
+     * 「标记不存在」表现为<b>空列表</b>而非异常——首次安装不该在日志里留下 ERROR（见调用处注释）。</p>
+     */
+    private boolean alreadyInstalled(Sandbox sandbox, String targetDir, LoadedSkillPackage pkg) {
+        String markerPath = targetDir + "/" + SKILL_MARKER_FILE;
+        try {
+            boolean markerExists = sandbox.files().listDirectory(targetDir, null).stream()
+                    .anyMatch(info -> info.getPath() != null && info.getPath().endsWith("/" + SKILL_MARKER_FILE));
+            if (!markerExists) {
+                return false;
+            }
+            JsonNode marker = markerMapper.readTree(sandbox.files().readFile(markerPath, "UTF-8", null));
+            String installedTree = marker.path("sha256Tree").asText(null);
+            if (pkg.sha256Tree().equalsIgnoreCase(installedTree)) {
+                return true;
+            }
+            log.info("OpenSandboxExecutionService: 已有技能包内容不同，将覆盖写入 name={}, installed={}, expected={}",
+                    pkg.name(), abbreviate(installedTree), abbreviate(pkg.sha256Tree()));
+            return false;
+        } catch (Exception e) {
+            log.debug("OpenSandboxExecutionService: 幂等标记探测失败（按未安装处理）path={}, cause={}",
+                    markerPath, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 写载荷：先批量（`SKX-3` 实测 146ms / 1 次往返），失败再降级逐文件重试。
+     *
+     * <p><b>为什么保留逐文件退路</b>：批量写是「全有或全无」的形态——一批里任何一个文件被拒
+     * （权限 / 路径 / 服务端限制）整批就失败，而失败信息往往只给第一个错。逐文件重试能<b>定位</b>
+     * 到具体哪个文件装不进去，也能救回「只有个别文件失败」的场景。写是覆盖语义，重试天然幂等。</p>
+     */
+    private void writePayload(Long subTaskId, Sandbox sandbox, LoadedSkillPackage pkg, String targetDir) {
+        List<WriteEntry> entries = new ArrayList<>(pkg.fileCount());
+        for (LoadedSkillPackage.Entry entry : pkg.entries()) {
+            entries.add(fileEntry(targetDir + "/" + entry.relativePath(), entry.data()));
+        }
+        long start = System.currentTimeMillis();
+        try {
+            sandbox.files().write(entries);
+            log.info("OpenSandboxExecutionService: 技能包批量写入完成 subTaskId={}, files={}, costMs={}",
+                    subTaskId, entries.size(), System.currentTimeMillis() - start);
+            return;
+        } catch (Exception batchError) {
+            log.warn("OpenSandboxExecutionService: 批量写入失败，降级逐文件重试 subTaskId={}, files={}, cause={}",
+                    subTaskId, entries.size(), batchError.getMessage());
+        }
+        List<String> failed = new ArrayList<>();
+        for (LoadedSkillPackage.Entry entry : pkg.entries()) {
+            try {
+                sandbox.files().writeFile(fileEntry(targetDir + "/" + entry.relativePath(), entry.data()));
+            } catch (Exception e) {
+                failed.add(entry.relativePath());
+                if (failed.size() <= 3) {
+                    log.warn("OpenSandboxExecutionService: 逐文件写入失败 path={}, cause={}",
+                            entry.relativePath(), e.getMessage());
+                }
+            }
+        }
+        if (!failed.isEmpty()) {
+            throw new IllegalStateException("逐文件重试后仍有 " + failed.size() + " 个文件写入失败，首个: "
+                    + failed.get(0));
+        }
+        log.info("OpenSandboxExecutionService: 技能包逐文件写入完成 subTaskId={}, files={}, costMs={}",
+                subTaskId, pkg.fileCount(), System.currentTimeMillis() - start);
+    }
+
+    /**
+     * 注入后校验：文件数与总字节必须与包一致。
+     *
+     * <p>校验的是<b>服务端视角</b>（{@code readFileInfo} 读回的大小），不是「我们发了多少」——
+     * 传输截断、服务端配额导致的部分写入都会在这里暴露，而这正是「装进去了但跑不起来」的根因。</p>
+     */
+    private void verifyInstalled(Sandbox sandbox, LoadedSkillPackage pkg, String targetDir) {
+        List<String> paths = new ArrayList<>(pkg.fileCount());
+        for (LoadedSkillPackage.Entry entry : pkg.entries()) {
+            paths.add(targetDir + "/" + entry.relativePath());
+        }
+        Map<String, EntryInfo> actual = sandbox.files().readFileInfo(paths);
+        int actualCount = actual == null ? 0 : actual.size();
+        long actualBytes = actual == null ? 0L
+                : actual.values().stream().mapToLong(EntryInfo::getSize).sum();
+        if (actualCount != pkg.fileCount() || actualBytes != pkg.totalBytes()) {
+            throw new IllegalStateException("注入校验失败 target=" + targetDir
+                    + "：期望 files=" + pkg.fileCount() + " bytes=" + pkg.totalBytes()
+                    + "，实际 files=" + actualCount + " bytes=" + actualBytes);
+        }
+    }
+
+    /**
+     * 目录清单：目标根 + 全部祖先目录，按路径升序（父在前，避免服务端不做递归建目录时子目录失败）。
+     *
+     * <p>{@code /workspace} 与 {@code /workspace/skills} 也显式列出：容器内默认<b>没有</b>
+     * {@code /workspace}（`SKX-1` 实测 {@code pwd=/}），不能指望上层已建。</p>
+     */
+    private static List<WriteEntry> directoryEntries(LoadedSkillPackage pkg, String targetDir) {
+        Set<String> dirs = new LinkedHashSet<>();
+        dirs.add("/workspace");
+        dirs.add(SKILL_ROOT_DIR);
+        dirs.add(targetDir);
+        for (LoadedSkillPackage.Entry entry : pkg.entries()) {
+            String relative = entry.relativePath();
+            int index = relative.lastIndexOf('/');
+            while (index > 0) {
+                dirs.add(targetDir + "/" + relative.substring(0, index));
+                index = relative.lastIndexOf('/', index - 1);
+            }
+        }
+        List<String> sorted = new ArrayList<>(dirs);
+        sorted.sort(Comparator.naturalOrder());
+        List<WriteEntry> entries = new ArrayList<>(sorted.size());
+        for (String dir : sorted) {
+            entries.add(WriteEntry.builder().path(dir).data(new byte[0]).mode(SKILL_DIR_MODE).build());
+        }
+        return entries;
+    }
+
+    private static WriteEntry fileEntry(String path, byte[] data) {
+        return WriteEntry.builder().path(path).data(data).mode(SKILL_FILE_MODE).build();
+    }
+
+    /** 幂等标记内容（版本 + 内容哈希树 + 计数 + 时间；不含任何平台凭据）。 */
+    private WriteEntry markerEntry(String markerPath, LoadedSkillPackage pkg) {
+        Map<String, Object> marker = new LinkedHashMap<>();
+        marker.put("packageName", pkg.name());
+        marker.put("version", pkg.version());
+        marker.put("fileCount", pkg.fileCount());
+        marker.put("totalBytes", pkg.totalBytes());
+        marker.put("sha256Tree", pkg.sha256Tree());
+        marker.put("installedAt", OffsetDateTime.now().toString());
+        try {
+            return WriteEntry.builder()
+                    .path(markerPath)
+                    .data(markerMapper.writeValueAsString(marker))
+                    .mode(SKILL_FILE_MODE)
+                    .build();
+        } catch (Exception e) {
+            throw new IllegalStateException("幂等标记序列化失败: " + e.getMessage(), e);
+        }
+    }
+
+    private static String abbreviate(String value) {
+        return value == null || value.length() <= 16 ? value : value.substring(0, 16) + "…";
+    }
+
+    // ---------------------------------------------------------------------
+    // 产物按指定路径回读（`SKX-7`，2026-10-26）
+    // ---------------------------------------------------------------------
+
+    /**
+     * 回读指定路径的产物（`SKX-7`）。
+     *
+     * <p><b>三步都省不掉</b>：① {@code readFileInfo} 判存在 + 拿大小（决定要不要走 Range 读）；
+     * ② {@code readByteArray} 取字节（一次读回 823KB 实测 34ms，分段读只会更慢）；
+     * ③ 本地算 {@code sha256}——哈希必须算在<b>字节</b>上，先解码成字符串再算会被编码差异毁掉。</p>
+     *
+     * <p><b>超限不报错而是截断</b>：调用方可能只想读一份 10MB 日志的头几 KB 做判断。但截断后
+     * 的 {@code sha256} 只代表片段，故结果里带 {@code truncated} 硬标志——**拿截断结果去和完整
+     * 文件回执对账，比出来必然不一致**，消费方必须先看这个标志。</p>
+     */
+    @Override
+    public SandboxArtifact readArtifact(Long subTaskId, String path, int maxBytes) {
+        if (!properties.isEnabled() || !properties.isReuseEnabled() || subTaskId == null) {
+            return null;
+        }
+        String normalized = normalizeArtifactPath(path);
+        if (normalized == null) {
+            log.warn("OpenSandboxExecutionService: 产物路径非法（须为容器内绝对路径且不含 ..）path={}", path);
+            return null;
+        }
+        // 只读：按谓词找在册键，绝不为了读文件新建沙箱（3s + 一份资源，且必然读到空目录）
+        SlotKey key = pool.findKey(k -> Objects.equals(k.subTaskId(), subTaskId)).orElse(null);
+        if (key == null) {
+            log.debug("OpenSandboxExecutionService: 无活跃工作区，跳过产物回读 subTaskId={}", subTaskId);
+            return null;
+        }
+        SandboxSlotPool.Slot<SlotKey, Sandbox> slot =
+                pool.acquire(key, idleTtlMillis(), () -> null, this::destroy);
+        if (slot == null) {
+            log.debug("OpenSandboxExecutionService: 工作区已并发释放，跳过产物回读 subTaskId={}", subTaskId);
+            return null;
+        }
+        slot.lock().lock();
+        long start = System.currentTimeMillis();
+        try {
+            Sandbox sandbox = slot.resource();
+            Map<String, EntryInfo> info = sandbox.files().readFileInfo(List.of(normalized));
+            EntryInfo entry = info == null ? null : info.get(normalized);
+            if (entry == null) {
+                log.info("OpenSandboxExecutionService: 产物不存在 subTaskId={}, path={}", subTaskId, normalized);
+                return null;
+            }
+            int limit = maxBytes > 0 ? maxBytes : DEFAULT_ARTIFACT_MAX_BYTES;
+            long expectedSize = entry.getSize();
+            boolean truncated = expectedSize > limit;
+            byte[] data = truncated
+                    ? sandbox.files().readByteArray(normalized, "bytes=0-" + (limit - 1))
+                    : sandbox.files().readByteArray(normalized, null);
+            byte[] bytes = data == null ? new byte[0] : data;
+            String sha256 = sha256Hex(bytes);
+            renewQuietly(sandbox, subTaskId);
+            slot.touch();
+            log.info("OpenSandboxExecutionService: 产物回读完成 subTaskId={}, path={}, size={}, readBytes={}, "
+                            + "truncated={}, sha256={}, costMs={}",
+                    subTaskId, normalized, expectedSize, bytes.length, truncated, sha256,
+                    System.currentTimeMillis() - start);
+            return new SandboxArtifact(normalized, bytes, mimeOf(normalized), sha256, truncated);
+        } catch (Exception e) {
+            log.warn("OpenSandboxExecutionService: 产物回读失败 subTaskId={}, path={}, cause={}",
+                    subTaskId, normalized, e.getMessage());
+            return null;
+        } finally {
+            slot.lock().unlock();
+        }
+    }
+
+    /**
+     * 规整产物路径：必须是容器内绝对路径、不含 {@code ..}、不含空白。
+     *
+     * <p>不做「相对路径按 /workspace 补全」——那会把「模型写错路径」变成「读到了另一个文件」，
+     * 静默错误比明确失败难查得多。</p>
+     */
+    private static String normalizeArtifactPath(String path) {
+        if (path == null || path.isBlank()) {
+            return null;
+        }
+        String trimmed = path.trim();
+        if (!trimmed.startsWith("/") || trimmed.contains("..")) {
+            return null;
+        }
+        return trimmed.length() > 1 && trimmed.endsWith("/")
+                ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
+    }
+
+    /** 按扩展名推断 MIME（推断不出 ⇒ 二进制兜底；只覆盖当前会产出的几类）。 */
+    private static String mimeOf(String path) {
+        int dot = path.lastIndexOf('.');
+        if (dot < 0 || dot == path.length() - 1) {
+            return "application/octet-stream";
+        }
+        String ext = path.substring(dot + 1).toLowerCase(Locale.ROOT);
+        return switch (ext) {
+            case "html", "htm" -> "text/html";
+            case "json" -> "application/json";
+            case "md" -> "text/markdown";
+            case "txt" -> "text/plain";
+            case "css" -> "text/css";
+            case "js", "mjs" -> "text/javascript";
+            case "svg" -> "image/svg+xml";
+            case "png" -> "image/png";
+            case "jpg", "jpeg" -> "image/jpeg";
+            case "pdf" -> "application/pdf";
+            default -> "application/octet-stream";
+        };
+    }
+
+    /** 字节的 SHA-256（64 位小写十六进制，与容器内 {@code sha256sum} 同口径）。 */
+    private static String sha256Hex(byte[] data) {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256").digest(data);
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+                sb.append(Character.forDigit(b & 0xF, 16));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("SHA-256 不可用: " + e.getMessage(), e);
+        }
+    }
+
     /** 一次性语义（复用关闭 / 无子任务上下文）：建 → 跑 → 无条件 kill（原 S-7 行为，零变化）。 */
-    private ExecuteResponse executeOneShot(Long subTaskId, String command, long timeoutSec, long start) {
+    private ExecuteResponse executeOneShot(Long subTaskId, SandboxSpec spec, String command,
+                                           long timeoutSec, long start) {
         Sandbox sandbox = null;
         try {
-            sandbox = openSandbox(subTaskId);
+            sandbox = openSandbox(subTaskId, spec);
             if (sandbox == null) {
                 return new ExecuteResponse("sandbox create failed (opener returned null)",
                         ExecuteResponse.EXIT_CODE_ERROR, false);
@@ -279,24 +723,24 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
      * （如 {@code grep} 没命中、{@code python} 校验脚本报 False）<b>不</b>丢弃——那正是
      * 「对上一轮产物做校验」的正常用法。</p>
      */
-    private ExecuteResponse runInSlot(Long subTaskId, SandboxSlotPool.Slot<Sandbox> slot,
+    private ExecuteResponse runInSlot(SlotKey key, Long subTaskId, SandboxSlotPool.Slot<SlotKey, Sandbox> slot,
                                       String command, long timeoutSec, long start) {
         Sandbox sandbox = slot.resource();
         ExecuteResponse response;
         try {
             response = runCommand(subTaskId, sandbox, command, timeoutSec, start);
         } catch (Exception e) {
-            pool.remove(subTaskId, this::destroy);
-            log.warn("OpenSandboxExecutionService: 复用沙箱执行异常，已丢弃待重建 subTaskId={}, cause={}",
-                    subTaskId, e.getMessage());
+            pool.remove(key, this::destroy);
+            log.warn("OpenSandboxExecutionService: 复用沙箱执行异常，已丢弃待重建 subTaskId={}, spec={}, cause={}",
+                    subTaskId, key.specFingerprint(), e.getMessage());
             return new ExecuteResponse("sandbox execution failed: " + e.getClass().getSimpleName()
                     + ": " + e.getMessage(), ExecuteResponse.EXIT_CODE_ERROR, false);
         }
         if (response.exitCode() == ExecuteResponse.EXIT_CODE_TIMEOUT
                 || response.exitCode() == ExecuteResponse.EXIT_CODE_ERROR) {
-            pool.remove(subTaskId, this::destroy);
-            log.info("OpenSandboxExecutionService: 命令未正常结束（exitCode={}），丢弃复用沙箱 subTaskId={}",
-                    response.exitCode(), subTaskId);
+            pool.remove(key, this::destroy);
+            log.info("OpenSandboxExecutionService: 命令未正常结束（exitCode={}），丢弃复用沙箱 subTaskId={}, spec={}",
+                    response.exitCode(), subTaskId, key.specFingerprint());
             return response;
         }
         renewQuietly(sandbox, subTaskId);
@@ -330,24 +774,119 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
     /**
      * 建沙箱（复用槽 opener 与一次性路径共用）。失败返回 {@code null}，
      * 由调用方降级为结构化失败（不抛异常，与既有容错哲学一致）。
+     *
+     * <p><b>`SKX-5` 起 spec 真正被消费</b>（2026-10-26）。此前只喂了 {@code image}，
+     * {@code resourceLimits} / {@code networkPolicy} / {@code entrypoint} / {@code timeoutSeconds}
+     * 全是「声明了但没接」，于是「按调用分层规格」名不副实。现在逐项落到 SDK Builder
+     * （实测 `sandbox-1.1.1` 的 Builder 支持 {@code image} / {@code entrypoint} /
+     * {@code resource} / {@code networkPolicy} / {@code timeout}）。</p>
+     *
+     * <p><b>刻意不喂的字段</b>：{@code scope}——SDK 无对应概念，且「按 scope 复用」是另一套
+     * 策略（当前复用口径是「按子任务 + 规格」），单独裁定前不接。</p>
+     *
+     * @param subTaskId 子任务 id（仅日志定位，可为 null）
+     * @param spec      生效规格（非 null；调用方已回落默认）
      */
-    private Sandbox openSandbox(Long subTaskId) {
+    private Sandbox openSandbox(Long subTaskId, SandboxSpec spec) {
+        long sandboxTimeout = resolveSandboxTimeoutSeconds(spec);
         try {
-            Sandbox sandbox = Sandbox.builder()
+            Sandbox.Builder builder = Sandbox.builder()
                     .connectionConfig(connectionConfig())
-                    .image(resolveImage())
+                    .image(resolveImage(spec))
                     .readyTimeout(Duration.ofSeconds(READY_TIMEOUT_SECONDS))
-                    .timeout(Duration.ofSeconds(SANDBOX_TIMEOUT_SECONDS))
-                    .build();
-            log.info("OpenSandboxExecutionService: sandbox created id={}, subTaskId={}, reuse={}, ttl={}s",
-                    sandbox.getId(), subTaskId,
-                    properties.isReuseEnabled() && subTaskId != null, SANDBOX_TIMEOUT_SECONDS);
+                    .timeout(Duration.ofSeconds(sandboxTimeout));
+            applyEntrypoint(builder, spec);
+            applyResourceLimits(builder, spec);
+            applyNetworkPolicy(builder, spec);
+            Sandbox sandbox = builder.build();
+            log.info("OpenSandboxExecutionService: sandbox created id={}, subTaskId={}, reuse={}, "
+                            + "image={}, cpu={}, memory={}, ttl={}s, fingerprint={}",
+                    sandbox.getId(), subTaskId, properties.isReuseEnabled() && subTaskId != null,
+                    resolveImage(spec), resourceOf(spec, true), resourceOf(spec, false), sandboxTimeout,
+                    SandboxSpecMapper.fingerprint(spec));
             return sandbox;
         } catch (Exception e) {
             log.warn("OpenSandboxExecutionService: sandbox create failed subTaskId={}, cause={}",
                     subTaskId, e.getMessage());
             return null;
         }
+    }
+
+    /** 入口命令：spec 显式给了才覆盖 SDK 默认（{@code tail -f /dev/null} 保持存活）。 */
+    private void applyEntrypoint(Sandbox.Builder builder, SandboxSpec spec) {
+        if (spec.entrypoint() == null || spec.entrypoint().isEmpty()) {
+            return;
+        }
+        builder.entrypoint(new ArrayList<>(spec.entrypoint()));
+    }
+
+    /**
+     * 资源限制：{@code cpu} / {@code memory} 为 K8s 风格字符串，与 SDK 的 {@code resource}
+     * 映射逐字对齐；两项都空则不设（沿用 SDK 默认，防「配置缺字段 ⇒ 显式给 0」）。
+     */
+    private void applyResourceLimits(Sandbox.Builder builder, SandboxSpec spec) {
+        SandboxSpec.ResourceLimits limits = spec.resourceLimits();
+        if (limits == null) {
+            return;
+        }
+        Map<String, String> resource = new LinkedHashMap<>();
+        if (limits.cpu() != null && !limits.cpu().isBlank()) {
+            resource.put("cpu", limits.cpu().trim());
+        }
+        if (limits.memory() != null && !limits.memory().isBlank()) {
+            resource.put("memory", limits.memory().trim());
+        }
+        if (!resource.isEmpty()) {
+            builder.resource(resource);
+        }
+    }
+
+    /**
+     * 网络策略：默认动作 + egress 白名单 ⇒ SDK {@link NetworkPolicy}。
+     *
+     * <p>{@code egress} 里每条都映射为 {@code ALLOW} 规则（白名单语义，与 `REF-5.4` 同向：
+     * 默认禁出、白名单放行）。{@code defaultAction} 只认 {@code allow}/{@code deny}，
+     * 其它值按 {@code deny} 处理——失败方向必须是「更严」而不是「更松」。</p>
+     */
+    private void applyNetworkPolicy(Sandbox.Builder builder, SandboxSpec spec) {
+        SandboxSpec.NetworkPolicy policy = spec.networkPolicy();
+        if (policy == null) {
+            return;
+        }
+        List<NetworkRule> rules = new ArrayList<>();
+        if (policy.egress() != null) {
+            for (String target : policy.egress()) {
+                if (target == null || target.isBlank()) {
+                    continue;
+                }
+                rules.add(NetworkRule.builder()
+                        .action(NetworkRule.Action.ALLOW)
+                        .target(target.trim())
+                        .build());
+            }
+        }
+        NetworkPolicy.Builder sdkPolicy = NetworkPolicy.builder()
+                .defaultAction("allow".equalsIgnoreCase(policy.defaultAction())
+                        ? NetworkPolicy.DefaultAction.ALLOW
+                        : NetworkPolicy.DefaultAction.DENY);
+        if (!rules.isEmpty()) {
+            sdkPolicy.egress(rules);
+        }
+        builder.networkPolicy(sdkPolicy.build());
+    }
+
+    /** 沙箱生命周期上限：spec 显式值优先，否则回落到历史常量。 */
+    private long resolveSandboxTimeoutSeconds(SandboxSpec spec) {
+        long fromSpec = spec == null ? 0L : spec.timeoutSeconds();
+        return fromSpec > 0 ? fromSpec : SANDBOX_TIMEOUT_SECONDS;
+    }
+
+    private static String resourceOf(SandboxSpec spec, boolean cpu) {
+        if (spec == null || spec.resourceLimits() == null) {
+            return "-";
+        }
+        String value = cpu ? spec.resourceLimits().cpu() : spec.resourceLimits().memory();
+        return value == null || value.isBlank() ? "-" : value;
     }
 
     /** 续期（保活工作区）；失败只降级日志，不阻断命令结果返回。 */
@@ -405,10 +944,19 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
     }
 
     /** 沙箱镜像：优先配置 spec.image，回落 python:3.12（OpenSandboxProperties 默认）。 */
-    private String resolveImage() {
-        OpenSandboxProperties.Spec spec = properties.getSpec();
-        if (spec != null && spec.getImage() != null && !spec.getImage().isBlank()) {
-            return spec.getImage();
+    /**
+     * 解析生效镜像：spec 优先，其次全局配置，最后兜底 {@code python:3.12}。
+     *
+     * <p>`SKX-5` 起镜像来自「调用方指定的规格」，不再是全局单例——同子任务要跑 node 出图时
+     * 由调用方把 node 规格传进来。</p>
+     */
+    private String resolveImage(SandboxSpec spec) {
+        if (spec != null && spec.image() != null && !spec.image().isBlank()) {
+            return spec.image();
+        }
+        OpenSandboxProperties.Spec configured = properties.getSpec();
+        if (configured != null && configured.getImage() != null && !configured.getImage().isBlank()) {
+            return configured.getImage();
         }
         return "python:3.12";
     }

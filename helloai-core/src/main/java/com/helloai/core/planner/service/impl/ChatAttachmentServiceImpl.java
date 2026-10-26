@@ -122,6 +122,52 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
     }
 
     @Override
+    public ChatAttachment saveArtifact(Long conversationId, Long uploaderUserId,
+                                       String fileName, String mimeType, byte[] content) {
+        if (conversationId == null) {
+            throw new BizException("产物附件必须挂在会话上（conversationId 为空）");
+        }
+        if (content == null || content.length == 0) {
+            throw new BizException("产物内容为空，拒绝登记为附件");
+        }
+        String safeName = ArtifactStorage.sanitizeFileName(fileName);
+        String mime = (mimeType == null || mimeType.isBlank())
+                ? mimeOfExtension(safeName) : mimeType;
+        StoredArtifact stored = artifactStorage.store(ownerName(conversationId, null), safeName, content);
+        ChatAttachment attachment = new ChatAttachment();
+        attachment.setConversationId(conversationId);
+        attachment.setUploaderUserId(uploaderUserId);
+        attachment.setFileName(safeName);
+        attachment.setFileType(extensionOf(safeName));
+        attachment.setMimeType(mime);
+        attachment.setFileSize((long) content.length);
+        attachment.setContentHash(sha256(content));
+        attachment.setBucketName(stored.bucketName());
+        attachment.setObjectKey(stored.objectKey());
+        attachment.setStorageUrl(stored.storageUrl());
+        // 产物不进 Prompt 上下文（840KB HTML 注入既无意义又挤预算）：
+        // 用 SKIPPED 表达「不要注入它的正文」，与图片/扫描件共用同一状态语义。
+        attachment.setParseStatus(ChatAttachmentParseStatus.SKIPPED);
+        save(attachment);
+        log.info("对话产物已登记为附件: id={}, conversationId={}, fileName={}, mime={}, size={}",
+                attachment.getId(), conversationId, safeName, mime, content.length);
+        return attachment;
+    }
+
+    /** 扩展名 → MIME 兜底（产物由平台生成，调用方通常已给 mime；这里只处理缺省）。 */
+    private static String mimeOfExtension(String fileName) {
+        String ext = extensionOf(fileName);
+        return switch (ext) {
+            case "html", "htm" -> "text/html";
+            case "json" -> "application/json";
+            case "md" -> "text/markdown";
+            case "svg" -> "image/svg+xml";
+            case "png" -> "image/png";
+            default -> "application/octet-stream";
+        };
+    }
+
+    @Override
     public List<ChatAttachment> list(Long conversationId, String clientToken) {
         if (conversationId != null) {
             return baseMapper.listByConversationId(conversationId);

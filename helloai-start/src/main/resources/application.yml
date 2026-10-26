@@ -161,6 +161,25 @@ helloai:
       enabled: true
       # 采样温度：保持语义 + 结构化改写而非创作，取低值保证稳定（建议 0.1~0.3）。
       temperature: 0.2
+  # 沙箱规格按调用分层（SKX-5，2026-10-26）：spec-presets.<name>。
+  # 不在此处定义 default —— 它就是 helloai.sandbox.opensandbox.spec（同一事实不能有两份默认值）。
+  # node 规格供「技能执行」使用：archify 的 engines 要求 node >= 18，镜像与资源经真机实测
+  # （SKX-1：node v20.20.2 / 峰值 103.6MB / 512Mi 余量 4.7 倍，见 LOG-20261026-030）。
+  # enabled / url / api-key 仍由各 profile 提供（local.yml / 环境变量），此处只声明规格。
+  sandbox:
+    opensandbox:
+      # 技能执行使用哪个规格（SKX-8，2026-10-26）：指向 spec-presets 的键名。
+      # 技能执行的镜像由「技能需要什么运行时」决定（archify 要 node），与验算命令用的镜像无关。
+      skill-spec-preset: node
+      spec-presets:
+        node:
+          image: node:20-bookworm-slim
+          resource-limits:
+            cpu: "1"
+            memory: 1Gi
+          network-policy:
+            default-action: deny
+          timeout-seconds: 900
   # 调度策略 3：外部优先 / 空闲优先 / 平台内 LLM 保底
   dispatch:
     auto-assign-on-create: false

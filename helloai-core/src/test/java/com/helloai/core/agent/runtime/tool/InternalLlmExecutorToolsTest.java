@@ -3,7 +3,10 @@ package com.helloai.core.agent.runtime.tool;
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
+import com.helloai.core.agent.runtime.sandbox.SandboxArtifact;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
+import com.helloai.core.agent.runtime.sandbox.SkillInstallResult;
+import com.helloai.core.agent.runtime.sandbox.impl.SkillExecutionSupport;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
@@ -19,8 +22,11 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -40,9 +46,14 @@ class InternalLlmExecutorToolsTest {
     private final com.helloai.core.agent.port.SubTaskCommandPort subTaskCommandPort =
             mock(com.helloai.core.agent.port.SubTaskCommandPort.class);
     private final SandboxExecutionService sandboxExecutionService = mock(SandboxExecutionService.class);
+    private final com.helloai.core.agent.runtime.sandbox.impl.SkillExecutionSupport skillExecutionSupport =
+            mock(com.helloai.core.agent.runtime.sandbox.impl.SkillExecutionSupport.class);
+    private final com.helloai.core.agent.service.SkillArtifactExportService skillArtifactExportService =
+            mock(com.helloai.core.agent.service.SkillArtifactExportService.class);
     private final InternalLlmExecutorTools tools =
             new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService,
-                    subTaskCommandPort, sandboxExecutionService);
+                    subTaskCommandPort, sandboxExecutionService, skillExecutionSupport,
+                    skillArtifactExportService);
 
     /** REF-8.1 A1 强制闸门：本类工具仅可由内部执行链调用，单测需先绑定执行链上下文。 */
     @BeforeEach
@@ -295,5 +306,144 @@ class InternalLlmExecutorToolsTest {
 
         assertThat(result).isSameAs(failed);
         verify(sandboxExecutionService).execute(22L, "cat nope.txt", 30);
+    }
+    // ===== SKX-8：internal_run_skill / internal_read_artifact（2026-10-26） =====
+
+    private static SkillExecutionSupport.SkillTarget archifyTarget() {
+        return new SkillExecutionSupport.SkillTarget("archify", "3.1.0", null);
+    }
+
+    @Test
+    @DisplayName("SKX-8 internal_run_skill：未绑定执行链上下文 ⇒ 拒绝（与其它 internal 工具同闸门）")
+    void runSkillShouldRejectWithoutChain() {
+        ToolInvocationContext.unbind();
+
+        assertThatThrownBy(() -> tools.internalRunSkill(11L, 22L, "archify",
+                "node bin/archify.mjs --help", null))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("内部执行链");
+        verifyNoInteractions(skillExecutionSupport);
+    }
+
+    @Test
+    @DisplayName("SKX-8 internal_run_skill：技能未入库 ⇒ 拒绝并列出可用包（不静默回落）")
+    void runSkillShouldRejectUnknownSkill() {
+        when(skillExecutionSupport.resolve("nope")).thenReturn(null);
+        when(skillExecutionSupport.availableSkillNames()).thenReturn(List.of("archify"));
+
+        assertThatThrownBy(() -> tools.internalRunSkill(11L, 22L, "nope", "ls", null))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("技能未入库")
+                .hasMessageContaining("archify");
+        verify(sandboxExecutionService, never()).installSkillPackage(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("SKX-8 internal_run_skill：注入失败 ⇒ 拒绝执行命令（不跑半装包）")
+    void runSkillShouldFailWhenInstallFails() {
+        when(skillExecutionSupport.resolve("archify")).thenReturn(archifyTarget());
+        when(skillExecutionSupport.ensureInstalled(22L, archifyTarget()))
+                .thenReturn(SkillInstallResult.fail("技能包加载失败: 清单与实际内容不一致"));
+
+        assertThatThrownBy(() -> tools.internalRunSkill(11L, 22L, "archify", "node bin/archify.mjs --help", 30))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("注入失败")
+                .hasMessageContaining("清单与实际内容不一致");
+        verify(skillExecutionSupport, never()).run(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("SKX-8 internal_run_skill：正常路径 ⇒ 返回 skill / skillDir / installed / 执行结果")
+    void runSkillShouldReturnStructuredResult() {
+        when(skillExecutionSupport.resolve("archify")).thenReturn(archifyTarget());
+        when(skillExecutionSupport.ensureInstalled(22L, archifyTarget()))
+                .thenReturn(SkillInstallResult.ok(122, 4_330_504L, "/workspace/skills/archify", true, "skipped"));
+        when(skillExecutionSupport.run(22L, archifyTarget(), "node bin/archify.mjs doctor", 60))
+                .thenReturn(new ExecuteResponse("Archify is ready.", 0, false));
+
+        Object result = tools.internalRunSkill(11L, 22L, "archify", "node bin/archify.mjs doctor", 60);
+
+        assertThat(result).isInstanceOf(Map.class);
+        Map<?, ?> map = (Map<?, ?>) result;
+        assertThat(map.get("skill")).isEqualTo("archify@3.1.0");
+        assertThat(map.get("skillDir")).isEqualTo("/workspace/skills/archify");
+        assertThat(map.get("exitCode")).isEqualTo(0);
+        assertThat(map.get("output")).isEqualTo("Archify is ready.");
+        assertThat(map.get("installed")).isEqualTo(Map.of("files", 122, "bytes", 4_330_504L, "skipped", true));
+    }
+
+    @Test
+    @DisplayName("SKX-8 internal_read_artifact：产物不存在 ⇒ 拒绝（提示路径与沙箱重建）")
+    void readArtifactShouldRejectWhenMissing() {
+        when(sandboxExecutionService.readArtifact(22L, "/workspace/out/x.html", 0)).thenReturn(null);
+
+        assertThatThrownBy(() -> tools.internalReadArtifact(11L, 22L, "/workspace/out/x.html", null))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("产物不存在");
+    }
+
+    @Test
+    @DisplayName("SKX-8 internal_read_artifact：小产物内联正文；大产物只给 size / sha256（不吃上下文预算）")
+    void readArtifactShouldInlineOnlySmallContent() {
+        when(sandboxExecutionService.readArtifact(22L, "/workspace/out/small.json", 0))
+                .thenReturn(new SandboxArtifact("/workspace/out/small.json",
+                        "{\"ok\":true}".getBytes(StandardCharsets.UTF_8),
+                        "application/json", "a".repeat(64), false));
+        when(sandboxExecutionService.readArtifact(22L, "/workspace/out/big.html", 0))
+                .thenReturn(new SandboxArtifact("/workspace/out/big.html",
+                        new byte[20_000], "text/html", "b".repeat(64), false));
+
+        Map<?, ?> small = (Map<?, ?>) tools.internalReadArtifact(11L, 22L, "/workspace/out/small.json", null);
+        Map<?, ?> big = (Map<?, ?>) tools.internalReadArtifact(11L, 22L, "/workspace/out/big.html", null);
+
+        assertThat(small.get("content")).isEqualTo("{\"ok\":true}");
+        assertThat(small.get("sha256")).isEqualTo("a".repeat(64));
+        assertThat(big.get("content")).isNull();
+        assertThat(big.get("note").toString()).contains("未内联");
+        assertThat(big.get("size")).isEqualTo(20_000);
+    }
+
+    // ===== SKX-11：internal_export_artifact（沙箱字节 → 对象存储 → 附件登记，2026-10-26） =====
+
+    @Test
+    @DisplayName("SKX-11 internal_export_artifact：未绑定执行链上下文 ⇒ 拒绝（与其它 internal 工具同闸门）")
+    void exportArtifactShouldRejectWithoutChain() {
+        ToolInvocationContext.unbind();
+
+        assertThatThrownBy(() -> tools.internalExportArtifact(11L, 22L, "/workspace/out/g.html", null))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("内部执行链");
+        verifyNoInteractions(skillArtifactExportService);
+    }
+
+    @Test
+    @DisplayName("SKX-11 internal_export_artifact：正常路径 ⇒ 回 attachmentId / fileName / size / sha256")
+    void exportArtifactShouldReturnAttachmentIdentity() {
+        when(skillArtifactExportService.export(11L, 22L, "/workspace/out/g.html", "arch-graph.html"))
+                .thenReturn(new com.helloai.core.agent.service.SkillArtifactExportService.ExportResult(
+                        9001L, "arch-graph.html", "text/html", 819_076L, "c".repeat(64)));
+
+        Map<?, ?> result = (Map<?, ?>) tools.internalExportArtifact(
+                11L, 22L, "/workspace/out/g.html", "arch-graph.html");
+
+        assertThat(result.get("attachmentId")).isEqualTo(9001L);
+        assertThat(result.get("fileName")).isEqualTo("arch-graph.html");
+        assertThat(result.get("mime")).isEqualTo("text/html");
+        assertThat(result.get("size")).isEqualTo(819_076L);
+        assertThat(result.get("sha256")).isEqualTo("c".repeat(64));
+        assertThat(result.get("note").toString()).contains("附件");
+        // 不外露 storageUrl：模型拿它没用，而内部存储地址属于不该扩散的实现细节
+        assertThat(result.containsKey("storageUrl")).isFalse();
+    }
+
+    @Test
+    @DisplayName("SKX-11 internal_export_artifact：超上限 / 产物不存在 ⇒ 拒绝原因原样透传（不吞成成功）")
+    void exportArtifactShouldPropagateRejections() {
+        when(skillArtifactExportService.export(11L, 22L, "/workspace/out/huge.html", null))
+                .thenThrow(new BizException("产物超过单文件上限（5242880 字节），拒绝导出以免交付被截断的文件"));
+
+        assertThatThrownBy(() -> tools.internalExportArtifact(11L, 22L, "/workspace/out/huge.html", null))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("单文件上限");
     }
 }
