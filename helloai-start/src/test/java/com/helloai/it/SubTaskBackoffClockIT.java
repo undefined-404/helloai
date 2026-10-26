@@ -40,8 +40,11 @@ import static org.mockito.Mockito.verify;
  *     <li>状态流转（block/changeStatus）刷新 {@code update_time} 但<b>不</b>触碰
  *         {@code last_attempt_time}；退避时钟只由 {@code incrementAttemptTotal} 推进、
  *         由 {@code resetAttemptTotal} 清空；</li>
- *     <li>退避窗口内 BLOCKED 重派被拦截且落 {@code sub_task_redispatch_skipped} 时间线
- *         （不再静默）；窗口过后放行。</li>
+ *     <li>退避窗口内<b>自动</b>重派（{@code dispatchBlockedSubTaskAuto}）被拦截且落
+ *         {@code sub_task_redispatch_skipped} 时间线（不再静默）；窗口过后放行。
+ *         <b>人工「换人」（{@code dispatchBlockedSubTask}）豁免退避</b>——2026-10-25 起
+ *         （7443 事故修复）退避只约束自动路径，人工显式指令天然稀疏且不消耗预算，
+ *         不被自动路径点着的冷却锁死（与单测 shouldNotBlockManualRedispatchByBackoff 语义闭环）。</li>
  * </ol>
  *
  * <p><b>真实边界</b>：PostgreSQL / Redis / RabbitMQ 均 Testcontainers（与
@@ -54,6 +57,8 @@ class SubTaskBackoffClockIT extends AbstractItTestBase {
     private static final long TASK = 9060L;
     private static final long SUB = 9360L;
     private static final long PREFERRED_AGENT = 12345L;
+    /** 自动入口 {@code dispatchBlockedSubTaskAuto} 的候选执行者（pickPreferred 前置）。 */
+    private static final long CANDIDATE_AGENT = 12346L;
 
     @Autowired
     private SubTaskService subTaskService;
@@ -73,10 +78,19 @@ class SubTaskBackoffClockIT extends AbstractItTestBase {
         jdbcTemplate.update("DELETE FROM task_timeline WHERE sub_task_id = ?", SUB);
         jdbcTemplate.update("DELETE FROM sub_task WHERE id = ?", SUB);
         jdbcTemplate.update("DELETE FROM task WHERE id = ?", TASK);
+        // 自动入口 dispatchBlockedSubTaskAuto 会先 pickPreferred 选人（真库）；
+        // seed 一个唯一候选执行者（CLI_CLIENT + ONLINE + 心跳新鲜），否则无候选
+        // 会在选人处返回 no_candidate，根本到不了退避闸门判定（SubTaskBlockedAutoRedispatchIT 同口径）。
+        jdbcTemplate.update("DELETE FROM agent WHERE id = ?", CANDIDATE_AGENT);
         jdbcTemplate.update("""
                 INSERT INTO task (id, title, status, create_by, update_by)
                 VALUES (?, 'it-backoff-task', 'IN_PROGRESS', 'it', 'it')
                 """, TASK);
+        jdbcTemplate.update("""
+                INSERT INTO agent (id, name, role, status, access_type, online_status, last_seen_time,
+                                   create_by, update_by)
+                VALUES (?, 'it-backoff-agent', 'EXECUTOR', 'ACTIVE', 'CLI_CLIENT', 'ONLINE', ?, 'it', 'it')
+                """, CANDIDATE_AGENT, OffsetDateTime.now());
     }
 
     private void seedSubTask(String status, int attemptTotal, OffsetDateTime lastAttemptTime) {
@@ -156,14 +170,17 @@ class SubTaskBackoffClockIT extends AbstractItTestBase {
     }
 
     @Test
-    @DisplayName("804：退避窗口内 BLOCKED 重派被拦截 → 返回 skipped + 状态不变 + 落 sub_task_redispatch_skipped")
-    void blockedRedispatchWithinBackoffIsSkippedAndObservable() {
+    @DisplayName("804：自动重派在退避窗口内被拦截 → 返回 skipped + 状态不变 + 落 sub_task_redispatch_skipped")
+    void autoRedispatchWithinBackoffIsSkippedAndObservable() {
         seedSubTask("BLOCKED", 1, OffsetDateTime.now().withNano(0));
 
+        // ★2026-10-25 语义变更（7443 事故修复）：退避只约束自动路径，人工「换人」豁免。
+        // 本用例验证的是自动路径 dispatchBlockedSubTaskAuto 仍受退避约束
+        // （与单测 shouldStillBlockAutoRedispatchByBackoff 语义闭环）。
         SubTaskDispatchService.RedispatchResult result =
-                subTaskDispatchService.dispatchBlockedSubTask(SUB, PREFERRED_AGENT);
+                subTaskDispatchService.dispatchBlockedSubTaskAuto(SUB, false);
 
-        assertFalse(result.applied(), "退避窗口内应被拦截（applied=false）");
+        assertFalse(result.applied(), "自动重派在退避窗口内应被拦截（applied=false）");
         assertEquals("backoff", result.reason());
         assertNotNull(result.nextAllowed(), "backoff 应带 nextAllowed 供前端提示");
         // 拦截不消耗预算、不改状态、不派发
@@ -175,19 +192,37 @@ class SubTaskBackoffClockIT extends AbstractItTestBase {
     }
 
     @Test
-    @DisplayName("804：退避窗口已过 → 重派放行（不再被自己刷新的时钟拦截）+ 计数/时钟推进")
-    void blockedRedispatchAfterBackoffProceeds() {
+    @DisplayName("804：退避窗口已过 → 自动重派放行（不再被自己刷新的时钟拦截）+ 计数/时钟推进")
+    void autoRedispatchAfterBackoffProceeds() {
         // last_attempt_time 早在 1 小时前（第 1 档退避仅 60s）→ 窗口已过
         seedSubTask("BLOCKED", 1, OffsetDateTime.now().minusHours(1).withNano(0));
 
         SubTaskDispatchService.RedispatchResult result =
-                subTaskDispatchService.dispatchBlockedSubTask(SUB, PREFERRED_AGENT);
+                subTaskDispatchService.dispatchBlockedSubTaskAuto(SUB, false);
 
         assertTrue(result.applied(), "退避窗口已过应放行（applied=true）");
         // BLOCKED → PENDING（resetToPendingForDispatch）+ 累加计数 + 推进时钟
         assertEquals("PENDING", readStatus());
         assertEquals(2, readAttemptTotal());
         assertNotNull(readLastAttemptTimeInstant(), "放行应经 incrementAttemptTotal 推进时钟");
+        verify(taskDispatchPort, times(1)).assignNext(any(), eq(SUB), any());
+    }
+
+    @Test
+    @DisplayName("★人工换人豁免退避（2026-10-25，7443 事故真库锁定）：退避窗口内 MANUAL → 放行并派发")
+    void manualRedispatchWithinBackoffIsExempted() {
+        // 与单测 shouldNotBlockManualRedispatchByBackoff 同口径：last_attempt_time 新鲜（AUTO 窗口内）
+        seedSubTask("BLOCKED", 1, OffsetDateTime.now().withNano(0));
+
+        // 人工入口 dispatchBlockedSubTask：不被「自动路径点着的冷却」拦住
+        SubTaskDispatchService.RedispatchResult result =
+                subTaskDispatchService.dispatchBlockedSubTask(SUB, PREFERRED_AGENT);
+
+        assertTrue(result.applied(), "人工换人应豁免退避（applied=true）");
+        // 放行路径：BLOCKED → PENDING + 计数推进 + 派单一次
+        assertEquals("PENDING", readStatus());
+        assertEquals(2, readAttemptTotal());
+        assertNotNull(readLastAttemptTimeInstant(), "人工放行同样推进退避时钟");
         verify(taskDispatchPort, times(1)).assignNext(eq(PREFERRED_AGENT), eq(SUB), any());
     }
 }

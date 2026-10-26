@@ -161,7 +161,7 @@ services:
   #   docker compose up -d opensandbox-images           # 不推荐（会启动无意义容器，别用）
   opensandbox-images:
     image: python:3.12
-    pull_policy: always
+    pull_policy: missing
     restart: "no"
     command: ["sleep", "infinity"]
 

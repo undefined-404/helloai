@@ -863,7 +863,11 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         // 上游草案报成 TO_LOOK_UP，单条口径会漏标。
         List<UncertaintyDraft> taskLevelUncertainties = new ArrayList<>();
         for (PlanDraftItem item : items) {
-            taskLevelUncertainties.addAll(normalizeUncertainties(taskId, resolveUncertainties(item), planner));
+            // ★2026-10-26 双重归一化修复（CI 门禁 1 回归）：此处只做**纯归一化**（kind 降级 /
+            // 空白过滤 / ensureRefs），不记降级审计事件——事件由下方逐草案装配处的
+            // normalizeUncertainties（带审计版）统一记，否则同一批 uncertainties 被归一化两次、
+            // 非法 kind 的 task_plan_uncertainty_degraded 会被记两次（实测 2 次）。
+            taskLevelUncertainties.addAll(normalizeUncertaintiesPure(resolveUncertainties(item)));
         }
         for (int idx = 0; idx < items.size(); idx++) {
             PlanDraftItem item = items.get(idx);
@@ -987,9 +991,40 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     }
 
     /**
-     * G-011 D3：kind 合法性归一——非 ASSUMPTION / UNCONFIRMED 的值降级 UNCONFIRMED 并记
-     * timeline {@code task_plan_uncertainty_degraded}（不丢弃：降级到更严语义符合 fail-close，
-     * 与 G-010 幻觉标签丢弃模式差异理由见设计 D3）；note 空白条目丢弃（无信息量，消费侧无法使用）。
+     * G-011 D3：kind 合法性归一（**纯函数，无副作用**）——非 ASSUMPTION / UNCONFIRMED / TO_LOOK_UP /
+     * TO_DERIVE 的值降级 UNCONFIRMED（不丢弃：降级到更严语义符合 fail-close，与 G-010 幻觉标签
+     * 丢弃模式差异理由见设计 D3）；note 空白条目丢弃（无信息量，消费侧无法使用）。
+     *
+     * <p>★2026-10-26 拆分（CI 门禁 1 回归）：归一化结果会被两处复用（任务级汇总 + 逐草案装配），
+     * 若两处都调用带审计的 {@link #normalizeUncertainties}，同一批 uncertainties 的非法 kind
+     * 会被记两次 {@code task_plan_uncertainty_degraded}。降级审计事件是副作用，只应在
+     * 「真正落库的那一次」记——故拆出本纯版供复用方调用，带审计版只在逐草案装配处用一次。</p>
+     */
+    private List<UncertaintyDraft> normalizeUncertaintiesPure(List<UncertaintyDraft> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        List<UncertaintyDraft> kept = new ArrayList<>(raw.size());
+        for (UncertaintyDraft u : raw) {
+            if (u.note() == null || u.note().isBlank()) {
+                continue;
+            }
+            String kind = u.kind();
+            // TD-7：值域白名单单一来源 UncertaintyKind（四值），非法值仍降级 UNCONFIRMED
+            if (!UncertaintyKind.isKnown(kind)) {
+                kind = UncertaintyDraft.KIND_UNCONFIRMED;
+            }
+            kept.add(new UncertaintyDraft(kind, u.note()));
+        }
+        // TD-11：ref 补齐走 `AcceptanceSatisfiabilityChecker#ensureRefs`（全项目唯一实现，
+        // 判据侧读 ref 用的也是它——两处各写一份编号逻辑必然分叉）
+        return AcceptanceSatisfiabilityChecker.ensureRefs(kept);
+    }
+
+    /**
+     * G-011 D3：kind 合法性归一 + 降级审计（带副作用版）——语义与 {@link #normalizeUncertaintiesPure}
+     * 完全一致，额外对每个非法 kind 记一条 timeline {@code task_plan_uncertainty_degraded}。
+     * 只允许在「逐草案装配」这一处调用（每批 uncertainties 只落库一次，事件只记一次）。
      */
     private List<UncertaintyDraft> normalizeUncertainties(Long taskId, List<UncertaintyDraft> raw, PlannerAgentRef planner) {
         if (raw == null || raw.isEmpty()) {

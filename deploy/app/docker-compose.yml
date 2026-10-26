@@ -23,7 +23,10 @@
 #      because the official `guest` account is loopback-only and cannot be used from
 #      a sibling container.
 #   6. (2026-10-19) postgres image -> pgvector; added opensandbox-server plus a
-#      python:3.12 pre-warm declaration. The `app` and `web` blocks are UNCHANGED.
+#      python:3.12 pre-warm declaration.
+#   7. (2026-10-26) sandbox is now always-on: opensandbox-server profile removed
+#      (a plain `up -d` starts it), and the app injects SANDBOX_ENABLED/URL/API_KEY
+#      so internal_run_in_sandbox is actually enabled (fail-closed default was off).
 # Prerequisite files (same dir as this file, relative paths preserved):
 #   helloai-start-1.0.0-SNAPSHOT.jar   # jar executed inside the app container
 #   dist/                              # frontend static files (mounted by the web service)
@@ -209,18 +212,15 @@ services:
       retries: 3
 
   # --- OpenSandbox lifecycle server (added 2026-10-19) ---
-  # MANUAL PULL ONLY. Two independent guards, both required in this environment:
-  #   1. profiles: ["sandbox"]  -> a plain `docker compose up -d` does NOT touch this
-  #      service at all, so an unreachable registry cannot block the release.
-  #   2. pull_policy: never     -> even when started explicitly, compose never pulls;
+  # RUNS BY DEFAULT (2026-10-26: profile removed, sandbox is now always-on for a
+  #   plain `docker compose up -d`). Two guards, both required in this environment:
+  #   1. pull_policy: never -> compose never pulls, even when starting explicitly;
   #      a missing image fails in <1s instead of hanging (measured: 657s and counting
   #      on this host, because Docker Hub is unreachable there).
   # Get the image on the host BEFORE starting it, either way:
   #   a) docker pull opensandbox/server:release-1.1.0
   #   b) docker save opensandbox/server:release-1.1.0 | gzip -1 > os-server.tgz
   #      scp os-server.tgz ... && docker load -i os-server.tgz
-  # Then start it alone (the rest of the stack is already up):
-  #   docker compose --profile sandbox up -d opensandbox-server
   #
   # Why it mounts /var/run/docker.sock: this server creates and destroys one container
   #   per task, and it does so on the HOST daemon. CONSEQUENCE: root inside this
@@ -233,7 +233,6 @@ services:
   #   helloai.sandbox.opensandbox.enabled=true together with url/api-key is set.
   opensandbox-server:
     image: opensandbox/server:release-1.1.0
-    profiles: ["sandbox"]
     pull_policy: never
     container_name: opensandbox-server
     restart: unless-stopped
@@ -246,11 +245,6 @@ services:
       #   anyone who can reach :8090 and knows the api_key can create containers on
       #   the HOST -- i.e. host root. Binding 0.0.0.0 would put that behind nothing
       #   but the api_key and the cloud security group.
-      # When the app finally needs to call this server (helloai.sandbox.opensandbox
-      #   .enabled=true), publish it to the compose network instead of the world:
-      #     - add `extra_hosts: ["host.docker.internal:host-gateway"]` to the app
-      #       service and set url=http://host.docker.internal:8090, OR
-      #     - switch this line to "8090:8090" and rely on the security group.
       - "127.0.0.1:8090:8090"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -378,6 +372,19 @@ services:
       #   like it worked. `:?` for the same reason as the key above: an empty string
       #   counts as "set" in Spring and would silently override the default.
       HELLOAI_AGENT_REGISTRATION_TOKEN: ${HELLOAI_AGENT_REGISTRATION_TOKEN:?.env in the deploy dir must define HELLOAI_AGENT_REGISTRATION_TOKEN (agent self-registration shared secret)}
+      # OpenSandbox sandbox chain (S-5/S-7/S-8/S-9), added 2026-10-26.
+      #   SANDBOX_ENABLED=true injects the internal_run_in_sandbox tool into internal
+      #   LLM executors (fail-closed: off = tool not injected). This is the flag that
+      #   application-dev.yml reads (default false), so it MUST be set here -- without
+      #   it the sandbox server running is not enough, the tool stays uninjected.
+      #   SANDBOX_URL is host loopback: the app container reaches the published port
+      #   of opensandbox-server (bound to 127.0.0.1 on the host).
+      #   SANDBOX_API_KEY is single-sourced from OPEN_SANDBOX_API_KEY (same value the
+      #   server requires), `:?` fail-fast so a missing key never starts a half-open
+      #   sandbox chain.
+      SANDBOX_ENABLED: ${SANDBOX_ENABLED:-true}
+      SANDBOX_URL: ${SANDBOX_URL:-http://127.0.0.1:8090}
+      SANDBOX_API_KEY: ${OPEN_SANDBOX_API_KEY:?OPEN_SANDBOX_API_KEY is required}
     depends_on:
       postgres:
         condition: service_healthy
