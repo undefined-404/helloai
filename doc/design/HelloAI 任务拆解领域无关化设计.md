@@ -1,6 +1,6 @@
 # HelloAI 任务拆解领域无关化设计
 
-> **状态：Planned**
+> **状态：Partial**（2026-10-26 由 `Planned` 升级：`TD-1`/`TD-2`/`TD-3`/`TD-6`/`TD-7` 已落地，见下文「实施状态」）
 > 最后更新：2026-10-24
 >
 > **Scope**：草案生成（`planner-decompose`）与任务拆解的**领域无关化口径**——`taskArchetype` 六类拆分维度、`acceptanceKind` 四类验收判据、拆解期上下文快照、以及「计划未知」任务用的 ledger 通道边界。
