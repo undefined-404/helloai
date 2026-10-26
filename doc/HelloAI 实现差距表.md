@@ -4,7 +4,7 @@
 >
 > 本文只记录**当前 → 目标**的真实差距；**只保留最新状态、随迭代就地更新**，不累加过程记录。
 >
-> **最后更新：2026-10-26**（**`SKX-x` 建号**：技能执行面接入专项（`SKX-1`~`SKX-10`）——2026-10-26 用户裁定三项口径：`G-005` **仅条件②命中**（沙箱容器内执行、`filesystem=ISOLATED` ⇒ 条件①「碰宿主」不成立）、**C1 先行**不装 Chromium（⇒ 条件③不触发）、三项待核事实并入首任务；承接 `plan/HelloAI 技能执行面接入实施计划（2026-10-26）.md`，调研见 `research/Archify 类技能执行面接入可行性调查（2026-10-26）.md`；**`G-005` 行状态改判留待 `SKX-9` 验收后回填，不提前宣称**。前次 **三模型对照测试**：4 个同型文档任务分别由 deepseek-v4-flash / MiniMax-M3 / qwen3.7-plus 执行，产出行为画像——deepseek 9 次执行全一轮过、MiniMax 2 次全一轮过、**qwen 首轮被驳回**（`EXECUTION_RECORD` 泄漏进交付正文导致「恰好 3 个 H2」结构断言失败，返工后通过），另发现「执行密集闸门与评审闸门同判据」矛盾（内部 agent 无本机能力标记 ⇒ `dispatch_skip_execution_dense` + `review_skip_execution_dense_no_capability`，AUTOMATED 子任务无法自动闭环，见 `LOG-20261025-019`）。**纠错**：一度拟增设的「验收契约内部矛盾」判据被终审记录推翻、已撤回，同轮修 `B3` 并登记 `B4`，见 `LOG-20261025-018`。**G-025 续建**：契约死锁事故复盘后追加 `TD-11`（验收契约可满足性标注，只标不拒）+ `TD-12`（核验侧前置条件豁免），号段由 1~10 扩为 1~12；同日暴露 `B1a`（`SubTaskReviewServiceImpl:712` `rework()` 早退吞掉评审结论与 `SUB_TASK_AUTO_REVIEW_REJECTED` 事件）、`B1b`（前端未渲染驳回 `score`/`issues`）、`B2`（平台自身故障消耗返工预算）三项缺陷，批次次序见计划 §4.2，见 `LOG-20261025-014`。前次 **G-025 登记**：任务拆解的领域无关化——拆解只有一档（静态 DAG + 软件交付语法，`planner-decompose.md:60-93` 的契约先行/验收模板均为研发语境），`GRANULARITY` 只控「拆多细」不控「按什么维度拆」，`task` 表无领域/交付物类型维度，验收 `acceptance` 无判据类型；已立 `TD-1`~`TD-10`（`TD-10` 登记不启动）+ 设计 `design/HelloAI 任务拆解领域无关化设计.md` + 计划 `plan/HelloAI 任务拆解领域无关化实施计划（2026-10-24）.md`，**生效开关 = `TD-3`+`TD-5`**——二者未落地前两列恒为默认值、行为不变，见 `LOG-20261024-034`；`TD-1`/`TD-2` 迁移已 applied 复核通过、`TD-3` 真实样本验收②通过（DOCUMENT 任务产出 5 条非「写引言/写正文/写结论」草案）、`TD-4` 判定链已完成、`TD-5` **已完成并真实回归全通过**（fail-close 拦截显式错配、长度闸零误伤、**写侧缺口根治**——`SubTaskMapper.xml` 自定义 insert/updateById 补 `acceptance_kind` 列，重拆终验库里 5 条落显式 kind STRUCTURAL×4+REVIEWED×1，**观察项已解决**：模型已遵从 `acceptanceKind` 字段，见 `LOG-20261024-042`/`LOG-20261024-043`）⇒ **能力部分生效**。前次 **G-024 登记**：附件与联网检索的编排——决策 Prompt 原不含任何附件信息，检索词只能取自用户问句，实测产出「我上传的附件」「分析一下」等指代元词，首词已命中仍整轮耗时 42s；已补决策视图注入 + 模板「附件优先」规则 + 规则层元词过滤，见 `LOG-20261023-010`。G-008 复核：token 实为非空——37 条执行记录全为内部 LLM，SUCCESS 且带 token 22 条，12 条 null 均在 `V97` 迁移前；未达成项由「待数据积累」修正为「候选间比较待第 2 个 agent」，见 `LOG-20261023-005`；G-017 新增未达成项 ③：对账数据源未覆盖 `chat_attachment`，且两者同桶不同前缀会被判「会话附件 = 孤儿」，为开启孤儿清理的阻塞前置；G-017 未达成项 ③ 由「两类引用源」扩为「三类」：清理历史残留时发现 `skill_package.origin_zip_url`（技能包原始 zip，agent 域）也从不在对账口径内，且它不叫 `storage_url` 故按列名检索必漏；三类端口均已接入、分列字段齐备，剩余真机双来源对账验收。前次更新见 `LOG-20261022-001` / `LOG-20261021-008` / `LOG-20261021-006` / `LOG-20261021-005`）
+> **最后更新：2026-10-26**（**`G-026` 登记**：LLM 额度与用量监控——4 家外部供应商余额 + 只读悬浮控件，设计成文 `design/HelloAI LLM 额度与用量监控设计.md`（`Status=Planned`），含 SPI / 密钥来源双层抽象 / 单表快照 / Redis 缓存 / 不采用 SSE 的取舍 / 5 项待验证（博查单位与域名、MiniMax 返回结构、峰谷价、vault 多条 ACTIVE 取数）；通义千问经用户裁定不显示；状态 `设计中`，待 `plan/` 出批次。**`SKX-x` 建号**：技能执行面接入专项（`SKX-1`~`SKX-10`）——2026-10-26 用户裁定三项口径：`G-005` **仅条件②命中**（沙箱容器内执行、`filesystem=ISOLATED` ⇒ 条件①「碰宿主」不成立）、**C1 先行**不装 Chromium（⇒ 条件③不触发）、三项待核事实并入首任务；承接 `plan/HelloAI 技能执行面接入实施计划（2026-10-26）.md`，调研见 `research/Archify 类技能执行面接入可行性调查（2026-10-26）.md`；**`G-005` 行状态改判留待 `SKX-9` 验收后回填，不提前宣称**。前次 **三模型对照测试**：4 个同型文档任务分别由 deepseek-v4-flash / MiniMax-M3 / qwen3.7-plus 执行，产出行为画像——deepseek 9 次执行全一轮过、MiniMax 2 次全一轮过、**qwen 首轮被驳回**（`EXECUTION_RECORD` 泄漏进交付正文导致「恰好 3 个 H2」结构断言失败，返工后通过），另发现「执行密集闸门与评审闸门同判据」矛盾（内部 agent 无本机能力标记 ⇒ `dispatch_skip_execution_dense` + `review_skip_execution_dense_no_capability`，AUTOMATED 子任务无法自动闭环，见 `LOG-20261025-019`）。**纠错**：一度拟增设的「验收契约内部矛盾」判据被终审记录推翻、已撤回，同轮修 `B3` 并登记 `B4`，见 `LOG-20261025-018`。**G-025 续建**：契约死锁事故复盘后追加 `TD-11`（验收契约可满足性标注，只标不拒）+ `TD-12`（核验侧前置条件豁免），号段由 1~10 扩为 1~12；同日暴露 `B1a`（`SubTaskReviewServiceImpl:712` `rework()` 早退吞掉评审结论与 `SUB_TASK_AUTO_REVIEW_REJECTED` 事件）、`B1b`（前端未渲染驳回 `score`/`issues`）、`B2`（平台自身故障消耗返工预算）三项缺陷，批次次序见计划 §4.2，见 `LOG-20261025-014`。前次 **G-025 登记**：任务拆解的领域无关化——拆解只有一档（静态 DAG + 软件交付语法，`planner-decompose.md:60-93` 的契约先行/验收模板均为研发语境），`GRANULARITY` 只控「拆多细」不控「按什么维度拆」，`task` 表无领域/交付物类型维度，验收 `acceptance` 无判据类型；已立 `TD-1`~`TD-10`（`TD-10` 登记不启动）+ 设计 `design/HelloAI 任务拆解领域无关化设计.md` + 计划 `plan/HelloAI 任务拆解领域无关化实施计划（2026-10-24）.md`，**生效开关 = `TD-3`+`TD-5`**——二者未落地前两列恒为默认值、行为不变，见 `LOG-20261024-034`；`TD-1`/`TD-2` 迁移已 applied 复核通过、`TD-3` 真实样本验收②通过（DOCUMENT 任务产出 5 条非「写引言/写正文/写结论」草案）、`TD-4` 判定链已完成、`TD-5` **已完成并真实回归全通过**（fail-close 拦截显式错配、长度闸零误伤、**写侧缺口根治**——`SubTaskMapper.xml` 自定义 insert/updateById 补 `acceptance_kind` 列，重拆终验库里 5 条落显式 kind STRUCTURAL×4+REVIEWED×1，**观察项已解决**：模型已遵从 `acceptanceKind` 字段，见 `LOG-20261024-042`/`LOG-20261024-043`）⇒ **能力部分生效**。前次 **G-024 登记**：附件与联网检索的编排——决策 Prompt 原不含任何附件信息，检索词只能取自用户问句，实测产出「我上传的附件」「分析一下」等指代元词，首词已命中仍整轮耗时 42s；已补决策视图注入 + 模板「附件优先」规则 + 规则层元词过滤，见 `LOG-20261023-010`。G-008 复核：token 实为非空——37 条执行记录全为内部 LLM，SUCCESS 且带 token 22 条，12 条 null 均在 `V97` 迁移前；未达成项由「待数据积累」修正为「候选间比较待第 2 个 agent」，见 `LOG-20261023-005`；G-017 新增未达成项 ③：对账数据源未覆盖 `chat_attachment`，且两者同桶不同前缀会被判「会话附件 = 孤儿」，为开启孤儿清理的阻塞前置；G-017 未达成项 ③ 由「两类引用源」扩为「三类」：清理历史残留时发现 `skill_package.origin_zip_url`（技能包原始 zip，agent 域）也从不在对账口径内，且它不叫 `storage_url` 故按列名检索必漏；三类端口均已接入、分列字段齐备，剩余真机双来源对账验收。前次更新见 `LOG-20261022-001` / `LOG-20261021-008` / `LOG-20261021-006` / `LOG-20261021-005`）
 >
 > 过程与订正历史按「做过什么」归 `doc/log/`：2026-09 批次见 `doc/archive/log/2026-09.md`，2026-10 批次见 `doc/log/2026-10.md`。
 >
@@ -18,7 +18,7 @@
 
 | 编号 | 含义 |
 |---|---|
-| `G-001`~`G-024` | 本表差距项（见 §1 总体矩阵）；`G-021` / `G-022` / `G-023` / `G-024` 分别于 2026-10-12 / 2026-10-13 / 2026-10-16 / 2026-10-23 登记 |
+| `G-001`~`G-026` | 本表差距项（见 §1 总体矩阵）；`G-021` / `G-022` / `G-023` / `G-024` / `G-025` / `G-026` 分别于 2026-10-12 / 2026-10-13 / 2026-10-16 / 2026-10-23 / 2026-10-24 / 2026-10-26 登记 |
 | `P0`~`P3` | **架构重构主线阶段**（唯一含义）；审计优先级档已改用 `PR0`~`PR3` |
 | `RM1`~`RM13` | 代码质量路线图（与目标架构能力层不再撞号）；**该计划已于 2026-10-17 归档 `Done`**（`doc/archive/implemented/HelloAI_RM存量缺口清偿计划（2026-10-04）.md`），号段不再新增 |
 | `B1`~`B5` | 目标架构能力层（阻断项）；**4 项达成**（B1 单轨 / B3 Recover / B4 QualityGate / B5 用量与成本），**仅 `B2 Sandbox` 条件触发（暂缓）**（2026-10-18 复核：契约 + 五边界诚实标注 + 真实执行通道已建，`G-005` 三触发条件仍未命中） |
@@ -176,6 +176,7 @@
 | G-024 | 附件与联网检索的编排 | 决策视图注入 + 模板「附件优先」四条硬规则 + 元词过滤（含兜底同源判定）+ `ATT-5` 附件意图三态（真机三轮验证：`answerable` 不联网 / `none` 不注入正文 / `needs_external` 带锚点检索）+ `ATT-6` 补搜多变体 | 检索词由附件外部锚点构成；附件无可核验实体时不触发联网 | PR1 | 部分完成 | 进度文案取真实候选词；`websearch-gap-assess.md` 补「检索词由附件外部锚点构成」约束（`ATT-6` 目前只做多变体） |
 
 | G-025 | 任务拆解的领域无关化 | 拆解只有一档：静态 DAG + 软件交付语法（`planner-decompose.md:60-93` 契约先行/验收模板均为研发语境）；`GRANULARITY` 只控「拆多细」不控「按什么维度拆」；`task` 表无领域或交付物类型维度；拆解输入仅 `title`+`description`+`requiredSkills`+`difficulty`+需求包；验收 `acceptance` 为自由文本、无判据类型 | 按交付物判据分档：`task.task_archetype` 六类（BUILD/DOCUMENT/RESEARCH/DATA/OPERATE/DECIDE）+ `sub_task.acceptance_kind` 四类（AUTOMATED/STRUCTURAL/REVIEWED/ATTESTED）+ 每类对应的拆分维度与终止锚 + 拆解期上下文快照 + 「计划未知」任务的 ledger 通道 | PR1 | 部分完成 | `TD-1` / `TD-2` **已完成**（迁移 `V124` / `V125` 应用重启后复核 `Success`：存量 10 条任务全 `BUILD`、45 条子任务全 `AUTOMATED`，CHECK 拒绝非法值 `NOPE`/`MAYBE` 已实测）；`TD-3` 提示词分档已落地 + **真实样本验收②通过**（`taskArchetype=DOCUMENT` 任务产出 5 条草案，title 脱离「写引言/写正文/写结论」结构；**观察项已解决**：模型已遵从 `acceptanceKind` 结构化字段——重拆实测 5 条全显式声明，见 `LOG-20261024-043`）；`TD-4` **已完成**（`package.archetype` → 防御式解析 → 写 `task.task_archetype`，未走澄清链路回落 `BUILD`，单测锁定回落路径；六类真实判定待澄清链路回归观测）；`TD-5` **已完成**（`AcceptanceKindValidator` 四套 kind 校验 + 显式声明 fail-close / 缺失回落 Warn 放行 + `acceptance ≥ 10` / `deliverable ≥ 8` 字符下限质量闸；**真实回归全通过**——fail-close 拦截显式错配（`2113976255295021058` 整批拒绝 + `task_plan_failed`）、长度闸零误伤（真实产物最短 219/46 字符）、**写侧缺口根治**（`SubTaskMapper.xml` 自定义 `insert`/`updateById` 补 `acceptance_kind` 列，重拆终验库里 5 条落显式 kind：STRUCTURAL×4 + REVIEWED×1，insert 日志参数带 `STRUCTURAL(String)` 铁证）、**验收③ REVIEWED 接审查域完成**（timeline payload 补 `acceptanceKind`+`analysis` 逐条核验、对话流结果文本补「逐条核验」段，单测 61+8 例全绿，见 `LOG-20261024-044`；另人工修正两个历史回归任务 `2113947011709964289`/`2113971974332534786` 共 11 条草案 kind——写侧缺陷期间产物，文本 STRUCTURAL/REVIEWED 风格库记 AUTOMATED，修正后 9 STRUCTURAL + 2 REVIEWED）；`TD-6` / `TD-7` 已完成；`TD-8` **已完成**（澄清侧 stall 计数——**判据经用户拍板 = 用户信息量判据**：selections 的 values/customText 全空 + 纯文本敷衍词即「无新信息」，连续 2 轮（可配置）强制收敛出终稿、不自动建任务、未决项 openQuestions 完整列出；`ClarifyStallGuard` 纯函数 + `runConvergeRound` 接入，单测 13+3 例全绿，见 `LOG-20261024-045`）；`TD-9` **已完成**（单条草案细拆 `expandById` + 同粒度重写 `regenerateById`——expand：单条 → N 条 FINE 子草案、组内依赖 Kahn 校验后落库回写、**逻辑删原草案**、被其他草案依赖拒绝展开（幽灵依赖 fail-close）；regenerate：**不变量白名单**只改 content/deliverable/acceptance/acceptanceKind，title/id/dependsOn 一律不动（LLM 输出被忽略取原值）；专用提示词 `planner-expand.md`/`planner-regenerate.md` + `SubTaskService.updateDraftContent` 写命令 + `POST /sub-tasks/expandDraftById/{id}`/`regenerateDraftById/{id}`（`subtask:edit`）+ 前端草案审阅弹窗「展开」「重生成」按钮；同步执行 `@Transactional` 失败回滚不破坏原草案；单测 5 例全绿 + 全量 2601 例全绿，见 `LOG-20261024-046`），`TD-10` 登记不启动；**能力部分生效**——`TD-4` 已接 ⇒ 走澄清链路的任务可自动判 archetype，未走链路仍 `BUILD`；`TD-5` 已接 ⇒ 显式声明的 `acceptance_kind` 触发分流校验（错配 fail-close）且落库保留显式 kind（写侧已补列），缺失回落放行不影响存量；`TD-8` 已接 ⇒ 连续无信息收敛出终稿不建任务；`TD-9` 已接 ⇒ 草案态支持局部返工（细拆/重写）；**2026-10-25 续建 `TD-11`（验收契约可满足性标注，只标不拒）+ `TD-12`（核验侧前置条件豁免）**——起因是契约死锁事故：`content` 要求「不要自行替换成其他产品」∧ `acceptance` 要求「≥15 条带真实 URL 的事实」⇒ 执行者无解，两版产出各走极端均判 2 分，且驳回理由因 `SubTaskReviewServiceImpl:712` 的 `rework()` 早退被整条吞掉（`B1a`）；`TD-5` 未拦住是因 `validateAcceptanceKinds` 签名不含 `uncertainties`、`AcceptanceKindValidator` 只判文本写法（见 `LOG-20261025-014`）；**2026-10-25 批次 6 已落地 `B1a`（驳回留痕前移到 `rework()` 之前）+ `B1b`（事件行渲染评分与 issues）+ `TD-11`（只标注不阻断，`AcceptanceSatisfiabilityChecker` 四条件 + `ref` 补齐）**，全量 2930 例 0 失败、守卫全绿，`TD-11` 置「验证中」待真机样本；`B2` 按计划留第 8 批（见 `LOG-20261025-015`）；**同日真机全链路实测 + 一次纠错**：拆解产出 8 条草案、`TD-11` 标注机制全通（`ref` 落库 / `context` 键 / 时间线事件均正常）但**准确率 0**——标了 2 条都不阻断、漏了实际 `BLOCKED` 的 2 条；期间一度据「`acceptance` 内部自相矛盾」提出「甲判据」，被同一任务的终审记录推翻（草案 4 的第 5 条与草案 2 **一字不差**，且 round 2 `APPROVED score=4`，理由明写「有官方来源」∧「全文未出现代号—真实产品对应表述」）⇒ **甲判据撤回**、`TD-12` 豁免入口维持 `acceptancePreconditions` 不变（见 `LOG-20261025-018`）；同轮修 `B3`（终稿 `archetype` 回落不可见 → `TaskArchetypeResolver` 纯函数 + `task_archetype_fallback` 事件 + 7 例单测，真机现场：终稿包顶层键**根本没有 `archetype`**，落库却是 `BUILD`）并登记 `B4`（`sub_task_report_blocked` 的 `reason` 恒为空，失败原因在相邻 `execute_failed` 事件上 ⇒ 转展示层合并，不动执行侧契约）；见 `plan/HelloAI 任务拆解领域无关化实施计划（2026-10-24）.md` §0 ④ |
+| G-026 | LLM 额度与用量监控 | 4 家外部供应商（deepseek / moonshot / minimax / dashscope）余额分散在各自控制台，平台侧仅能通过「调用失败」感知额度耗尽；`credential_vault` PLATFORM 级 10 条凭据（deepseek 3 / moonshot 3 / minimax 2 / dashscope 2）；博查 key 另存 `sys_config[web-search.bocha.api-key]`；`agent_completed` 的 `usage` 字段 **0 条落库**、token 仅单值无 model 维度 | 4 家（deepseek / moonshot / minimax / 博查）余额在平台内一处可查，每项带抓取时间与失败标记；通义无公开接口故不显示；只读悬浮控件 | PR2 | 设计中 | 设计已成文 `design/HelloAI LLM 额度与用量监控设计.md`（`Status=Planned`）：SPI + 密钥来源抽象 + 单表快照 + Redis 缓存 + 4 家适配矩阵 + 5 项待验证。**未达成**：全部实现工作；`V1`~`V5` 待验证（博查单位/域名、MiniMax 返回结构、峰谷价、vault 多条 ACTIVE 取数）；`plan/` 批次待出 |
 
 ## 1.1 专项任务索引（任务视角，状态不复述）
 
@@ -378,6 +379,7 @@ Historical Success
 Cost / Latency
 RAG 知识库（G-019，可后置）
 外部 Agent 工作详情快照（G-020，可后置）
+LLM 额度与用量监控（G-026，价值项）
 ```
 
 ### RAG 知识库（G-019）
@@ -454,6 +456,39 @@ L3 可见上下文    system prompt（非空）+ 工作区 / 附件读手脚    
 **收敛完成判据**（内核自洽，较「组完成」更严）：① 不依赖 MCP 会话可独立构造 / 测试；② **可见面单口径**（模型可见工具集 = `ToolRegistry.resolve` 结果，上游无第二处二次过滤——对应已证缺陷模式「**规则存在 ≠ 全路径强制**」）；③ **能力可验证**（拿一条「需读原附件 / 写产物」的验收任务，内部 LLM 能**自己调工具**完成）；④ 事件不双写（模型可见消息与事件流同源）。
 
 **红线**：**不新建 append-only 表**（`agent_event` 已是主表 + Outbox 双写，见 `AgentEventRecorder.java:11-15`）——正确动作是**提升已有 `agent_event`**（补 `surface` 投影 + `deriveMessages()`）；**不动 `ChatModelToolLoop` 循环本体**；**不引入 LangGraph4j**（触发信号出现前）。
+
+### LLM 额度与用量监控（G-026，2026-10-26 立项）
+
+任务锚点：设计 `design/HelloAI LLM 额度与用量监控设计.md`（`Status=Planned`）；实施计划待 `plan/` 另立。
+
+**要解决的事**：4 家外部供应商的余额分散在各自控制台，当前只能靠「调用失败」事后感知额度耗尽。
+
+**设计已定的六条**（详见设计文档，此处只留结论）：
+
+```text
+① SPI           BalanceProvider（key / supports / fetch），fetch 不抛异常、失败返回 failed(reason)
+② 密钥来源      BalanceCredentialResolver 抽象两层：vault（3 家 LLM）/ sys_config（博查）
+③ 数据          只建一张 llm_balance_snapshot；不建 llm_account（与 vault 双写）、不建 llm_usage_daily（与事件源双写）
+④ 缓存          Redis RBucket TTL 60s（多实例不重复打外部接口）+ Resilience4j quotaFetch 熔断
+⑤ 刷新          前端 30s 轮询 + 定时采集 15min；不采用 SSE（低频数据，且已有跨实例踩坑）
+⑥ 前端          MainLayout 悬挂浮球，折叠显示总额、展开列 4 家；金额型与额度型分开（MiniMax 是百分比）
+```
+
+**范围裁定**（2026-10-26 用户拍板）：通义千问**不显示**——无公开余额接口，需阿里云 AK/SK 签名，而本平台只有 `sk-` key。
+「显示一个取不到数的行」比「不显示这一行」更容易被当成缺陷。
+
+**与外部建议的三处有意分歧**（外部方案 vs 本设计）：
+
+| 外部建议 | 本设计 | 理由 |
+|---|---|---|
+| 三张表（account / snapshot / usage_daily） | **只建 snapshot** | 另两张分别与 `credential_vault`、`agent_event` 双写，必然漂移 |
+| SSE 增量推 | 30s 轮询 + 60s 缓存 | 低频数据建高频通道，成本高于收益 |
+| 余额 5 分钟轮询 | 15 分钟 | 4 家 × 96 次/天已足够，余额是日级变化 |
+
+**前置待验证**（写 plan 前必须确认，否则实现会返工）：博查 `remaining` 单位（元/分）、博查 base-url 用 `api.bochaai.com` 还是 `api.bocha.cn`、
+MiniMax `token_plan/remains` 实际结构、`deepseek-v4-flash` 是否仍适用峰谷价、`credential_vault` 同 provider 多条 ACTIVE 时的取数规则。
+
+**明确不做**（M1）：AGENT 级 22 条凭据余额、调度联动（额度低停止派单）、MCP 工具 `queryBalance`、token 五分量与趋势图、阈值告警。
 
 # 5. P3
 
