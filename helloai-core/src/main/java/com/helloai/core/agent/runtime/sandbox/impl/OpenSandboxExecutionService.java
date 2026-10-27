@@ -34,6 +34,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -115,6 +116,16 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
     private static final int DEFAULT_ARTIFACT_MAX_BYTES = 4 * 1024 * 1024;
 
     /**
+     * 建沙箱失败时上报的 cause 上限（字符，600）。
+     *
+     * <p>SDK / 反向代理返回的 error body 可能是整页 HTML（实测 {@code 500} 会带一段 JSON，
+     * 但网关层失败会是 HTML），而这条消息会进 {@link ExecuteResponse#output()}——
+     * 既喂给模型也显示在界面上。截断只为防病态长度，600 字符足够装下
+     * {@code {"code":"DOCKER::SANDBOX_START_FAILED","message":"..."}} 这类判据。</p>
+     */
+    private static final int MAX_CAUSE_CHARS = 600;
+
+    /**
      * 回读命令：挑出工作区里<b>最大的 .md</b>，以 <b>base64</b> 单行输出。
      *
      * <p><b>为什么用 base64 而不是直接 {@code cat}</b>：本服务的输出通路会把多条 stdout 消息用
@@ -194,10 +205,13 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
             return executeOneShot(subTaskId, effective, command, timeoutSec, start);
         }
         SlotKey key = new SlotKey(subTaskId, SandboxSpecMapper.fingerprint(effective));
+        // opener 返回 null 只表达「创建失败」，真实原因经 errorSink 带出（2026-10-27）
+        AtomicReference<String> createFailure = new AtomicReference<>();
         SandboxSlotPool.Slot<SlotKey, Sandbox> slot =
-                pool.acquire(key, idleTtlMillis(), () -> openSandbox(subTaskId, effective), this::destroy);
+                pool.acquire(key, idleTtlMillis(), () -> openSandbox(subTaskId, effective, createFailure),
+                        this::destroy);
         if (slot == null) {
-            return new ExecuteResponse("sandbox create failed (opener returned null)",
+            return new ExecuteResponse(createFailedMessage(createFailure.get()),
                     ExecuteResponse.EXIT_CODE_ERROR, false);
         }
         slot.lock().lock();
@@ -358,10 +372,12 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
         SlotKey key = new SlotKey(subTaskId, SandboxSpecMapper.fingerprint(effective));
         String targetDir = SKILL_ROOT_DIR + "/" + pkg.name();
         long start = System.currentTimeMillis();
+        AtomicReference<String> createFailure = new AtomicReference<>();
         SandboxSlotPool.Slot<SlotKey, Sandbox> slot = pool.acquire(key, idleTtlMillis(),
-                () -> openSandbox(subTaskId, effective), this::destroy);
+                () -> openSandbox(subTaskId, effective, createFailure), this::destroy);
         if (slot == null) {
-            return SkillInstallResult.fail("sandbox create failed (opener returned null)");
+            // 注入失败的原因必须带出去：它会被上层拼成「技能包注入失败：<此消息>」显示给用户
+            return SkillInstallResult.fail(createFailedMessage(createFailure.get()));
         }
         slot.lock().lock();
         try {
@@ -699,9 +715,10 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
                                            long timeoutSec, long start) {
         Sandbox sandbox = null;
         try {
-            sandbox = openSandbox(subTaskId, spec);
+            AtomicReference<String> createFailure = new AtomicReference<>();
+            sandbox = openSandbox(subTaskId, spec, createFailure);
             if (sandbox == null) {
-                return new ExecuteResponse("sandbox create failed (opener returned null)",
+                return new ExecuteResponse(createFailedMessage(createFailure.get()),
                         ExecuteResponse.EXIT_CODE_ERROR, false);
             }
             return runCommand(subTaskId, sandbox, command, timeoutSec, start);
@@ -784,10 +801,19 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
      * <p><b>刻意不喂的字段</b>：{@code scope}——SDK 无对应概念，且「按 scope 复用」是另一套
      * 策略（当前复用口径是「按子任务 + 规格」），单独裁定前不接。</p>
      *
+     * <p><b>`LOG-20261027` 起带出失败原因</b>：此前 catch 只 {@code log.warn} 后返回 {@code null}，
+     * 调用方只好报 {@code "sandbox create failed (opener returned null)"} —— 真实原因（egress
+     * sidecar 起不来 / url 未配置 / 网络不可达）只在服务端日志里，用户在界面上看不到，
+     * 排障时被这句无信息量的文案误导。现用一个 {@code errorSink} 出口把 SDK 原始
+     * cause 与「url 是否配置 / apiKey 是否配置」带回调用方拼进失败消息。
+     * <b>返回值语义不变</b>（失败仍返回 {@code null}）——{@link SandboxSlotPool#acquire}
+     * 的「opener 返回 null ⇒ 不登记」契约与相关单测口径不受影响。</p>
+     *
      * @param subTaskId 子任务 id（仅日志定位，可为 null）
      * @param spec      生效规格（非 null；调用方已回落默认）
+     * @param errorSink 失败原因出口（可 null；仅在失败时写入，含 SDK cause 与连接配置摘要）
      */
-    private Sandbox openSandbox(Long subTaskId, SandboxSpec spec) {
+    private Sandbox openSandbox(Long subTaskId, SandboxSpec spec, AtomicReference<String> errorSink) {
         long sandboxTimeout = resolveSandboxTimeoutSeconds(spec);
         try {
             Sandbox.Builder builder = Sandbox.builder()
@@ -806,10 +832,50 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
                     SandboxSpecMapper.fingerprint(spec));
             return sandbox;
         } catch (Exception e) {
-            log.warn("OpenSandboxExecutionService: sandbox create failed subTaskId={}, cause={}",
-                    subTaskId, e.getMessage());
+            String detail = describeCreateFailure(e);
+            if (errorSink != null) {
+                errorSink.set(detail);
+            }
+            log.warn("OpenSandboxExecutionService: sandbox create failed subTaskId={}, image={}, {}",
+                    subTaskId, resolveImage(spec), detail);
             return null;
         }
+    }
+
+    /**
+     * 拼「建沙箱失败」的可读原因：SDK 异常 + 连接配置摘要（<b>绝不打印 apiKey 值</b>）。
+     *
+     * <p>把配置摘要放进失败消息是刻意的：本次排查中「yml 缺占位符 ⇒ url/apiKey 均为 null
+     * ⇒ builder 抛异常」与「egress sidecar 起不来」在旧日志里长得一样（都只有一句
+     * {@code opener returned null}）。带上 {@code url=未配置} 这类判据，运维一眼就能区分
+     * 「配置没生效」和「沙箱服务本身不健康」。</p>
+     *
+     * <p>包级可见（非 private）仅为让单测直接断言这条消息契约——
+     * 尤其是「apiKey 只报是否配置、绝不打印值」，那是一条安全约束，值得被测试钉住。</p>
+     */
+    String describeCreateFailure(Exception e) {
+        String url = properties.getUrl();
+        String urlText = url == null || url.isBlank() ? "未配置" : url;
+        String keyText = properties.getApiKey() == null || properties.getApiKey().isBlank()
+                ? "未配置" : "已配置";
+        String message = e.getMessage() == null ? "(no message)" : e.getMessage();
+        if (message.length() > MAX_CAUSE_CHARS) {
+            message = message.substring(0, MAX_CAUSE_CHARS) + "…(truncated)";
+        }
+        return "sandbox create failed: " + e.getClass().getSimpleName() + ": " + message
+                + " [url=" + urlText + ", apiKey=" + keyText + ", enabled=" + properties.isEnabled() + "]";
+    }
+
+    /**
+     * 失败消息统一出口：有 cause 用 cause，没有则回落历史文案。
+     *
+     * <p>回落的必要性：{@code acquire} 在 {@code key == null} 时直接返回 null（不经 opener），
+     * 此时 sink 必然是空的。保留原文案是为了让调用方与既有排障文档的对应关系不断。</p>
+     */
+    static String createFailedMessage(String detail) {
+        return detail == null || detail.isBlank()
+                ? "sandbox create failed (opener returned null)"
+                : detail;
     }
 
     /** 入口命令：spec 显式给了才覆盖 SDK 默认（{@code tail -f /dev/null} 保持存活）。 */

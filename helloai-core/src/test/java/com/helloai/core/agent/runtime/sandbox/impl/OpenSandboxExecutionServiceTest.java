@@ -190,4 +190,50 @@ class OpenSandboxExecutionServiceTest {
         assertThat(enabled.readArtifact(10L, "  ", 0)).isNull();
         assertThat(enabled.activeSandboxes()).isZero();
     }
+
+    // ===== 建沙箱失败的可观测性（2026-10-27，LOG-20261027-026） =====
+
+    @Test
+    @DisplayName("建沙箱失败消息：带出 SDK 原始 cause + 连接配置摘要（不再是 opener returned null）")
+    void createFailureMessageShouldCarryRealCause() {
+        OpenSandboxExecutionService service =
+                new OpenSandboxExecutionService(props(true), new SkillPackageLoader());
+
+        String message = service.describeCreateFailure(
+                new IllegalStateException("Server error : 500 DOCKER::SANDBOX_START_FAILED"));
+
+        // ① 真实 cause 必须在：这正是旧实现丢掉、让我们把「配置缺失」误判成「镜像问题」的那一段
+        assertThat(message).contains("IllegalStateException")
+                .contains("SANDBOX_START_FAILED");
+        // ② 配置摘要必须在：用于区分「env 没生效」与「沙箱服务本身不健康」
+        assertThat(message).contains("url=http://localhost:8090")
+                .contains("apiKey=已配置")
+                .contains("enabled=true");
+    }
+
+    @Test
+    @DisplayName("建沙箱失败消息：url / apiKey 未配置时明确标注，且绝不打印 apiKey 明文")
+    void createFailureMessageShouldNeverLeakApiKey() {
+        OpenSandboxProperties props = props(true);
+        props.setUrl(null);
+        props.setApiKey("super-secret-key-value");
+        OpenSandboxExecutionService service = new OpenSandboxExecutionService(props, new SkillPackageLoader());
+
+        String message = service.describeCreateFailure(new IllegalStateException("boom"));
+
+        assertThat(message).contains("url=未配置").contains("apiKey=已配置");
+        // 安全约束：只报「是否配置」，值永不入日志/界面
+        assertThat(message).doesNotContain("super-secret-key-value");
+    }
+
+    @Test
+    @DisplayName("建沙箱失败消息：detail 缺失时回落历史文案（调用方与旧排障文档的对应关系不断）")
+    void createFailureMessageShouldFallbackToLegacyText() {
+        assertThat(OpenSandboxExecutionService.createFailedMessage(null))
+                .isEqualTo("sandbox create failed (opener returned null)");
+        assertThat(OpenSandboxExecutionService.createFailedMessage("  "))
+                .isEqualTo("sandbox create failed (opener returned null)");
+        assertThat(OpenSandboxExecutionService.createFailedMessage("sandbox create failed: X: y"))
+                .isEqualTo("sandbox create failed: X: y");
+    }
 }

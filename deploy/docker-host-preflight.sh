@@ -388,6 +388,56 @@ else
 fi
 
 # ------------------------------------------------------------
+sec "7. Sandbox runtime images present on the host"
+# ------------------------------------------------------------
+# WHY this section exists (2026-10-27 incident): the sandbox server creates one
+#   container per task through the mounted docker.sock, so it can only use images
+#   that ALREADY exist on this host. Compose's pull_policy does not constrain that
+#   path at all. On a host without Docker Hub access a missing image does not fail
+#   fast: the create request burns ~35s (egress readiness_timeout 30s + overhead)
+#   and dies as SandboxTimeoutException, which reaches the user as a bare "timeout"
+#   with no cause. Measured: node:20-bookworm-slim was absent, every skill run failed.
+# The list mirrors two files. When either changes, update this list too:
+#   application.yml  helloai.sandbox.opensandbox.spec.image           -> python:3.12
+#   application.yml  ...spec-presets.node.image                       -> node:20-bookworm-slim
+#   deploy/app/docker-compose.yml  configs[opensandbox-config]
+#                    [runtime] execd_image / [egress] image
+SANDBOX_IMAGES="python:3.12
+node:20-bookworm-slim
+sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:v1.1.0
+sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:v1.1.7"
+if [ "$DOCKER_OK" = "1" ]; then
+  SANDBOX_PRESENT="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true)"
+  SANDBOX_MISSING=0
+  while IFS= read -r img; do
+    [ -n "$img" ] || continue
+    if printf '%s\n' "$SANDBOX_PRESENT" | grep -qxF "$img"; then
+      info "image present: ${img}"
+      rec "sandbox_image=${img}"
+    else
+      SANDBOX_MISSING=$((SANDBOX_MISSING + 1))
+      fail "image MISSING: ${img} - skill runs will stall ~35s and report a bare timeout"
+    fi
+  done <<SANDBOX_IMAGE_LIST
+$SANDBOX_IMAGES
+SANDBOX_IMAGE_LIST
+  if [ "$SANDBOX_MISSING" -gt 0 ]; then
+    info "FIX: the opensandbox helper images pull from the aliyun registry:"
+    info "       docker pull sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:v1.1.0"
+    info "       docker pull sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:v1.1.7"
+    info "     node:20-bookworm-slim lives on Docker Hub (usually unreachable here):"
+    info "       docker save it on a working machine, copy it over, then docker load here."
+  else
+    ok "all sandbox runtime images present"
+  fi
+  info "NOTE: egress sidecars publish their proxy ports on 0.0.0.0 (e.g. 0.0.0.0:47xxx->8080)."
+  info "      The range is configs [docker] port_range_min/max 40000-60000; keep it CLOSED"
+  info "      at the cloud security group, otherwise the sandbox egress proxy is public."
+else
+  warn "docker not usable - cannot verify sandbox runtime images"
+fi
+
+# ------------------------------------------------------------
 sec "VERDICT"
 # ------------------------------------------------------------
 if [ "$DOCKER_OK" = "0" ]; then

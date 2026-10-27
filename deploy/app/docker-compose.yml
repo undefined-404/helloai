@@ -227,10 +227,19 @@ services:
   #   container is effectively root on the host (it can start privileged containers
   #   and read the host filesystem). Remove this service and opensandbox-images below
   #   if that trade-off is not acceptable.
-  # The app does NOT join opensandbox-net, on purpose (plan 4.6): keeping the app and
-  #   the sandbox containers on separate networks shrinks the attack surface. The app
-  #   reaches this server over the published port, and only when
-  #   helloai.sandbox.opensandbox.enabled=true together with url/api-key is set.
+  # NETWORKING (corrected 2026-10-27): the app now JOINS opensandbox-net and talks to
+  #   `http://opensandbox-server:8090` over the compose bridge. Plan 4.6 had kept them
+  #   apart and pointed the app at the published port -- that could never work:
+  #     1) inside the app container 127.0.0.1 is the app itself, not the host;
+  #     2) :8090 is published LOOPBACK ONLY on the host (see ports below, deliberate --
+  #        this container mounts docker.sock, so reaching :8090 is host-root-equivalent).
+  #        A loopback-bound publish is unreachable from ANY container, host.docker.internal
+  #        included: the DNAT rule is pinned to destination 127.0.0.1 and nothing listens
+  #        on the gateway IP.
+  #   The only alternative that keeps them separate is publishing 8090 on 0.0.0.0, i.e.
+  #   exposing a docker.sock-mounted service to the network -- strictly worse than one
+  #   shared bridge. The direction matters: the APP joins opensandbox-net, never the
+  #   reverse, so this server does not gain a route to postgres/minio on the default net.
   opensandbox-server:
     image: opensandbox/server:release-1.1.0
     pull_policy: never
@@ -253,23 +262,42 @@ services:
         target: /etc/opensandbox/config.toml
     environment:
       - SANDBOX_CONFIG_PATH=/etc/opensandbox/config.toml
-      # `:?` never `:-`: a placeholder key would let anyone who can reach :8090
-      #   drive container creation on this host.
       - OPEN_SANDBOX_API_KEY=${OPEN_SANDBOX_API_KEY:?OPEN_SANDBOX_API_KEY is required}
 
-  # --- Sandbox business image pre-warm: declaration only, it never runs ---
-  # Carries the image referenced by helloai.sandbox.opensandbox.spec.image so that
-  #   `docker compose --profile prewarm pull opensandbox-images` can fetch it ahead of
-  #   time: the sandbox server needs that image on the HOST daemon to create a sandbox.
+  # --- Sandbox business images: declaration only, they never run ---
+  # Every image a sandbox needs on the HOST daemon, one service per image, because a
+  #   compose service can only declare a single `image:`. The sandbox server creates
+  #   containers through the mounted docker.sock, so it can only use images already
+  #   present locally -- `pull_policy` here does NOT govern that pull.
+  # TWO images are required, for two different call paths (2026-10-27):
+  #   python:3.12            -- helloai.sandbox.opensandbox.spec.image, verification commands
+  #   node:20-bookworm-slim  -- spec-presets.node, used by skill execution
+  #                             (helloai.sandbox.opensandbox.skill-spec-preset=node);
+  #                             archify needs node >= 18
+  #   MISSING node is not a soft failure: the sandbox server tries to pull it, this host
+  #   cannot reach Docker Hub (measured 657s+ with no progress), the create request dies
+  #   as SandboxTimeoutException after ~35s (egress readiness 30s + overhead), and every
+  #   skill run fails. That is exactly what happened on 2026-10-27 -- python only was
+  #   declared here, so a fresh deploy silently shipped without node.
   # pull_policy is "missing", NOT "always". "always" attempts a Docker Hub pull on
-  #   every `up` and hangs on a server without Docker Hub access, even when the image
+  #   every `up` and hangs on a host without Docker Hub access, even when the image
   #   has already been loaded with `docker load`.
-  # profiles: ["prewarm"] keeps it OUT of a plain `docker compose up`, so an absent
-  #   python:3.12 never blocks a release. Fetch it explicitly:
-  #     docker compose --profile prewarm pull opensandbox-images
+  # profiles: ["prewarm"] keeps these OUT of a plain `docker compose up`, so an absent
+  #   image never blocks a release. Fetch them explicitly:
+  #     docker compose --profile prewarm pull
+  #   On a host that cannot reach Docker Hub, ship node:20-bookworm-slim by
+  #   `docker save` from a working machine + `docker load` here (the opensandbox
+  #   helper images execd/egress come from the aliyun registry and pull fine).
   # restart "no" + sleep infinity: there is nothing to run.
   opensandbox-images:
     image: python:3.12
+    pull_policy: missing
+    profiles: ["prewarm"]
+    restart: "no"
+    command: ["sleep", "infinity"]
+
+  opensandbox-images-node:
+    image: node:20-bookworm-slim
     pull_policy: missing
     profiles: ["prewarm"]
     restart: "no"
@@ -375,16 +403,24 @@ services:
       # OpenSandbox sandbox chain (S-5/S-7/S-8/S-9), added 2026-10-26.
       #   SANDBOX_ENABLED=true injects the internal_run_in_sandbox tool into internal
       #   LLM executors (fail-closed: off = tool not injected). This is the flag that
-      #   application-dev.yml reads (default false), so it MUST be set here -- without
-      #   it the sandbox server running is not enough, the tool stays uninjected.
-      #   SANDBOX_URL is host loopback: the app container reaches the published port
-      #   of opensandbox-server (bound to 127.0.0.1 on the host).
+      #   application-dev.yml reads (default true since 2026-10-27), so set it
+      #   explicitly here to keep the container independent of that default.
+      #   SANDBOX_URL points at the compose service name over the shared bridge (the app
+      #   joins opensandbox-net below). MUST NOT be 127.0.0.1 -- inside this container
+      #   that is the app itself; the old value could never connect, which surfaced as
+      #   "sandbox create failed (opener returned null)" on the server (corrected 2026-10-27).
       #   SANDBOX_API_KEY is single-sourced from OPEN_SANDBOX_API_KEY (same value the
       #   server requires), `:?` fail-fast so a missing key never starts a half-open
       #   sandbox chain.
       SANDBOX_ENABLED: ${SANDBOX_ENABLED:-true}
-      SANDBOX_URL: ${SANDBOX_URL:-http://127.0.0.1:8090}
+      SANDBOX_URL: ${SANDBOX_URL:-http://opensandbox-server:8090}
       SANDBOX_API_KEY: ${OPEN_SANDBOX_API_KEY:?OPEN_SANDBOX_API_KEY is required}
+    # Joins opensandbox-net so `http://opensandbox-server:8090` above resolves to the
+    #   sandbox server container (compose service-name DNS). `default` is kept so
+    #   postgres / minio / rabbitmq keep resolving by service name.
+    networks:
+      - default
+      - opensandbox-net
     depends_on:
       postgres:
         condition: service_healthy
