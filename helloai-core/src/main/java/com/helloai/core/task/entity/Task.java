@@ -17,7 +17,7 @@ import java.util.Map;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("task")
+@TableName(value = "task", autoResultMap = true)
 public class Task extends BaseEntity {
 
     private String title;

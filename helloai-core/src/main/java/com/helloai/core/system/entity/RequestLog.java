@@ -11,7 +11,7 @@ import java.util.Map;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("request_log")
+@TableName(value = "request_log", autoResultMap = true)
 public class RequestLog extends BaseEntity {
 
     private String requestId;

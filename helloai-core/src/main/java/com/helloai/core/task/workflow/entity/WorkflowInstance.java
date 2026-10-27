@@ -22,7 +22,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("workflow_instance")
+@TableName(value = "workflow_instance", autoResultMap = true)
 public class WorkflowInstance extends BaseEntity {
 
     /** 模板 ID。 */

@@ -15,7 +15,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("agent_mcp_server")
+@TableName(value = "agent_mcp_server", autoResultMap = true)
 public class AgentMcpServer extends BaseEntity {
 
     /** Agent ID，关联 agent.id */

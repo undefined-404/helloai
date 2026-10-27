@@ -26,7 +26,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("task_timeline")
+@TableName(value = "task_timeline", autoResultMap = true)
 public class TaskTimeline extends BaseEntity {
 
     /** 主任务 ID（系统级事件可空，如 agent_offline） */

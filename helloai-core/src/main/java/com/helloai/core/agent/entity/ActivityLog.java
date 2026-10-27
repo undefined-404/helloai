@@ -11,7 +11,7 @@ import java.util.Map;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("activity_log")
+@TableName(value = "activity_log", autoResultMap = true)
 public class ActivityLog extends BaseEntity {
 
     private Long agentId;

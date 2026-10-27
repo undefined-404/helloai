@@ -22,7 +22,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("agent_session")
+@TableName(value = "agent_session", autoResultMap = true)
 public class AgentSession extends BaseEntity {
 
     /** Run 标识（run-{taskId}-{roundNum}，见 ADR-001）。 */

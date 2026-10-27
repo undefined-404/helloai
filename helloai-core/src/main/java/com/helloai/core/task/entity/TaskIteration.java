@@ -26,7 +26,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("task_iteration")
+@TableName(value = "task_iteration", autoResultMap = true)
 public class TaskIteration extends BaseEntity {
 
     /** 关联顶层 task.id */

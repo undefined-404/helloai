@@ -16,7 +16,7 @@ import java.util.Map;
 @Data
 @EqualsAndHashCode(callSuper = true)
 // autoResultMap：让 @TableField(typeHandler) 参与 SELECT 结果映射。uncertainties 强类型读取依赖
-// （全局 List→JacksonTypeHandler 注册会把 JSON 数组读成 List<LinkedHashMap>，见该字段 Javadoc）
+// （2026-10-27 起全局 List→JacksonTypeHandler 注册已移除；uncertainties 读侧改由 autoResultMap 驱动，见该字段 Javadoc）
 @TableName(value = "sub_task", autoResultMap = true)
 public class SubTask extends BaseEntity {
 

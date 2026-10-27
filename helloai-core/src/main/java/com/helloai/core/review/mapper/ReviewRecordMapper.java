@@ -27,7 +27,7 @@ public interface ReviewRecordMapper extends BaseMapper<ReviewRecord> {
      * 质量趋势源（看板）：窗口内按天分组统计审查数/通过数/平均分。
      *
      * <p>create_time 为审计列（BaseEntity），窗口语义 {@code create_time >= now() - days}。
-     * 投影 record（非 Map）：防 MyBatisPlusConfig 全局 Map→JacksonTypeHandler 劫持（§6.132）。</p>
+     * 投影 record（非 Map）：强类型投影最佳实践（2026-10-27 起全局 Map→JacksonTypeHandler 注册已移除）。</p>
      */
     @Select("""
             SELECT to_char(date_trunc('day', create_time), 'YYYY-MM-DD') AS period,

@@ -113,8 +113,8 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
      * 重算数据源：该执行者（sub_task.assigned_agent_id 当前归属）名下全部
      * review_record，按记录 id 升序（保证重算顺序与历史落库顺序一致）。
      *
-     * <p>返回具体 DTO 而非 List&lt;Map&gt;：Map 返回会被 MyBatisPlusConfig 的全局
-     * Map→JacksonTypeHandler 注册劫持（整行按 JSON 解析首列），真实环境已炸 500。</p>
+     * <p>返回具体 DTO 而非 List&lt;Map&gt;：强类型投影最佳实践（2026-10-27 起全局
+     * Map→JacksonTypeHandler 注册已移除，不再存在整行按 JSON 解析首列的劫持）。</p>
      */
     @Select("""
             SELECT r.id AS record_id, r.result AS result, r.score AS score,
@@ -130,8 +130,8 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
     /**
      * 全局质量概览（看板 overview）：画像表存量聚合，单行必返回。
      *
-     * <p>COALESCE 兜底保证空表也返回一行 0 值；投影 record（非 Map），
-     * 防 Map→JacksonTypeHandler 劫持（§6.132）。</p>
+     * <p>COALESCE 兜底保证空表也返回一行 0 值；投影 record（非 Map）——强类型投影最佳实践
+     * （2026-10-27 起全局 Map→JacksonTypeHandler 注册已移除）。</p>
      */
     @Select("""
             SELECT COALESCE(SUM(reviewed_count), 0) AS totalReviewed,

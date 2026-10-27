@@ -1,12 +1,15 @@
 package com.helloai.start.config;
 
 import com.baomidou.mybatisplus.annotation.DbType;
+import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 // 注意：mybatis-plus 3.5.9 的 namespace 是 'mybatisplus'（不带连字符）
 import com.baomidou.mybatisplus.extension.plugins.inner.OptimisticLockerInnerInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;
-import org.apache.ibatis.type.TypeHandlerRegistry;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -18,8 +21,15 @@ import org.springframework.context.annotation.Configuration;
  *   （表现为 BindingException: Parameter 'MP_OPTLOCK_VERSION_ORIGINAL' not found）
  * - 分页插件不随 starter 自动注册，需显式加 PaginationInnerInterceptor，
  *   否则 IPage.page() 不执行 COUNT、total 恒为 0 且不分页（G-012 用户分页 API 实测暴露）
- * - 通过 ConfigurationCustomizer 显式注册 PgJsonbTypeHandler（继承 JacksonTypeHandler，仅覆写写侧），
- *   解决 agent_outbox_event.payload 等 JSONB 列 SELECT 读出为 null 的问题
+ * - JSONB 读侧映射由「含 JSONB 字段的实体 @TableName(autoResultMap=true) +
+ *   @TableField(typeHandler=PgJsonbTypeHandler.class)」驱动（2026-10-27 起不再全局注册
+ *   Map/List → PgJsonbTypeHandler——全局注册会劫持 mpFillEt 等参数绑定，见方法注释）
+ * - 通过 ConfigurationCustomizer 向 JacksonTypeHandler 静态注入带 JavaTimeModule 的
+ *   ObjectMapper：MyBatis-Plus 内置 JacksonTypeHandler 默认 new ObjectMapper()（裸 mapper，
+ *   无 jsr310 模块），任何 JSONB 序列化 OffsetDateTime（如 BaseEntity.updateTime）都会抛
+ *   InvalidDefinitionException（editMessageById 500 实测暴露）。注册进静态字段后，
+ *   PgJsonbTypeHandler / UncertaintyListTypeHandler / TaskIteration 直用
+ *   内置 JacksonTypeHandler 的字段全部受益（写侧序列化 + 读侧反序列化）。
  */
 @Configuration
 public class MyBatisPlusConfig {
@@ -38,24 +48,38 @@ public class MyBatisPlusConfig {
     }
 
     /**
-     * 显式注册 PgJsonbTypeHandler（JSONB 写入用 PGobject）到 MyBatis TypeHandlerRegistry，
-     * 确保 @TableField(typeHandler=PgJsonbTypeHandler.class) 在 BaseMapper.selectList 中生效。
+     * 向 JacksonTypeHandler 静态注入带 JavaTimeModule 的 ObjectMapper。
      *
-     * <p>⚠ 副作用（真实环境已踩坑，迭代记录 §6.132）：Map 与 List 是按类型全局注册，
-     * 任何返回值被推断为 Map.class 的自定义查询（如 {@code List<Map<String, Object>>}），
-     * MyBatis 会把整行（首列）当作 JSON 交给 JacksonTypeHandler 反序列化，
-     * 裸数字/字符串列会抛 MismatchedInputException 导致 500。
-     * 因此 Mapper 自定义查询一律禁止返回 List&lt;Map&gt;，必须使用具体 DTO。</p>
+     * <p>MyBatis-Plus 内置 {@link JacksonTypeHandler} 默认 {@code new ObjectMapper()}（裸 mapper，
+     * 无 jsr310 模块），任何 JSONB 序列化 OffsetDateTime（如 BaseEntity.updateTime）都会抛
+     * InvalidDefinitionException（editMessageById 500 实测暴露）。注册进静态字段后，
+     * PgJsonbTypeHandler / UncertaintyListTypeHandler / 实体 @TableField(typeHandler=...) 全部受益
+     * （写侧序列化 + 读侧反序列化）。</p>
+     *
+     * <p><b>2026-10-27 根治（移除全局 Map/List 注册）</b>：此前此处把
+     * {@code Map/HashMap/List/ArrayList → PgJsonbTypeHandler} 全局注册到 TypeHandlerRegistry，
+     * 本意是让 JSONB 列 SELECT 读出时命中自定义 handler，但副作用致命——
+     * MyBatis 对 {@code removeByIds}/{@code updateById} 内部构造的 {@code mpFillEt} 参数 map 推断
+     * javaType=HashMap，绑定 {@code #{mpFillEt.updateBy}} 占位符时按 javaType 命中全局注册，
+     * setNonNullParameter 收到整个 map → 序列化 map 内含 BaseEntity.updateTime（OffsetDateTime）
+     * → 裸 mapper 炸 InvalidDefinitionException（editMessageById 500 实测暴露）。</p>
+     *
+     * <p>根治方式：<b>移除全局注册</b>，改由「含 JSONB 字段的实体 {@code @TableName(autoResultMap=true)}
+     * + 字段级 {@code @TableField(typeHandler=PgJsonbTypeHandler.class)}」驱动读侧映射。
+     * 全局注册的劫持面（任何 javaType=Map/List 的参数/返回绑定）彻底清零；
+     * 写侧 JSONB 由字段级 typeHandler 覆盖，读侧由 autoResultMap 覆盖。</p>
      */
     @Bean
     public com.baomidou.mybatisplus.autoconfigure.ConfigurationCustomizer mybatisPlusConfigurationCustomizer() {
         return configuration -> {
-            TypeHandlerRegistry registry = configuration.getTypeHandlerRegistry();
-            registry.register(java.util.Map.class, PgJsonbTypeHandler.class);
-            registry.register(java.util.HashMap.class, PgJsonbTypeHandler.class);
-            // sub_task.depends_on 是 List<Long> JSONB 列，SELECT 读出同样需要显式注册
-            registry.register(java.util.List.class, PgJsonbTypeHandler.class);
-            registry.register(java.util.ArrayList.class, PgJsonbTypeHandler.class);
+            // 注入带 jsr310 支持的 ObjectMapper 到 JacksonTypeHandler 静态字段（懒加载时序安全：
+            // SqlSessionFactory 创建时执行，早于一切 DB 访问；toJson/parse 都懒读该静态字段）。
+            ObjectMapper mapper = new ObjectMapper()
+                    .registerModule(new JavaTimeModule())
+                    .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+            JacksonTypeHandler.setObjectMapper(mapper);
+            // ⚠ 不再全局注册 Map/List → PgJsonbTypeHandler：会劫持 mpFillEt 等参数绑定（见类注释）。
+            //    读侧 JSONB 由实体 @TableName(autoResultMap=true) + @TableField(typeHandler=...) 覆盖。
         };
     }
 }

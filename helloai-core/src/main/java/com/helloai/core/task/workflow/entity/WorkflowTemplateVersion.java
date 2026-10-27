@@ -31,7 +31,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("workflow_template_version")
+@TableName(value = "workflow_template_version", autoResultMap = true)
 public class WorkflowTemplateVersion extends BaseEntity {
 
     /** 所属模板 ID。 */

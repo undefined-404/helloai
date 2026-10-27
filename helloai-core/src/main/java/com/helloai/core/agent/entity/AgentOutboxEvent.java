@@ -13,7 +13,7 @@ import java.util.Map;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("agent_outbox_event")
+@TableName(value = "agent_outbox_event", autoResultMap = true)
 public class AgentOutboxEvent extends BaseEntity {
 
     private String eventId;

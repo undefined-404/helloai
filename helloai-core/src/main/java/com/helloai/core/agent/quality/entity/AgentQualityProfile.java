@@ -18,7 +18,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("agent_quality_profile")
+@TableName(value = "agent_quality_profile", autoResultMap = true)
 public class AgentQualityProfile extends BaseEntity {
 
     /** 被评审的执行 Agent ID（取 sub_task.assigned_agent_id 落库时刻归属）。 */

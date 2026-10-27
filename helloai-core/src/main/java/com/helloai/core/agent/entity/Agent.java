@@ -33,7 +33,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("agent")
+@TableName(value = "agent", autoResultMap = true)
 public class Agent extends BaseEntity {
 
     private String name;

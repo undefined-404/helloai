@@ -17,7 +17,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("agent_event")
+@TableName(value = "agent_event", autoResultMap = true)
 public class AgentEvent extends BaseEntity {
 
     /** 事件唯一 ID（与 agent_outbox_event.event_id 共享，B3 对账键）。 */
