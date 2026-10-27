@@ -42,3 +42,10 @@ helloai-core/src/test/resources/skills/golden/** -text
 # 钉成 LF 后**输入侧**不再有平台差异。损坏夹具同因：行尾多一个 \r 会影响 fence/键的逐行判定。
 helloai-core/src/main/resources/skills/plugins/** text eol=lf
 helloai-core/src/test/resources/skills/plugins-corrupt/** text eol=lf
+# 技能包运行时资产（SKX-4 起，skills/packages/**）：字节级完整性校验的载荷。
+# 与 golden/** 同理——MANIFEST.json 的 totalBytes / sha256Tree 按「逐字节原文」计算，
+# core.autocrlf=true 的 Windows 检出会把 LF 转成 CRLF（每行 +1 字节 ⇒ 122 文件 +72KB），
+# 直接触发 SkillPackageLoader#verifyManifest 的「清单与实际内容不一致」fail-close。
+# 用 -text 而非 text eol=lf：包内还有 *.mjs / *.json / schema 等会被人工替换更新的资产，
+# 统一按二进制处理最稳；行尾由上游/打包脚本保证。
+helloai-core/src/main/resources/skills/packages/** -text
