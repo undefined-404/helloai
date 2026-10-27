@@ -144,6 +144,14 @@ function toggle(q: ClarifyQuestion, opt: ClarifyOption) {
 const canSubmit = computed(() =>
   props.questions.every(q => (picked[q.id] ?? []).length > 0 || (customText[q.id] ?? '').trim().length > 0))
 
+// B（2026-10-27）确认卡「取消」不污染 LLM 判定：
+// 意图确认卡（confirm-switch）选中「取消」时，可读文本只输出「取消」二字，
+// 不带题面「检测到你想把讨论整理成落地方案」——否则该字样随 user 消息进上下文，
+// 下一条 LLM 意图决策会再次判 clarify、反复弹卡（死循环根源之一）。
+// selections 快照照旧提交（后端 isAcceptSelected 走快照判定，不受文本影响）。
+const CONFIRM_QUESTION_ID = 'confirm-switch'
+const CONFIRM_OPTION_CANCEL = '取消'
+
 function submit() {
   if (!canSubmit.value) return
   const selections: ClarifySelection[] = []
@@ -160,6 +168,12 @@ function submit() {
       custom: custom.length > 0,
       customText: custom || null
     })
+    // 确认卡取消：不拼题面，只输出选项值，避免「整理成落地方案」字样污染 LLM 决策
+    const isConfirmCancel = q.id === CONFIRM_QUESTION_ID && values.includes(CONFIRM_OPTION_CANCEL)
+    if (isConfirmCancel) {
+      lines.push(CONFIRM_OPTION_CANCEL)
+      continue
+    }
     const parts = [...labels]
     if (custom) parts.push(`补充：${custom}`)
     lines.push(`${q.text}：${parts.join('、')}`)

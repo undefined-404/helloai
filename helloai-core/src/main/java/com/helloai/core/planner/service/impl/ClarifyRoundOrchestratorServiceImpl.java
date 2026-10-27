@@ -195,6 +195,10 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
      * <p>从 {@code runLlmRound} 抽出（2026-10-18）：流式路径此前直接拒绝待确认卡场景
      * （抛「请使用普通发送回答确认卡」），而结构化卡提交改走流式后该守卫会误拦确认操作。
      * 抽成单一方法后两条路径共用同一口径，不再各写一套。</p>
+     *
+     * <p><b>2026-10-27 拒绝记忆（V127）</b>：取消分支额外置 {@code clarifyDeclined=true}——
+     * 用户明确拒绝转入方案澄清后，后续轮次即使 LLM 再次判 clarify 也不再弹确认卡
+     * （防「取消 → 下一条又被判 clarify → 再弹卡」死循环）。确认分支同时重置该记忆。</p>
      */
     @Override
     public boolean resolvePendingClarifyConfirm(RequirementConversation conversation,
@@ -207,9 +211,12 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         boolean confirmAccepted = confirmCardProtocol.isAcceptSelected(selections);
         if (confirmAccepted) {
             conversation.setMode(RequirementClarifyService.MODE_CLARIFY);
+            conversation.setClarifyDeclined(false);
             log.info("用户确认转方案（确认卡）: conversationId={}", conversation.getId());
         } else {
-            log.info("用户取消转方案，继续自由对话: conversationId={}", conversation.getId());
+            // 用户取消（或回复非确认内容）：记拒绝记忆，后续轮次不再重复弹确认卡
+            conversation.setClarifyDeclined(true);
+            log.info("用户取消转方案，继续自由对话（记拒绝记忆）: conversationId={}", conversation.getId());
         }
         conversation.setPendingClarifyConfirm(false);
         conversationService.updateById(conversation);
@@ -335,8 +342,9 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         RequirementConversation conversation = commandSearch.requireActive(conversationId);
         String from = conversation.getMode();
         conversation.setMode(RequirementClarifyService.MODE_CLARIFY);
-        // 手动切换时一并清除意图词待确认标记，避免残留状态影响后续轮次
+        // 手动切换时一并清除意图词待确认标记与拒绝记忆（用户显式转方案，重置冷却期）
         conversation.setPendingClarifyConfirm(false);
+        conversation.setClarifyDeclined(false);
         conversationService.updateById(conversation);
         log.info("澄清会话切换模式: conversationId={}, from={}, to={}",
                 conversationId, from, RequirementClarifyService.MODE_CLARIFY);
@@ -360,7 +368,12 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         }
         RoundDecision roundDecision = makeRoundDecision(conversation, userMessage);
         if (roundDecision.decision().isClarify()) {
-            return applyClarifyDecision(conversation, roundDecision.decision());
+            // 2026-10-27：已被拒绝过（clarify_declined=1）时不弹确认卡，继续普通对话；
+            // applyClarifyDecision 返回 null 表示抑制（保持 CHAT 回复语义）
+            ClarifyConversationDetail suppressed = applyClarifyDecision(conversation, roundDecision.decision());
+            if (suppressed != null) {
+                return suppressed;
+            }
         }
         WebSearchOutcome webSearchOutcome = commandSearch.resolveChatSearchOutcome(conversation, userMessage, userPayload,
                 roundDecision.decision(), roundDecision.degraded());
@@ -582,6 +595,14 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     @Override
     public ClarifyConversationDetail applyClarifyDecision(RequirementConversation conversation,
                                                           ChatRoundDecisionParser.ChatRoundDecision decision) {
+        // 2026-10-27（V127 拒绝记忆）：用户已明确拒绝过转方案（clarify_declined=1）时，
+        // 即使 LLM 再次判 clarify 也不再弹确认卡——保持 CHAT 对话，防死循环。
+        // 用户后续显式输入 /planner 或再次表达转方案意图（经 switchToClarify）会重置该记忆。
+        if (Boolean.TRUE.equals(conversation.getClarifyDeclined())) {
+            log.info("确认卡已拒绝（clarify_declined=1），抑制再次弹卡，保持 CHAT: conversationId={}",
+                    conversation.getId());
+            return null;
+        }
         Long conversationId = conversation.getId();
         String question = decision.clarificationQuestion();
         messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT,

@@ -154,7 +154,14 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                     RoundDecision roundDecision = orchestrator.makeRoundDecision(conversation, userMessage);
                     if (roundDecision.decision().isClarify()) {
                         // 确认卡流式播放：question 分片打字机 → 落库确认卡 → done
-                        return playClarifyQuestion(conversation, roundDecision.decision());
+                        // 2026-10-27：用户已拒绝过（clarify_declined=1）时不再弹卡，
+                        // 退回普通对话主回复（防「取消 → 再判 clarify → 再弹卡」死循环）。
+                        // ★抑制判断必须无副作用（不落库）：确认卡由 playClarifyQuestion 内
+                        //   applyClarifyDecision 唯一落库——这里再调一次会把确认卡消息落两条
+                        //   （曾发生：A 方案把判断改为 applyClarifyDecision()!=null 后双落库回归）。
+                        if (!Boolean.TRUE.equals(conversation.getClarifyDeclined())) {
+                            return playClarifyQuestion(conversation, roundDecision.decision());
+                        }
                     }
                     boolean willSearch = commandSearch.isWebSearchEnabled(conversation);
                     String searchStep = willSearch

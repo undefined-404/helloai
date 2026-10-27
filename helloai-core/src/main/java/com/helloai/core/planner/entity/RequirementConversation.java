@@ -20,7 +20,7 @@ import java.util.Map;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("requirement_conversation")
+@TableName(value = "requirement_conversation", autoResultMap = true)
 public class RequirementConversation extends BaseEntity {
 
     /** 会话标题（首条用户消息截断） */
@@ -87,4 +87,14 @@ public class RequirementConversation extends BaseEntity {
      */
     @TableField(typeHandler = SmallIntBooleanTypeHandler.class)
     private Boolean pendingClarifyConfirm;
+
+    /**
+     * 确认卡拒绝记忆（V127，SMALLINT 0/1）。
+     * <p>1 = 用户最近一次拒绝了转入方案澄清（点「取消」或回复非确认内容）。
+     * 决策阶段若为 1，即使 LLM 判 clarify 也<b>不再弹确认卡</b>（保持 CHAT 对话），
+     * 防「取消 → 下一条又被判 clarify → 再弹卡」死循环（2026-10-27 实测暴露）。
+     * 用户显式输入 /planner /task 或再次明确表达转方案时重置为 0。</p>
+     */
+    @TableField(typeHandler = SmallIntBooleanTypeHandler.class)
+    private Boolean clarifyDeclined;
 }

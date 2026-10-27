@@ -165,6 +165,9 @@ class RequirementClarifyServiceTest {
     private ClarifyFinalizeServiceImpl finalizeService;
     private ClarifyCommandSearchServiceImpl commandSearch;
 
+    /** 对话内技能执行器 mock（2026-10-27）：主链回归不触发技能轮，默认零操作；技能轮用例单独 stub。 */
+    private ConversationSkillRunner conversationSkillRunner;
+
     @BeforeEach
     void setUp() {
         // 元词过滤（2026-10-23 附件+联网修复）：本类存量用例走的是「规划器无产出 →
@@ -202,13 +205,14 @@ class RequirementClarifyServiceTest {
                 conversationService, messageService, taskService, agentService, agentInboxService,
                 taskTimelineService, longTermMemoryService, requirementConversationMapper,
                 new ObjectMapper(), commandSearch, skillDirective);
+        conversationSkillRunner = mock(ConversationSkillRunner.class);
         orchestrator = new ClarifyRoundOrchestratorServiceImpl(
                 commandSearch, promptRenderService, finalizeService, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
                 new ChatRoundDecisionParser(new ObjectMapper()), webSearchOrchestrator,
                 skillDirective,
                 // 对话内技能执行（2026-10-27）：主链回归不触发技能轮，mock 即可
-                mock(ConversationSkillRunner.class),
+                conversationSkillRunner,
                 // TD-8：stall 守卫（用户信息量判据）接入后新增的构造参数
                 new ClarifyStallGuard(new ObjectMapper()), mock(ChatAttachmentService.class));
         streamService = new ClarifyStreamServiceImpl(
@@ -2112,6 +2116,86 @@ class RequirementClarifyServiceTest {
             verify(messageService).addMessage(CONV_ID, "assistant", "好的，继续聊。", null);
         }
 
+        @Test
+        @DisplayName("D：取消后（clarifyDeclined=1）下一条消息 LLM 判 clarify → 抑制再弹卡，保持 CHAT 普通回复")
+        void doRound_afterCancel_clarifyDecisionSuppressed() {
+            // 用户上次点「取消」（resolvePendingClarifyConfirm 已置 clarifyDeclined=true，V127），
+            // 本轮消息被 LLM 判 clarify——真实路径（makeRoundDecision 驱动）应被 applyClarifyDecision
+            // 抑制（返回 null），退回普通 CHAT 主回复，不再弹确认卡。
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(3);
+            conversation.setClarifyDeclined(true);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(messageService.listByConversation(CONV_ID))
+                    .thenReturn(List.of(message("user", "再帮我看看怎么落地", 1)));
+            // 决策轮判 clarify（若不抑制，会走 applyClarifyDecision 弹卡并直接返回）
+            stubDecisionRound("""
+                    {"intent":"clarify","intent_reason":"task_oriented",
+                     "clarification_question":"你想怎么落地？",
+                     "web_search":{"need_search":false,"search_query":null,"reason":"无需搜索"}}
+                    """);
+            // 主回复轮：被抑制后继续普通 CHAT 回复
+            when(platformAgentExecutionService.executeSync(anyLong(),
+                    argThat(task -> task != null
+                            && "requirement_chat".equals(task.getContext() == null
+                            ? null : task.getContext().get("scene")))))
+                    .thenReturn(AgentResult.success("好的，先继续聊，需要转方案时再告诉我。", "stop", "llm", 100));
+
+            clarifyService.sendMessage(CONV_ID, "再帮我看看怎么落地");
+
+            // 未被抑制：不落确认卡、不置待确认标记；保持 CHAT 模式
+            assertThat(conversation.getPendingClarifyConfirm()).isNotEqualTo(Boolean.TRUE);
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+            assertThat(conversation.getRoundCount()).isEqualTo(4);
+            // 决策轮恰一次（clarify 判定仍发生），但主回复轮也恰一次（被抑制后继续回复）
+            verify(platformAgentExecutionService, times(1)).executeSync(anyLong(),
+                    argThat(task -> task != null
+                            && DECISION_SCENE.equals(task.getContext() == null
+                            ? null : task.getContext().get("scene"))));
+            verify(platformAgentExecutionService, times(1)).executeSync(anyLong(),
+                    argThat(task -> task != null
+                            && "requirement_chat".equals(task.getContext() == null
+                            ? null : task.getContext().get("scene"))));
+            // 不落确认卡消息（applyClarifyDecision 被抑制）：assistant 只有主回复一条
+            verify(messageService).addMessage(CONV_ID, "assistant",
+                    "好的，先继续聊，需要转方案时再告诉我。", null);
+            verify(messageService, never()).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq(ConfirmCardProtocol.CONFIRM_ASK_TEXT), any());
+        }
+
+        @Test
+        @DisplayName("D：显式技能请求（[skill:archify] 前缀）直接走技能轮，不进意图决策、不弹确认卡")
+        void doRound_skillCommand_skipsDecisionAndRunsSkillRound() {
+            RequirementConversation conversation = chatConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            // 技能轮由 ConversationSkillRunner 执行：stub 成功回执（产物附件登记由 runner 内部完成）
+            when(conversationSkillRunner.run(eq(CONV_ID), isNull(), isNull(), eq("archify"),
+                    eq("画一张支付生命周期图"))).thenReturn(
+                    new ConversationSkillRunner.Result(1001L, "支付生命周期.svg", 2048L, "abc", "workflow"));
+            when(messageService.listByConversation(CONV_ID)).thenReturn(List.of());
+
+            clarifyService.sendMessage(CONV_ID, "[skill:archify] 画一张支付生命周期图");
+
+            // 不进意图决策（makeRoundDecision 零调用）：不弹确认卡、不置待确认标记
+            assertThat(conversation.getPendingClarifyConfirm()).isNotEqualTo(Boolean.TRUE);
+            verify(platformAgentExecutionService, never()).executeSync(anyLong(),
+                    argThat(task -> task != null
+                            && DECISION_SCENE.equals(task.getContext() == null
+                            ? null : task.getContext().get("scene"))));
+            // 技能轮执行一次（文本剥前缀后落库，payload 承载技能名）
+            verify(conversationSkillRunner).run(eq(CONV_ID), isNull(), isNull(), eq("archify"),
+                    eq("画一张支付生命周期图"));
+            // 产物消息落库（不弹确认卡）：user 消息带技能名 payload；assistant 产物消息落库
+            // （payloadOf 是 mock 实例方法 → 返回 null，故 payload 断言 null，与真实 runner 行为无关）
+            verify(messageService).addMessage(eq(CONV_ID), eq("user"), eq("画一张支付生命周期图"),
+                    contains("\"skill\":\"archify\""));
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), contains("已生成"),
+                    isNull());
+            verify(messageService, never()).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq(ConfirmCardProtocol.CONFIRM_ASK_TEXT), any());
+        }
+
         // ════════════════════════════════════════════════════════
         //  联网搜索：多轮触发 + payload 查验
         // ════════════════════════════════════════════════════════
@@ -2692,6 +2776,47 @@ class RequirementClarifyServiceTest {
         verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), anyString(), anyString());
         verify(platformAgentExecutionService, never())
                 .executeStream(anyLong(), any(AgentTask.class));
+    }
+
+    @Test
+    @DisplayName("D：流式轮取消后（clarifyDeclined=1）判 clarify → 抑制再弹卡，退回普通 CHAT 主回复")
+    void streamRound_afterCancel_clarifyDecisionSuppressedAndReplies() {
+        RequirementConversation conversation = streamChatConversation();
+        conversation.setClarifyDeclined(true);
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        when(messageService.listByConversation(CONV_ID))
+                .thenReturn(List.of(message("user", "再帮我看看怎么落地", 1)));
+        // 决策轮判 clarify：若不被抑制会弹卡直接返回；抑制后走普通 CHAT 流式主回复
+        stubDecisionRound("""
+                {"intent":"clarify","intent_reason":"task_oriented",
+                 "clarification_question":"你想怎么落地？",
+                 "web_search":{"need_search":false,"search_query":null,"reason":"无需搜索"}}
+                """);
+        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
+                .thenReturn(Flux.just(
+                        com.helloai.core.agent.chat.LlmStreamChunk.content("好的，先继续聊，需要转方案时再告诉我。")));
+
+        List<RequirementClarifyService.ChatStreamEvent> events =
+                clarifyService.streamRound(CONV_ID, "再帮我看看怎么落地", null).collectList().block();
+
+        assertThat(events).isNotNull();
+        assertThat(events.get(events.size() - 1).type())
+                .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.DONE);
+        // 播放的是普通 CHAT 主回复，而非确认卡正文
+        String joined = events.stream()
+                .filter(e -> e.type() == RequirementClarifyService.ChatStreamEvent.Type.TOKEN)
+                .map(RequirementClarifyService.ChatStreamEvent::data)
+                .reduce("", String::concat);
+        assertThat(joined).isEqualTo("好的，先继续聊，需要转方案时再告诉我。");
+        // 未弹确认卡、未置待确认标记
+        assertThat(conversation.getPendingClarifyConfirm()).isNotEqualTo(Boolean.TRUE);
+        assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+        // 主回复流式通道恰一次（被抑制后继续回复）；确认卡正文零播放
+        verify(platformAgentExecutionService, times(1))
+                .executeStream(anyLong(), any(AgentTask.class));
+        verify(messageService, never()).addMessage(eq(CONV_ID), eq("assistant"),
+                eq(ConfirmCardProtocol.CONFIRM_ASK_TEXT), any());
     }
 
     @Test
