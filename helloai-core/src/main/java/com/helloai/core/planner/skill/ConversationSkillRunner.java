@@ -369,6 +369,24 @@ public class ConversationSkillRunner {
         boolean lifecycle = guessedTypes.contains("lifecycle");
         boolean sequence = guessedTypes.contains("sequence");
         StringBuilder sb = new StringBuilder();
+        // ── 公共段（2026-10-27）───────────────────────────────────────────────
+        // 两类「模型猜不出来、只能靠告知」的知识，对所有图类型都成立：
+        //   ① meta 的可选字段是重灾区——schema 里它们是 {"$ref": "common.schema.json#/$defs/.."}，
+        //      模型跨文件查不到枚举就自己编，直接 schema/enum 失败（实测 /meta/visual_preset
+        //      被填成非法值，整轮白跑，用户只看到一串 raw error）。
+        //   ② 用户粘贴 Mermaid / SVG 代码时，模型容易「重写」而不是「照抄结构」。
+        sb.append("公共（所有图类型必读）：\n")
+                .append("- meta 的**必填只有 title 与 output**；visual_preset / quality_profile / animation /\n")
+                .append("  translations 都是可选，**不要主动填**——省略即用默认值。schema 里多数对象是\n")
+                .append("  additionalProperties:false，多填一个猜错的字段就整轮失败。\n")
+                .append("  实测教训：自己编 visual_preset 导致 schema/enum 校验失败，图没出来，只有报错。\n")
+                .append("- 万不得已要填时只用这些值：visual_preset ∈ classic|signal-flow|blueprint|editorial；\n")
+                .append("  quality_profile ∈ standard|showcase\n")
+                .append("- schema 里的 {\"$ref\":\"common.schema.json#/$defs/X\"} 意思是「去上面 common 段的 $defs/X 找定义」，\n")
+                .append("  枚举一律以注入的 common 段为准，不要凭印象造值\n")
+                .append("- id 一律字母开头（数字/中文开头校验不过）\n")
+                .append("- 用户直接贴了 Mermaid / PlantUML / SVG 或明确列出节点时，**按代码里的结构填**：\n")
+                .append("  不要重排顺序、不要删减环节、不要补代码里没有的内容；代码没提的分支就不要编\n");
         if (workflow) {
             sb.append("workflow 类型（用户描述含流程/决策/审批时必读）：\n")
                     .append("- 顶层必填：schema_version（取 1 或 2）、diagram_type（必须恰为 \"workflow\"）、meta（必含 title 与 output）、lanes、nodes、edges\n")
@@ -392,11 +410,19 @@ public class ConversationSkillRunner {
                     .append("- 迁移的 from/to 必须引用已定义的状态 id\n");
         }
         if (sequence) {
-            sb.append("sequence 类型（用户描述含调用链/消息往返时必读）：\n")
-                    .append("- 参与者/消息按 schema 的 participants/messages 结构填，消息 from/to 引用参与者 id\n");
-        }
-        if (sb.length() == 0) {
-            sb.append("- 严格按注入的 schema 填必填字段；id 一律字母开头（数字/中文开头校验不过）；枚举字段只取 schema 列出的值，不发明新值\n");
+            // 2026-10-27 增强：用户贴 Mermaid sequenceDiagram 时，这几条映射是模型猜不到的
+            // （尤其 messages[].y 是必填数值、Note over 要映射成 segments 且 from/to 是消息下标）。
+            sb.append("sequence 类型（用户描述含调用链，或直接贴了 sequenceDiagram 时必读）：\n")
+                    .append("- participant X as 名称 → participants[{id:\"X\", type:<组件枚举>, label:\"名称\"}]；\n")
+                    .append("  type 用组件枚举（frontend/backend/database/cloud/security/messagebus/external），不是动作词\n")
+                    .append("- A->>B: 文本 → messages[{from:\"A\", to:\"B\", label:\"文本\", y:<数值>, variant:\"default\"}]；\n")
+                    .append("  **y 必填且必须是数值**（≥160），按消息出现顺序递增（160, 200, 240…），漏填直接失败\n")
+                    .append("- **只有出现在消息里的参与者也要补进 participants**：Mermaid 允许隐式声明\n")
+                    .append("  （没写 participant 但出现在 A->>B 里），而 archify 的 messages.from/to 必须能引用到\n")
+                    .append("  participants 里的 id，漏一个就整图校验失败——照 Mermaid 原文把出现过的一方都补上\n")
+                    .append("- B-->>A: 文本（虚线/返回）→ variant:\"return\"（variant 只取 default|emphasis|security|dashed|return）\n")
+                    .append("- Note over A,B: 第X步 → segments[{from:<该段首条消息的数组下标>, to:<末条下标>, label:\"第X步\"}]；\n")
+                    .append("  segments 的 from/to 是**消息数组下标（数字）**，不是 participant id——这是最常见的映射错误\n");
         }
         return sb.toString();
     }
