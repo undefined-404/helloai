@@ -123,6 +123,11 @@ public class ConversationSkillRunner {
             SkillSpecExtractor.ChartSpec spec = produceSpec(conversationId, plannerAgentId, skillName, userNeed);
             SkillPackageExecutionService.RunResult runResult = runRender(scopeId, skillName, spec);
             if (!runResult.ok()) {
+                // 完整 CLI 输出进日志（1357 字符级别，落盘可追）——只留 firstLine 会把 JSON
+                // 错误 receipt 裁成孤零零一个「{」，用户看不到真正的 error/diagnostics。
+                log.warn("对话内技能渲染失败: conversationId={}, skill={}, chartType={}, exitCode={}, timedOut={}, output={}",
+                        conversationId, skillName, spec.chartType(), runResult.exitCode(),
+                        runResult.timedOut(), runResult.output());
                 throw new BizException("技能渲染失败（" + skillName + "）：" + firstLine(runResult.output()));
             }
             SkillPackageExecutionService.Artifact artifact =
@@ -246,6 +251,11 @@ public class ConversationSkillRunner {
      * <p>为什么把「输出契约」写在技能正文之外：技能正文是给人/模型读的完整手册（含 CLI 用法、
      * 失败对策、验收标准），但本链路只需要其中的<b>输入结构</b>。契约单列能覆盖正文里
      * 「用 internal_export_artifact 导出」这类对话轮并不存在的步骤，避免模型去调不存在的工具。</p>
+     *
+     * <p><b>2026-10-27 关键约束显式化</b>：模型读 2 万字 schema 抓不住必填字段，真实失败里
+     * 最典型的是 workflow 节点 {@code type} 填了动作词（action/task/step），而 archify 的
+     * 枚举是组件类型（frontend/backend/...）。把「最容易错的三条」在契约段点名，
+     * 而不是让模型自己从 schema 里找——schema 仍注入做兜底，但契约段是主参照。</p>
      */
     private static String specPrompt(String skillBody, List<String> guessedTypes,
                                      String schemaSection, String userNeed) {
@@ -263,6 +273,9 @@ public class ConversationSkillRunner {
                   是「业务流程与决策分支」时用 workflow；是「谁调谁、消息往返」时用 sequence
                 - 不要输出 html、不要输出命令、不要调用任何工具
 
+                ## 最容易踩的坑（渲染前必查，比 schema 全文更重要）
+                %s
+
                 ## 类型初判（仅供你参考，最终以你的判断为准）
                 按用户描述，最可能是：%s
 
@@ -274,9 +287,49 @@ public class ConversationSkillRunner {
 
                 ## 用户需求
                 %s
-                """.formatted(String.join(" / ", guessedTypes),
+                """.formatted(pitfallsSection(guessedTypes),
+                String.join(" / ", guessedTypes),
                 schemaSection.isBlank() ? "（该技能包未提供 schema 文件，按下文规范自行组织字段）" : schemaSection,
                 skillBody, userNeed);
+    }
+
+    /**
+     * 按初判类型输出「最容易踩的坑」段（显式点名枚举与必填，模型不用去长 schema 里找）。
+     * 命中不到已知类型时给通用兜底提示。
+     */
+    private static String pitfallsSection(List<String> guessedTypes) {
+        boolean workflow = guessedTypes.contains("workflow");
+        boolean architecture = guessedTypes.contains("architecture");
+        boolean lifecycle = guessedTypes.contains("lifecycle");
+        boolean sequence = guessedTypes.contains("sequence");
+        StringBuilder sb = new StringBuilder();
+        if (workflow) {
+            sb.append("workflow 类型（用户描述含流程/决策/审批时必读）：\n")
+                    .append("- 顶层必填：schema_version（取 1 或 2）、diagram_type（必须恰为 \"workflow\"）、meta（必含 title 与 output）、lanes、nodes、edges\n")
+                    .append("- 每个节点必填 id / lane / col / type / label；id 只能字母开头（数字或中文开头的 id 校验不过）\n")
+                    .append("- **node.type 是组件枚举，不是动作词**：只能取 frontend / backend / database / cloud / security / messagebus / external——\n")
+                    .append("  把流程步骤写进 type（如 \"action\"/\"task\"/\"step\"）会直接校验失败；步骤名应放 label，类型按执行方选组件\n")
+                    .append("- 每条泳道（lane）必填 id 与 label；每条边（edge）必填 from 与 to（引用节点 id）\n")
+                    .append("- 用户要求「泳道」时 lanes 必须有多个；「成功主路径」用 mainPath 列出主链节点 id\n");
+        }
+        if (architecture) {
+            sb.append("architecture 类型（用户描述含架构/模块/依赖时必读）：\n")
+                    .append("- 组件 type 同样是组件枚举（frontend / backend / database / cloud / security / messagebus / external），不要造新词\n")
+                    .append("- id 只能字母开头，数字/中文开头校验不过；依赖关系写在 edges（from/to 引用组件 id）\n");
+        }
+        if (lifecycle) {
+            sb.append("lifecycle 类型（用户描述含状态机/状态流转时必读）：\n")
+                    .append("- 状态节点与迁移按 schema 的 states/transitions 结构填，字段名与 schema 一致\n")
+                    .append("- 迁移的 from/to 必须引用已定义的状态 id\n");
+        }
+        if (sequence) {
+            sb.append("sequence 类型（用户描述含调用链/消息往返时必读）：\n")
+                    .append("- 参与者/消息按 schema 的 participants/messages 结构填，消息 from/to 引用参与者 id\n");
+        }
+        if (sb.length() == 0) {
+            sb.append("- 严格按注入的 schema 填必填字段；id 一律字母开头（数字/中文开头校验不过）；枚举字段只取 schema 列出的值，不发明新值\n");
+        }
+        return sb.toString();
     }
 
     /**
@@ -386,14 +439,52 @@ public class ConversationSkillRunner {
         return chartType + "-" + stamp + ".html";
     }
 
-    /** 取输出的第一行（CLI 报错常常多行，消息里只放最关键的一句）。 */
+    /**
+     * 取输出的首行（CLI 报错常常多行，消息里只放最关键的一句）。
+     *
+     * <p><b>2026-10-27 改进</b>：archify 的 {@code --json} 失败输出是一份格式化的 JSON receipt
+     * （{@code {"schemaVersion":1,"ok":false,"error":...,"diagnostics":[...]}}），直接取首行
+     * 只会得到孤零零的「{」。这里先尝试解析 receipt：命中 {@code error} 或首条
+     * {@code diagnostics[].message} 就展示它们；解析不出（普通文本输出）再回落首行。</p>
+     */
     private static String firstLine(String output) {
         if (output == null || output.isBlank()) {
             return "（无输出）";
         }
-        String[] lines = output.strip().split("\\R");
-        String first = lines.length == 0 ? output : lines[0];
+        String trimmed = output.strip();
+        if (trimmed.startsWith("{")) {
+            String receiptSummary = receiptErrorSummary(trimmed);
+            if (receiptSummary != null) {
+                return receiptSummary.length() > 300 ? receiptSummary.substring(0, 300) + "…" : receiptSummary;
+            }
+        }
+        String[] lines = trimmed.split("\\R");
+        String first = lines.length == 0 ? trimmed : lines[0];
         return first.length() > 300 ? first.substring(0, 300) + "…" : first;
+    }
+
+    /** 从 CLI {@code --json} 错误 receipt 里提取可读错误摘要（error 或首条 diagnostics 的 message）。 */
+    private static String receiptErrorSummary(String json) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = new ObjectMapper().readTree(json);
+            String error = root.path("error").asText(null);
+            var diagnostics = root.path("diagnostics");
+            String diagMessage = null;
+            if (diagnostics.isArray() && !diagnostics.isEmpty()) {
+                diagMessage = diagnostics.get(0).path("message").asText(null);
+            }
+            if (error != null && !error.isBlank()) {
+                return diagMessage != null && !diagMessage.isBlank()
+                        ? error + " | " + diagMessage
+                        : error;
+            }
+            if (diagMessage != null && !diagMessage.isBlank()) {
+                return diagMessage;
+            }
+        } catch (Exception ignored) {
+            // 不是合法 JSON（普通文本输出），回落首行逻辑
+        }
+        return null;
     }
 
     private static String brief(String output) {
