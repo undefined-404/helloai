@@ -169,7 +169,12 @@ helloai:
 
 ### 4.6 网络隔离（S-5）
 
-- **拓扑**：`opensandbox-server` 独立容器 + 独立网络 `opensandbox-net`；**app 容器不加入**该网络（app 只经 HTTP API 访问 server 的 `8090`，走 compose 服务名解析需显式加入——**裁定：app 不加入 `opensandbox-net`，经宿主发布端口或独立 network 别名访问**，避免「app 与沙箱容器同网」扩大攻击面）。
+> **⚠️ 本条「app 不加入 `opensandbox-net`」已被 [`ADR-006`](../design/adr/ADR-006-app-join-opensandbox-network.md) 取代（2026-10-27）**：
+> server 端口发布 `127.0.0.1:8090:8090` 的 DNAT 限定 `-d 127.0.0.1/32`，任何容器都连不上（`host.docker.internal` 同样不行）
+> ⇒ 现行为 **app 加入 `opensandbox-net`，`SANDBOX_URL=http://opensandbox-server:8090`**。
+> 攻击面改由「沙箱默认拒绝出网 + 沙箱内不注入凭据」承担（见 `ADR-006` §4）。下文保留原文以便追溯。
+
+- **拓扑**：`opensandbox-server` 独立容器 + 独立网络 `opensandbox-net`；~~**app 容器不加入**该网络~~（已由 `ADR-006` 取代）（app 只经 HTTP API 访问 server 的 `8090`，走 compose 服务名解析需显式加入——**裁定：app 不加入 `opensandbox-net`，经宿主发布端口或独立 network 别名访问**，避免「app 与沙箱容器同网」扩大攻击面）。
 - **沙箱容器网络**：`network_mode=bridge`（OpenSandbox server 默认）+ `networkPolicy.defaultAction=deny`（默认禁出）+ egress 白名单按需放行。
 
 ### 4.7 配置与开关

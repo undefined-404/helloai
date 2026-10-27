@@ -8,6 +8,12 @@
 | **关联文档** | [`plan/HelloAI OpenSandbox 沙箱集成计划.md`](../../plan/HelloAI%20OpenSandbox%20沙箱集成计划.md) §4.6（S-5 网络隔离）、[`HelloAI 项目基线文档.md`](../../HelloAI%20项目基线文档.md) §7/§10、`LOG-20261017-008` / `-009` / `-010` |
 | **决策类型** | 部署拓扑 + 网络隔离（S-5 前置契约，先于 S-6 验证集） |
 
+> **⚠️ §2（app 不加入 `opensandbox-net`）已被 [`ADR-006`](ADR-006-app-join-opensandbox-network.md) 取代（2026-10-27）**：
+> `opensandbox-server` 的端口发布钉在 `127.0.0.1:8090:8090`，其 DNAT 规则限定 `-d 127.0.0.1/32`，
+> **任何容器都连不上**（`host.docker.internal` 同样不行）⇒ app 必须加入 `opensandbox-net` 用服务名寻址。
+> 本 ADR 其余决策（`docker.sock` 不挂 app、`api_key` 走 config.toml、ACR 镜像源）**继续有效**。
+> 照 §2 改回去的症状是同一条 `sandbox create failed (opener returned null)`，极难定位。
+
 > **本 ADR 只定部署拓扑与网络隔离口径，不接业务执行链**（本轮集成目标 = 能力预研 + 契约落地，
 > 用户 2026-10-17 裁定；沙箱内执行 agent 工具链属后置阶段，触发条件见 §6）。
 
