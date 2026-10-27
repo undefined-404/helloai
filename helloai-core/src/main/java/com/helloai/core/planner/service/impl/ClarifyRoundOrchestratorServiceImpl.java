@@ -291,12 +291,28 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
             messageService.removeByIds(truncateIds);
         }
         // 更新编辑后的内容（payload 保留——纯文本 user 消息无 payload，选择快照等结构化数据不动）
-        target.setContent(trimmed);
+        // 编辑后的内容同样要解析技能前缀（2026-10-27）：runRoundCore 没有技能分支，
+        // 不解析就意味着「编辑重发」必然退化成普通对话 —— 技能名只存在于 payload 里，
+        // 而 runRoundCore 从不读它。前端提交时会把技能拼回 `[skill:name] ` 前缀。
+        SkillDirective.Parsed edited = skillDirective.parse(trimmed);
+        if (edited.hasSkill() && edited.text().isEmpty()) {
+            throw new BizException("请说明要生成什么内容（例如「画一张分布式支付的生命周期图」）");
+        }
+        // 正文与 payload 必须同步：留前缀会把内部语法暴露在气泡里；用户去掉技能则必须清 payload，
+        // 否则 chip 显示「用了技能」而本轮实际走普通对话，界面与行为互相矛盾。
+        target.setContent(edited.hasSkill() ? edited.text() : trimmed);
+        target.setPayload(edited.hasSkill()
+                ? skillDirective.mergePayload(target.getPayload(), edited.skillName())
+                : skillDirective.withoutSkill(target.getPayload()));
         messageService.updateById(target);
-        log.info("澄清会话编辑消息并重跑: conversationId={}, messageId={}, truncated={}, newLen={}",
-                conversationId, messageId, truncateIds.size(), trimmed.length());
-        // 重跑该消息（与 retryRound 同语义：不新增消息、不加轮数）
-        return runRoundCore(conversation, trimmed, target.getPayload());
+        log.info("澄清会话编辑消息并重跑: conversationId={}, messageId={}, truncated={}, newLen={}, skill={}",
+                conversationId, messageId, truncateIds.size(), trimmed.length(), edited.skillName());
+        // 重跑该消息（与 retryRound 同语义：不新增消息、不加轮数）；
+        // 带技能时走技能执行段 —— 只补 assistant 结果，不再新增 user 消息。
+        if (edited.hasSkill()) {
+            return executeSkillRound(conversation, edited.skillName(), edited.text());
+        }
+        return runRoundCore(conversation, target.getContent(), target.getPayload());
     }
 
     @Override
@@ -420,7 +436,22 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         conversationService.updateById(conversation);
         log.info("对话内技能执行开始: conversationId={}, skill={}, needLen={}",
                 conversationId, skillName, need.length());
+        return executeSkillRound(conversation, skillName, need);
+    }
 
+    /**
+     * 执行技能轮（用户消息<b>已落库之后</b>的部分：跑技能 → 落 assistant 结果）。
+     *
+     * <p><b>为什么从 {@link #runSkillRound} 抽出</b>（2026-10-27）：编辑重发也要走技能，
+     * 但编辑场景的 user 消息已被原地更新，不能再 addMessage 一条。抽成独立方法后，
+     * 「新增消息 + 执行」与「更新消息 + 执行」共用同一段执行逻辑，避免两份实现漂移。</p>
+     *
+     * @param skillName 技能包名（非空）
+     * @param need      已剥离前缀的用户正文
+     */
+    private ClarifyConversationDetail executeSkillRound(RequirementConversation conversation,
+                                                        String skillName, String need) {
+        Long conversationId = conversation.getId();
         ConversationSkillRunner.Result result;
         try {
             result = conversationSkillRunner.run(conversationId, conversation.getPlannerAgentId(),

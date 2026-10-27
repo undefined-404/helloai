@@ -122,6 +122,32 @@ public class SkillDirective {
     }
 
     /**
+     * 从消息 payload 里移除技能名（编辑消息时用户去掉了技能）。
+     *
+     * <p><b>为什么必须清</b>：技能名既驱动后端走技能轮，也驱动前端显示技能 chip。
+     * 编辑后不再走技能轮却留着 chip，界面与行为就互相矛盾——用户会以为又跑了一次技能。</p>
+     *
+     * @param payload 原 payload（可为 null）
+     * @return 移除后的 JSON 串；无该键 / 非法 JSON / 删空后无其它字段时返回 {@code null}
+     */
+    public String withoutSkill(String payload) {
+        if (payload == null || payload.isBlank()) {
+            return payload;
+        }
+        try {
+            ObjectNode node = objectMapper.readValue(payload, ObjectNode.class);
+            if (node == null || !node.has(PAYLOAD_KEY)) {
+                return payload;
+            }
+            node.remove(PAYLOAD_KEY);
+            return node.isEmpty() ? null : objectMapper.writeValueAsString(node);
+        } catch (Exception e) {
+            log.warn("技能名从消息 payload 移除失败（保留原 payload）: err={}", e.getMessage());
+            return payload;
+        }
+    }
+
+    /**
      * 从消息 payload 里读技能名。
      *
      * @param payload 消息 payload（可为 null）

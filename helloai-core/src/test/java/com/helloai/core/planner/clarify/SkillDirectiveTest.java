@@ -103,6 +103,25 @@ class SkillDirectiveTest {
         assertNull(directive.skillOfPayload(null));
     }
 
+    // ===== withoutSkill：编辑消息去掉技能时必须同时清 payload（2026-10-27） =====
+
+    @Test
+    @DisplayName("withoutSkill：只删 skill，其余字段保留（selections 等不能丢）")
+    void withoutSkillKeepsOtherFields() {
+        String stripped = directive.withoutSkill("{\"skill\":\"archify\",\"selections\":[{\"questionId\":\"q1\"}]}");
+        assertNull(directive.skillOfPayload(stripped));
+        assertTrue(stripped.contains("selections"));
+    }
+
+    @Test
+    @DisplayName("withoutSkill：删空后返回 null（不留 {} 空壳），无该键/非法 JSON 原样返回")
+    void withoutSkillEdgeCases() {
+        assertNull(directive.withoutSkill("{\"skill\":\"archify\"}"));
+        assertEquals("{\"other\":1}", directive.withoutSkill("{\"other\":1}"));
+        assertEquals("not-json", directive.withoutSkill("not-json"));
+        assertNull(directive.withoutSkill(null));
+    }
+
     @Test
     @DisplayName("renderInstruction：技能不存在时不注入任何规范（不编造）")
     void renderInstructionSkipsUnknownSkill() {
