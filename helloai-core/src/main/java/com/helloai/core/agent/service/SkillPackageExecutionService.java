@@ -60,7 +60,8 @@ public interface SkillPackageExecutionService {
      * 按绝对路径回读产物（只读，不会为读文件新建沙箱）。
      *
      * @param scopeId  复用工作区键
-     * @param path     容器内绝对路径（如 {@code /workspace/out/artifact.html}）
+     * @param path     容器内绝对路径（对话内执行形如 {@code /workspace/runs/<runId>/artifact.html}；
+     *                 子任务侧由模型自选，通常 {@code /workspace/out/<name>.html}）
      * @param maxBytes 上限字节；超出时返回 {@code truncated=true}
      * @return 产物；工作区不存在 / 文件不可读 ⇒ {@code null}
      */

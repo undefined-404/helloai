@@ -1,11 +1,23 @@
 package com.helloai.core.planner.skill;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.agent.service.SkillPackageExecutionService;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.service.ChatAttachmentService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ResourceLoader;
 
 import java.lang.reflect.Method;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * {@link ConversationSkillRunner} 失败信息展示的聚焦测试（2026-10-27）。
@@ -134,5 +146,105 @@ class ConversationSkillRunnerTest {
         assertThat(isLayoutGateFailure("compose/whatever")).isFalse();
         assertThat(isLayoutGateFailure(null)).isFalse();
         assertThat(isLayoutGateFailure("")).isFalse();
+    }
+
+    // ===== 产物自检（check）判定 + 执行级目录（2026-10-27 P0） =====
+
+    /**
+     * 用给定 CLI 输出构造 runner，并反射调用 {@code checkArtifact}。
+     *
+     * <p>为什么 mock 其余 7 个依赖：本组只验「回执怎么判」，真跑会牵出 LLM 与沙箱；
+     * 判定逻辑是纯函数性质，注入桩输出即可覆盖全部分支。</p>
+     */
+    private static Object check(String cliOutput) throws Exception {
+        SkillPackageExecutionService exec = mock(SkillPackageExecutionService.class);
+        when(exec.run(anyString(), anyLong(), anyString(), anyInt()))
+                .thenReturn(new SkillPackageExecutionService.RunResult(true, 0, cliOutput, false));
+        ConversationSkillRunner runner = new ConversationSkillRunner(
+                mock(AgentSkillSpecService.class), exec, mock(SkillSpecExtractor.class),
+                mock(PlatformAgentExecutionService.class), mock(PlannerAgentPicker.class),
+                mock(ChatAttachmentService.class), new ObjectMapper(), mock(ResourceLoader.class));
+        Method m = ConversationSkillRunner.class.getDeclaredMethod(
+                "checkArtifact", Long.class, String.class, String.class);
+        m.setAccessible(true);
+        return m.invoke(runner, -1L, "archify", "/workspace/runs/abc12345");
+    }
+
+    private static boolean attr(Object attempt, String accessor) throws Exception {
+        Method m = attempt.getClass().getDeclaredMethod(accessor);
+        m.setAccessible(true);
+        return (Boolean) m.invoke(attempt);
+    }
+
+    private static String strAttr(Object attempt, String accessor) throws Exception {
+        Method m = attempt.getClass().getDeclaredMethod(accessor);
+        m.setAccessible(true);
+        return (String) m.invoke(attempt);
+    }
+
+    @Test
+    @DisplayName("★ 自检通过：回执 ok + provenance=current ⇒ 取出产物哈希用于三方对账")
+    void check_passesAndExtractsSha() throws Exception {
+        Object attempt = check("""
+                {"ok": true, "artifact": {"sha256": "c014b6e4aa", "bytes": 840706},
+                 "composition": {"profile": "showcase", "status": "pass", "summary": {"errors": 0, "warnings": 0}},
+                 "provenance": "current", "deliveryReceiptId": "r1"}
+                """);
+        assertThat(attr(attempt, "ok")).isTrue();
+        assertThat(strAttr(attempt, "artifactSha256")).isEqualTo("c014b6e4aa");
+    }
+
+    @Test
+    @DisplayName("★ provenance 不是 current ⇒ 硬失败且不重试（降档糊不过去，属正确性问题）")
+    void check_provenanceNotCurrent_hardFails() throws Exception {
+        // 不带 --require-provenance 时 CLI 的真实返回就是这个（archify.mjs:1994）
+        Object attempt = check("""
+                {"ok": true, "artifact": {"sha256": "x"}, "composition": {"status": "pass"},
+                 "provenance": "unknown"}
+                """);
+        assertThat(attr(attempt, "ok")).isFalse();
+        assertThat(attr(attempt, "retryable")).as("provenance 问题重试也不会变好").isFalse();
+        assertThat(strAttr(attempt, "message")).contains("provenance=unknown");
+    }
+
+    @Test
+    @DisplayName("★ 构图不过但来源正常 ⇒ 可重试（与 deliver 布局门同一族，走重生成 / 降档）")
+    void check_compositionErrors_retryable() throws Exception {
+        Object attempt = check("""
+                {"ok": false, "artifact": {"sha256": "x"},
+                 "composition": {"profile": "showcase", "status": "fail", "summary": {"errors": 2}},
+                 "provenance": "current"}
+                """);
+        assertThat(attr(attempt, "ok")).isFalse();
+        assertThat(attr(attempt, "retryable")).isTrue();
+        assertThat(strAttr(attempt, "message")).contains("composition=fail").contains("errors=2");
+    }
+
+    @Test
+    @DisplayName("回执不可解析（非 JSON / 空）⇒ 硬失败，不得当成布局门白重试")
+    void check_unparsableOutput_hardFails() throws Exception {
+        assertThat(attr(check("node: not found"), "retryable")).isFalse();
+        assertThat(attr(check(""), "ok")).isFalse();
+        assertThat(attr(check(null), "ok")).isFalse();
+    }
+
+    @Test
+    @DisplayName("★ 执行级目录：每次 runId 不同，路径落在 /workspace/runs/<runId>/ 下")
+    void runIdPaths_arePerExecution() throws Exception {
+        Method id = ConversationSkillRunner.class.getDeclaredMethod("newRunId");
+        id.setAccessible(true);
+        String a = (String) id.invoke(null);
+        String b = (String) id.invoke(null);
+        assertThat(a).hasSize(8).matches("[0-9a-f]{8}");
+        assertThat(a).as("两次执行必须落在不同目录，否则仍会串产物").isNotEqualTo(b);
+
+        Method html = ConversationSkillRunner.class.getDeclaredMethod("htmlPathOf", String.class);
+        Method spec = ConversationSkillRunner.class.getDeclaredMethod("specPathOf", String.class);
+        html.setAccessible(true);
+        spec.setAccessible(true);
+        assertThat((String) html.invoke(null, "/workspace/runs/" + a))
+                .isEqualTo("/workspace/runs/" + a + "/artifact.html");
+        assertThat((String) spec.invoke(null, "/workspace/runs/" + a))
+                .isEqualTo("/workspace/runs/" + a + "/spec.json");
     }
 }

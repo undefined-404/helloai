@@ -1,5 +1,6 @@
 package com.helloai.core.planner.skill;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.domain.AgentResult;
@@ -24,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
@@ -41,20 +43,22 @@ import java.util.regex.Pattern;
  * 把 CLI 的错误输出回给模型重产一次，成功率明显提升；仍失败就如实报错并附首条错误——
  * 无限重试会把一次「模型没理解 schema」拖成几十秒的空转。</p>
  *
- * <p><b>作用域</b>：沙箱槽键用 {@code -conversationId}（会话 ID 取负）：子任务 ID 是雪花正数，
- * 负数不会撞车，且同一个会话的两次技能执行会串行复用同一个工作区（包注入幂等）。</p>
+ * <p><b>两级作用域（2026-10-27 修正）</b>：<b>沙箱</b>按会话复用，槽键 {@code -conversationId}
+ * （会话 ID 取负，子任务 ID 是雪花正数不会撞车；复用只为省掉 2.2s 的包注入）；
+ * <b>工作目录</b>按<b>每次执行</b>隔离，落 {@code /workspace/runs/<runId>/}。
+ * 必须分开的理由：槽级锁只保证「单条命令」串行，挡不住
+ * 「A 的 run 结束 → B 写 spec 重渲 → A 再读 artifact.html」这段窗口——固定路径下 A 会读到 B 的图。</p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ConversationSkillRunner {
 
-    /** 技能产物输出目录（与技能正文里的约定一致）。 */
-    private static final String OUT_DIR = "/workspace/out";
+    /** 每次执行独立工作目录的根：隔离的最小单位是目录，不是沙箱（沙箱复用属会话级收益）。 */
+    private static final String RUN_ROOT = "/workspace/runs";
 
-    private static final String SPEC_PATH = OUT_DIR + "/spec.json";
-
-    private static final String HTML_PATH = OUT_DIR + "/artifact.html";
+    /** 产物自检命令超时：单次 {@code check} 本地实测约 1.1s，给足余量但不放任卡死。 */
+    private static final int CHECK_TIMEOUT_SECONDS = 120;
 
     /** 单次产物上限：与对话框内联预览的 5MB 同一把尺子（更大的产物既传不动也看不了）。 */
     private static final int MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
@@ -156,42 +160,47 @@ public class ConversationSkillRunner {
             throw new BizException("技能不可用（未入库或沙箱未启用）: " + skillName);
         }
         Long scopeId = -conversationId;
+        // 沙箱按会话复用（注入只付一次），工作目录按执行隔离（串产物窗口消失）。
+        String runId = newRunId();
+        String runDir = RUN_ROOT + "/" + runId;
+        String htmlPath = htmlPathOf(runDir);
         try {
             SkillSpecExtractor.ChartSpec spec = produceSpec(conversationId, plannerAgentId, skillName, userNeed);
-            SkillPackageExecutionService.RunResult runResult =
-                    runRender(scopeId, skillName, spec, QUALITY_SHOWCASE);
+            Attempt attempt = renderAttempt(scopeId, skillName, spec, QUALITY_SHOWCASE, runDir);
             // 第 1 次自动重试（2026-10-27）：布局门失败先「重新生成 spec 再渲染」。
             //   依据：同一段描述第一次 ambiguous-corridor 失败、用户手点重试就成功 —— spec 由
             //   LLM 生成，col 摆位/边集合每次都不同，成功率实际上取决于这次生成的布局输入。
             //   把用户手点的这一下搬进代码，并把失败原因回喂让它主动避开。
-            if (!runResult.ok() && isLayoutGateFailure(runResult.output())) {
-                log.info("布局门未过，重新生成 spec 重试: conversationId={}, skill={}, firstLine={}",
-                        conversationId, skillName, firstLine(runResult.output()));
+            if (!attempt.ok() && attempt.retryable()) {
+                log.info("布局门未过，重新生成 spec 重试: conversationId={}, skill={}, runId={}, reason={}",
+                        conversationId, skillName, runId, attempt.message());
                 spec = produceSpec(conversationId, plannerAgentId, skillName,
-                        userNeed + LAYOUT_RETRY_HINT.formatted(firstLine(runResult.output())));
-                runResult = runRender(scopeId, skillName, spec, QUALITY_SHOWCASE);
+                        userNeed + LAYOUT_RETRY_HINT.formatted(attempt.message()));
+                attempt = renderAttempt(scopeId, skillName, spec, QUALITY_SHOWCASE, runDir);
             }
             // 第 2 次兜底：仍不过则降档 standard —— 该档对本类诊断 return []（不报），
             //   保证用户拿到一张图而不是一句失败。宁可 90 分的图，也不要零产物。
-            if (!runResult.ok() && isLayoutGateFailure(runResult.output())) {
-                log.info("降档 standard 重试: conversationId={}, skill={}", conversationId, skillName);
-                runResult = runRender(scopeId, skillName, spec, QUALITY_STANDARD);
+            if (!attempt.ok() && attempt.retryable()) {
+                log.info("降档 standard 重试: conversationId={}, skill={}, runId={}", conversationId, skillName, runId);
+                attempt = renderAttempt(scopeId, skillName, spec, QUALITY_STANDARD, runDir);
             }
-            if (!runResult.ok()) {
-                // 完整 CLI 输出进日志（1357 字符级别，落盘可追）——只留 firstLine 会把 JSON
-                // 错误 receipt 裁成孤零零一个「{」，用户看不到真正的 error/diagnostics。
-                log.warn("对话内技能渲染失败: conversationId={}, skill={}, chartType={}, exitCode={}, timedOut={}, output={}",
-                        conversationId, skillName, spec.chartType(), runResult.exitCode(),
-                        runResult.timedOut(), runResult.output());
-                throw new BizException("技能渲染失败（" + skillName + "）：" + firstLine(runResult.output()));
+            if (!attempt.ok()) {
+                throw new BizException("技能渲染失败（" + skillName + "）：" + attempt.message());
             }
             SkillPackageExecutionService.Artifact artifact =
-                    skillPackageExecutionService.readArtifact(scopeId, HTML_PATH, MAX_ARTIFACT_BYTES);
+                    skillPackageExecutionService.readArtifact(scopeId, htmlPath, MAX_ARTIFACT_BYTES);
             if (artifact == null) {
-                throw new BizException("产物读不回：命令自报成功但 " + HTML_PATH + " 不可读");
+                throw new BizException("产物读不回：命令自报成功但 " + htmlPath + " 不可读");
             }
             if (artifact.truncated()) {
                 throw new BizException("产物超过单文件上限（" + MAX_ARTIFACT_BYTES + " 字节），拒绝交付被截断的文件");
+            }
+            // 三方对账（对齐 SKX-9 口径）：check 回执的 artifact.sha256 ↔ 回读字节哈希。
+            //   不一致说明「读到的不是刚自检过的那一份」，此时落库等于交付来路不明的文件。
+            if (attempt.artifactSha256() != null
+                    && !attempt.artifactSha256().equalsIgnoreCase(artifact.sha256())) {
+                throw new BizException("产物哈希与 check 回执不一致（回执 " + attempt.artifactSha256()
+                        + " / 回读 " + artifact.sha256() + "），拒绝交付");
             }
             String fileName = fileNameOf(spec.chartType());
             ChatAttachment attachment = chatAttachmentService.saveArtifact(
@@ -268,21 +277,133 @@ public class ConversationSkillRunner {
     }
 
     /**
-     * 跑「写 spec → validate → deliver」一条命令。
+     * 一次完整的「渲染 + 自检」尝试。
+     *
+     * <p><b>为什么 {@code check} 单独一条命令</b>，而不是接在 {@code &&} 链尾：
+     * {@code check --json} 要解析结构化回执（{@code provenance} / {@code composition} /
+     * {@code artifact.sha256}），而链尾会与前两段 JSON 粘成一段输出，只能靠正则抠字段 ——
+     * 等于把稳定契约换成脆弱解析。</p>
+     *
+     * <p><b>为什么必须自检</b>：{@code skills/plugins/archify.md} 自己写着「渲染后必须 check 通过
+     * （{@code provenance=current}、{@code issues} 为空）才算产出」，实现少跑这一步就是
+     * 违反自定契约（外部评审 2026-10-27 指出，见 {@code review/技能执行面代码审查…} §3）。</p>
+     */
+    private Attempt renderAttempt(Long scopeId, String skillName, SkillSpecExtractor.ChartSpec spec,
+                                  String quality, String runDir) {
+        SkillPackageExecutionService.RunResult runResult =
+                runRender(scopeId, skillName, spec, quality, runDir);
+        if (!runResult.ok()) {
+            // 完整 CLI 输出进日志（1357 字符级别，落盘可追）——只留 firstLine 会把 JSON
+            // 错误 receipt 裁成孤零零一个「{」，用户看不到真正的 error/diagnostics。
+            log.warn("对话内技能渲染失败: skill={}, chartType={}, quality={}, exitCode={}, timedOut={}, output={}",
+                    skillName, spec.chartType(), quality, runResult.exitCode(),
+                    runResult.timedOut(), runResult.output());
+            return new Attempt(false, isLayoutGateFailure(runResult.output()),
+                    firstLine(runResult.output()), null);
+        }
+        return checkArtifact(scopeId, skillName, runDir);
+    }
+
+    /**
+     * 产物自检（{@code check --require-provenance}）+ 回执解析 + 判定。
+     *
+     * <p><b>必须带 {@code --require-provenance}</b>：不带时 CLI 直接返回
+     * {@code provenance: "unknown"}（{@code archify.mjs:1994}），"provenance=current" 这条验收
+     * 形同虚设。</p>
+     *
+     * <p><b>{@code check} 不接受 {@code --quality}</b>（{@code COMMAND_USAGE.check} 只列
+     * {@code --json} / {@code --require-provenance}），它读的是产物里已内嵌的
+     * {@code composition.profile}。所以降档 {@code standard} 重渲后本方法依然能通过 ——
+     * 补 check 不会让「降档兜底」失效（2026-10-27 本地实跑确认）。</p>
+     */
+    private Attempt checkArtifact(Long scopeId, String skillName, String runDir) {
+        String command = "node bin/archify.mjs check " + htmlPathOf(runDir)
+                + " --json --require-provenance";
+        SkillPackageExecutionService.RunResult result =
+                skillPackageExecutionService.run(skillName, scopeId, command, CHECK_TIMEOUT_SECONDS);
+        String output = result.output();
+        JsonNode root = parseJson(output);
+        if (root == null) {
+            log.warn("产物自检回执不可解析: skill={}, exitCode={}, output={}", skillName, result.exitCode(), output);
+            return new Attempt(false, false, "产物自检失败（回执不可解析）：" + firstLine(output), null);
+        }
+        String provenance = root.path("provenance").asText("");
+        if (!"current".equals(provenance)) {
+            // provenance 不是 current = 产物不是这条输入渲染出来的（被手改过 / 拿旧文件充数 /
+            // 交付侧车丢失）。属正确性问题，降档糊不过去，重试也不会变好 —— 直接失败。
+            return new Attempt(false, false, "产物来源校验未通过（provenance=" + provenance + "）", null);
+        }
+        boolean ok = root.path("ok").asBoolean(false);
+        int errors = root.path("composition").path("summary").path("errors").asInt(0);
+        String status = root.path("composition").path("status").asText("");
+        if (!ok || errors > 0 || (!status.isEmpty() && !"pass".equals(status))) {
+            // 来源正常但构图不过 ⇒ 与 deliver 的布局门同一族：重生成 spec、必要时降档。
+            String reason = status.isEmpty()
+                    ? "self-check failed"
+                    : "composition=" + status + ", errors=" + errors;
+            log.info("产物自检未通过: skill={}, reason={}, output={}", skillName, reason, brief(output));
+            return new Attempt(false, true, "产物自检未通过（" + reason + "）", null);
+        }
+        String sha256 = root.path("artifact").path("sha256").asText(null);
+        log.info("产物自检通过: skill={}, bytes={}, sha256={}, profile={}",
+                skillName, root.path("artifact").path("bytes").asLong(0), sha256,
+                root.path("composition").path("profile").asText(""));
+        return new Attempt(true, false, "", sha256);
+    }
+
+    /**
+     * 跑「写 spec → validate → deliver」一条命令（`check` 由 {@link #checkArtifact} 单独跑）。
      *
      * <p>写文件用 base64 而不是 heredoc：spec 里必然有引号与花括号，heredoc 的分隔符选择、
      * shell 变量展开都会引入转义问题；base64 的字符集只有 {@code A-Za-z0-9+/=}，放进单引号里恒定安全。</p>
      */
     private SkillPackageExecutionService.RunResult runRender(Long scopeId, String skillName,
                                                              SkillSpecExtractor.ChartSpec spec,
-                                                             String quality) {
+                                                             String quality, String runDir) {
         String base64 = Base64.getEncoder().encodeToString(spec.specJson().getBytes(StandardCharsets.UTF_8));
-        String command = "mkdir -p " + OUT_DIR
-                + " && printf '%s' '" + base64 + "' | base64 -d > " + SPEC_PATH
-                + " && node bin/archify.mjs validate " + spec.chartType() + " " + SPEC_PATH + " --json"
-                + " && node bin/archify.mjs deliver " + spec.chartType() + " " + SPEC_PATH + " " + HTML_PATH
-                + " --json --quality " + quality;
+        String specPath = specPathOf(runDir);
+        String command = "mkdir -p " + runDir
+                + " && printf '%s' '" + base64 + "' | base64 -d > " + specPath
+                + " && node bin/archify.mjs validate " + spec.chartType() + " " + specPath + " --json"
+                + " && node bin/archify.mjs deliver " + spec.chartType() + " " + specPath + " "
+                + htmlPathOf(runDir) + " --json --quality " + quality;
         return skillPackageExecutionService.run(skillName, scopeId, command, COMMAND_TIMEOUT_SECONDS);
+    }
+
+    /** 执行级目录名：8 位十六进制，容器内路径恒定安全，日志与回读能对上号。 */
+    private static String newRunId() {
+        return UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+    }
+
+    private static String specPathOf(String runDir) {
+        return runDir + "/spec.json";
+    }
+
+    private static String htmlPathOf(String runDir) {
+        return runDir + "/artifact.html";
+    }
+
+    /** CLI 回执解析：不是 JSON（含被截断的半截）一律返回 {@code null}，由调用方按失败处理。 */
+    private JsonNode parseJson(String output) {
+        if (output == null || output.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(output);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 一次尝试的结果。
+     *
+     * @param ok             产物可用（渲染 + 自检都过）
+     * @param retryable      值得重试（布局/构图门，与输入非法相对）
+     * @param message        失败原因（给人看的一句话）
+     * @param artifactSha256 自检回执里的产物哈希（成功时非空，用于与回读字节对账）
+     */
+    private record Attempt(boolean ok, boolean retryable, String message, String artifactSha256) {
     }
 
     /**
