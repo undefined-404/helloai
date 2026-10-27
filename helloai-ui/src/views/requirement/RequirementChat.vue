@@ -2085,12 +2085,22 @@ function isTaskCommand(text: string): boolean {
  * 成功后按 FINALIZED/taskId 联动打开草案审阅（§6.169）。
  */
 async function sendSyncCreate(text: string, plannerId: string | null) {
-  const result = await clarifyApi.create(text, plannerId, webSearchEnabled.value, clientToken.value)
+  // 2026-10-27 修：此前无条件走 create —— 在同一个对话里连画第二张图时会被弹到一个新会话，
+  // 历史上下文、产物侧栏、技能 chip 全部断掉，用户看到的是「又开了一个对话」。
+  // 判据：已有 activeId 就在当前会话 continue（send），只有真正的新会话才 create。
+  // 注：create 才需要 clientToken / plannerId / 搜索开关（首句前附件认领、选人、开关初值），
+  //     send 一律沿用会话上已保存的设置，不再透传。
+  const existing = activeId.value
+  const result = existing != null
+    ? await clarifyApi.send(existing, text)
+    : await clarifyApi.create(text, plannerId, webSearchEnabled.value, clientToken.value)
   detail.value = result
-  activeId.value = String(result.conversation.id)
-  // 建会已认领临时批次：清 token（避免下一轮误用）并按会话重新拉附件清单
-  clientToken.value = null
-  void refreshAttachments()
+  if (existing == null) {
+    activeId.value = String(result.conversation.id)
+    // 建会已认领临时批次：清 token（避免下一轮误用）并按会话重新拉附件清单
+    clientToken.value = null
+    void refreshAttachments()
+  }
   loadList()
   scrollToBottom()
   if (result.conversation.status === 'FINALIZED' && result.conversation.taskId != null) {
