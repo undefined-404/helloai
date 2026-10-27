@@ -16,6 +16,22 @@
             >
               {{ isChatMode ? '自由对话' : '方案澄清' }}
             </el-tag>
+            <!-- 2026-10-27 产物侧栏开关：平台生成的附件收进右侧可收缩侧栏（对齐 Kimi）；
+                 与用户上传附件（输入框上方胶囊条）严格分离。有产物时高亮 + 角标数字。 -->
+            <button
+              type="button"
+              class="artifact-toggle-btn"
+              :class="{ 'is-active': artifactPanelOpen, 'has-artifacts': conversationArtifacts.length > 0 }"
+              :title="artifactToggleTitle"
+              @click="toggleArtifactPanel"
+            >
+              <el-icon><Document /></el-icon>
+              <span class="artifact-toggle-label">产物</span>
+              <span
+                v-if="conversationArtifacts.length"
+                class="artifact-toggle-badge"
+              >{{ conversationArtifacts.length }}</span>
+            </button>
             <!-- 操作组：刷新 / 分享 / 更多（更多 = dropdown） -->
             <el-button
               size="small"
@@ -301,31 +317,21 @@
                           v-else
                           :content="row.intro"
                         />
-                        <!-- 2026-10-27 技能产物卡片：选「产出型技能」后由平台在对话轮内生成，
-                             产物是会话附件（打开=内联预览 / 下载=attachment 落盘） -->
+                        <!-- 2026-10-27：技能产物已从消息流移入右侧「产物侧栏」——
+                            平台生成的附件与用户上传附件分开；这里不再内联卡片。
+                            生成后若侧栏未展开，自动展开一次提示用户查看。 -->
                         <div
-                          v-if="row.artifact"
-                          class="msg-artifact"
+                          v-if="row.artifact && !artifactPanelOpen"
+                          class="msg-artifact-tip"
                         >
-                          <span class="msg-artifact-icon"><el-icon><Document /></el-icon></span>
-                          <span class="msg-artifact-meta">
-                            <span class="msg-artifact-name">{{ row.artifact.fileName }}</span>
-                            <span class="msg-artifact-sub">
-                              {{ artifactSizeLabel(row.artifact.fileSize) }}<template v-if="row.artifact.chartType"> · {{ row.artifact.chartType }}</template>
-                            </span>
-                          </span>
-                          <span class="msg-artifact-actions">
-                            <a
-                              class="msg-artifact-btn"
-                              :href="clarifyApi.attachmentPreviewUrl(row.artifact.attachmentId)"
-                              target="_blank"
-                              rel="noopener"
-                            >打开</a>
-                            <a
-                              class="msg-artifact-btn is-primary"
-                              :href="clarifyApi.attachmentDownloadUrl(row.artifact.attachmentId)"
-                            >下载</a>
-                          </span>
+                          <span class="msg-artifact-tip-text">已生成文件 <b>{{ row.artifact.fileName }}</b>，见右侧「产物」栏</span>
+                          <button
+                            type="button"
+                            class="msg-artifact-tip-btn"
+                            @click="artifactPanelOpen = true"
+                          >
+                            查看
+                          </button>
                         </div>
                         <!-- 用户消息展示态：hover 出现编辑铅笔（对齐 ChatGPT/DeepSeek 交互） -->
                         <button
@@ -679,12 +685,12 @@
                   <!-- 会话附件（V121）：上传后以胶囊列在输入框上方；解析态必须可见——
                        SKIPPED 画成「加载中」会让用户一直等一个永远不会好的文件。 -->
                   <div
-                    v-if="attachments.length || uploading"
+                    v-if="userAttachments.length || uploading"
                     class="attachment-bar"
                   >
                     <!-- ATT-3：点击胶囊切换「本轮是否参与」；未参与的不注入正文也不进检索池 -->
                     <span
-                      v-for="item in attachments"
+                      v-for="item in userAttachments"
                       :key="item.id"
                       class="attachment-chip"
                       :class="attachmentChipClass(item)"
@@ -982,6 +988,102 @@
             </div>
           </div>
         </div>
+        <!-- 2026-10-27 产物侧栏（平台生成的附件，对齐 Kimi 右侧可收缩面板）：
+             与用户上传附件（输入框上方胶囊条）严格分离。展开 = 列表 + 内嵌预览，
+             收起 = 仅保留顶部「产物」开关按钮。 -->
+        <transition name="artifact-panel">
+          <aside
+            v-show="artifactPanelOpen"
+            class="artifact-sidebar"
+          >
+            <div class="artifact-sidebar-head">
+              <span class="artifact-sidebar-title">产物</span>
+              <span class="artifact-sidebar-count">{{ conversationArtifacts.length }} 个</span>
+            </div>
+            <div class="artifact-sidebar-body">
+              <template v-if="conversationArtifacts.length">
+                <button
+                  v-for="item in conversationArtifacts"
+                  :key="item.artifact.attachmentId"
+                  type="button"
+                  class="artifact-item"
+                  :class="{ 'is-current': artifactPreview?.fileName === item.artifact.fileName }"
+                  @click="previewArtifactInPanel(item)"
+                >
+                  <span class="artifact-item-icon"><el-icon><Document /></el-icon></span>
+                  <span class="artifact-item-meta">
+                    <span class="artifact-item-name">{{ item.artifact.fileName }}</span>
+                    <span class="artifact-item-sub">
+                      {{ artifactSizeLabel(item.artifact.fileSize) }}<template v-if="item.artifact.chartType"> · {{ item.artifact.chartType }}</template>
+                    </span>
+                  </span>
+                  <span class="artifact-item-actions">
+                    <!-- 2026-10-27：打开/下载必须走 blob 通道 —— 裸 <a href> 导航不带
+                         X-Admin-Token 会被 401（浏览器导航请求无法携带自定义头）。
+                         blob 经 request 拦截器补鉴权头，再 createObjectURL 交给新标签页 / 落盘。 -->
+                    <button
+                      type="button"
+                      class="artifact-item-btn"
+                      title="新标签页打开"
+                      @click.stop="openArtifactInNewTab(item)"
+                    >
+                      <el-icon><TopRight /></el-icon>
+                    </button>
+                    <button
+                      type="button"
+                      class="artifact-item-btn"
+                      title="下载"
+                      @click.stop="downloadArtifact(item)"
+                    >
+                      <el-icon><Download /></el-icon>
+                    </button>
+                  </span>
+                </button>
+              </template>
+              <el-empty
+                v-else
+                description="暂无产物"
+                :image-size="48"
+              />
+            </div>
+            <!-- 内嵌预览区：点击产物条目后在此渲染（图片/PDF 走 iframe blob，文本/源码走 pre） -->
+            <div
+              v-if="artifactPreview"
+              class="artifact-preview"
+            >
+              <div class="artifact-preview-head">
+                <span class="artifact-preview-name">{{ artifactPreview.fileName }}</span>
+                <button
+                  type="button"
+                  class="artifact-preview-close"
+                  title="关闭预览"
+                  @click="closeArtifactPreview"
+                >
+                  <el-icon><Close /></el-icon>
+                </button>
+              </div>
+              <div
+                v-loading="artifactPreviewLoading"
+                class="artifact-preview-body"
+              >
+                <iframe
+                  v-if="artifactPreview.mode === 'iframe' && artifactPreview.blobUrl"
+                  :src="artifactPreview.blobUrl"
+                  class="artifact-preview-iframe"
+                />
+                <pre
+                  v-else-if="artifactPreview.mode === 'text' && artifactPreview.textContent"
+                  class="artifact-preview-pre"
+                >{{ artifactPreview.textContent }}</pre>
+                <el-empty
+                  v-else
+                  description="暂无预览内容"
+                  :image-size="40"
+                />
+              </div>
+            </div>
+          </aside>
+        </transition>
       </div>
     </el-card>
   </div>
@@ -991,13 +1093,14 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled, Grid } from '@element-plus/icons-vue'
+import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled, Grid, TopRight } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { promptEnhanceApi } from '@/api/promptEnhance'
 import { taskApi } from '@/api/task'
 import { skillApi, type ChatSkillOption } from '@/api/skill'
 import { streamCreateConversation, streamSendConversation } from '@/api/chatStream'
 import { fmtTime } from '@/utils/tableConfig'
+import { saveBlobResponse } from '@/utils/download'
 import StructuredQuestionCard from './StructuredQuestionCard.vue'
 import WebSearchBar from './WebSearchBar.vue'
 import MarkdownView from '@/components/MarkdownView.vue'
@@ -1151,6 +1254,15 @@ watch(() => conversation.value?.status, (s) => {
 
 /** 已挂到本会话（或本临时批次）的附件。 */
 const attachments = ref<ChatAttachmentItem[]>([])
+
+/**
+ * 胶囊条只展示「用户上传」的附件（2026-10-27）：平台产物（source === 'platform'，
+ * uploader_user_id 为 null）一律不进输入框，只出现在右侧「产物」侧栏。
+ * 后端 list 已带 source 字段；极少数老数据无 source 时按用户上传处理（不误伤）。
+ */
+const userAttachments = computed(() =>
+  attachments.value.filter((a) => a.source !== 'platform')
+)
 /**
  * ATT-3：「本轮不参与」的附件 id 集合（默认空 = 全部参与）。
  *
@@ -1177,7 +1289,7 @@ function toggleAttachmentParticipation(item: ChatAttachmentItem): void {
  */
 function effectiveAttachmentIds(): string[] | null {
   if (!excludedAttachmentIds.value.size) return null
-  return attachments.value
+  return userAttachments.value
     .filter((a) => !excludedAttachmentIds.value.has(String(a.id)))
     .map((a) => String(a.id))
 }
@@ -1271,7 +1383,7 @@ async function uploadFiles(files: File[]) {
   try {
     const saved = await clarifyApi.uploadAttachments(form)
     // 去重合并：后端可能因同一文件重复上传返回既有记录
-    const known = new Set(attachments.value.map((a) => String(a.id)))
+    const known = new Set(userAttachments.value.map((a) => String(a.id)))
     saved.forEach((item) => {
       if (!known.has(String(item.id))) attachments.value.push(item)
     })
@@ -1285,6 +1397,7 @@ async function uploadFiles(files: File[]) {
 
 /** 移除附件（软删；后端幂等，前端先摘胶囊保证手感）。 */
 async function removeAttachment(id: LongId) {
+  // 快照全量（含平台产物）：失败回滚时原样还原，不能只回滚 userAttachments 而丢平台产物
   const before = attachments.value
   attachments.value = attachments.value.filter((a) => String(a.id) !== String(id))
   try {
@@ -1304,7 +1417,7 @@ function scheduleParsePoll() {
   parsePollTimer = window.setInterval(async () => {
     attempts += 1
     await refreshAttachments()
-    const pending = attachments.value.some((a) => a.parseStatus === 'PENDING' || a.parseStatus === 'PARSING')
+    const pending = userAttachments.value.some((a) => a.parseStatus === 'PENDING' || a.parseStatus === 'PARSING')
     if (!pending || attempts >= 15) {
       if (parsePollTimer != null) {
         window.clearInterval(parsePollTimer)
@@ -1517,6 +1630,111 @@ const renderMessages = computed(() => {
   }
   return rows
 })
+
+// 2026-10-27：会话内平台生成的产物集合（技能执行产出；从全部消息 payload 收集，
+// 含来源消息 id 用于侧栏定位；按生成顺序倒序展示，最新产物在前）。
+// 与「用户上传附件」（attachments，输入框上方胶囊条）严格分离：产物是 AI 输出，进右侧侧栏。
+const conversationArtifacts = computed(() => {
+  const msgs = detail.value?.messages ?? []
+  const list: { artifact: ClarifyArtifactRef; msgId: string; msgSeq: number }[] = []
+  for (const msg of msgs) {
+    const p = assistantPayloadOf(msg)
+    if (p?.artifact?.attachmentId) {
+      list.push({ artifact: p.artifact, msgId: String(msg.id), msgSeq: msg.seq })
+    }
+  }
+  return list.sort((a, b) => b.msgSeq - a.msgSeq)
+})
+
+// 产物侧栏可见性：点击顶部「文件」按钮切换；会话切换时自动收起
+const artifactPanelOpen = ref(false)
+const artifactToggleTitle = computed(() => {
+  if (!conversationArtifacts.value.length) return '暂无产物（平台生成的附件会出现在这里）'
+  return artifactPanelOpen.value ? '收起产物栏' : `查看产物（${conversationArtifacts.value.length} 个）`
+})
+const artifactPreview = ref<{ blobUrl: string; mode: 'iframe' | 'markdown' | 'text'; textContent: string; fileName: string } | null>(null)
+const artifactPreviewLoading = ref(false)
+let artifactBlobUrl = ''
+
+watch(
+  () => activeId,
+  () => {
+    artifactPanelOpen.value = false
+    closeArtifactPreview()
+  }
+)
+
+/** 切换产物侧栏开关；有产物时打开，无产物时仅收起（按钮灰态时也允许展开查看已加载历史）。 */
+function toggleArtifactPanel() {
+  artifactPanelOpen.value = !artifactPanelOpen.value
+}
+
+/** 关闭内嵌预览并释放 blob URL。 */
+function closeArtifactPreview() {
+  if (artifactBlobUrl) {
+    URL.revokeObjectURL(artifactBlobUrl)
+    artifactBlobUrl = ''
+  }
+  artifactPreview.value = null
+}
+
+/** 侧栏内嵌预览：点击产物条目后拉取内容（iframe 通道用 blob，文本类用 text）。 */
+async function previewArtifactInPanel(item: { artifact: ClarifyArtifactRef; msgId: string; msgSeq: number }) {
+  const name = item.artifact.fileName || ''
+  const dot = name.lastIndexOf('.')
+  const ext = dot >= 0 && dot < name.length - 1 ? name.slice(dot + 1).toLowerCase() : ''
+  const textLike = ['md', 'txt', 'log', 'json', 'xml', 'yml', 'yaml', 'csv', 'html', 'htm', 'svg',
+    'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx'].includes(ext)
+  closeArtifactPreview()
+  artifactPreviewLoading.value = true
+  try {
+    if (textLike) {
+      const resp = await clarifyApi.attachmentPreviewText(item.artifact.attachmentId)
+      artifactPreview.value = { blobUrl: '', mode: 'text', textContent: resp.data, fileName: name }
+    } else {
+      const resp = await clarifyApi.attachmentPreviewBlob(item.artifact.attachmentId)
+      const mime = (resp.headers['content-type'] as string | undefined) || 'application/octet-stream'
+      artifactBlobUrl = URL.createObjectURL(new Blob([resp.data], { type: mime }))
+      artifactPreview.value = { blobUrl: artifactBlobUrl, mode: 'iframe', textContent: '', fileName: name }
+    }
+  } catch {
+    // 业务异常（413 / 404 / 500）由 axios 拦截器统一弹错；预览区置空
+    artifactPreview.value = null
+  } finally {
+    artifactPreviewLoading.value = false
+  }
+}
+
+/**
+ * 下载产物（2026-10-27）：必须走 blob 通道 —— 裸 <a href> 的浏览器导航请求
+ * 不带 X-Admin-Token，会被 AuthInterceptor 401 拒（已实测 11:39:07 日志）。
+ * 经 request 拦截器带鉴权头拉 blob → 临时 <a download> 落盘 → revokeObjectURL。
+ */
+async function downloadArtifact(item: { artifact: ClarifyArtifactRef; msgId: string; msgSeq: number }) {
+  try {
+    const resp = await clarifyApi.attachmentDownloadBlob(item.artifact.attachmentId)
+    saveBlobResponse(resp, item.artifact.fileName || 'attachment')
+  } catch {
+    // 拦截器已统一弹错
+  }
+}
+
+/**
+ * 新标签页打开产物（2026-10-27）：同样走 blob 通道避免 401。
+ * 拉 blob → createObjectURL → window.open（Content-Type 已由响应头决定，text/html 会正常渲染）
+ * → 延迟 revoke（给新标签页留出加载时间）。
+ */
+async function openArtifactInNewTab(item: { artifact: ClarifyArtifactRef; msgId: string; msgSeq: number }) {
+  try {
+    const resp = await clarifyApi.attachmentPreviewBlob(item.artifact.attachmentId)
+    const mime = (resp.headers['content-type'] as string | undefined) || 'application/octet-stream'
+    const url = URL.createObjectURL(new Blob([resp.data], { type: mime }))
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch {
+    // 拦截器已统一弹错
+  }
+}
 
 // 进度：取最近一条带 progress 的 assistant payload；FINALIZED 直接 100
 const clarifyProgress = computed(() => {
@@ -2522,6 +2740,258 @@ onMounted(() => {
   background: var(--ha-bg);
 }
 
+/* ── 2026-10-27 产物侧栏（平台生成的附件，对齐 Kimi 右侧可收缩面板） ── */
+/* 顶部「产物」开关按钮（header-actions 内） */
+.artifact-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--ha-border);
+  border-radius: var(--ha-radius-md);
+  background: var(--ha-surface-elevated);
+  color: var(--ha-ink-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  position: relative;
+  transition: border-color var(--ha-duration-fast) var(--ha-ease-out),
+              color var(--ha-duration-fast) var(--ha-ease-out),
+              background var(--ha-duration-fast) var(--ha-ease-out);
+}
+.artifact-toggle-btn:hover {
+  border-color: var(--ha-primary-light);
+  color: var(--ha-primary);
+}
+.artifact-toggle-btn.is-active {
+  border-color: var(--ha-primary);
+  background: var(--ha-primary-muted);
+  color: var(--ha-primary);
+}
+.artifact-toggle-btn.has-artifacts .artifact-toggle-label {
+  color: var(--ha-primary);
+  font-weight: 600;
+}
+.artifact-toggle-label { font-size: 12px; }
+.artifact-toggle-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--ha-primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* 侧栏本体：flex 子项，固定宽度；展开/收起走 v-show + 宽度过渡 */
+.artifact-sidebar {
+  width: 300px;
+  flex: 0 0 300px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--ha-border-light);
+  background: var(--ha-surface-elevated);
+  overflow: hidden;
+}
+.artifact-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ha-border-light);
+  flex-shrink: 0;
+}
+.artifact-sidebar-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ha-ink);
+}
+.artifact-sidebar-count {
+  font-size: 12px;
+  color: var(--ha-muted);
+}
+.artifact-sidebar-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.artifact-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--ha-radius-md);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--ha-duration-fast) var(--ha-ease-out),
+              border-color var(--ha-duration-fast) var(--ha-ease-out);
+}
+.artifact-item:hover {
+  background: var(--ha-surface-hover);
+}
+.artifact-item.is-current {
+  border-color: var(--ha-primary-light);
+  background: var(--ha-primary-muted);
+}
+.artifact-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--ha-radius-sm);
+  background: var(--ha-primary-light);
+  color: var(--ha-primary);
+  font-size: 15px;
+}
+.artifact-item-meta {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.artifact-item-name {
+  font-size: 13px;
+  color: var(--ha-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-item-sub {
+  font-size: 12px;
+  color: var(--ha-muted);
+}
+.artifact-item-actions {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity var(--ha-duration-fast) var(--ha-ease-out);
+}
+.artifact-item:hover .artifact-item-actions,
+.artifact-item.is-current .artifact-item-actions {
+  opacity: 1;
+}
+.artifact-item-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ha-radius-sm);
+  background: transparent;
+  color: var(--ha-muted);
+  font-size: 14px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color var(--ha-duration-fast) var(--ha-ease-out),
+              background var(--ha-duration-fast) var(--ha-ease-out);
+}
+.artifact-item-btn:hover {
+  color: var(--ha-primary);
+  background: var(--ha-primary-muted);
+}
+
+/* 内嵌预览区（侧栏下半部） */
+.artifact-preview {
+  flex: 0 0 45%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--ha-border-light);
+  background: var(--ha-bg);
+}
+.artifact-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--ha-border-light);
+  flex-shrink: 0;
+  background: var(--ha-surface-elevated);
+}
+.artifact-preview-name {
+  font-size: 12px;
+  color: var(--ha-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-preview-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--ha-radius-sm);
+  background: transparent;
+  color: var(--ha-muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: color var(--ha-duration-fast) var(--ha-ease-out),
+              background var(--ha-duration-fast) var(--ha-ease-out);
+}
+.artifact-preview-close:hover {
+  color: var(--ha-ink);
+  background: var(--ha-surface-hover);
+}
+.artifact-preview-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.artifact-preview-iframe {
+  width: 100%;
+  flex: 1 1 auto;
+  border: none;
+  background: var(--ha-surface);
+}
+.artifact-preview-pre {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 14px 16px;
+  font-family: var(--ha-font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ha-ink);
+  background: var(--ha-surface);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  tab-size: 2;
+}
+
+/* 侧栏展开/收起过渡（宽度 + 透明度） */
+.artifact-panel-enter-active,
+.artifact-panel-leave-active {
+  transition: width var(--ha-duration) var(--ha-ease-out),
+              opacity var(--ha-duration) var(--ha-ease-out);
+  overflow: hidden;
+}
+.artifact-panel-enter-from,
+.artifact-panel-leave-to {
+  width: 0;
+  flex-basis: 0;
+  opacity: 0;
+}
+
 /* ── V33 澄清进度条 ── */
 .clarify-progress {
   display: flex;
@@ -2616,73 +3086,43 @@ onMounted(() => {
   max-width: 100%;
   box-sizing: border-box;
 }
-/* 技能产物卡片（2026-10-27）：附在 assistant 气泡内的文件行 —— 打开走内联预览，下载走 attachment */
-.msg-artifact {
+/* 产物生成提示条（2026-10-27）：产物已移入右侧侧栏，消息流内仅留一条轻提示，
+   点击「查看」展开侧栏 —— 平台生成的附件不再内联在气泡里（与用户上传附件分离） */
+.msg-artifact-tip {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-top: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--ha-border);
+  padding: 8px 12px;
+  border: 1px dashed var(--ha-primary-light);
   border-radius: var(--ha-radius-md);
-  background: var(--ha-surface);
+  background: var(--ha-primary-muted);
+  color: var(--ha-ink-secondary);
+  font-size: 12px;
 }
-.msg-artifact-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 32px;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--ha-radius-sm);
-  background: var(--ha-primary-light);
-  color: var(--ha-primary);
-  font-size: 16px;
-}
-.msg-artifact-meta {
-  display: flex;
-  flex-direction: column;
+.msg-artifact-tip-text {
   flex: 1;
   min-width: 0;
-}
-.msg-artifact-name {
-  font-size: 13px;
-  color: var(--ha-ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.msg-artifact-sub {
-  font-size: 12px;
-  color: var(--ha-muted);
-}
-.msg-artifact-actions {
-  display: flex;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-.msg-artifact-btn {
-  padding: 4px 10px;
-  border: 1px solid var(--ha-border);
-  border-radius: var(--ha-radius-sm);
-  background: var(--ha-surface-elevated);
-  color: var(--ha-ink);
-  font-size: 12px;
-  text-decoration: none;
-  transition: border-color var(--ha-duration-fast) var(--ha-ease-out),
-              color var(--ha-duration-fast) var(--ha-ease-out);
-}
-.msg-artifact-btn:hover {
-  border-color: var(--ha-primary);
+.msg-artifact-tip-text b {
   color: var(--ha-primary);
+  font-weight: 600;
 }
-.msg-artifact-btn.is-primary {
-  border-color: var(--ha-primary);
+.msg-artifact-tip-btn {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid var(--ha-primary);
+  border-radius: var(--ha-radius-sm);
   background: var(--ha-primary);
   color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: opacity var(--ha-duration-fast) var(--ha-ease-out);
 }
-.msg-artifact-btn.is-primary:hover {
-  color: #fff;
+.msg-artifact-tip-btn:hover {
   opacity: 0.9;
 }
 /*
@@ -3357,6 +3797,14 @@ onMounted(() => {
   .thread { padding: 0 4px; gap: 14px; }
   .msg-stream { padding: 14px 8px 16px; }
   .chat-input { padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
+  /* 窄屏：产物侧栏改为底部全宽抽屉（column 布局下不再挤占消息区横向空间） */
+  .artifact-sidebar {
+    width: 100%;
+    flex: 0 0 auto;
+    max-height: 40vh;
+    border-left: none;
+    border-top: 1px solid var(--ha-border-light);
+  }
 }
 
 /* 下拉菜单中的危险项：与 TaskList/SubTaskList 同构 */

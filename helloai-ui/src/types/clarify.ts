@@ -139,4 +139,10 @@ export interface ChatAttachmentItem {
   pageCount: number | null
   parser: string | null
   createTime?: string | null
+  /**
+   * 附件归属：`user` = 用户上传（uploader_user_id 非空）；`platform` = 平台产物
+   * （saveArtifact 写入时 uploader_user_id 为 null，2026-10-27）。
+   * 胶囊条只展示 user；平台产物进右侧「产物」侧栏。
+   */
+  source?: 'user' | 'platform' | string | null
 }

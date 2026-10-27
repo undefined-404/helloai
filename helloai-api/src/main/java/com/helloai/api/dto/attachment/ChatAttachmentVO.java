@@ -42,6 +42,17 @@ public class ChatAttachmentVO {
     /** text / tika / vision（后续）。 */
     private String parser;
 
+    /**
+     * 附件来源（2026-10-27）：{@code user}=用户上传（输入框上方胶囊条）；
+     * {@code platform}=平台生成产物（右侧「产物」侧栏）。
+     *
+     * <p>判定依据：用户上传端点有登录态、必写 {@code uploader_user_id}；
+     * 平台产物（技能执行 {@code saveArtifact}）不传上传者、该列为 null。
+     * 注：V123 之前的历史上传数据 uploader_user_id 同样为 null，
+     * 会被归入 platform —— 存量场景少，且这些数据不会再被当输入复用，可接受。</p>
+     */
+    private String source;
+
     private OffsetDateTime createTime;
 
     public static ChatAttachmentVO from(ChatAttachment entity) {
@@ -60,6 +71,7 @@ public class ChatAttachmentVO {
         vo.setExtractedChars(entity.getExtractedChars());
         vo.setPageCount(entity.getPageCount());
         vo.setParser(entity.getParser());
+        vo.setSource(entity.getUploaderUserId() == null ? "platform" : "user");
         vo.setCreateTime(entity.getCreateTime());
         return vo;
     }

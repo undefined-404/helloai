@@ -1,5 +1,6 @@
 import request from './request'
 import { paths } from './paths'
+import type { AxiosResponse } from 'axios'
 import type { ChatAttachmentItem, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, Task, LongId } from '@/types'
 
 // V29 对话式需求澄清: 每轮走一次 LLM，耗时远超全局 30s，create/send/retry 单请求覆盖 timeout
@@ -74,13 +75,31 @@ export const clarifyApi = {
   deleteAttachment(id: LongId) {
     return request.post<any, void>(paths.chatAttachments.deleteById(id))
   },
-  /** 内联预览地址（文本/图片/PDF 小文件；交给 <a target=_blank> 或 fetch 直接打开）。 */
+  /**
+   * ⚠️ 裸直链地址：浏览器导航请求不带 X-Admin-Token → 一律 401。
+   * 仅保留给「确需分享 URL」等极少数场景；产物打开/下载一律走下方 blob 通道
+   * （经 request 拦截器补鉴权头）。
+   * @deprecated 产物交互请用 attachmentDownloadBlob / attachmentPreviewBlob / attachmentPreviewText
+   */
   attachmentPreviewUrl(id: LongId) {
     return `${import.meta.env.VITE_API_BASE ?? '/api'}${paths.chatAttachments.previewById(id)}`
   },
-  /** 下载地址（attachment 语义；技能产物卡片「下载」按钮用）。 */
+  /** @deprecated 产物交互请用 attachmentDownloadBlob（裸直链带不了鉴权头，会 401）。 */
   attachmentDownloadUrl(id: LongId) {
     return `${import.meta.env.VITE_API_BASE ?? '/api'}${paths.chatAttachments.downloadById(id)}`
+  },
+  /** 下载 blob 通道（attachment 语义）：经 request 拦截器带鉴权头拉取，
+   *  文件名从 Content-Disposition（RFC 5987）解析，落盘前生成临时 <a download>。 */
+  attachmentDownloadBlob(id: LongId) {
+    return request.get<any, AxiosResponse<Blob>>(paths.chatAttachments.downloadById(id), { responseType: 'blob' })
+  },
+  /** 内嵌预览二进制通道（图片 / PDF → blob URL 交给 iframe；token 在请求头，不能裸 <a href> 直链）。 */
+  attachmentPreviewBlob(id: LongId) {
+    return request.get<any, AxiosResponse<Blob>>(paths.chatAttachments.previewById(id), { responseType: 'blob' })
+  },
+  /** 内嵌预览文本通道（md / 源码 / html 等 → 项目 MarkdownView / <pre> 渲染；超限或不可预览由后端 413 兜底）。 */
+  attachmentPreviewText(id: LongId) {
+    return request.get<any, AxiosResponse<string>>(paths.chatAttachments.previewById(id), { responseType: 'text' })
   },
   // 会话详情（含全部消息按 seq 升序）
   detail(id: LongId) {
