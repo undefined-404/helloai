@@ -102,4 +102,37 @@ class ConversationSkillRunnerTest {
         // 但 receipt 场景必须展示真实错误（见上两个用例），此处只是确认非 receipt 不误解析
         assertThat(result).doesNotContain("schema_version");
     }
+
+    // ===== 布局门判据：决定「要不要自动重试 / 降档」（2026-10-27） =====
+
+    private static boolean isLayoutGateFailure(String output) throws Exception {
+        Method m = ConversationSkillRunner.class.getDeclaredMethod("isLayoutGateFailure", String.class);
+        m.setAccessible(true);
+        return (Boolean) m.invoke(null, output);
+    }
+
+    @Test
+    @DisplayName("布局门判据：命中 composition/* 与 clean-flow/*（含本次线上真实失败文案）")
+    void layoutGate_matchesDiagnosticCodes() throws Exception {
+        // 原样取 2026-10-27 服务器上的真实失败输出
+        String real = "Workflow layout validation failed:\n"
+                + "[composition/ambiguous-corridor] showcase workflow edges[1] id \"e_register_validate\" "
+                + "\"n_register\" -> \"n_validate\" shares a 28px corridor with edges[6] "
+                + "id \"e_supplement_validate\" \"n_supplement\" -> \"n_validate\" at [264, 243] -> [292, 243] "
+                + "(segments 0 and 2; minimum 8px) — adjust route/via.";
+        assertThat(isLayoutGateFailure(real)).isTrue();
+        assertThat(isLayoutGateFailure("[clean-flow/orphan-node] workflow n_x has no edge")).isTrue();
+    }
+
+    @Test
+    @DisplayName("布局门判据：schema / 语法类失败不命中（重试与降档都救不了，不得白烧一次渲染）")
+    void layoutGate_ignoresNonLayoutFailures() throws Exception {
+        assertThat(isLayoutGateFailure(
+                "spec.nodes[0].type must be one of frontend|backend|database")).isFalse();
+        assertThat(isLayoutGateFailure("SyntaxError: Unexpected token } in JSON at position 12")).isFalse();
+        // 前缀相近但不是诊断码族（防正则写宽了把无关失败也当布局问题）
+        assertThat(isLayoutGateFailure("compose/whatever")).isFalse();
+        assertThat(isLayoutGateFailure(null)).isFalse();
+        assertThat(isLayoutGateFailure("")).isFalse();
+    }
 }

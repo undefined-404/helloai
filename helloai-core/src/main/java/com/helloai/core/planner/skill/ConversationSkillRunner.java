@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 对话内技能执行（2026-10-27）：用户选一个产出型技能 → 当场跑出文件 → 落成会话附件。
@@ -69,6 +70,42 @@ public class ConversationSkillRunner {
 
     /** 技能正文注入上限（与 {@code SkillDirective} 同一口径）。 */
     private static final int BODY_LIMIT = 6000;
+
+    /** 渲染质量档：{@code showcase} = 最严格布局门，{@code standard} = 布局重叠类诊断直接不报。 */
+    private static final String QUALITY_SHOWCASE = "showcase";
+    private static final String QUALITY_STANDARD = "standard";
+
+    /**
+     * 「布局质量门」诊断码（命中 ⇒ 图<em>能</em>画，只是没达到 showcase 标准，降档可产出）。
+     *
+     * <p>判据取自技能包自己的诊断码，不猜文案：{@code geometry.mjs} 对
+     * {@code profile=showcase} 把 {@code composition/ambiguous-corridor} 等升级为 error，
+     * 而 {@code profile=standard} 直接 {@code return []}（不报）。所以这一族错误是
+     * <b>质量门</b>而不是<b>可行性门</b>。</p>
+     *
+     * <p>为什么必须区分：schema 违规 / 字段缺失 / 语法错降档也没救，重试只会多烧一次
+     * 渲染；只有这一族值得自动重试与降档。</p>
+     */
+    private static final Pattern LAYOUT_GATE_DIAGNOSTIC =
+            Pattern.compile("(?:composition|clean-flow)/[a-z-]+");
+
+    /**
+     * 布局失败后回喂模型的纠正指令。
+     *
+     * <p>为什么点名「不要 via/route/channel」：这正是技能包 repair hint 的第一条
+     * （{@code archify.mjs} 的 {@code composition/ambiguous-corridor} 条目），
+     * 「让渲染器重新规划」比「模型手工指定走线」可靠得多——模型给的两条边落进同一条
+     * 28px 走廊，正是 {@code ambiguous-corridor} 的典型现场。</p>
+     */
+    private static final String LAYOUT_RETRY_HINT = """
+
+            【上一次的布局未通过校验】
+            原因：%s
+            请重新生成完整的 spec，并遵守：
+            1) 不要输出 via / route / channelX / channelY 等显式路由字段，交给渲染器自动规划；
+            2) 多条边汇入同一节点时，把来源节点分到不同的泳道/列，避免它们的水平段落在同一行；
+            3) 只调整布局相关的 id/lane/col，不要删掉用户要求的节点或分支。
+            """;
 
     private final AgentSkillSpecService agentSkillSpecService;
 
@@ -121,7 +158,25 @@ public class ConversationSkillRunner {
         Long scopeId = -conversationId;
         try {
             SkillSpecExtractor.ChartSpec spec = produceSpec(conversationId, plannerAgentId, skillName, userNeed);
-            SkillPackageExecutionService.RunResult runResult = runRender(scopeId, skillName, spec);
+            SkillPackageExecutionService.RunResult runResult =
+                    runRender(scopeId, skillName, spec, QUALITY_SHOWCASE);
+            // 第 1 次自动重试（2026-10-27）：布局门失败先「重新生成 spec 再渲染」。
+            //   依据：同一段描述第一次 ambiguous-corridor 失败、用户手点重试就成功 —— spec 由
+            //   LLM 生成，col 摆位/边集合每次都不同，成功率实际上取决于这次生成的布局输入。
+            //   把用户手点的这一下搬进代码，并把失败原因回喂让它主动避开。
+            if (!runResult.ok() && isLayoutGateFailure(runResult.output())) {
+                log.info("布局门未过，重新生成 spec 重试: conversationId={}, skill={}, firstLine={}",
+                        conversationId, skillName, firstLine(runResult.output()));
+                spec = produceSpec(conversationId, plannerAgentId, skillName,
+                        userNeed + LAYOUT_RETRY_HINT.formatted(firstLine(runResult.output())));
+                runResult = runRender(scopeId, skillName, spec, QUALITY_SHOWCASE);
+            }
+            // 第 2 次兜底：仍不过则降档 standard —— 该档对本类诊断 return []（不报），
+            //   保证用户拿到一张图而不是一句失败。宁可 90 分的图，也不要零产物。
+            if (!runResult.ok() && isLayoutGateFailure(runResult.output())) {
+                log.info("降档 standard 重试: conversationId={}, skill={}", conversationId, skillName);
+                runResult = runRender(scopeId, skillName, spec, QUALITY_STANDARD);
+            }
             if (!runResult.ok()) {
                 // 完整 CLI 输出进日志（1357 字符级别，落盘可追）——只留 firstLine 会把 JSON
                 // 错误 receipt 裁成孤零零一个「{」，用户看不到真正的 error/diagnostics。
@@ -219,14 +274,25 @@ public class ConversationSkillRunner {
      * shell 变量展开都会引入转义问题；base64 的字符集只有 {@code A-Za-z0-9+/=}，放进单引号里恒定安全。</p>
      */
     private SkillPackageExecutionService.RunResult runRender(Long scopeId, String skillName,
-                                                             SkillSpecExtractor.ChartSpec spec) {
+                                                             SkillSpecExtractor.ChartSpec spec,
+                                                             String quality) {
         String base64 = Base64.getEncoder().encodeToString(spec.specJson().getBytes(StandardCharsets.UTF_8));
         String command = "mkdir -p " + OUT_DIR
                 + " && printf '%s' '" + base64 + "' | base64 -d > " + SPEC_PATH
                 + " && node bin/archify.mjs validate " + spec.chartType() + " " + SPEC_PATH + " --json"
                 + " && node bin/archify.mjs deliver " + spec.chartType() + " " + SPEC_PATH + " " + HTML_PATH
-                + " --json --quality showcase";
+                + " --json --quality " + quality;
         return skillPackageExecutionService.run(skillName, scopeId, command, COMMAND_TIMEOUT_SECONDS);
+    }
+
+    /**
+     * 渲染失败是否属于「布局质量门」（值得自动重试 / 降档），而不是输入非法（重试无用）。
+     *
+     * <p>只认技能包的诊断码前缀，不匹配自然语言文案——文案会随技能版本变化，
+     * 诊断码是其稳定契约。</p>
+     */
+    private static boolean isLayoutGateFailure(String output) {
+        return output != null && LAYOUT_GATE_DIAGNOSTIC.matcher(output).find();
     }
 
     /** 调 planner 产输入（单次同步，不进流式、不进工具循环）。 */
@@ -310,6 +376,9 @@ public class ConversationSkillRunner {
                     .append("- **node.type 是组件枚举，不是动作词**：只能取 frontend / backend / database / cloud / security / messagebus / external——\n")
                     .append("  把流程步骤写进 type（如 \"action\"/\"task\"/\"step\"）会直接校验失败；步骤名应放 label，类型按执行方选组件\n")
                     .append("- 每条泳道（lane）必填 id 与 label；每条边（edge）必填 from 与 to（引用节点 id）\n")
+                    .append("- **不要输出 via / route / channelX / channelY 等显式路由字段**：交给渲染器自动规划。\n")
+                    .append("  手工指定走线是渲染失败的首要原因——多条边会被挤进同一条走廊，触发\n")
+                    .append("  ambiguous-corridor 校验（技能包 repair hint 的第一条就是「删掉这些字段」）\n")
                     .append("- 用户要求「泳道」时 lanes 必须有多个；「成功主路径」用 mainPath 列出主链节点 id\n");
         }
         if (architecture) {
