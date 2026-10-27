@@ -230,6 +230,15 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
     }
 
     @Override
+    public PreviewPayload download(Long id) {
+        ChatAttachment attachment = getByIdRequired(id);
+        // 下载是「拿到文件落盘」语义，不受内联预览的 5MB / MIME 白名单约束：
+        // 大产物与 docx/zip 等不可预览类型同样必须能下载（对齐 AttachmentController 下载口径）。
+        byte[] content = artifactStorage.load(attachment.getStorageUrl());
+        return new PreviewPayload(content, attachment.getMimeType(), attachment.getFileName());
+    }
+
+    @Override
     public int claimByClientToken(String clientToken, Long conversationId) {
         if (clientToken == null || clientToken.isBlank() || conversationId == null) {
             return 0;

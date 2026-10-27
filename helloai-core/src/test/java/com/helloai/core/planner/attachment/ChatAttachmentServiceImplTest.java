@@ -99,4 +99,42 @@ class ChatAttachmentServiceImplTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("conversationId");
     }
+
+    @Test
+    @DisplayName("下载：不可内联预览类型（docx）也能下载，不触发 413 MIME 白名单")
+    void downloadShouldBypassPreviewableMimeGate() {
+        ChatAttachment attachment = new ChatAttachment();
+        attachment.setId(42L);
+        attachment.setFileName("报告.docx");
+        attachment.setMimeType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        attachment.setFileSize(1024L);
+        attachment.setStorageUrl("minio://helloai-artifacts/chat-1/2026/10/0/0/abc.docx");
+        when(mapper.selectById(42L)).thenReturn(attachment);
+        byte[] body = "PK fake docx".getBytes(StandardCharsets.UTF_8);
+        when(storage.load(anyString())).thenReturn(body);
+
+        var payload = service.download(42L);
+
+        // 不抛 413；类型不重新探测（保留 DB 登记的 MIME 作参考），字节完整透出
+        org.assertj.core.api.Assertions.assertThat(payload.content()).isEqualTo(body);
+        org.assertj.core.api.Assertions.assertThat(payload.fileName()).isEqualTo("报告.docx");
+    }
+
+    @Test
+    @DisplayName("下载：超过内联预览 5MB 上限的大产物同样能下载")
+    void downloadShouldAllowLargeArtifact() {
+        ChatAttachment attachment = new ChatAttachment();
+        attachment.setId(43L);
+        attachment.setFileName("big-arch.html");
+        attachment.setMimeType("text/html");
+        attachment.setFileSize(6L * 1024 * 1024); // 6MB > 5MB 预览上限
+        attachment.setStorageUrl("minio://helloai-artifacts/chat-1/2026/10/0/0/big.html");
+        when(mapper.selectById(43L)).thenReturn(attachment);
+        byte[] body = "<html>big</html>".getBytes(StandardCharsets.UTF_8);
+        when(storage.load(anyString())).thenReturn(body);
+
+        var payload = service.download(43L);
+
+        org.assertj.core.api.Assertions.assertThat(payload.content()).isEqualTo(body);
+    }
 }

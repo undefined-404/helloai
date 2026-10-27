@@ -126,18 +126,20 @@ public class ChatAttachmentController {
      * {@code attachment} 才会落盘（「拿到文件」的场景）。产物卡片上的「下载」按钮
      * 走这条，避免用户点了之后只能在浏览器里另存为。</p>
      *
-     * <p>与 preview 共用同一条读取通道与同一把大小尺子（超过 5MB 仍返回 413）：
-     * 不走两套字节通路，才不会出现「能预览但下载不了」的分叉。</p>
+     * <p><b>不过内联预览闸门</b>：下载走 {@link ChatAttachmentService#download}，
+     * 不套 preview 的 5MB / MIME 白名单——docx、zip、大产物等「不可内联预览」的类型
+     * 同样必须能下载（对齐子任务级 {@code AttachmentController#downloadById} 口径）。
+     * Content-Type 统一 {@code application/octet-stream}，中文文件名经 RFC 5987 落盘。</p>
      */
     @SaCheckPermission("conversation:add")
     @GetMapping("/downloadById/{id}")
     public ResponseEntity<byte[]> downloadById(@PathVariable("id") Long id) {
-        PreviewPayload payload = chatAttachmentService.preview(id);
+        PreviewPayload payload = chatAttachmentService.download(id);
         HttpHeaders headers = new HttpHeaders();
         headers.setContentDisposition(ContentDisposition.attachment()
                 .filename(payload.fileName(), StandardCharsets.UTF_8)
                 .build());
-        headers.setContentType(MediaType.parseMediaType(payload.contentType()));
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
         return new ResponseEntity<>(payload.content(), headers, HttpStatus.OK);
     }
 

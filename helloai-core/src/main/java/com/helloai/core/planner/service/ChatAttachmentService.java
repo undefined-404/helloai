@@ -120,6 +120,21 @@ public interface ChatAttachmentService {
     PreviewPayload preview(Long id);
 
     /**
+     * 读取下载所需内容（{@code attachment} 语义，2026-10-27）。
+     *
+     * <p><b>与 {@link #preview} 的区别</b>：下载是「拿到文件落盘」，不受内联预览的
+     * MIME 白名单约束——任何类型都该能下载（docx / zip / 二进制产物等）。
+     * 复用 preview 会把「该类型不支持浏览器内联预览，请使用下载」的 413 错误错误地
+     * 抛在下载接口上，造成「点了下载却提示请使用下载」的自相矛盾。</p>
+     *
+     * <p>对齐子任务级 {@code AttachmentService} 下载口径：不过 MIME 白名单，
+     * Content-Type 由 Controller 用 {@code application/octet-stream} 返回。</p>
+     *
+     * @param id 附件 ID
+     */
+    PreviewPayload download(Long id);
+
+    /**
      * 建会认领：把 {@code clientToken} 名下的临时附件挂到会话上（幂等）。
      *
      * @return 认领条数（0 表示该 token 下无临时附件或已认领）
