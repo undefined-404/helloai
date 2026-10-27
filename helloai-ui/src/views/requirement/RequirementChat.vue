@@ -151,8 +151,8 @@
                   }"
                   @click="selectConversation(String(conv.id))"
                 >
-                  <div class="conv-title">
-                    {{ conv.title || '(无标题)' }}
+                  <div class="conv-title" :title="conv.title || ''">
+                    {{ displayTitle(conv.title) || '(无标题)' }}
                   </div>
                   <div class="conv-meta">
                     <el-tag
@@ -300,18 +300,54 @@
                         <!-- 用户消息：编辑态显示 textarea（对齐 ChatGPT/DeepSeek 行内编辑），
                              展示态原样渲染；assistant 回复渲染 Markdown -->
                         <template v-if="row.msg.role === 'user'">
-                          <el-input
+                          <div
                             v-if="editingMsgId === String(row.msg.id)"
-                            v-model="editingDraft"
-                            type="textarea"
-                            :rows="3"
-                            resize="none"
-                            placeholder="编辑消息…"
-                            class="msg-edit-input"
-                            @keydown.enter.exact.prevent="submitEdit(row.msg)"
-                            @keydown.esc="cancelEdit"
-                          />
-                          <span v-else class="msg-user-text">{{ row.intro }}</span>
+                            class="msg-edit-wrap"
+                          >
+                            <!-- 技能 chip：编辑重发不能丢技能——后端按 `[skill:name] ` 前缀
+                                 决定是否走技能轮，而技能名只存在于 payload 里，正文看不见。
+                                 点 × 表示「这次当普通对话发」，后端会一并清掉 payload.skill。 -->
+                            <div
+                              v-if="editingSkill"
+                              class="msg-edit-skill"
+                            >
+                              <span
+                                class="skill-token skill-token--package"
+                                :title="`重新发送仍使用技能 ${editingSkill}`"
+                              >
+                                <el-icon class="skill-token-icon"><Grid /></el-icon>
+                                <span class="skill-token-name">{{ editingSkill }}</span>
+                                <button
+                                  type="button"
+                                  class="skill-token-close"
+                                  title="移除技能（这次按普通对话重新发送）"
+                                  :disabled="editingSaving"
+                                  @click="editingSkill = null"
+                                >
+                                  <el-icon><Close /></el-icon>
+                                </button>
+                              </span>
+                            </div>
+                            <el-input
+                              v-model="editingDraft"
+                              type="textarea"
+                              :rows="3"
+                              resize="none"
+                              placeholder="编辑消息…"
+                              class="msg-edit-input"
+                              @keydown.enter.exact.prevent="submitEdit(row.msg)"
+                              @keydown.esc="cancelEdit"
+                            />
+                          </div>
+                          <span v-else class="msg-user-text">
+                            <span
+                              v-if="row.skill"
+                              class="msg-skill-chip"
+                              :title="`本条通过技能 ${row.skill} 生成`"
+                            >
+                              <el-icon class="msg-skill-chip-icon"><Grid /></el-icon>{{ row.skill }}
+                            </span>{{ row.intro }}
+                          </span>
                         </template>
                         <MarkdownView
                           v-else
@@ -1476,6 +1512,14 @@ function attachmentChipTitle(item: ChatAttachmentItem): string {
 const editingMsgId = ref<string>('')
 const editingDraft = ref('')
 const editingSaving = ref(false)
+/**
+ * 编辑态携带的技能名（2026-10-27）。
+ *
+ * <p>为什么必须有它：`editMessage` 后端只解析正文里的 `[skill:name] ` 前缀，
+ * <b>不读</b>消息 payload（`target.getPayload()` 只作为普通轮次的上下文透传）。
+ * 编辑框里不把技能拼回去，重新发送就一定退化成普通对话。</p>
+ */
+const editingSkill = ref<string | null>(null)
 
 // 输入优化（PromptEnhancer）：先预览、用户自行回填；不自动发送、不自动覆盖原文本输入框
 const enhancing = ref(false)
@@ -1581,6 +1625,35 @@ function userSelectionsOf(msg: RequirementMessage): ClarifySelection[] | null {
   } catch { return null }
 }
 
+/**
+ * 用户消息 payload 里的技能名（键名与后端 `SkillDirective.PAYLOAD_KEY = "skill"` 对齐）。
+ *
+ * 2026-10-27：技能名此前只被后端用于路由，前端完全看不见——于是「历史对话看不出这条消息
+ * 用了技能」与「编辑重发时技能丢失」两个问题同时无解。把它读出来这两件事一次解决。
+ */
+function skillOf(msg: RequirementMessage): string | null {
+  if (msg.role !== 'user' || !msg.payload) return null
+  try {
+    const parsed = JSON.parse(msg.payload)
+    const value = parsed?.skill
+    return typeof value === 'string' && value.trim() ? value.trim() : null
+  } catch { return null }
+}
+
+/**
+ * 会话列表/头部的标题展示（2026-10-27）：剥掉内部的技能前缀。
+ *
+ * <p>标题由后端按「用户发送原文」截断生成，而原文带 `[skill:archify] ` 前缀 ⇒ 列表里
+ * 直接露出内部协议语法。只在<b>展示层</b>剥离，库里的标题一字不动——它还被
+ * 「按标题找回刚建的会话」等逻辑用作精确匹配键（`c.title === title`）。</p>
+ */
+function displayTitle(title: string | null | undefined): string {
+  const raw = (title ?? '').trim()
+  if (!raw) return ''
+  const stripped = raw.replace(/^\[skill:[A-Za-z0-9][A-Za-z0-9._-]*]\s*/i, '').trim()
+  return stripped || raw
+}
+
 // 结构化 assistant content 由后端合成（引导语 + \n1. 问题列表），卡片呈现问题时气泡只留引导语
 function introOf(content: string) {
   const idx = content.search(/(^|\n)1\. /)
@@ -1609,7 +1682,9 @@ const renderMessages = computed(() => {
     const process: RoundProcessTrace | null = p?.process ?? null
     // 2026-10-27：技能产物（选 archify 等产出型技能时，后端在对话轮内直接跑出文件）
     const artifact: ClarifyArtifactRef | null = p?.artifact ?? null
-    if (!structured) return { msg, structured: null, intro: msg.content, selections: null, webSearch, process, artifact, liked: false }
+    // 2026-10-27：user 消息用了哪个技能（展示态显示 chip、编辑态回填）
+    const skill = msg.role === 'user' ? skillOf(msg) : null
+    if (!structured) return { msg, structured: null, intro: msg.content, selections: null, webSearch, process, artifact, skill, liked: false }
     const interactive = i === msgs.length - 1 && activeStructured.value != null
     const next = msgs[i + 1]
     return {
@@ -1620,6 +1695,7 @@ const renderMessages = computed(() => {
       webSearch,
       process,
       artifact,
+      skill,
       liked: false
     }
   })
@@ -1867,6 +1943,27 @@ function closeEnhancePanel() {
   enhancedDraft.value = ''
 }
 
+/**
+ * `/技能名 需求` 快捷（2026-10-27，对齐既有的 `/plan`、`/planner`）。
+ *
+ * <p><b>为什么动态匹配而不是写死正则</b>：可用技能由服务端下发（`packageSkills`），
+ * 写死意味着每加一个技能就得改前端。这里按「首段 `/xxx` 在菜单里存在」判定，
+ * 不在菜单里的 `/xxx` 一律当普通文本交给模型——用户随手打的斜杠不该被劫持。</p>
+ *
+ * <p><b>为什么不抢 `/plan` `/planner` `/task`</b>：它们各有专门语义（进方案澄清 / 直接拆解），
+ * 由后面既有分支处理，这里显式排除，避免两套命令语法打架。</p>
+ *
+ * @returns 命中的技能名与剩余需求；未命中返回 {@code null}
+ */
+function matchSkillCommand(raw: string): { name: string; rest: string } | null {
+  const m = raw.match(/^\/([A-Za-z0-9][A-Za-z0-9._-]*)(?:\s+([\s\S]*))?$/)
+  if (!m) return null
+  const lower = m[1].toLowerCase()
+  if (lower === 'plan' || lower === 'planner' || lower === 'task') return null
+  const hit = packageSkills.value.find(s => s.name.toLowerCase() === lower)
+  return hit ? { name: hit.name, rest: (m[2] ?? '').trim() } : null
+}
+
 async function handleSend() {
   const raw = input.value.trim()
   if (!raw) {
@@ -1876,6 +1973,15 @@ async function handleSend() {
     return
   }
   if (sending.value) return
+  // `/技能名 需求`：菜单可能还没加载过（用户没点过「＋」），先补一次再判定
+  if (!activeSkill.value && raw.startsWith('/') && !packageSkills.value.length) {
+    await loadPackageSkills()
+  }
+  const skillCmd = activeSkill.value ? null : matchSkillCommand(raw)
+  if (skillCmd && !skillCmd.rest) {
+    ElMessage.warning(`已识别技能「${skillCmd.name}」，请在同一句里补上要生成什么（例如 /${skillCmd.name} 画一张支付流程图）`)
+    return
+  }
   // 已挂载技能：先按能力语义改写，再走各自链路（命令语法对用户不可见）
   if (activeSkill.value === 'planner') {
     // /planner 链路：附加文本先落库进上下文，再切 CLARIFY
@@ -1886,11 +1992,13 @@ async function handleSend() {
   }
   // 直接拆解：补 /task 前缀走下方同步 create 分支（读 FINALIZED/taskId 联动审阅）
   // 产出型技能：补 [skill:name] 前缀，后端据此剥出技能名、落 payload、建任务时写 required_skills
-  const pkgName = activePackageName.value
+  // 技能来源两处：已挂载的胶囊优先，其次 `/技能名` 命令 —— 两者归一到同一个前缀协议
+  const pkgName = activePackageName.value ?? skillCmd?.name ?? null
+  const need = skillCmd ? skillCmd.rest : raw
   const text = pkgName
-    ? `[skill:${pkgName}] ${raw}`
-    : (activeSkill.value === 'task' ? `/task ${raw}` : raw)
-  const skill = activeSkill.value
+    ? `[skill:${pkgName}] ${need}`
+    : (activeSkill.value === 'task' ? `/task ${need}` : need)
+  const skill = activeSkill.value ?? (pkgName ? `pkg:${pkgName}` : null)
   // V40.2 /planner 斜杠命令：显式进入方案澄清模式（命令前缀不落消息）
   const cmd = text.match(PLANNER_COMMAND_RE)
   if (cmd) {
@@ -1901,8 +2009,8 @@ async function handleSend() {
   closeEnhancePanel()
   input.value = ''
   activeSkill.value = null
-  // 气泡展示用户原文（不带 /task 前缀），保证斜杠语法不出现在可见面
-  pendingText.value = raw
+  // 气泡展示用户原文（不带 /task、[skill:x]、/技能名 前缀），保证命令语法不出现在可见面
+  pendingText.value = need
   sending.value = true
   scrollToBottom()
   try {
@@ -1951,13 +2059,13 @@ async function handleSend() {
         }
       }
       // 消息未落库（建会前就失败/未找回会话）时回填输入框，避免丢失用户文本；
-      // 回填用户原文而非 /task 组合文本，并把技能胶囊一并恢复，重试时语义不丢
+      // 回填「纯需求 + 技能胶囊」而非命令组合文本，重试时语义不丢
       const msgs = detail.value?.messages ?? []
       const lastIsSameUserText = msgs.length > 0
         && msgs[msgs.length - 1].role === 'user'
-        && (msgs[msgs.length - 1].content === text || msgs[msgs.length - 1].content === raw)
+        && (msgs[msgs.length - 1].content === text || msgs[msgs.length - 1].content === need)
       if (!lastIsSameUserText) {
-        input.value = raw
+        input.value = need
         activeSkill.value = skill
       }
     }
@@ -2238,11 +2346,13 @@ function stopGenerating() {
 
 // ── 编辑已发送消息（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi）──
 
-/** 进入编辑态：预填原文。发送中/终稿中/已放弃不可编辑。 */
-function startEdit(msg: { id: string | number; content?: string }) {
+/** 进入编辑态：预填原文与技能。发送中/终稿中/已放弃不可编辑。 */
+function startEdit(msg: RequirementMessage) {
   if (sending.value || finalizing.value) return
   editingMsgId.value = String(msg.id)
   editingDraft.value = msg.content ?? ''
+  // 原文里已不含技能前缀（后端落库时剥掉了），技能只存在于 payload ⇒ 从 payload 读回
+  editingSkill.value = skillOf(msg)
 }
 
 /** 取消编辑：清空编辑态，原文不动。 */
@@ -2250,6 +2360,7 @@ function cancelEdit() {
   if (editingSaving.value) return
   editingMsgId.value = ''
   editingDraft.value = ''
+  editingSkill.value = null
 }
 
 /**
@@ -2260,12 +2371,17 @@ async function submitEdit(msg: { id: string | number }) {
   const text = editingDraft.value.trim()
   if (!text || editingSaving.value) return
   if (activeId.value == null) { cancelEdit(); return }
+  // 技能拼回 `[skill:name] ` 前缀：后端据此走技能轮（不拼则退化成普通对话）。
+  // 用户在编辑态点 × 清掉 chip ⇒ editingSkill 为 null ⇒ 后端收到纯文本，
+  // 并把消息 payload 里的 skill 一并清掉，界面与行为保持一致。
+  const outgoing = editingSkill.value ? `[skill:${editingSkill.value}] ${text}` : text
   editingSaving.value = true
   try {
-    const result = await clarifyApi.editMessage(activeId.value, String(msg.id), text)
+    const result = await clarifyApi.editMessage(activeId.value, String(msg.id), outgoing)
     detail.value = result
     editingMsgId.value = ''
     editingDraft.value = ''
+    editingSkill.value = null
     loadList()
     scrollToBottom()
   } catch {
@@ -2496,7 +2612,7 @@ function moreMsg(id: LongId) {
 // ─ 设计图右上角动作：分享 / 更多 ─
 async function handleShare() {
   const conv = conversation.value
-  const title = conv?.title || '当前会话'
+  const title = displayTitle(conv?.title) || '当前会话'
   const url = window.location.href
   try {
     if (navigator.clipboard?.writeText) {
@@ -3224,6 +3340,40 @@ onMounted(() => {
 .msg-edit-hover:disabled {
   opacity: 0.3;
   cursor: not-allowed;
+}
+/* 编辑态容器：技能 chip 与 textarea 竖排（textarea 自身无法内联胶囊） */
+.msg-edit-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.msg-edit-skill {
+  display: flex;
+}
+/* 胶囊里的 × 原本 hover 才显示；编辑框内没有胶囊 hover 目标，必须常显才有「可移除」的可发现性 */
+.msg-edit-skill .skill-token-close {
+  opacity: 1;
+}
+/* 历史用户消息上的技能徽标：比输入框胶囊小一号并弱化，避免喧宾夺主 */
+.msg-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--ha-surface-hover);
+  color: var(--ha-ink-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  vertical-align: 1px;
+  white-space: nowrap;
+  user-select: none;
+}
+.msg-skill-chip-icon {
+  font-size: 11px;
+  color: var(--ha-primary);
 }
 .msg-edit-input .el-textarea__inner {
   font-family: inherit;
