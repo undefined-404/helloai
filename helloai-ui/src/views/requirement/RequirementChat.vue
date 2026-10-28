@@ -1105,6 +1105,7 @@
                 <iframe
                   v-if="artifactPreview.mode === 'iframe' && artifactPreview.blobUrl"
                   :src="artifactPreview.blobUrl"
+                  :sandbox="artifactPreview.isHtml ? 'allow-scripts' : undefined"
                   class="artifact-preview-iframe"
                 />
                 <pre
@@ -1728,7 +1729,16 @@ const artifactToggleTitle = computed(() => {
   if (!conversationArtifacts.value.length) return '暂无产物（平台生成的附件会出现在这里）'
   return artifactPanelOpen.value ? '收起产物栏' : `查看产物（${conversationArtifacts.value.length} 个）`
 })
-const artifactPreview = ref<{ blobUrl: string; mode: 'iframe' | 'markdown' | 'text'; textContent: string; fileName: string } | null>(null)
+// isHtml：iframe 预览的是否为 HTML。只有 HTML 才加 sandbox ——
+//   产物是模型生成的，同源 iframe 里的脚本能读父页面 sessionStorage（admin token 就在那），
+//   等价 XSS；而 PDF（Chrome 内置 viewer）加 sandbox 会白屏、图片无脚本风险，故两者不加。
+const artifactPreview = ref<{
+  blobUrl: string
+  mode: 'iframe' | 'markdown' | 'text'
+  textContent: string
+  fileName: string
+  isHtml: boolean
+} | null>(null)
 const artifactPreviewLoading = ref(false)
 let artifactBlobUrl = ''
 
@@ -1766,12 +1776,12 @@ async function previewArtifactInPanel(item: { artifact: ClarifyArtifactRef; msgI
   try {
     if (textLike) {
       const resp = await clarifyApi.attachmentPreviewText(item.artifact.attachmentId)
-      artifactPreview.value = { blobUrl: '', mode: 'text', textContent: resp.data, fileName: name }
+      artifactPreview.value = { blobUrl: '', mode: 'text', textContent: resp.data, fileName: name, isHtml: false }
     } else {
       const resp = await clarifyApi.attachmentPreviewBlob(item.artifact.attachmentId)
       const mime = (resp.headers['content-type'] as string | undefined) || 'application/octet-stream'
       artifactBlobUrl = URL.createObjectURL(new Blob([resp.data], { type: mime }))
-      artifactPreview.value = { blobUrl: artifactBlobUrl, mode: 'iframe', textContent: '', fileName: name }
+      artifactPreview.value = { blobUrl: artifactBlobUrl, mode: 'iframe', textContent: '', fileName: name, isHtml: mime.toLowerCase().startsWith('text/html') }
     }
   } catch {
     // 业务异常（413 / 404 / 500）由 axios 拦截器统一弹错；预览区置空
@@ -1804,9 +1814,26 @@ async function openArtifactInNewTab(item: { artifact: ClarifyArtifactRef; msgId:
   try {
     const resp = await clarifyApi.attachmentPreviewBlob(item.artifact.attachmentId)
     const mime = (resp.headers['content-type'] as string | undefined) || 'application/octet-stream'
-    const url = URL.createObjectURL(new Blob([resp.data], { type: mime }))
-    window.open(url, '_blank', 'noopener')
-    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    const contentUrl = URL.createObjectURL(new Blob([resp.data], { type: mime }))
+    if (!mime.toLowerCase().startsWith('text/html')) {
+      // 图片 / PDF：无脚本风险；PDF 还依赖浏览器内置 viewer，套 sandbox 会白屏
+      window.open(contentUrl, '_blank', 'noopener')
+      setTimeout(() => URL.revokeObjectURL(contentUrl), 60_000)
+      return
+    }
+    // HTML 产物不能直接 window.open(blob)：那会让模型生成的脚本在**与主页面同源**的
+    // 顶层上下文执行，读得到 sessionStorage 里的 admin token（等价 XSS）。
+    // 套一层同样没有 allow-same-origin 的 sandbox 包装页 ⇒ 内层成唯一源，拿不到父存储；
+    // 包装页本身只有 style + iframe，不含任何业务脚本。
+    const wrapper = '<!doctype html><meta charset="utf-8">'
+      + '<style>html,body{margin:0;height:100%;overflow:hidden}iframe{border:0;width:100%;height:100%}</style>'
+      + `<iframe sandbox="allow-scripts" src="${contentUrl}"></iframe>`
+    const wrapperUrl = URL.createObjectURL(new Blob([wrapper], { type: 'text/html' }))
+    window.open(wrapperUrl, '_blank', 'noopener')
+    setTimeout(() => {
+      URL.revokeObjectURL(wrapperUrl)
+      URL.revokeObjectURL(contentUrl)
+    }, 60_000)
   } catch {
     // 拦截器已统一弹错
   }
