@@ -290,43 +290,6 @@ cd helloai-ui && npm install && npm run dev
 >
 > 如果你只是想让服务跑起来（不打算改代码），**用方式 A 就够了**——它连源码都不需要。
 
-### 附：本地自检与 CI 门禁
-
-> 这一节不是部署方式，是提交代码前的自检手段。
-
-> ⚠️ **两个高频踩坑**（2026-09-29 架构与质量审计实测）：
-> 1. **默认 `JAVA_HOME` 可能指向会崩溃的 JDK**。本机实测 `ms-17.0.19` 必然触发 JVM `EXCEPTION_ACCESS_VIOLATION`，表现成「项目编译不了 / 测试跑不起来」——这其实是环境问题，不是代码问题。请改用 `ms-17.0.20.1`（或任一可用的 JDK 17）。
-> 2. **`mvn test` 默认一个用例都不跑**。根 POM 为打包速度设了 `<skipTests>true</skipTests>`，**必须显式加 `-DskipTests=false`**，否则得到的是「0 用例通过」的假绿结论。
-
-一条命令完成「构建 + 真实单测 + 用例数>0 + 架构漂移冻结 + 前端校验」：
-
-```bash
-# 全量（等价于 CI 所跑内容）
-bash scripts/ci/ci-gate.sh
-
-# 本地快速自检（单模块单测试类，且跳过前端）
-bash scripts/ci/ci-gate.sh --quick --skip-ui
-
-# 若默认 JAVA_HOME 不可用，显式指定可用 JDK
-HELLOAI_JAVA_HOME="$HOME/.jdks/ms-17.0.20.1" bash scripts/ci/ci-gate.sh --quick --skip-ui
-```
-
-CI 配置：[`.workflow/helloai-ci.yml`](.workflow/helloai-ci.yml)（Gitee Go，对应本仓库远程）与 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)（GitHub Actions，可移植备份）。两者都只是薄封装——**门禁语义全部在 `scripts/ci/ci-gate.sh`**，本地执行同一份脚本即可复现 CI 结论。
-
-**架构红线守卫**：跨域反向依赖（`agent→task` / `planner→agent` / `task→agent`）计数**只降不升**，由 `scripts/ci/check-arch-freeze.sh` 把关。确需新增时，执行 `bash scripts/ci/check-arch-freeze.sh --update-baseline` 更新基线，并在评审中说明理由。
-
-**CI 跑在哪台机器上**：`.workflow/helloai-ci.yml` 使用 `shell@agent` 在**自有主机组**执行（Gitee Go 官方计费规则下，自有主机执行**不消耗**每月免费核分）。换新主机时，先在该主机跑一次自检：
-
-```bash
-bash scripts/ci/host-prepare.sh                  # 只检测，不改系统（安全）
-sudo bash scripts/ci/host-prepare.sh --install   # 安装缺失的 JDK17 / Maven / Node20
-sudo bash scripts/ci/host-prepare.sh --swap 2G   # 4G 内存机器建议加 2G swap
-```
-
-> ⚠️ Gitee 的 Agent 会自带一份 JDK 8（`…/gitee_go_agent/jdk4agent`）。`scripts/ci/lib-jdk.sh` 已改为**实测 `java -version` 大版本必须为 17**，不会再把它误判为可用 JDK（旧实现只按路径黑名单判断，会在自有主机上踩这个坑）。
->
-> ⚠️ 流水线需在 Gitee 侧打开该任务的「**是否克隆代码**」开关，主机上才会有仓库副本（前置：主机 SSH 公钥已加入 Gitee）。脚本在找不到仓库时会以非零码明确失败，**不会假绿**。
-
 ---
 
 ## 📸 界面预览
@@ -432,6 +395,23 @@ A：支持完全私有化部署，任务、产出物、审计记录全部落在�
 2. 新建 `feat_xxx` 或 `fix_xxx` 分支
 3. 改代码前必读 [`doc/HelloAI_CODE_STYLE.md`](doc/HelloAI_CODE_STYLE.md)；涉及调度 / 执行链改动先读 [`doc/design/Agent_Runtime.md`](doc/design/Agent_Runtime.md) 与 [`doc/design/Agent_Event_Stream.md`](doc/design/Agent_Event_Stream.md)
 4. 提交前跑通与改动面相关的 `scripts/` 验证脚本，PR 附上脚本输出
+
+**提交前必跑的门禁**（本地与 CI 跑的是同一份脚本，结果可复现）：
+
+```bash
+bash scripts/ci/ci-gate.sh                    # 全量：构建 + 真实单测 + 用例数>0 + 架构冻结 + 前端
+bash scripts/ci/ci-gate.sh --quick --skip-ui  # 快速自检
+```
+
+> ⚠️ **两个高频坑**：① 默认 `JAVA_HOME` 若指向 `ms-17.0.19` 会触发 JVM `EXCEPTION_ACCESS_VIOLATION`
+> （表现成「项目编译不了」，其实是环境问题），改用 `ms-17.0.20.1` 或任一可用 JDK 17；
+> ② 根 POM 默认 `skipTests=true`，手工跑测试必须显式 `-DskipTests=false`，否则拿到的是
+> 「0 用例通过」的假绿。
+>
+> 涉及跨域依赖的改动还要过架构红线守卫：`bash scripts/ci/check-arch-freeze.sh`
+> （反向依赖计数只降不升；确需新增时用 `--update-baseline` 刷新基线，并在 PR 说明理由）。
+
+脚本用法、门禁分档、CI 跑在自有主机组时的准备步骤，详见 [`scripts/README.md`](scripts/README.md) §六。
 
 ---
 

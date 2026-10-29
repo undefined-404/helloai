@@ -210,6 +210,8 @@ powershell -File scripts/powershell/verify-dependency-direction.ps1
 
 依据：Gitee 官方计费规则「仅当您使用 Gitee 提供的云端构建资源，且流水线中的任务属于计费模型时，任务运行才会消耗核分」。回退到云端形态：`git show b02dce3:.workflow/helloai-ci.yml > .workflow/helloai-ci.yml`。
 
+**自有主机组的前置开关（换主机时必看）**：流水线需在 Gitee 侧打开该任务的「**是否克隆代码**」开关，主机上才会有仓库副本（前置：主机 SSH 公钥已加入 Gitee）。脚本在找不到仓库时会以非零码明确失败，**不会假绿**——这条与「Agent 自带 JDK 8」是自有主机上仅有的两个静默失效点。
+
 **尚未覆盖（后续项）**：本门禁只做「可编译 + 单测 + 依赖方向增量 + 前端」四类校验；**B 级集成测试已同日落地并与门禁 5 一起挂接**（详见下方第七节与 §0.3），已在本机 Docker 实跑**全绿**（2026-10-05：**7 个 IT 类 / 27 用例**；`run-it-local.ps1` 一键复跑）；E2E 仍依赖需 Docker 的 ps1/sh 脚本（审计建议 #6，待排期）。
 
 ## 七、本地 B 级集成测试一键跑（scripts/run-it-local.ps1，2026-09-29 新增）
