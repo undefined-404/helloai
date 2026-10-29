@@ -193,20 +193,51 @@ HelloAI 希望把多个 Agent 组织起来：
 
 ## 🚀 快速开始
 
-先分清两条路径，**环境要求完全不同**：
+三条路径，按「你想干什么」选：
 
-| | 源码开发（本地跑） | 服务器部署（Docker 一键） |
-|---|---|---|
-| 需要 JDK 17 | ✅ 是 | ❌ 否（镜像内已带 JRE） |
-| 需要 Maven 3.8+ | ✅ 是（构建用） | ❌ 否（构建在 Docker 容器内完成） |
-| 需要 Node.js 18+ | ✅ 是（前端 dev） | ❌ 否（构建在 Docker 容器内完成） |
-| 需要 Docker + Compose | ✅ 是（中间件） | ✅ 是 |
-| 需要下载源码 | ✅ `git clone` 全量 | ✅ `git clone` 一次（`docker compose -f docker-compose.server.yml up -d --build` 在服务器本地构建镜像） |
-| 建议配置 | 4C8GB | 4C8GB |
+| | **零依赖体验（推荐先试）** | 源码开发 | 服务器自建 |
+|---|---|---|---|
+| 适合 | 先看看这产品能干什么 | 二次开发 / 调试 | 自己长期部署一套 |
+| 需要 JDK / Maven / Node | ❌ 都不需要 | ✅ 全要 | ❌ 不需要 |
+| 需要 Docker + Compose | ✅ | ✅（只跑中间件） | ✅ |
+| 需要源码 | ❌ 不用 `git clone` | ✅ 全量 | ✅ 一次 |
+| 起步动作 | 解压 + `./start.sh` | `mvn package` + `npm run dev` | `compose --build` |
+| 首次耗时 | 5~10 分钟（拉镜像） | 10~20 分钟 | 15~30 分钟 |
 
-> 💡 **一句话**：JDK / Maven / Node 是**本地源码构建**才需要的；服务器一键部署**不需要装任何 Java/前端工具链**——`git clone` 后 `docker compose -f docker-compose.server.yml up -d --build` 会用仓库自带的多阶段 `Dockerfile` 在服务器本地构建好 jar 镜像与前端镜像，再一键拉起。
+### 方式 A：零依赖体验（推荐）
 
-### 方式 A：源码开发（5 分钟）
+**不需要 JDK / Maven / Node，也不需要源码树。** 只要 Docker + Docker Compose。
+
+`app` / `web` 两个预构建镜像放在**公开 ACR** 上，匿名可拉、不用登录：
+
+```
+crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/app:0.2.0
+crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/web:0.2.0
+```
+
+```bash
+# 下载 quickstart 包（26 KB）→ 解压 → 一条命令
+tar xzf helloai-quickstart-0.2.0.tar.gz
+cd helloai-quickstart-0.2.0
+./start.sh                      # Windows: .\start.ps1
+```
+
+打开 <http://localhost:8080> —— 默认管理员 **admin / admin123**。
+
+> 🔒 **默认密码是固定的**，只为「下来就能进」。**仅本机试用**；对外部署请登录后立刻改密码，
+> 且不要把 8080 直接暴露到公网。
+>
+> 🎨 **要画图 / 技能执行**：`./start.sh --with-sandbox`（会额外拉沙箱镜像）。
+>
+> 📦 **断网 / 镜像仓库不可达**：另提供离线包（见发布说明），下载后走 `./start.sh --offline`。
+>
+> 完整说明（离线安装、沙箱模式、升级、常见问题）见包内 `README.md`，或
+> [`deploy/quickstart/README.md`](deploy/quickstart/README.md)。
+
+> ⚠️ **前提**：中间件（postgres / redis / rabbitmq / minio）仍从 Docker Hub 拉。
+> 国内建议先配好 Docker 镜像加速（`registry-mirrors`），否则这一步可能较慢。
+
+### 方式 B：源码开发（5 分钟）
 
 面向本地开发、二次开发。**必须先 `git clone` 下载源码**，因为后端构建（Maven）、前端开发服务器（Node）都依赖源码树。
 
@@ -229,154 +260,12 @@ cd helloai-ui && npm install && npm run dev
 
 > ⚠️ **后端默认激活 `dev` profile（云服务器联调）**：本地纯 Docker 开发请在启动参数加 `--spring.profiles.active=local`，或用 IDEA Run Configuration 指定 `local`（否则会连云上的 `application-dev.yml` 数据源）。
 
-### 方式 B：Docker 一键部署（服务器）
 
-适合**不装 Java/前端工具链**、直接在服务器上把服务跑起来。**只需要 `git clone` 一次**，之后 `docker compose -f docker-compose.server.yml up -d --build` 一条命令即可——后端 jar 与前端 dist 都由仓库里的多阶段 [`Dockerfile`](Dockerfile) 在服务器本地构建，**不需要任何预构建产物**。详见 [`docker-compose.server.yml`](docker-compose.server.yml) 头部注释（含纯 ASCII 约定与端口说明）。
-
-#### 首次部署（一次性）
-
-在**有 Docker + Docker Compose 的服务器**上：
-
-```bash
-# 1. 克隆（只需一次；构建依赖源码树）
-git clone https://gitee.com/undefined_404/helloai.git /home/admin/helloai && cd /home/admin/helloai
-
-# 2. 用脚本自动生成 .env（含随机密码与 AES 密钥；git 不跟踪 .env）
-bash deploy/init-env.sh
-
-# 3. 用脚本把 RabbitMQ 管理员建到 broker 上（自动启动 broker + 创建管理员 + 验证）
-bash deploy/init-rabbitmq-admin.sh
-
-# 4. 首次初始化构建+启动（首次构建拉基础镜像 + Maven/Node 依赖，视网络 5~15 分钟）
-docker compose -f docker-compose.server.yml up -d --build
-```
-
-> 💡 **从零到启动，总共 4 条命令**：`git clone` → `bash deploy/init-env.sh` → `bash deploy/init-rabbitmq-admin.sh` → `docker compose -f docker-compose.server.yml up -d --build`，全程**不需要手动编辑 .env、不需要复制粘贴任何密码**。
->
-> ⚠️ **服务器 compose 文件是 `docker-compose.server.yml`，必须用 `-f` 显式指定**：`docker compose` 默认只读 `docker-compose.yml`（那是**本地开发版**，只有中间件、没有 app/web 服务），不带 `-f` 会起错文件——实测表现是「只起了 PG/Redis/RabbitMQ/MinIO，没有 app 和 web」。
->
-> ⚠️ **首次部署不要执行 `git pull`**：刚 `git clone` 完就是最新代码，此时 `git pull` 是多余的；且若服务器上存在本地改动（如 `docker-compose.yml` 被手动改过、脚本被手动放置），`git pull` 会报「local changes would be overwritten」**中断流程**。只有**后续更新**场景才需要 `git pull`（见「启动与更新」）。
-
-**如何确认部署成功（小白必看）**：
-
-```bash
-# ① 所有服务应为 running 或 exited(0)
-docker compose -f docker-compose.server.yml ps
-
-# ② rabbitmq-init 应显示 DONE（vhost /helloai + 业务账号 helloai 已创建）
-docker compose -f docker-compose.server.yml logs rabbitmq-init | tail
-
-# ③ 后端日志应出现「Started HelloAIApplication」，且无 ACCESS_REFUSED / ERROR
-docker compose -f docker-compose.server.yml logs app | tail -50
-# 或实时看文件日志（app 挂载了 ./logs 目录）
-tail -f logs/helloai.log
-
-# ④ 浏览器访问 http://<服务器IP>/ 应看到管理端登录页
-```
-
-> 🆘 **常见启动失败自查**（2026-10-19 更新）：
-> - `Could not resolve placeholder 'DATASOURCE_PASSWORD'` / `'HELLOAI_AGENT_REGISTRATION_TOKEN'`：`.env` 缺键。这两个变量在 `application.yml` 里**没有默认值**，而构建出的镜像**不再包含 `application-dev.yml`**（源码树里的那份带真实凭据，已被 `.dockerignore` 排除，绝不进镜像），所以必须由 compose 注入。重跑 `bash deploy/init-env.sh` 补齐 7 个键即可。
-> - `ACCESS_REFUSED - Login was refused`（RabbitMQ 认证失败）：先确认 `rabbitmq-init` 已显示 DONE；若 `.env` 是启动后改的，执行 `docker compose -f docker-compose.server.yml up -d --force-recreate app` 让 app 重新读取环境变量。**改环境变量不需要 `--build`**，只有改代码才需要。
-> - 若 `rabbitmq-init` 未显示 DONE，执行 `bash deploy/init-rabbitmq-admin.sh` 重跑初始化（幂等）。
-
-部署目录结构（clone 后自动齐备，只需跑一次上面的脚本生成 `.env`）：
-
-```
-/home/admin/helloai/
-├── docker-compose.server.yml     # 服务器部署版（含 app/web build）；命令需 `-f` 显式指定
-├── docker-compose.yml            # 本地开发版（仅中间件）；服务器部署【不要】用它
-├── Dockerfile                    # 多阶段构建：Maven→jar→JRE 镜像 + Node→dist→nginx 镜像
-├── deploy/init-rabbitmq.sh       # rabbitmq-init 容器初始化脚本（bind 挂载）
-├── deploy/init-env.sh            # 一键生成 .env（随机密码 + 密钥 + 令牌，幂等可重跑）
-└── .env                          # 由脚本生成，权限 600，含 7 个变量
-```
-
-**`.env` 自动生成脚本 [`deploy/init-env.sh`](deploy/init-env.sh)**——一条命令生成全部 7 个变量，**不用手写**：
-
-```bash
-# 用法（在部署目录执行，即在当前目录生成 .env）
-bash deploy/init-env.sh
-
-# 或指定目录 / 仅打印不落盘
-bash deploy/init-env.sh /home/admin/helloai
-bash deploy/init-env.sh --print
-```
-
-脚本行为：
-- 生成 **5 个随机口令**：`RABBITMQ_ADMIN_PASSWORD`、`HELLOAI_RABBIT_PASSWORD`（各 hex 32 位）、`HELLOAI_CREDENTIAL_AES_KEY_BASE64`（base64 256-bit AES 密钥）、`HELLOAI_AGENT_REGISTRATION_TOKEN`、`OPEN_SANDBOX_API_KEY`（各 hex 64 位）；固定 `RABBITMQ_ADMIN_USER=helloaiadmin`、`HELLOAI_RABBIT_USER=helloai`
-- **幂等**：重复运行**不会覆盖**已有值（尤其 AES 密钥必须与库中密文匹配）；`.env` 权限自动设为 `600`
-- **`--print` 模式**：只打印生成的变量值，不写文件（便于先预览）
-
-`.env` 的 7 个变量（`.env` 是 Docker Compose 变量插值来源，应用容器内不直接读 `.env`；全部为运行时注入，镜像内不含任何密钥）：
-
-```bash
-RABBITMQ_ADMIN_USER=helloaiadmin            # RabbitMQ 管理员（脚本固定；必须先手工建到 broker，见下）
-RABBITMQ_ADMIN_PASSWORD=<hex 密码>           # 脚本随机生成（hex，无冒号）
-HELLOAI_RABBIT_USER=helloai                 # RabbitMQ 业务账号（脚本固定；rabbitmq-init 创建）
-HELLOAI_RABBIT_PASSWORD=<hex 密码>           # 脚本随机生成（与 app 共享）
-HELLOAI_CREDENTIAL_AES_KEY_BASE64=<base64>  # 脚本随机生成（credential_vault 加密用）
-HELLOAI_AGENT_REGISTRATION_TOKEN=<hex 令牌>  # 脚本随机生成（Agent 自注册校验）
-OPEN_SANDBOX_API_KEY=<hex 令牌>              # 脚本随机生成（沙箱服务端 API Key）
-```
-
-> ⚠️ **后两个是 2026-10-19 新增的**：`application.yml` 里这两项都没有默认值，镜像里也不再带 dev profile，缺了会让 `docker compose up` 在解析阶段直接报错退出。老部署升级时重跑一次 `bash deploy/init-env.sh` 即可（脚本只补缺失的键，不会动已有值）。
-
-> ⚠️ **AES 密钥务必妥善保管**：`credential_vault` 表中的 API Key 均用此密钥加密，密钥变更将导致所有已配置 Provider 解密失败。脚本**只生成一次、绝不覆盖**（重跑幂等）；**若复用已有数据库**则必须沿用旧密钥，否则历史密文全部解不开。脚本会输出管理员的明文密码，请记录到密码管理器后即可删除终端历史。
-
-> ⚠️ **RabbitMQ 前置步骤（必做，否则应用起不来）**：`rabbitmq-init` 一次性容器会用 `RABBITMQ_ADMIN_USER/PASSWORD` 调 Management API 创建 `/helloai` vhost 和业务账号。`RABBITMQ_DEFAULT_USER/PASS` 只在 broker **首次启动**时生效；**已有数据卷的 broker 会忽略它**，且 `guest` 仅允许本机回环登录（兄弟容器必然被拒）。因此 `up -d` 前必须先把管理员建到 broker 上——**用一条脚本搞定，无需手动复制密码**：
->
-> ```bash
-> # 一条命令：启动 broker → 等待就绪 → 创建管理员 + 打 administrator 标签 → 验证
-> bash deploy/init-rabbitmq-admin.sh
-> ```
->
-> 脚本 [`deploy/init-rabbitmq-admin.sh`](deploy/init-rabbitmq-admin.sh) 自动完成原本需要手工执行的 3 步（启动 broker / `rabbitmqctl add_user` / `set_user_tags`），**密码从 `deploy/init-env.sh` 生成的 `.env` 读取**，全程无需复制粘贴；**幂等**，重复运行不会改密码、只会重打标签。也支持指定部署目录或直接传环境变量：
->
-> ```bash
-> bash deploy/init-rabbitmq-admin.sh /home/admin/helloai   # 指定 .env 所在目录
-> RABBITMQ_ADMIN_USER=foo RABBITMQ_ADMIN_PASSWORD=bar bash deploy/init-rabbitmq-admin.sh
-> ```
->
-
-#### 启动与更新
-
-> 以下命令均针对服务器部署，**统一带 `-f docker-compose.server.yml`**（默认文件是本地开发版，起不了 app/web）。
-
-```bash
-# 一键启动（先构建 app/web 镜像，再起全部服务；rabbitmq-init 成功后 app 才启动）
-# 首次构建需拉取基础镜像 + 下载 Maven/Node 依赖，视网络 5~15 分钟
-docker compose -f docker-compose.server.yml up -d --build
-
-# 查看初始化日志（确认 vhost /helloai 与业务账号已创建）
-docker compose -f docker-compose.server.yml logs rabbitmq-init
-
-# 查看整体状态
-docker compose -f docker-compose.server.yml ps
-
-# 更新到最新代码：git pull 后重跑同一条命令（Docker 层缓存，增量构建）
-git pull && docker compose -f docker-compose.server.yml up -d --build
-```
-
-**配置 API Key**：启动后在管理端「系统设置 → 模型配置」页面填写，加密落库、实时生效、无需重启。
-
-> 💡 **升级兼容**：旧版（`1.0.0-SNAPSHOT` 手动传 jar/dist 的挂载方式）升级到 build 模式，只需 `git clone` + 重跑 `bash deploy/init-env.sh` 补齐 `.env`（老版本只有 5 个变量，现在还差 `HELLOAI_AGENT_REGISTRATION_TOKEN` / `OPEN_SANDBOX_API_KEY` 两个）后执行 `docker compose -f docker-compose.server.yml up -d --build`，数据卷（PG/Redis/RabbitMQ/MinIO）不变，数据不丢。
-
-#### 沙箱（可选，不在默认启动范围内）
-
-`opensandbox-server` 与 `python:3.12` 声明在 `sandbox` profile 里：普通 `up -d` **既不会启动它们，也不会去 Docker Hub 拉镜像**（避免网络不通时整条 `up` 卡住）。需要时单独拉起：
-
-```bash
-# 镜像若拉不动，可在有网机器上 docker save 后 docker load
-docker compose -f docker-compose.server.yml --profile sandbox up -d opensandbox-server
-```
-
-> ⚠️ 该容器挂载 `/var/run/docker.sock`——容器内 root 等同宿主机 root。因此 8090 **只绑 `127.0.0.1`**（不要改成 `0.0.0.0`），且 `OPEN_SANDBOX_API_KEY` 必须是强随机值（`init-env.sh` 已生成）。不需要沙箱的话，两个服务保持不启动即可，不影响其余功能。
-
-#### 已手动构建好 jar + dist？
-
-还有一条更短的发布路径：[`deploy/app/docker-compose.yml`](deploy/app/docker-compose.yml)——`app` 用 `eclipse-temurin:17-jre` 挂载 `helloai-start-1.0.0-SNAPSHOT.jar`、`web` 用 `nginx:1.27-alpine` 挂载 `dist` + `nginx.conf`，**服务器完全不构建镜像**，更新方式是换文件 + `docker compose restart app`。适合把构建放在本地或 CI 的场景。
-
-> 两条路径**二选一，不要混用**：`docker-compose.server.yml` 是「服务器源码构建」，`deploy/app/docker-compose.yml` 是「预构建产物挂载」。它们的 `.env` 键集一致（都是那 7 个），所以切换时 `.env` 不用改。
+> **要长期部署到自己的服务器、且不想每次在服务器上 build？** 复用
+> [`deploy/app/docker-compose.yml`](deploy/app/docker-compose.yml)（jar + dist 挂载：
+> `eclipse-temurin:17-jre` + `nginx:1.27-alpine`，服务器不构建任何镜像）。构建在本地完成：
+> `mvn -pl helloai-start -am package -DskipTests` 后 `scp` 出包的 jar；`npm run build` 后
+> `scp` 出 `dist/`；服务器 `docker compose -f docker-compose.app.yml up -d`。
 
 ### 方式 C：本地验证与 CI 门禁
 

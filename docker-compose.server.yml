@@ -31,8 +31,20 @@
 #      DATASOURCE_PASSWORD and HELLOAI_AGENT_REGISTRATION_TOKEN are set below --
 #      without them the app dies at startup with
 #      "Could not resolve placeholder 'DATASOURCE_PASSWORD'".
-#   7. 8090 (sandbox) is loopback-only and the sandbox services are behind the
-#      "sandbox" profile: a plain `up -d` neither exposes them nor pulls python:3.12.
+#   7. 8090 (sandbox) is loopback-only. The sandbox server runs BY DEFAULT
+#      (2026-10-29: profile removed -- an earlier header claimed "always-on" but the
+#      implementation still carried `profiles: ["sandbox"]`, so a plain `up -d`
+#      silently skipped it and every skill run said "sandbox unavailable").
+#   8. (2026-10-29) the one-click path now ships a WORKING sandbox end to end:
+#        - the app joins opensandbox-net and talks to http://opensandbox-server:8090
+#          by service name (ADR-006: a loopback-published port is unreachable from any
+#          container, host.docker.internal included);
+#        - the app injects SANDBOX_ENABLED / SANDBOX_URL / SANDBOX_API_KEY (the image
+#          carries no application-dev.yml, so without them the tool is never injected);
+#        - the two business images (python:3.12, node:20-bookworm-slim) are installed by
+#          deploy/pull-sandbox-images.sh, NOT by `up`: Docker Hub may be unreachable
+#          here and a pull inside `up` hangs the whole deploy. Missing node does not
+#          fail fast -- sandbox create stalls ~35s then reports a bare timeout.
 # ------------------------------------------------------------
 # REQUIRED PRE-STEP BEFORE `docker compose up -d` (do not skip):
 #   The rabbitmq-init container authenticates with RABBITMQ_ADMIN_USER /
@@ -342,6 +354,25 @@ services:
       #   failure mode as the MQ incident, so it gets the same fail-fast treatment:
       #   an explicit compose error is preferable to a silent half-working state.
       HELLOAI_CREDENTIAL_AES_KEY_BASE64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:?.env in the deploy dir must define HELLOAI_CREDENTIAL_AES_KEY_BASE64 (the original key matching the ciphertext already in the database); without it every credential fails to decrypt}
+      # --- Sandbox chain (2026-10-29): ON by default in the one-click path ---
+      # Consumed by application-dev.yml's ${...} placeholders. That file is NOT inside
+      #   the image (.dockerignore excludes it -- it carries real credentials in a
+      #   working tree), so without these lines the properties fall back to the class
+      #   defaults (enabled=false) and internal_run_in_sandbox is never injected:
+      #   skills silently become "unavailable", which looks like a missing feature.
+      # SANDBOX_URL must be the compose SERVICE NAME: inside this container 127.0.0.1
+      #   is the app itself, and :8090 is bound to the host loopback (see that service).
+      SANDBOX_ENABLED: ${SANDBOX_ENABLED:-true}
+      SANDBOX_URL: ${SANDBOX_URL:-http://opensandbox-server:8090}
+      SANDBOX_API_KEY: ${OPEN_SANDBOX_API_KEY:?OPEN_SANDBOX_API_KEY is required}
+    # Joins opensandbox-net so the service name above resolves. `default` is kept so
+    #   postgres / redis / rabbitmq / minio keep resolving by name. The direction
+    #   matters: the app joins the sandbox network, never the reverse -- the sandbox
+    #   server mounts docker.sock (host-root equivalent) and must not reach the data
+    #   services.
+    networks:
+      - default
+      - opensandbox-net
     depends_on:
       postgres:
         condition: service_healthy
@@ -359,6 +390,11 @@ services:
       # half-working state.
       rabbitmq-init:
         condition: service_completed_successfully
+      # Start the sandbox server first so the first skill run does not race its boot.
+      #   service_started (not healthy): that service has no healthcheck, and the SDK
+      #   already retries on a failed connect.
+      opensandbox-server:
+        condition: service_started
 
   # --- Nginx: frontend static hosting + API reverse proxy (only public entry) ---
   # Built from the same Dockerfile (target: web) which bakes in the frontend dist
@@ -379,16 +415,23 @@ services:
 
   # --- OpenSandbox sandbox service (S-5, OpenSandbox integration plan) ---
   # Self-hosted OpenSandbox lifecycle server. It mounts docker.sock to create/destroy
-  # sandbox containers. The app container does NOT join opensandbox-net (plan 4.6:
-  # avoid widening the attack surface by putting app and sandbox containers on the
-  # same network). The app only reaches the server via HTTP API + api_key, and the
-  # Kotlin SDK must use useServerProxy(true) so execd requests are proxied through
-  # this server (verified in LOG-20261017-009).
+  # sandbox containers.
+  # NETWORKING (2026-10-29, ADR-006): the app JOINS opensandbox-net and talks to
+  #   http://opensandbox-server:8090 by service name. Plan 4.6 originally kept them
+  #   apart, but that could never work: :8090 is published on the HOST LOOPBACK only
+  #   (see ports below) and a loopback-bound publish is unreachable from ANY container
+  #   -- not even via host.docker.internal, because the DNAT rule is pinned to
+  #   destination 127.0.0.1 and nothing listens on the gateway IP. The Kotlin SDK still
+  #   uses useServerProxy(true) so execd requests are proxied through this server
+  #   (verified in LOG-20261017-009).
   # Required .env (in the deploy dir):
   #   OPEN_SANDBOX_API_KEY    # REQUIRED; server refuses to start without a non-empty api_key
   opensandbox-server:
     image: opensandbox/server:release-1.1.0
-    profiles: ["sandbox"]
+    # RUNS BY DEFAULT (2026-10-29). The one-click path must ship a working sandbox:
+    #   with the old `profiles: ["sandbox"]` a plain `up -d` skipped this service, and
+    #   every skill run failed with "sandbox unavailable (not installed or sandbox
+    #   disabled)" -- a dead end that looked like a missing feature.
     pull_policy: missing
     container_name: opensandbox-server
     restart: unless-stopped
@@ -413,13 +456,28 @@ services:
   # Declares the business sandbox image referenced by helloai.sandbox.opensandbox.spec.image
   # so it can be pulled in advance:  docker compose pull opensandbox-images
   # Not meant to be started (restart: no, sleep command, no ports).
+  # TWO business images are required, one service per image (a compose service can
+  #   declare only one `image:`):
+  #     python:3.12            -- spec.image, verification commands
+  #     node:20-bookworm-slim  -- spec-presets.node, used by skill execution (archify)
+  # Neither is pulled by a plain `up`: `profiles` keeps them out, because on a host
+  #   without Docker Hub access that pull hangs the whole deploy (measured 657s+).
+  # Fetch them explicitly with `bash deploy/pull-sandbox-images.sh` -- it tries the
+  #   configured mirrors first and falls back to offline import instructions.
+  # A missing node image is NOT a soft failure: the sandbox server tries to pull it,
+  #   the request stalls ~35s (egress readiness 30s + overhead) and dies as
+  #   SandboxTimeoutException -- the user only sees a bare "timeout".
   opensandbox-images:
     image: python:3.12
-    # "always" would try Docker Hub on EVERY `up` and can hang for minutes on a host
-    #   without Docker Hub access, even when the image is already present locally.
-    #   "missing" pulls only when absent, and profiles keeps it out of a plain `up`.
-    profiles: ["sandbox"]
     pull_policy: missing
+    profiles: ["prewarm"]
+    restart: "no"
+    command: ["sleep", "infinity"]
+
+  opensandbox-images-node:
+    image: node:20-bookworm-slim
+    pull_policy: missing
+    profiles: ["prewarm"]
     restart: "no"
     command: ["sleep", "infinity"]
 

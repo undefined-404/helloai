@@ -49,3 +49,10 @@ scripts/
 
 # Deploy artifacts (not needed in the image)
 deploy/*
+
+# Release bundles (deploy/quickstart/build-release.sh writes here, and a second
+# run would otherwise push the previous version's multi-GB offline tars into the
+# build context). Leading slash = context root only, so helloai-ui/dist stays
+# excluded above on its own rule.
+/dist/
+/dist

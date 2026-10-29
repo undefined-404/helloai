@@ -1,0 +1,307 @@
+# ============================================================
+# HelloAI - Quickstart Docker Compose (PREBUILT IMAGES ONLY)
+#
+# Purpose: let anyone try HelloAI with ONE command, without the source
+#   tree, JDK, Maven, Node.js, or a local multi-stage image build.
+#
+# Usage (from this directory):
+#   ./start.sh                 # core mode (no sandbox)
+#   ./start.sh --with-sandbox  # + OpenSandbox capability
+#   .\start.ps1                # Windows equivalent
+#
+# What the difference is vs docker-compose.server.yml (repo root):
+#   - NO `build:` anywhere. Every service is an `image:` reference, so the
+#     only prerequisite is `docker pull` (or `docker load` for offline).
+#   - The app/web images already carry the jar + dist + nginx config, so
+#     there is no bind mount of artifacts, no version skew between a jar
+#     and a dist zip, and no host path/permission/CRLF problems.
+#   - Middleware publishes NO host ports. On a developer laptop 5432/6379
+#     are frequently taken, and publishing them on 0.0.0.0 is a needless
+#     exposure. Debug with `docker compose exec`, not with a host port.
+#   - Project name is fixed to `helloai-quickstart` and containers get
+#     generated names, so this stack CAN coexist with a dev stack that
+#     already uses the helloai-* container names and volumes.
+#
+# Sandbox is OFF by default (core mode). Rationale: the sandbox lifecycle
+#   server mounts /var/run/docker.sock (host-root equivalent) and needs 4
+#   extra images, ~2 GB of pulls on a slow network. Core mode must work on
+#   a plain laptop without paying that cost. Enabling it also sets
+#   SANDBOX_ENABLED=true (done by start.sh), otherwise the tool is stripped
+#   from the model-visible list and skills look broken -- the exact failure
+#   the 2026-10-29 server change fixed in the opposite direction.
+#
+# ASCII-only file (repo convention for deploy artifacts).
+# ============================================================
+
+name: helloai-quickstart
+
+services:
+
+  # --- PostgreSQL 16 + pgvector 0.8.0 ---
+  # MUST stay on the pgvector image, NOT postgres:16: migration V106 runs
+  #   CREATE EXTENSION vector, which the stock image does not ship.
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: helloai
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DATASOURCE_PASSWORD:?DATASOURCE_PASSWORD is missing; run start.sh to generate .env}
+      TZ: Asia/Shanghai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d helloai"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- Redis 7.2.5 ---
+  redis:
+    image: redis:7.2.5-alpine
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- RabbitMQ 3.12.14 (management plugin) ---
+  # No rabbitmq-init service and no manual `rabbitmqctl add_user` pre-step:
+  #   RABBITMQ_DEFAULT_USER / _PASS / _VHOST are applied by the official
+  #   entrypoint on the broker's FIRST boot, and it grants that user full
+  #   permissions on the default vhost. For an EXISTING volume those three
+  #   variables are ignored -- start.sh covers that case with an idempotent
+  #   `rabbitmqctl add_vhost / change_password / set_permissions`.
+  #   Two realities this removes: the admin account was previously a manual
+  #   prerequisite, and the init service needed a curl-carrying image.
+  rabbitmq:
+    image: rabbitmq:3.12.14-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${HELLOAI_RABBIT_USER:-helloai}
+      RABBITMQ_DEFAULT_PASS: ${HELLOAI_RABBIT_PASSWORD:?HELLOAI_RABBIT_PASSWORD is missing; run start.sh to generate .env}
+      # Pinned, not a knob: application-quickstart.yml hardcodes the same
+      #   vhost. Changing one side alone yields "auth ok but vhost missing".
+      RABBITMQ_DEFAULT_VHOST: /helloai
+      TZ: Asia/Shanghai
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # --- MinIO object storage ---
+  # No bucket-init service: MinioArtifactStorage.ensureBucket() creates
+  #   helloai-artifacts on first write.
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is missing; run start.sh to generate .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is missing; run start.sh to generate .env}
+      TZ: Asia/Shanghai
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ':9001'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- HelloAI backend (prebuilt image: JRE 17 + jar) ---
+  # No bind-mounted jar: upgrade = change HELLOAI_APP_IMAGE tag, restart.
+  app:
+    image: ${HELLOAI_APP_IMAGE:?HELLOAI_APP_IMAGE is missing; run start.sh to generate .env}
+    restart: unless-stopped
+    working_dir: /app
+    command: ["java", "-Xms512m", "-Xmx${HELLOAI_JVM_XMX:-2g}", "-jar", "helloai-start.jar"]
+    environment:
+      TZ: Asia/Shanghai
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai
+      # quickstart profile hardcodes the compose topology (service names,
+      #   container ports, vhost, minio endpoint); see
+      #   helloai-start/src/main/resources/application-quickstart.yml.
+      SPRING_PROFILES_ACTIVE: quickstart
+      DATASOURCE_PASSWORD: ${DATASOURCE_PASSWORD:?}
+      RABBITMQ_USERNAME: ${HELLOAI_RABBIT_USER:-helloai}
+      RABBITMQ_PASSWORD: ${HELLOAI_RABBIT_PASSWORD:?}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?}
+      HELLOAI_AGENT_REGISTRATION_TOKEN: ${HELLOAI_AGENT_REGISTRATION_TOKEN:?HELLOAI_AGENT_REGISTRATION_TOKEN is missing; run start.sh to generate .env}
+      # Must match the ciphertext already in the database. Never regenerate
+      #   it on upgrade: a new key makes every stored credential undecryptable.
+      HELLOAI_CREDENTIAL_AES_KEY_BASE64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:?HELLOAI_CREDENTIAL_AES_KEY_BASE64 is missing; run start.sh to generate .env}
+      # Core mode: off. --with-sandbox exports SANDBOX_ENABLED=true.
+      SANDBOX_ENABLED: ${SANDBOX_ENABLED:-false}
+      SANDBOX_URL: ${SANDBOX_URL:-http://opensandbox-server:8090}
+      SANDBOX_API_KEY: ${SANDBOX_API_KEY:-}
+    networks:
+      - default
+      - opensandbox-net
+    healthcheck:
+      # Requires curl in the app image (see Dockerfile, stage "app").
+      #   /actuator/health is exposed by application.yml and reports
+      #   DB/Redis/RabbitMQ contributors, so a green check means the
+      #   dependencies actually came up, not merely that the port is open.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:6565/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      # Flyway runs on first boot; 3 minutes is the measured cold-start budget.
+      # Budget: 180s start_period + 20 x 10s = ~380s before compose marks it
+      #   unhealthy, which stays inside start.sh's 420s wall-clock gate.
+      start_period: 180s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  # --- Nginx: frontend dist + /api,/mcp reverse proxy (only public port) ---
+  # The image bakes dist AND the nginx config, so no ./dist or nginx.conf.
+  # CONTRACT: the service name must stay `app` -- nginx.server.conf inside
+  #   the image proxies to http://app:6565 by that name.
+  web:
+    image: ${HELLOAI_WEB_IMAGE:?HELLOAI_WEB_IMAGE is missing; run start.sh to generate .env}
+    restart: unless-stopped
+    ports:
+      # 8080 by default: port 80 is often taken on a laptop (and needs root
+      #   on Linux). Override with HELLOAI_HTTP_PORT.
+      - "${HELLOAI_HTTP_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # --- OpenSandbox lifecycle server (profile: sandbox) ---
+  # Mounts /var/run/docker.sock => root inside equals root on the host.
+  #   Never publish 8090 beyond loopback; the api_key is not a real boundary.
+  opensandbox-server:
+    image: opensandbox/server:release-1.1.0
+    profiles: ["sandbox"]
+    restart: unless-stopped
+    networks:
+      - opensandbox-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      # LOOPBACK ONLY, deliberately -- do not drop the 127.0.0.1 prefix.
+      #   This container mounts /var/run/docker.sock, so anyone who can reach
+      #   this port with the api_key can start containers on the HOST, i.e.
+      #   host root. Publishing it on 0.0.0.0 puts that behind nothing but the
+      #   api_key and whatever firewall happens to exist.
+      # The PORT is overridable because 8090 is a common collision: a second
+      #   HelloAI stack (e.g. a dev stack) usually owns it already. Note that
+      #   two sandbox servers on the SAME docker socket still fight over the
+      #   40000-60000 sandbox port range, so run only one at a time -- changing
+      #   the port is for co-existence with a NON-sandbox stack, not for two.
+      - "127.0.0.1:${HELLOAI_SANDBOX_PORT:-8090}:8090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
+      # `:-` not `:?`: compose interpolates EVERY service's environment while
+      #   rendering, even services behind an inactive profile -- with `:?` a
+      #   plain core-mode `up` would fail asking for a sandbox key it never
+      #   uses (measured). The fail-fast that matters lives in start.sh
+      #   (--with-sandbox asserts the key) and in the server itself (it
+      #   refuses to start on an empty api_key).
+      OPEN_SANDBOX_API_KEY: ${SANDBOX_API_KEY:-}
+    configs:
+      - source: opensandbox-config
+        target: /etc/opensandbox/config.toml
+
+  # --- Sandbox business images: declaration only, never started ---
+  # The sandbox server creates containers through the mounted docker socket,
+  #   i.e. it can only use images already present on the HOST daemon; compose
+  #   `pull_policy` does not govern that path. One service per image because
+  #   a compose service declares a single `image:`.
+  # `prewarm` profile keeps these out of `up`: on a network without Docker
+  #   Hub access a pull inside `up` hangs the whole deploy.
+  #   start.sh --with-sandbox runs: docker compose --profile prewarm pull ...
+  # BOTH images are required: python for verification commands, node for
+  #   skill execution (archify needs node >= 18). Shipping python only was
+  #   measured to fail every skill run with a bare timeout.
+  opensandbox-image-python:
+    image: python:3.12
+    profiles: ["prewarm"]
+    restart: "no"
+    command: ["sleep", "infinity"]
+
+  opensandbox-image-node:
+    image: node:20-bookworm-slim
+    profiles: ["prewarm"]
+    restart: "no"
+    command: ["sleep", "infinity"]
+
+configs:
+  # OpenSandbox server config (trimmed from the official example).
+  # execd/egress are runtime helpers pulled by the server when creating a
+  #   sandbox; the Alibaba Cloud mirror is used to avoid Docker Hub timeouts
+  #   on CN networks.
+  # NOTE the `:-` (not `:?`) on api_key: a top-level `configs:` block is
+  #   interpolated even when the sandbox profile is NOT enabled, so `:?` here
+  #   would make a plain core-mode `up` fail on a missing sandbox key. The
+  #   fail-fast guard that matters lives on the opensandbox-server service,
+  #   where the key is actually required.
+  opensandbox-config:
+    content: |
+      [server]
+      host = "0.0.0.0"
+      port = 8090
+      api_key = "${SANDBOX_API_KEY:-}"
+
+      [proxy]
+      resolve_internal = false
+
+      [log]
+      level = "INFO"
+
+      [runtime]
+      type = "docker"
+      execd_image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:v1.1.0"
+
+      [egress]
+      image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:v1.1.7"
+      readiness_timeout_seconds = 30.0
+
+      [docker]
+      network_mode = "bridge"
+      host_ip = "host.docker.internal"
+      port_range_min = 40000
+      port_range_max = 60000
+      drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
+      no_new_privileges = true
+      pids_limit = 4096
+
+      [ingress]
+      mode = "direct"
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+
+networks:
+  opensandbox-net:
+    driver: bridge

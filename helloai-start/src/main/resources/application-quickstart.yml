@@ -1,0 +1,111 @@
+# ============================================================
+# HelloAI - quickstart 环境配置（面向 docker compose 一键体验）
+#
+# 激活方式：SPRING_PROFILES_ACTIVE=quickstart（由 deploy/quickstart/docker-compose.yml 注入）
+#
+# 【本 profile 存在的理由】
+#   application.yml 的默认值是「宿主机视角」：datasource 指向 localhost:15432、
+#   rabbitmq 指向 localhost:25672 且 vhost 为 "/"、redis 指向 localhost:26379。
+#   容器内的 localhost 是容器自己，这些默认值必然连不上；而在 compose 里逐条用
+#   SPRING_* 环境变量覆盖，会让用户体验版 compose 堆到二十多条 env。
+#   本文件把「compose 内部拓扑」一次性写死（服务名 + 容器端口），用户的 .env 只剩
+#   密钥类变量——这是「屏蔽初始化细节」的落地手段。
+#
+# 【与 application-local.yml 的区别】
+#   local  = 应用跑在宿主机，中间件跑在 Docker（走宿主发布端口 15432/26379/25672）
+#   quickstart = 应用与中间件同在 compose 网络（走服务名 postgres/redis/rabbitmq）
+#   两者不可合并：宿主端口与服务名是两套事实。
+#
+# 【安全边界】
+#   本文件只含占位符与拓扑，**不含任何真实凭据**，因此可以安全进入镜像。
+#   （application-local.yml / application-dev.yml 含默认口令或真实凭据，
+#     已被 .dockerignore 排除，不进镜像。）
+#
+# 【为什么密钥仍是无默认值的 ${...}】
+#   沿用 CODE_STYLE §41：凭据缺失即启动失败，绝不静默回落弱口令。
+#   .env 由 deploy/quickstart 下的 start.sh / start.ps1 自动生成（幂等）。
+# ============================================================
+
+spring:
+  datasource:
+    url: jdbc:postgresql://postgres:5432/helloai?currentSchema=public&reWriteBatchedInserts=true
+    username: ${DATASOURCE_USERNAME:postgres}
+    password: ${DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DATASOURCE_POOL_SIZE:20}
+      minimum-idle: 5
+  data:
+    redis:
+      # compose 服务名 + 容器内端口（不是宿主发布端口 26379）
+      host: redis
+      port: 6379
+  rabbitmq:
+    # compose 服务名 + 容器内端口（不是宿主发布端口 25672）
+    host: rabbitmq
+    port: 5672
+    username: ${RABBITMQ_USERNAME:helloai}
+    password: ${RABBITMQ_PASSWORD}
+    # vhost 与 rabbitmq 服务的 RABBITMQ_DEFAULT_VHOST 是同一份事实：
+    #   quickstart 在 broker 首次启动时由官方 entrypoint 建出 /helloai，
+    #   start.sh 在「卷已存在」时用 rabbitmqctl add_vhost 幂等补齐。
+    # 两处必须一致，故此处写死、不暴露为可配置项。
+    virtual-host: /helloai
+
+helloai:
+  agent:
+    # Agent 自注册共享令牌：无默认值，缺失即启动失败（§42）
+    registration-token: ${HELLOAI_AGENT_REGISTRATION_TOKEN}
+
+  # --- 执行窗口与模型档位 ---------------------------------------------
+  # 【为什么必须显式写，而不能吃 application.yml 的基线】
+  #   基线是「宿主机日常调试」口径，有三个值对「跑完整任务」偏短：
+  #     sync-timeout-seconds 180  / read-timeout-ms 180000 / model=flash
+  #   local 与 dev 都已各自放宽（前两项 1200 / 600000），唯独 quickstart
+  #   原先三样全落在基线上。后果不是报错，而是「整合报告跑到一半失败」
+  #   或「模型质量明显低一档」——体验版最不该出现的失败形态。
+  #   这是一次性的对齐，不是调优：三处取值与 dev/server 一致。
+  execution:
+    # 整合报告是多章节、多轮模型调用的长任务，180s 必然跑不完。
+    #   local/dev 同为 1200s，故此处也用 1200s，不做第三套口径。
+    sync-timeout-seconds: ${HELLOAI_SYNC_TIMEOUT_SECONDS:1200}
+  providers:
+    # 基线 3 分钟的读超时对「推理型模型 + 大附件」不足（application-local.yml
+    #   记录了成因：2026-10-16 kimi-k3 对 28KB 章节交付物反复卡 REVIEW）。
+    #   四个 provider 统一放宽到 10 分钟，与 local/dev 逐项一致——只放宽
+    #   deepseek 会让切到 kimi/qwen 的用户踩同一个坑。
+    deepseek:
+      # 默认 pro，与 dev/server 对齐：体验版的核心卖点是「整合报告」，
+      #   flash 会降一档质量。注意 local 刻意用 flash（日常调试更快更省），
+      #   这与本文件不同是**有意的**，不是漏改。
+      #   想省钱：在 .env 里设 DEEPSEEK_CHAT_MODEL=deepseek-v4-flash。
+      default-model: ${DEEPSEEK_CHAT_MODEL:deepseek-v4-pro}
+      read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:600000}
+    moonshot:
+      read-timeout-ms: ${MOONSHOT_READ_TIMEOUT_MS:600000}
+    minimax:
+      read-timeout-ms: ${MINIMAX_READ_TIMEOUT_MS:600000}
+    dashscope:
+      read-timeout-ms: ${DASHSCOPE_READ_TIMEOUT_MS:600000}
+
+  security:
+    credential:
+      # credential_vault 加密密钥：无默认值，缺失即启动失败。
+      # 一旦生成必须长期保留——换 key 等于所有已存 API Key 全部解不开。
+      aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64}
+  storage:
+    # 对象存储走 compose 服务名；桶由 MinioArtifactStorage.ensureBucket() 首写自动创建
+    minio-endpoint: http://minio:9000
+    minio-bucket: helloai-artifacts
+    minio-access-key: ${MINIO_ACCESS_KEY}
+    minio-secret-key: ${MINIO_SECRET_KEY}
+  sandbox:
+    opensandbox:
+      # 核心模式默认关闭（与 OpenSandboxProperties 的 enabled=false 一致）。
+      # 关闭时 internal_run_in_sandbox 工具从模型可见列表摘除（fail-closed），
+      # 不会出现「功能看着在、一调用就超时」的假可用状态。
+      # 开启方式：start.sh --with-sandbox（由脚本 export SANDBOX_ENABLED=true）
+      enabled: ${SANDBOX_ENABLED:false}
+      # 必须是 compose 服务名：容器内 127.0.0.1 是 app 自己。
+      url: ${SANDBOX_URL:http://opensandbox-server:8090}
+      api-key: ${SANDBOX_API_KEY:}

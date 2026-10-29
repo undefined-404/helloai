@@ -5,8 +5,13 @@
 #   helloai-app   (stage 3): Spring Boot jar on eclipse-temurin:17-jre
 #   helloai-web   (stage 4): Vue3 dist + nginx config on nginx:1.27-alpine
 #
-# Usage (single-command one-click deployment, see README):
-#   docker compose -f docker-compose.server.yml up -d --build
+# Usage:
+#   A) End-user quickstart -- PREBUILT images, nothing is built on the
+#      target host. CI publishes both images and deploy/quickstart/ consumes
+#      them with one command (no source tree, no JDK/Maven/Node):
+#        see deploy/quickstart/README.md
+#   B) Self-host from source (dev / internal):
+#        docker compose -f docker-compose.server.yml up -d --build
 #
 # Notes:
 #   - Build arg MAVEN_OPTS can override Maven memory flags (see backend-build stage).
@@ -47,18 +52,20 @@ COPY helloai-core helloai-core/
 COPY helloai-api helloai-api/
 COPY helloai-start helloai-start/
 
-# SECURITY NOTE (2026-10-19) -- THE IMAGE-BUILD PATH IS RETIRED.
-#   Server releases are jar + dist bind mounts (deploy/app/docker-compose.yml);
-#   nothing builds this image any more. What used to be here was:
-#     COPY deploy/templates/application-dev.yml helloai-start/src/main/resources/application-dev.yml
-#   because the working tree carries a skip-worktree application-dev.yml with REAL
-#   credentials, and baking that into an image would leak them.
-#   deploy/templates/ and deploy/middleware/ were both deleted on 2026-10-19.
-#   If the image path is ever revived you MUST restore a public placeholder
-#   application-dev.yml and copy it over the working-tree one BEFORE `mvn package`
-#   below, otherwise the real secrets get baked into the image.
-#   Second guard: .dockerignore now excludes **/application-dev.yml, so a revived
-#   build fails fast (no dev profile) instead of silently shipping secrets.
+# SECURITY NOTE (2026-10-19, revised 2026-10-29) -- WHO SUPPLIES THE PROFILE.
+#   This image ships in TWO shapes, and the rule below applies to both:
+#     A) prebuilt release image for deploy/quickstart (target host has no source);
+#     B) built from source on the server via docker-compose.server.yml.
+#   NEITHER may carry the working tree's application-dev.yml: that file is
+#   skip-worktree and holds REAL credentials (cloud IP, MQ/MinIO passwords,
+#   AES key). Guard 1: .dockerignore excludes **/application-dev.yml, so the
+#   COPY lines above never see it. Guard 2: this file deliberately contains
+#   NO `COPY ... application-dev.yml` line -- do not add one back.
+#   CONSEQUENCE: the jar has NO dev profile, so every placeholder that
+#   application.yml declares without a default MUST be injected at runtime.
+#   - quickstart path: application-quickstart.yml (topology baked in, secrets
+#     injected by deploy/quickstart/start.sh)
+#   - server path:     application.yml + the deploy dir's .env
 
 # ARG defaults mirror the local CI memory guidance (4C8GB host).
 ARG MAVEN_OPTS="-Xmx1024m -XX:+UseSerialGC"
@@ -97,13 +104,22 @@ WORKDIR /app
 # (postgres:16.4) and RestoreGate gate 1 requires dump major == runtime major.
 # Without this the backup endpoint fails explicitly ("cannot start pg_dump");
 # the capability is unavailable rather than silently degraded.
+#
+# curl is required by the container HEALTHCHECK below (GET /actuator/health).
+# deploy/quickstart gates `web` on this check, so removing it silently turns
+# every startup into a 380s timeout.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends postgresql-client-16 \
+ && apt-get install -y --no-install-recommends postgresql-client-16 curl \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=backend-build /workspace/helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar helloai-start.jar
 # Runs as root (same as the legacy bind-mount mode) so the bind-mounted
 # host `./logs` directory remains writable without host-side chown.
 EXPOSE 6565
+# Actuator health includes the DB / Redis / RabbitMQ contributors, so a green
+# check means the dependencies are actually usable, not merely that the port
+# is open. deploy/quickstart uses exactly this signal to gate `web`.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=180s --retries=20 \
+  CMD curl -fsS http://127.0.0.1:6565/actuator/health || exit 1
 ENTRYPOINT ["java", "-Xms512m", "-Xmx2g", "-jar", "helloai-start.jar"]
 
 # ---------- Stage 4: web image (frontend + nginx) ----------
