@@ -8,9 +8,11 @@ import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.ChatAttachmentService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.DefaultResourceLoader;
 import org.springframework.core.io.ResourceLoader;
 
 import java.lang.reflect.Method;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -246,5 +248,86 @@ class ConversationSkillRunnerTest {
                 .isEqualTo("/workspace/runs/" + a + "/artifact.html");
         assertThat((String) spec.invoke(null, "/workspace/runs/" + a))
                 .isEqualTo("/workspace/runs/" + a + "/spec.json");
+    }
+
+    // ===== 类型识别与 schema 注入（2026-10-29 P1：外部评审 §2 第 3 条） =====
+
+    @SuppressWarnings("unchecked")
+    private static List<String> guessTypes(String need) throws Exception {
+        Method m = ConversationSkillRunner.class.getDeclaredMethod("guessTypes", String.class);
+        m.setAccessible(true);
+        return (List<String>) m.invoke(null, need);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> pickInjection(List<String> hits) throws Exception {
+        Method m = ConversationSkillRunner.class.getDeclaredMethod("pickInjection", List.class);
+        m.setAccessible(true);
+        return (List<String>) m.invoke(null, hits);
+    }
+
+    private static ConversationSkillRunner newRunner() {
+        return new ConversationSkillRunner(
+                mock(AgentSkillSpecService.class), mock(SkillPackageExecutionService.class),
+                mock(SkillSpecExtractor.class), mock(PlatformAgentExecutionService.class),
+                mock(PlannerAgentPicker.class), mock(ChatAttachmentService.class),
+                new ObjectMapper(), new DefaultResourceLoader());
+    }
+
+    @Test
+    @DisplayName("★ 识别不截断：「支付审批调用链时序图」三个类型全保留（sequence 不得被丢）")
+    void guessTypes_keepsAllHits() throws Exception {
+        List<String> hits = guessTypes("画一张支付审批的调用链时序图");
+        assertThat(hits)
+                .as("三种信号都命中，识别层不得丢弃任何一类——丢 sequence 正是 validate 必失败的成因")
+                .contains("lifecycle", "workflow", "sequence");
+        assertThat(pickInjection(hits)).as("注入全文仍只取 2 份（prompt 预算）")
+                .hasSize(2).containsExactly("lifecycle", "workflow");
+    }
+
+    @Test
+    @DisplayName("识别退化：无关键词时给 arch／workflow 两张最通用的")
+    void guessTypes_fallsBackToGeneric() throws Exception {
+        assertThat(guessTypes("随便画点什么")).containsExactly("architecture", "workflow");
+        assertThat(pickInjection(List.of("lifecycle", "workflow", "sequence", "erd")))
+                .as("超过预算只切注入集，不切识别结果").hasSize(2);
+    }
+
+    @Test
+    @DisplayName("★ 未注入全文的候选类型给出顶层必填摘要（字段名对齐，避免盲写）")
+    void requiredFieldsSummary_listsTopLevelRequired() throws Exception {
+        Method m = ConversationSkillRunner.class.getDeclaredMethod(
+                "requiredFieldsSummary", String.class, List.class);
+        m.setAccessible(true);
+        String out = (String) m.invoke(newRunner(),
+                "classpath:skills/packages/archify/3.1.0/schemas/", List.of("sequence"));
+        assertThat(out)
+                .contains("sequence")
+                .contains("participants")
+                .contains("messages")
+                .as("摘要只是字段名级提示，不得展开成 schema 全文").doesNotContain("$ref");
+    }
+
+    // ===== 降档留痕（2026-10-29 P3，外部评审 §2 第 4 条） =====
+
+    @Test
+    @DisplayName("★ 降档留痕：payload 带 degraded/qualityProfile/degradeReason，未降档时为 false")
+    void payload_marksDegraded() throws Exception {
+        ConversationSkillRunner runner = newRunner();
+        ConversationSkillRunner.Result strict = new ConversationSkillRunner.Result(
+                1L, "a.html", 100L, "sha", "lifecycle", "showcase", null);
+        ConversationSkillRunner.Result degraded = new ConversationSkillRunner.Result(
+                2L, "b.html", 100L, "sha", "lifecycle", "standard", "composition=fail, errors=2");
+
+        assertThat(strict.degraded()).isFalse();
+        assertThat(degraded.degraded()).isTrue();
+
+        var om = new ObjectMapper();
+        var p1 = om.readTree(runner.payloadOf(strict));
+        var p2 = om.readTree(runner.payloadOf(degraded));
+        assertThat(p1.path("artifact").path("degraded").asBoolean()).isFalse();
+        assertThat(p2.path("artifact").path("degraded").asBoolean()).isTrue();
+        assertThat(p2.path("artifact").path("qualityProfile").asText()).isEqualTo("standard");
+        assertThat(p2.path("artifact").path("degradeReason").asText()).contains("composition=fail");
     }
 }

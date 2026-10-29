@@ -360,7 +360,7 @@
                           v-if="row.artifact && !artifactPanelOpen"
                           class="msg-artifact-tip"
                         >
-                          <span class="msg-artifact-tip-text">已生成文件 <b>{{ row.artifact.fileName }}</b>，见右侧「产物」栏</span>
+                          <span class="msg-artifact-tip-text">已生成文件 <b>{{ row.artifact.fileName }}</b><template v-if="row.artifact.degraded">（兼容布局）</template>，见右侧「产物」栏</span>
                           <button
                             type="button"
                             class="msg-artifact-tip-btn"
@@ -1051,6 +1051,11 @@
                     <span class="artifact-item-name">{{ item.artifact.fileName }}</span>
                     <span class="artifact-item-sub">
                       {{ artifactSizeLabel(item.artifact.fileSize) }}<template v-if="item.artifact.chartType"> · {{ item.artifact.chartType }}</template>
+                      <span
+                        v-if="item.artifact.degraded"
+                        class="artifact-item-degraded"
+                        :title="item.artifact.degradeReason || '严格布局门未通过，已用兼容布局产出'"
+                      > · 兼容布局</span>
                     </span>
                   </span>
                   <span class="artifact-item-actions">
@@ -3025,6 +3030,10 @@ onMounted(() => {
 .artifact-item-sub {
   font-size: 12px;
   color: var(--ha-muted);
+}
+/* 降档标记（2026-10-29）：用信息态色而非危险色——它是「请核对」的提示，不是失败 */
+.artifact-item-degraded {
+  color: var(--ha-info-text);
 }
 .artifact-item-actions {
   display: flex;

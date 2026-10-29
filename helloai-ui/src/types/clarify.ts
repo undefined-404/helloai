@@ -37,6 +37,12 @@ export interface ClarifyArtifactRef {
   sha256?: string
   /** 图表类型（lifecycle / workflow / …；其它技能可能为空） */
   chartType?: string
+  /** 实际产出用的质量档：showcase（严格门通过）/ standard（降档） */
+  qualityProfile?: string
+  /** 是否降档产出（严格布局门未通过，退回标准档才出的图） */
+  degraded?: boolean
+  /** 降档原因（如 composition=fail, errors=2） */
+  degradeReason?: string
 }
 
 /** assistant 消息 payload：{mode, progress, questions, webSearch, process, artifact} */

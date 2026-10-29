@@ -466,6 +466,14 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         }
         String content = "已生成 `" + result.chartType() + "` 图，产物见下方附件（"
                 + readableSize(result.fileSize()) + "）。";
+        // 降档留痕（2026-10-29）：正文必须说清「这是兼容布局产出的」，光在 payload 里标前端不一定展示，
+        // 而用户把它当完全通过的结果直接拿去用，代价比多一行字大得多。
+        if (result.degraded()) {
+            String reason = result.degradeReason() == null ? "" : result.degradeReason();
+            content += "\n\n> 严格布局门未通过，已用**兼容布局**产出（"
+                    + (reason.length() > 120 ? reason.substring(0, 120) + "…" : reason)
+                    + "）。图可用，但建议人工核对节点重叠与连线走向。";
+        }
         messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT, content,
                 conversationSkillRunner.payloadOf(result));
         return new ClarifyConversationDetail(conversation,

@@ -75,6 +75,15 @@ public class ConversationSkillRunner {
     /** 技能正文注入上限（与 {@code SkillDirective} 同一口径）。 */
     private static final int BODY_LIMIT = 6000;
 
+    /**
+     * 单次注入的「全文 schema」份数上限（其余命中类型只给必填摘要）。
+     *
+     * <p>预算来源：单份 schema 约 10KB，三份以上 prompt 过长，模型反而抓不住重点
+     * （2026-10-26 实测）。注意这个上限只约束<b>注入多少全文</b>，不约束<b>初判命中多少</b>
+     * ——截断发生在注入层，不在识别层（2026-10-29 修正，见 {@link #guessTypes}）。</p>
+     */
+    private static final int MAX_INJECTED_SCHEMAS = 2;
+
     /** 渲染质量档：{@code showcase} = 最严格布局门，{@code standard} = 布局重叠类诊断直接不报。 */
     private static final String QUALITY_SHOWCASE = "showcase";
     private static final String QUALITY_STANDARD = "standard";
@@ -137,7 +146,24 @@ public class ConversationSkillRunner {
      * @param sha256       内容哈希（与 CLI 回执可对账）
      * @param chartType    实际使用的图表类型
      */
-    public record Result(Long attachmentId, String fileName, long fileSize, String sha256, String chartType) {
+    /**
+     * 一次执行的结果。
+     *
+     * @param attachmentId   产物附件 ID
+     * @param fileName       产物文件名
+     * @param fileSize       字节数
+     * @param sha256         产物哈希（已与 check 回执对账）
+     * @param chartType      图表类型
+     * @param qualityProfile 实际产出用的质量档（{@code showcase} / {@code standard}）
+     * @param degradeReason  降档原因（{@code null} = 未降档，严格标准一次通过）
+     */
+    public record Result(Long attachmentId, String fileName, long fileSize, String sha256,
+                         String chartType, String qualityProfile, String degradeReason) {
+
+        /** 是否降档产出：{@code showcase} 过不了布局门，退到 {@code standard} 才出的图。 */
+        public boolean degraded() {
+            return degradeReason != null;
+        }
     }
 
     /**
@@ -180,8 +206,13 @@ public class ConversationSkillRunner {
             }
             // 第 2 次兜底：仍不过则降档 standard —— 该档对本类诊断 return []（不报），
             //   保证用户拿到一张图而不是一句失败。宁可 90 分的图，也不要零产物。
+            //   降档必须留痕（2026-10-29，外部评审 §2 第 4 条）：这张图是「兼容布局」产出的，
+            //   用户有权知道，否则会把降档图当完全通过的结果用。
+            String degradeReason = null;
             if (!attempt.ok() && attempt.retryable()) {
-                log.info("降档 standard 重试: conversationId={}, skill={}, runId={}", conversationId, skillName, runId);
+                degradeReason = attempt.message();
+                log.info("降档 standard 重试: conversationId={}, skill={}, runId={}, reason={}",
+                        conversationId, skillName, runId, degradeReason);
                 attempt = renderAttempt(scopeId, skillName, spec, QUALITY_STANDARD, runDir);
             }
             if (!attempt.ok()) {
@@ -205,11 +236,13 @@ public class ConversationSkillRunner {
             String fileName = fileNameOf(spec.chartType());
             ChatAttachment attachment = chatAttachmentService.saveArtifact(
                     conversationId, uploaderUserId, fileName, "text/html", artifact.bytes());
-            log.info("对话内技能执行完成: conversationId={}, skill={}, chartType={}, fileName={}, size={}, sha256={}, attachmentId={}",
-                    conversationId, skillName, spec.chartType(), fileName, artifact.bytes().length,
-                    artifact.sha256(), attachment.getId());
+            String qualityProfile = degradeReason == null ? QUALITY_SHOWCASE : QUALITY_STANDARD;
+            log.info("对话内技能执行完成: conversationId={}, skill={}, chartType={}, quality={}, degraded={}, "
+                            + "fileName={}, size={}, sha256={}, attachmentId={}",
+                    conversationId, skillName, spec.chartType(), qualityProfile, degradeReason != null,
+                    fileName, artifact.bytes().length, artifact.sha256(), attachment.getId());
             return new Result(attachment.getId(), fileName, artifact.bytes().length,
-                    artifact.sha256(), spec.chartType());
+                    artifact.sha256(), spec.chartType(), qualityProfile, degradeReason);
         } finally {
             // 对话轮没有「turn 结束」钩子，必须自己释放；否则容器活到空闲超时
             skillPackageExecutionService.release(scopeId);
@@ -234,7 +267,12 @@ public class ConversationSkillRunner {
                             "fileName", result.fileName(),
                             "fileSize", result.fileSize(),
                             "sha256", result.sha256() == null ? "" : result.sha256(),
-                            "chartType", result.chartType() == null ? "" : result.chartType())));
+                            "chartType", result.chartType() == null ? "" : result.chartType(),
+                            // 降档留痕（2026-10-29）：前端据此显示「兼容布局」标记，让用户知道
+                            // 这张图没过严格布局门，而不是把它当完全通过的结果用。
+                            "qualityProfile", result.qualityProfile() == null ? "" : result.qualityProfile(),
+                            "degraded", result.degraded(),
+                            "degradeReason", result.degradeReason() == null ? "" : result.degradeReason())));
         } catch (Exception e) {
             log.warn("产物消息 payload 序列化失败（消息退化为纯文本）: err={}", e.getMessage());
             return null;
@@ -254,15 +292,21 @@ public class ConversationSkillRunner {
                 ? body.substring(0, BODY_LIMIT) + "\n\n（技能正文过长，已截断）" : body;
         // schema 注入是成功率的关键：技能正文只说「按 schemas/<type>.schema.json 写」，
         // 模型看不到那份文件就只能凭印象编字段，validate 必然失败。
-        List<String> guessedTypes = guessTypes(userNeed);
-        String schemaSection = schemaSection(skillName, guessedTypes);
-        String basePrompt = specPrompt(trimmedBody, guessedTypes, schemaSection, userNeed);
+        // 识别与注入分开（2026-10-29）：guessTypes 保留全部命中，pickInjection 决定注入哪几份全文。
+        List<String> guesses = guessTypes(userNeed);
+        List<String> injected = pickInjection(guesses);
+        String schemaSection = schemaSection(skillName, injected, guesses);
+        String basePrompt = specPrompt(trimmedBody, guesses, injected, schemaSection, userNeed);
         String prompt = basePrompt;
         String lastError = null;
         for (int attempt = 1; attempt <= MAX_SPEC_ATTEMPTS; attempt++) {
             String output = callLlm(conversationId, plannerAgentId, prompt);
             try {
-                return specExtractor.extract(output);
+                SkillSpecExtractor.ChartSpec spec = specExtractor.extract(output);
+                // 类型一致性兜底：模型选了「未注入全文」的类型时按那个类型补产一次，
+                // 而不是等 validate 失败后再走「渲染重试」——后者要重跑一遍 CLI，前者只补一次生成。
+                return alignType(spec, conversationId, plannerAgentId, skillName, trimmedBody,
+                        userNeed, injected);
             } catch (SkillSpecExtractor.SpecExtractException e) {
                 lastError = e.getMessage();
                 log.warn("技能输入抽取失败（第 {}/{} 次）: skill={}, reason={}",
@@ -274,6 +318,50 @@ public class ConversationSkillRunner {
             }
         }
         throw new BizException("未能从模型输出里得到可用的图表输入：" + lastError);
+    }
+
+    /**
+     * 类型一致性兜底：模型选了「未注入全文」的类型时，用该类型的 schema 补产一次。
+     *
+     * <p><b>为什么需要</b>：{@link #pickInjection} 只注入 2 份全文，而初判是启发式——
+     * 模型完全可能选第三个类型。那种情况下它看不到正确 schema，字段只能凭印象写，
+     * {@code validate} 必然失败；现场表现是「重试一次就成」，实质是白烧一轮 20~40s 生成。
+     * 本方法把这步提前成「补一次带正确 schema 的生成」，比「渲染失败再重试」便宜且可解释。</p>
+     *
+     * <p><b>为什么只补一次、失败就沿用</b>：再失败说明问题不在 schema 可见性（技能包没有该
+     * 类型的 schema，或模型反复改主意），继续补只会把一次失败拖成几十秒空转。</p>
+     */
+    private SkillSpecExtractor.ChartSpec alignType(SkillSpecExtractor.ChartSpec spec,
+                                                   Long conversationId, Long plannerAgentId,
+                                                   String skillName, String skillBody,
+                                                   String userNeed, List<String> injected) {
+        if (spec.chartType() == null || injected.contains(spec.chartType())) {
+            return spec;
+        }
+        String fixSchema = schemaSection(skillName, List.of(spec.chartType()), List.of(spec.chartType()));
+        if (fixSchema.isBlank()) {
+            // 该类型没有 schema 文件（非数据驱动型技能包的正常情形），无从补产，按原样走。
+            return spec;
+        }
+        log.info("模型选了未注入全文的类型，按该类型 schema 补产: skill={}, chartType={}, injected={}",
+                skillName, spec.chartType(), injected);
+        String prompt = specPrompt(skillBody, List.of(spec.chartType()), List.of(spec.chartType()),
+                fixSchema, userNeed)
+                + "\n\n【类型已定，按上面这份 schema 重写】\nchartType=" + spec.chartType()
+                + "，不要改成别的类型。\n上一次的 spec（仅供定位字段，不要照抄其中不符 schema 的部分）：\n"
+                + brief(spec.specJson());
+        try {
+            SkillSpecExtractor.ChartSpec fixed = specExtractor.extract(
+                    callLlm(conversationId, plannerAgentId, prompt));
+            if (!spec.chartType().equals(fixed.chartType())) {
+                // 类型判断属模型职责，平台不硬改；但它又换类型说明初判与描述都含糊，值得记一笔。
+                log.warn("补产后类型仍变化，按最新结果继续: 原={}, 新={}", spec.chartType(), fixed.chartType());
+            }
+            return fixed;
+        } catch (Exception e) {
+            log.warn("类型补齐失败，沿用原 spec: chartType={}, err={}", spec.chartType(), e.getMessage());
+            return spec;
+        }
     }
 
     /**
@@ -445,7 +533,7 @@ public class ConversationSkillRunner {
      * 而不是让模型自己从 schema 里找——schema 仍注入做兜底，但契约段是主参照。</p>
      */
     private static String specPrompt(String skillBody, List<String> guessedTypes,
-                                     String schemaSection, String userNeed) {
+                                     List<String> injectedTypes, String schemaSection, String userNeed) {
         return """
                 你要为一次「图表渲染」准备输入数据。平台会把你输出的 JSON 直接交给渲染 CLI，
                 所以**只输出 JSON**，不要解释、不要 Markdown 围栏、不要任何多余文字。
@@ -465,6 +553,9 @@ public class ConversationSkillRunner {
 
                 ## 类型初判（仅供你参考，最终以你的判断为准）
                 按用户描述，最可能是：%s
+                已注入全文 schema：%s（未列出的类型只给了「顶层必填字段摘要」）。
+                优先选已注入全文的类型；只有当描述明确属于别的类型时才选它们——
+                选未注入全文的类型时，平台会用该类型的 schema 让你重产一次，等于多等一轮。
 
                 ## 输入 schema（字段名与层级必须与之一致）
                 %s
@@ -476,6 +567,7 @@ public class ConversationSkillRunner {
                 %s
                 """.formatted(pitfallsSection(guessedTypes),
                 String.join(" / ", guessedTypes),
+                String.join(" / ", injectedTypes),
                 schemaSection.isBlank() ? "（该技能包未提供 schema 文件，按下文规范自行组织字段）" : schemaSection,
                 skillBody, userNeed);
     }
@@ -549,11 +641,16 @@ public class ConversationSkillRunner {
     }
 
     /**
-     * 从用户原话初判图表类型（平台侧启发式）。
+     * 从用户原话初判图表类型（平台侧启发式，<b>返回全部命中，不截断</b>）。
      *
      * <p><b>只为一件事服务</b>：决定把哪几份 schema 注入 prompt。模型仍可推翻这个初判——
-     * 它输出的 {@code chartType} 才是最终事实。所以这里宁可多命中一两类（注入 2 份），
-     * 也不要为了「精准」而漏掉真正需要的那份：漏了 schema 等于让模型盲写字段。</p>
+     * 它输出的 {@code chartType} 才是最终事实。</p>
+     *
+     * <p><b>2026-10-29 修正（外部评审 §2 第 3 条）</b>：原实现在这里硬截断到 2 份，于是
+     * 「画一张支付审批的调用链时序图」命中 lifecycle + workflow + sequence 后<b>丢掉 sequence</b>，
+     * 而 prompt 仍允许模型选 sequence ⇒「类型可选、schema 看不到」⇒ 只能凭印象编字段 ⇒
+     * {@code validate} 必然失败 ⇒ 表现为「重试一次就好」，实质是白烧一轮 20~40s 生成。
+     * 截断的位置放错了：该由 {@link #pickInjection} 决定注入哪几份，而不是让识别环节丢弃事实。</p>
      *
      * <p>命中不到任何关键词时退化为「架构 / 流程」两张最通用的。</p>
      */
@@ -594,8 +691,19 @@ public class ConversationSkillRunner {
             hits.add("architecture");
             hits.add("workflow");
         }
-        // 最多注入两份：三份 schema 加起来 20KB+，prompt 过长反而让模型抓不住重点
-        return hits.size() > 2 ? hits.subList(0, 2) : hits;
+        return hits;
+    }
+
+    /**
+     * 从命中里挑「注入全文 schema」的类型（最多 {@value #MAX_INJECTED_SCHEMAS} 份）。
+     *
+     * <p>没被选中的命中类型<b>不会消失</b>：{@link #schemaSection} 会给它们一份必填字段摘要，
+     * 且模型若最终选了它们，{@link #alignType} 会用该类型的 schema 补产一次。
+     * 两层兜底合起来保证「模型选的类型一定有 schema 可对齐」。</p>
+     */
+    private static List<String> pickInjection(List<String> hits) {
+        return hits.size() > MAX_INJECTED_SCHEMAS
+                ? hits.subList(0, MAX_INJECTED_SCHEMAS) : hits;
     }
 
     private static boolean containsAny(String text, String... keywords) {
@@ -613,8 +721,13 @@ public class ConversationSkillRunner {
      * <p><b>路径按「技能包名 + 版本」拼</b>而不是写死 {@code archify/3.1.0}：升级技能包时
      * 不需要改代码。包内没有 {@code schemas/} 目录（不是数据驱动型技能）时返回空串，
      * prompt 退化为「按正文自行组织字段」——不阻断执行。</p>
+     *
+     * <p><b>两级注入（2026-10-29）</b>：{@code injected} 给全文（预算见
+     * {@link #MAX_INJECTED_SCHEMAS}），{@code allHits} 里没进全文的类型只给「顶层必填字段摘要」。
+     * 摘要的作用不是替代 schema，而是让模型在选定这些类型时<b>至少把字段名写对</b>——
+     * 真正的保证由 {@link #alignType} 的补产兜底。</p>
      */
-    private String schemaSection(String skillName, List<String> types) {
+    private String schemaSection(String skillName, List<String> injected, List<String> allHits) {
         var spec = agentSkillSpecService.getPackage(skillName);
         if (spec == null || spec.version().isBlank()) {
             return "";
@@ -622,8 +735,49 @@ public class ConversationSkillRunner {
         String base = "classpath:skills/packages/" + spec.name() + "/" + spec.version() + "/schemas/";
         StringBuilder sb = new StringBuilder();
         appendSchema(sb, base + "common.schema.json", "common.schema.json");
-        for (String type : types) {
+        for (String type : injected) {
             appendSchema(sb, base + type + ".schema.json", type + ".schema.json");
+        }
+        List<String> rest = allHits.stream().filter(t -> !injected.contains(t)).toList();
+        if (!rest.isEmpty()) {
+            sb.append(requiredFieldsSummary(base, rest));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 未注入全文的候选类型：只列顶层 {@code required} 与字段名。
+     *
+     * <p>刻意不做递归展开（那等于把 schema 全文换个写法），只解决「字段名与必填项」这一个
+     * 最容易错、也最容易被告知的部分。</p>
+     */
+    private String requiredFieldsSummary(String base, List<String> types) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("### 其余候选类型的顶层必填（只给字段名，未注入全文；若选它们请按此对齐）\n");
+        for (String type : types) {
+            try {
+                Resource resource = resourceLoader.getResource(base + type + ".schema.json");
+                if (!resource.exists()) {
+                    continue;
+                }
+                JsonNode root;
+                try (var in = resource.getInputStream()) {
+                    root = objectMapper.readTree(in);
+                }
+                List<String> required = new ArrayList<>();
+                root.path("required").forEach(n -> required.add(n.asText()));
+                List<String> props = new ArrayList<>();
+                root.path("properties").fieldNames().forEachRemaining(props::add);
+                sb.append("- ").append(type).append("：required = ")
+                        .append(required.isEmpty() ? "（schema 未声明）" : String.join(", ", required));
+                if (!props.isEmpty()) {
+                    sb.append("；顶层字段 = ")
+                            .append(String.join(", ", props.subList(0, Math.min(props.size(), 8))));
+                }
+                sb.append('\n');
+            } catch (Exception e) {
+                log.debug("schema 摘要生成失败（跳过该类型）: type={}, err={}", type, e.getMessage());
+            }
         }
         return sb.toString();
     }

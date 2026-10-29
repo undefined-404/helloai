@@ -2172,7 +2172,8 @@ class RequirementClarifyServiceTest {
             // 技能轮由 ConversationSkillRunner 执行：stub 成功回执（产物附件登记由 runner 内部完成）
             when(conversationSkillRunner.run(eq(CONV_ID), isNull(), isNull(), eq("archify"),
                     eq("画一张支付生命周期图"))).thenReturn(
-                    new ConversationSkillRunner.Result(1001L, "支付生命周期.svg", 2048L, "abc", "workflow"));
+                    new ConversationSkillRunner.Result(1001L, "支付生命周期.svg", 2048L, "abc",
+                            "workflow", "showcase", null));
             when(messageService.listByConversation(CONV_ID)).thenReturn(List.of());
 
             clarifyService.sendMessage(CONV_ID, "[skill:archify] 画一张支付生命周期图");
