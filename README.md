@@ -193,51 +193,72 @@ HelloAI 希望把多个 Agent 组织起来：
 
 ## 🚀 快速开始
 
-三条路径，按「你想干什么」选：
+两种方式，按「你想干什么」选：
 
-| | **零依赖体验（推荐先试）** | 源码开发 | 服务器自建 |
-|---|---|---|---|
-| 适合 | 先看看这产品能干什么 | 二次开发 / 调试 | 自己长期部署一套 |
-| 需要 JDK / Maven / Node | ❌ 都不需要 | ✅ 全要 | ❌ 不需要 |
-| 需要 Docker + Compose | ✅ | ✅（只跑中间件） | ✅ |
-| 需要源码 | ❌ 不用 `git clone` | ✅ 全量 | ✅ 一次 |
-| 起步动作 | 解压 + `./start.sh` | `mvn package` + `npm run dev` | `compose --build` |
-| 首次耗时 | 5~10 分钟（拉镜像） | 10~20 分钟 | 15~30 分钟 |
+| | **一键安装（推荐）** | 源码部署 |
+|---|---|---|
+| 适合 | 直接跑起来、部署到自己的服务器 | 二次开发 / 调试 / 改代码 |
+| 需要 JDK / Maven / Node | ❌ 都不需要 | ✅ 全要 |
+| 需要 Docker + Compose | ✅ | ✅（只跑中间件） |
+| 需要源码 | ❌ 不用 `git clone` | ✅ 全量 |
+| 起步动作 | 一行命令（脚本管道给 bash） | `git clone` → `mvn package` → `npm run dev` |
+| 首次耗时 | 5~10 分钟（拉镜像） | 10~20 分钟 |
 
-### 方式 A：零依赖体验（推荐）
+### 方式 A：一键安装（推荐）
 
-**不需要 JDK / Maven / Node，也不需要源码树。** 只要 Docker + Docker Compose。
+**不需要 JDK / Maven / Node，也不需要先 `git clone`。** 只要 Docker + Docker Compose（v2）。
 
-`app` / `web` 两个预构建镜像放在**公开 ACR** 上，匿名可拉、不用登录：
+```bash
+curl -fsSL https://gitee.com/undefined_404/helloai/raw/master/deploy/install.sh \
+  | HELLOAI_REF=v0.2.0 bash
+```
+
+它会从 [Gitee 发行版](https://gitee.com/undefined_404/helloai/releases) 取 **28 KB** 的 quickstart 包，
+铺到 `./helloai`，然后拉起整套栈。`app` / `web` 用**公开 ACR** 上的预构建镜像，匿名可拉、不用登录：
 
 ```
 crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/app:0.2.0
 crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/web:0.2.0
 ```
 
+打开 <http://localhost:8080>（服务器上是 `http://<公网IP>:8080`），默认管理员 **admin / admin123**。
+
+常用参数（都是环境变量，**必须放在管道右侧 `bash` 前面**）：
+
 ```bash
-# 下载 quickstart 包（26 KB）→ 解压 → 一条命令
-tar xzf helloai-quickstart-0.2.0.tar.gz
-cd helloai-quickstart-0.2.0
-./start.sh                      # Windows: .\start.ps1
+# 装到指定目录（默认 ./helloai）
+curl -fsSL …/install.sh | HELLOAI_INSTALL_DIR=$HOME/helloai HELLOAI_REF=v0.2.0 bash
+
+# 带沙箱（画图 / 技能执行）；`--` 之后的一切原样传给 start.sh
+curl -fsSL …/install.sh | HELLOAI_REF=v0.2.0 bash -s -- --with-sandbox
 ```
 
-打开 <http://localhost:8080> —— 默认管理员 **admin / admin123**。
-
-> 🔒 **默认密码是固定的**，只为「下来就能进」。**仅本机试用**；对外部署请登录后立刻改密码，
-> 且不要把 8080 直接暴露到公网。
+> ⚠️ `HELLOAI_REF=v0.2.0 curl … | bash` **是错的**——变量只作用于 `curl`，不会传给管道的接收端，
+> 结果会静默按默认分支安装。
 >
-> 🎨 **要画图 / 技能执行**：`./start.sh --with-sandbox`（会额外拉沙箱镜像）。
+> 🔒 **默认密码固定写在 Flyway 迁移里，启动前改不了**。登进去第一件事改密码；
+> 对外暴露时把安全组 / 防火墙来源收紧到你自己的 IP，不要 `0.0.0.0/0`。
 >
-> 📦 **断网 / 镜像仓库不可达**：另提供离线包（见发布说明），下载后走 `./start.sh --offline`。
+> 🌐 **服务器部署**：容器 80 映射到宿主 **8080**（改 `.env` 的 `HELLOAI_HTTP_PORT` 可换），
+> 记得放行该端口。只想自己用就走 SSH 隧道
+> `ssh -N -L 8080:127.0.0.1:8080 root@<IP>`，防火墙一条都不用开。
 >
-> 完整说明（离线安装、沙箱模式、升级、常见问题）见包内 `README.md`，或
+> 💾 **内存**：核心模式建议 ≥ 3.5 GB；`--with-sandbox` 建议 ≥ 5.5 GB
+> （4 GB 机器请只跑核心模式，否则 Flyway 迁移期间容易 OOM）。
+>
+> 🎨 **要画图 / 技能执行**：加 `--with-sandbox`（额外拉约 2 GB 镜像）。
+>
+> 📦 **手动安装 / 断网**：从 [发行版](https://gitee.com/undefined_404/helloai/releases) 下载
+> `helloai-quickstart-*.tar.gz`，解压后 `./start.sh`（Windows：`.\start.ps1`）；
+> 离线镜像包走 `./start.sh --offline`。
+>
+> 完整说明（离线、沙箱、升级、排障）见包内 `README.md` 或
 > [`deploy/quickstart/README.md`](deploy/quickstart/README.md)。
 
 > ⚠️ **前提**：中间件（postgres / redis / rabbitmq / minio）仍从 Docker Hub 拉。
 > 国内建议先配好 Docker 镜像加速（`registry-mirrors`），否则这一步可能较慢。
 
-### 方式 B：源码开发（5 分钟）
+### 方式 B：源码部署（二次开发）
 
 面向本地开发、二次开发。**必须先 `git clone` 下载源码**，因为后端构建（Maven）、前端开发服务器（Node）都依赖源码树。
 
@@ -261,13 +282,17 @@ cd helloai-ui && npm install && npm run dev
 > ⚠️ **后端默认激活 `dev` profile（云服务器联调）**：本地纯 Docker 开发请在启动参数加 `--spring.profiles.active=local`，或用 IDEA Run Configuration 指定 `local`（否则会连云上的 `application-dev.yml` 数据源）。
 
 
-> **要长期部署到自己的服务器、且不想每次在服务器上 build？** 复用
-> [`deploy/app/docker-compose.yml`](deploy/app/docker-compose.yml)（jar + dist 挂载：
-> `eclipse-temurin:17-jre` + `nginx:1.27-alpine`，服务器不构建任何镜像）。构建在本地完成：
-> `mvn -pl helloai-start -am package -DskipTests` 后 `scp` 出包的 jar；`npm run build` 后
-> `scp` 出 `dist/`；服务器 `docker compose -f docker-compose.app.yml up -d`。
+> **要把源码构建的产物部署到服务器、又不想在服务器上装 JDK / Maven？** 用
+> [`deploy/app/docker-compose.yml`](deploy/app/docker-compose.yml)：jar + dist 挂载，
+> 镜像只有 `eclipse-temurin:17-jre` + `nginx:1.27-alpine`，服务器不构建任何镜像。
+> 构建在本地完成：`mvn -pl helloai-start -am package -DskipTests` 后 `scp` 出 jar；
+> `npm run build` 后 `scp` 出 `dist/`；服务器上 `docker compose -f deploy/app/docker-compose.yml up -d`。
+>
+> 如果你只是想让服务跑起来（不打算改代码），**用方式 A 就够了**——它连源码都不需要。
 
-### 方式 C：本地验证与 CI 门禁
+### 附：本地自检与 CI 门禁
+
+> 这一节不是部署方式，是提交代码前的自检手段。
 
 > ⚠️ **两个高频踩坑**（2026-09-29 架构与质量审计实测）：
 > 1. **默认 `JAVA_HOME` 可能指向会崩溃的 JDK**。本机实测 `ms-17.0.19` 必然触发 JVM `EXCEPTION_ACCESS_VIOLATION`，表现成「项目编译不了 / 测试跑不起来」——这其实是环境问题，不是代码问题。请改用 `ms-17.0.20.1`（或任一可用的 JDK 17）。

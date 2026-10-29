@@ -36,7 +36,7 @@ cd helloai-quickstart-0.2.0
 
 | 文件 | 大小 | 要不要 |
 |---|---|---|
-| `helloai-quickstart-0.2.0.tar.gz` | 26 KB | **必须**（脚本 + compose + 本说明） |
+| `helloai-quickstart-0.2.0.tar.gz` | 28 KB | **必须**（脚本 + compose + 本说明） |
 | `helloai-offline-core-0.2.0.tar.gz` | 556 MB | **必须**（app + web + 4 个中间件镜像） |
 | `helloai-offline-sandbox-0.2.0.tar.gz` | 711 MB | 可选，仅 `--with-sandbox` 需要 |
 | `IMAGES-0.2.0.txt` | 2.4 KB | 建议（镜像 ID / digest 清单） |
