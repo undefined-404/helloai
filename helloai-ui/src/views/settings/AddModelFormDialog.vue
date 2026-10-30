@@ -253,6 +253,7 @@ import {
   type ApiKeyVerifyResult
 } from '@/api/settings'
 import { PROVIDER_CATALOG, findCatalogProvider, type CatalogProvider } from './providerCatalog'
+import type { LongId } from '@/types'
 
 /** 供应商下拉中的自定义占位值。 */
 const CUSTOM_CODE = '__custom__'
@@ -264,7 +265,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   'update:modelValue': [v: boolean]
-  added: [providerId: number]
+  added: [providerId: LongId]
 }>()
 
 const visible = ref(props.modelValue)
@@ -276,7 +277,7 @@ const submitting = ref(false)
 const verifying = ref(false)
 const phase = ref<'form' | 'done'>('form')
 const verifyResult = ref<ApiKeyVerifyResult | null>(null)
-const savedProviderId = ref<number | null>(null)
+const savedProviderId = ref<LongId | null>(null)
 /** `M-6`：本次保存是否命中「该 Key 已存在」（同 provider 内同指纹）。 */
 const savedKeyExisted = ref(false)
 /** `M-6`：命中已有 Key 时展示其指纹。 */
@@ -361,7 +362,7 @@ async function handleSubmit() {
   }
   submitting.value = true
   try {
-    let providerId: number
+    let providerId: LongId
     if (existingProvider.value) {
       providerId = existingProvider.value.id
       // 预置供应商重新添加时同步更新计费类型（编辑入口之外的唯一写路径）
@@ -417,7 +418,7 @@ async function retryVerify() {
   await runVerify(savedProviderId.value)
 }
 
-async function runVerify(providerId: number) {
+async function runVerify(providerId: LongId) {
   verifying.value = true
   try {
     verifyResult.value = await settingsApi.verifyLlmProviderApiKey(providerId)

@@ -509,6 +509,7 @@ import { browserSessionApi } from '@/api/browserSession'
 import { agentApi } from '@/api/agent'
 import type { Agent, BrowserSession } from '@/types'
 import { ACTION, fmtTime } from '@/utils/tableConfig'
+import { sameId } from '@/utils/id'
 
 const router = useRouter()
 
@@ -630,7 +631,7 @@ async function loadAgents() {
 }
 
 function agentName(agentId: string | number): string {
-  const hit = agents.value.find((a) => String(a.id) === String(agentId))
+  const hit = agents.value.find((a) => sameId(a.id, agentId))
   return hit ? hit.name : `#${agentId}`
 }
 

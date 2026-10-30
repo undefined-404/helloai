@@ -733,6 +733,7 @@ import ProviderPickerDialog from './settings/ProviderPickerDialog.vue'
 import AddModelFormDialog from './settings/AddModelFormDialog.vue'
 import ProviderApiKeysDialog from './settings/ProviderApiKeysDialog.vue'
 import type { CatalogProvider } from './settings/providerCatalog'
+import type { LongId } from '@/types'
 
 const formRef = ref()
 const form = reactive({
@@ -762,7 +763,7 @@ const isDirty = computed(() =>
 
 const providers = ref<LlmProviderResponse[]>([])
 const providersLoading = ref(false)
-const selectedId = ref<number | null>(null)
+const selectedId = ref<LongId | null>(null)
 
 const selectedProvider = computed<LlmProviderResponse | null>(
   () => providers.value.find(p => p.id === selectedId.value) || null
@@ -829,7 +830,7 @@ function billingLabel(type?: string): string {
 const pickerVisible = ref(false)
 const addModelVisible = ref(false)
 const addModelInitial = ref<CatalogProvider | null>(null)
-const verifyingKeyId = ref<number | null>(null)
+const verifyingKeyId = ref<LongId | null>(null)
 // 博查 Key 手动验证 loading（与供应商验证同源：按钮转圈 + 过程消息提示）
 const verifyingWebSearchKey = ref(false)
 
@@ -844,13 +845,13 @@ function handlePickProvider(entry: CatalogProvider) {
 }
 
 /** 第二步保存完成：刷新列表并定位到新/更新的 Provider。 */
-async function handleModelAdded(providerId: number) {
+async function handleModelAdded(providerId: LongId) {
   await loadProviders()
   selectedId.value = providerId
 }
 
 /** Provider Key 连通性验证（详情页「验证 Key」与保存后自动验证共用）。 */
-async function verifyProviderKey(providerId: number) {
+async function verifyProviderKey(providerId: LongId) {
   verifyingKeyId.value = providerId
   const loading = ElMessage({ message: '正在验证 API Key（最小请求探测）…', type: 'info', duration: 0 })
   try {

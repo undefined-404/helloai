@@ -374,6 +374,7 @@ import TaskFormDialog from './components/TaskFormDialog.vue'
 import { TASK_STATUS_MAP } from '@/types'
 import type { Task, TaskStatus, LongId } from '@/types'
 import { useAuthStore } from '@/stores/auth'
+import { sameId } from '@/utils/id'
 
 const route = useRoute()
 const router = useRouter()
@@ -419,7 +420,7 @@ async function load() {
     // 这样维持对话新建跳转全量匹配 review query 的旧契约，同时给用户分页体验
     const all = await taskApi.list()
     if (taskIdQuery.value) {
-      list.value = (all as any[]).filter((t: any) => String(t.id) === String(taskIdQuery.value))
+      list.value = (all as any[]).filter((t: any) => sameId(t.id, taskIdQuery.value))
     } else {
       list.value = all as any[]
     }
@@ -559,9 +560,10 @@ function memberTip(m: TaskMemberView): string {
 // - 其他状态 → 直接跳到主任务页（筛选展示该任务）
 onMounted(async () => {
   await load()
-  const review = route.query.review
+  // 雪花 ID 走字符串；route.query 可能是数组（?review=1&review=2），非字符串一律忽略
+  const review = typeof route.query.review === 'string' ? route.query.review : null
   if (review) {
-    const row = list.value.find(t => String(t.id) === String(review))
+    const row = list.value.find(t => sameId(t.id, review))
     if (row) {
       if (row.status === 'PLANNING') {
         openPlanReview(row)
@@ -635,7 +637,7 @@ function openReport(row: Task) { reportTask.value = row; reportVisible.value = t
 // 不重拉整个列表（避免打断用户当前操作 / 滚动位置）。
 function onReportStatusChange(status: string) {
   if (!reportTask.value) return
-  const target = list.value.find(t => String(t.id) === String(reportTask.value!.id))
+  const target = list.value.find(t => sameId(t.id, reportTask.value!.id))
   if (target) (target as any).finalReportStatus = status
   // patch 后可能新增/消除在途行（如弹窗在 REVIEWING 期间关闭），重新校准兜底轮询
   ensureReportPolling()

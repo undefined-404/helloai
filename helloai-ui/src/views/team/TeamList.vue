@@ -391,8 +391,9 @@ import {
 } from '@element-plus/icons-vue'
 import { teamApi } from '@/api/team'
 import { agentApi } from '@/api/agent'
-import type { Agent, Team, TeamMember } from '@/types'
+import type { Agent, Team, TeamMember, LongId } from '@/types'
 import { fmtTime, ACTION } from '@/utils/tableConfig'
+import { sameId } from '@/utils/id'
 
 const loading = ref(false)
 const rows = ref<Team[]>([])
@@ -408,7 +409,7 @@ const statusFilter = ref('')
 
 // 新建/编辑
 const editVisible = ref(false)
-const editingId = ref<number | string | null>(null)
+const editingId = ref<LongId | null>(null)
 const editForm = reactive({ name: '', description: '' })
 const saving = ref(false)
 
@@ -416,7 +417,7 @@ const saving = ref(false)
 const membersVisible = ref(false)
 const currentTeam = ref<Team | null>(null)
 const currentMembers = ref<TeamMember[]>([])
-const addForm = reactive<{ agentId: number | string | null; slotRole: string | null }>({
+const addForm = reactive<{ agentId: LongId | null; slotRole: string | null }>({
   agentId: null,
   slotRole: null
 })
@@ -489,8 +490,8 @@ async function loadAgents() {
   }
 }
 
-function agentName(agentId: string | number): string {
-  const hit = agents.value.find((a) => String(a.id) === String(agentId))
+function agentName(agentId: LongId): string {
+  const hit = agents.value.find((a) => sameId(a.id, agentId))
   return hit ? hit.name : `#${agentId}`
 }
 
@@ -576,7 +577,8 @@ async function onAddMember() {
   saving.value = true
   try {
     await teamApi.addMember(currentTeam.value!.id, {
-      agentId: Number(addForm.agentId),
+      // 直接透传字符串：雪花 ID 是 19 位，Number() 会静默丢精度（末尾变 00）
+      agentId: addForm.agentId,
       slotRole: addForm.slotRole
     })
     ElMessage.success('成员已添加')
@@ -596,7 +598,7 @@ async function onRemoveMember(member: TeamMember) {
   } catch {
     return
   }
-  await teamApi.removeMember(currentTeam.value.id, Number(member.agentId))
+  await teamApi.removeMember(currentTeam.value.id, member.agentId)
   ElMessage.success('成员已移除')
   currentMembers.value = await teamApi.members(currentTeam.value.id)
   memberCountMap[currentTeam.value.id] = currentMembers.value.length

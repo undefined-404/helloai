@@ -1147,6 +1147,7 @@ import StructuredQuestionCard from './StructuredQuestionCard.vue'
 import WebSearchBar from './WebSearchBar.vue'
 import MarkdownView from '@/components/MarkdownView.vue'
 import type { ChatAttachmentItem, ClarifyArtifactRef, ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, RoundProcessTrace, WebSearchTrace } from '@/types'
+import { sameId } from '@/utils/id'
 
 const router = useRouter()
 
@@ -1593,7 +1594,7 @@ const canRetry = computed(() => {
 const pinnedPlannerName = computed(() => {
   const id = conversation.value?.plannerAgentId
   if (id == null) return ''
-  const opt = plannerOptions.value.find(o => String(o.id) === String(id))
+  const opt = plannerOptions.value.find(o => sameId(o.id, id))
   return opt ? opt.name : `Agent#${id}`
 })
 
@@ -2608,7 +2609,7 @@ async function handleDeleteConversation(id: LongId, title?: string | null) {
     await clarifyApi.deleteConversation(id)
     ElMessage.success('会话已删除')
     // 当前详情正是被删会话时回到新会话占位
-    if (activeId.value != null && String(activeId.value) === String(id)) {
+    if (sameId(activeId.value, id)) {
       startNew()
     }
     loadList()

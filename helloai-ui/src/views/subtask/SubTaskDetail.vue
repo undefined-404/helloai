@@ -672,6 +672,7 @@ import { useEventCatalogStore } from '@/stores/eventCatalog'
 import { useSkillCatalogStore } from '@/stores/skillCatalog'
 import { resolvePendingWait, usePendingCountdown } from '@/composables/usePendingCountdown'
 import type { SubTask, TaskTimelineItem, ConversationMessageItem, Attachment, LongId, Agent } from '@/types'
+import { sameId } from '@/utils/id'
 
 const route = useRoute()
 const router = useRouter()
@@ -1500,8 +1501,8 @@ async function loadTaskMembers(taskId: LongId | null | undefined) {
 
 /** 该成员是否为当前子任务的执行者（高亮用；改派过的历史成员不高亮）。 */
 function isCurrentExecutor(m: TaskMemberView): boolean {
-  const cur = item.value?.assignedAgent
-  return cur != null && String(cur) === String(m.agentId)
+  // sameId 内部已处理 null：空 ID 永不相等，无需额外判空
+  return sameId(item.value?.assignedAgent, m.agentId)
 }
 
 /** Agent 已删除时后端 name 为 null：回退显示 ID 短尾，绝不显示「未知」。 */

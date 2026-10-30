@@ -151,6 +151,7 @@ import { Coin } from '@element-plus/icons-vue'
 import { rewardApi } from '@/api/reward'
 import AgentSelect from '@/components/AgentSelect.vue'
 import { fmtTime } from '@/utils/tableConfig'
+import type { LongId } from '@/types'
 
 const list = ref<any[]>([])
 const total = ref(0)
@@ -160,7 +161,7 @@ const loading = ref(false)
 const adjustDialog = ref(false)
 const adjusting = ref(false)
 const adjustFormRef = ref()
-const adjustForm = reactive({ agentId: null as number | null, scoreDelta: 0, reason: '' })
+const adjustForm = reactive({ agentId: null as LongId | null, scoreDelta: 0, reason: '' })
 const adjustRules = { agentId: [{ required: true }], scoreDelta: [{ required: true }], reason: [{ required: true }] }
 
 async function load(page = 1) {

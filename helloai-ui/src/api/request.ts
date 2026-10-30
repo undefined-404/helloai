@@ -3,6 +3,7 @@ import type { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'a
 import { ElMessage } from 'element-plus'
 import type { R } from '@/types'
 import { useAuthStore } from '@/stores/auth'
+import { warnUnsafeIds } from './unsafeIdGuard'
 
 /**
  * 错误放行白名单：这些接口即便 code !== 200，也由调用方自行处理错误（弹错/解析），
@@ -118,7 +119,12 @@ instance.interceptors.response.use(
     }
     const res = response.data
     if (res.code === 200) {
-      return normalizePageResult(res.data)
+      const payload = normalizePageResult(res.data)
+      // 开发期哨兵：后端若有字段把 Long 当数字下发，精度在 JSON.parse 时就已经丢了，
+      // 这里只能报出「哪个接口、哪个字段」，避免这类问题再次以「某页面查不到数据」的
+      // 形式出现却无从定位。仅 DEV 生效。
+      if (import.meta.env.DEV) warnUnsafeIds(payload, response.config.url)
+      return payload
     }
     // 白名单内接口（登录/登出/改密/me）由页面自行处理错误提示
     if (shouldLetCallerHandleError(response.config.url)) {

@@ -410,6 +410,7 @@ import { taskApi } from '@/api/task'
 import { subTaskApi } from '@/api/subTask'
 import { useSkillCatalogStore } from '@/stores/skillCatalog'
 import type { Task, SubTask, LongId, Uncertainty, AcceptanceKind } from '@/types'
+import { sameId } from '@/utils/id'
 
 const props = defineProps<{ modelValue: boolean; task: Task | null }>()
 const emit = defineEmits<{ 'update:modelValue': [v: boolean]; close: []; done: [] }>()
@@ -512,7 +513,7 @@ function priorityTagType(priority: string): 'danger' | 'warning' | 'info' {
 function fmtDepends(dependsOn?: LongId[] | null): string {
   if (!dependsOn?.length) return '-'
   const seqs = dependsOn
-    .map(id => drafts.value.findIndex(d => String(d.id) === String(id)) + 1)
+    .map(id => drafts.value.findIndex(d => sameId(d.id, id)) + 1)
     .filter(seq => seq > 0)
   return seqs.length ? `依赖 #${seqs.join(',')}` : '-'
 }
@@ -675,7 +676,7 @@ async function handleRegenerate(row: SubTask) {
     const updated = await subTaskApi.regenerateDraft(row.id)
     ElMessage.success('草案已按新内容重生成')
     // 局部刷新：替换重生成后的四要素（title/dependsOn 不变量由后端保证）
-    const idx = drafts.value.findIndex(d => String(d.id) === String(row.id))
+    const idx = drafts.value.findIndex(d => sameId(d.id, row.id))
     if (idx >= 0) {
       const merged = { ...row, ...updated }
       drafts.value.splice(idx, 1, merged)

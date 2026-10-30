@@ -195,6 +195,7 @@ import { moduleApi } from '@/api/module'
 import { agentApi } from '@/api/agent'
 import { subTaskApi } from '@/api/subTask'
 import type { Task, ModuleItem, Agent, CreateSubTaskPayload } from '@/types'
+import { sameId } from '@/utils/id'
 
 // props.modelValue 没有直接访问，但 <el-dialog> 用 :model-value 绑定父组件 v-model；
 // 必须保留 defineProps 才能让 :model-value 解析到 props.modelValue。
@@ -355,7 +356,7 @@ async function onSubmit() {
 }
 
 function lookupAgentName(agentId: string): string {
-  const a = agents.value.find(x => String(x.id) === String(agentId))
+  const a = agents.value.find(x => sameId(x.id, agentId))
   return a?.name || String(agentId)
 }
 

@@ -1,4 +1,5 @@
 import request from './request'
+import type { LongId } from '@/types'
 import { paths } from './paths'
 
 /** 平台级 LLM Provider 配置项（旧 /api/admin/platform/providers/list 响应，向后兼容）。 */
@@ -17,7 +18,7 @@ export type ProtocolType = 'OPENAI_COMPATIBLE' | 'ANTHROPIC_COMPATIBLE'
 
 /** 平台级 LLM Provider 详情 / 列表项（方案B，对应 /api/admin/llm-providers/*）。 */
 export interface LlmProviderResponse {
-  id: number
+  id: LongId
   providerCode: string
   providerName: string
   protocolType: ProtocolType
@@ -62,7 +63,7 @@ export interface UpdateLlmProviderRequest {
 
 /** LLM Provider 模型项（V49，对应 /api/admin/llm-providers/{id}/models/list）。 */
 export interface LlmProviderModelResponse {
-  id: number
+  id: LongId
   modelName: string
   isDefault: number
   enabled: number
@@ -126,7 +127,7 @@ export interface ApiKeyBatchSaveResult {
 
 /** `M-8` Key 列表的一行（不含密文）。 */
 export interface LlmProviderApiKeyItem {
-  id: number
+  id: LongId
   /** `ACTIVE`（启用位 / 主）| `DISABLED`（备位）| `EXPIRED`（轮换淘汰的历史行）。 */
   status: 'ACTIVE' | 'DISABLED' | 'EXPIRED'
   /** 是否当前启用位（后端由 status 推导，前端不再重复该判据）。 */
@@ -141,10 +142,10 @@ export interface LlmProviderApiKeyItem {
 
 /** `M-8` 主备操作结果（切换 / 停用 / 删除）。 */
 export interface LlmProviderApiKeyChange {
-  credentialId: number
+  credentialId: LongId
   fingerprint?: string
-  previousActiveId?: number | null
-  activeId?: number | null
+  previousActiveId?: LongId | null
+  activeId?: LongId | null
   /** 本次是否改变了「哪一把是启用位」（后端由前后 activeId 推导）。 */
   activeChanged: boolean
 }
@@ -195,19 +196,19 @@ export const settingsApi = {
   listLlmProviders() {
     return request.get<any, LlmProviderResponse[]>(paths.admin.llmProviders)
   },
-  getLlmProvider(id: number) {
+  getLlmProvider(id: LongId) {
     return request.get<any, LlmProviderResponse>(paths.admin.llmProviderById(id))
   },
   createLlmProvider(data: CreateLlmProviderRequest) {
     return request.post<any, LlmProviderResponse>(paths.admin.llmProviderCreate, data)
   },
-  updateLlmProvider(id: number, data: UpdateLlmProviderRequest) {
+  updateLlmProvider(id: LongId, data: UpdateLlmProviderRequest) {
     return request.put(paths.admin.llmProviderUpdate(id), data)
   },
-  deleteLlmProvider(id: number) {
+  deleteLlmProvider(id: LongId) {
     return request.delete(paths.admin.llmProviderDelete(id))
   },
-  toggleLlmProvider(id: number) {
+  toggleLlmProvider(id: LongId) {
     return request.put(paths.admin.llmProviderToggle(id), {})
   },
   /**
@@ -215,7 +216,7 @@ export const settingsApi = {
    *
    * @returns `created=false` ⇒ 该 Key 已存在（`M-6` 同 provider 内同指纹去重）
    */
-  saveLlmProviderApiKey(id: number, apiKey: string) {
+  saveLlmProviderApiKey(id: LongId, apiKey: string) {
     return request.put<any, ApiKeySaveResult>(paths.admin.llmProviderApiKey(id), apiKey, {
       headers: { 'Content-Type': 'text/plain' }
     })
@@ -226,56 +227,56 @@ export const settingsApi = {
    *
    * @returns 「新增 N 把 / 已存在 M 把」计数；`primaryActivated` 标明首把是否已生效
    */
-  saveLlmProviderApiKeys(id: number, rawText: string) {
+  saveLlmProviderApiKeys(id: LongId, rawText: string) {
     return request.put<any, ApiKeyBatchSaveResult>(paths.admin.llmProviderApiKeys(id), rawText, {
       headers: { 'Content-Type': 'text/plain' }
     })
   },
   // ---- `M-8` 多 Key 主备（手动切换 / 停用 / 删除；无自动 failover）----
   /** Key 列表（主 / 备 / 历史，不含密文；明文仅以 masked 脱敏形态出现）。 */
-  listLlmProviderApiKeys(id: number) {
+  listLlmProviderApiKeys(id: LongId) {
     return request.get<any, LlmProviderApiKeyItem[]>(paths.admin.llmProviderApiKeyList(id))
   },
   /** 手动把指定备位升为启用位（原启用位降为备位）。 */
-  activateLlmProviderApiKey(id: number, credentialId: number) {
+  activateLlmProviderApiKey(id: LongId, credentialId: LongId) {
     return request.put<any, LlmProviderApiKeyChange>(paths.admin.llmProviderApiKeyActivate(id, credentialId))
   },
   /** 停用；停用启用位时后端会自动把最旧备位顶为启用位，无备位可顶则报错。 */
-  deactivateLlmProviderApiKey(id: number, credentialId: number) {
+  deactivateLlmProviderApiKey(id: LongId, credentialId: LongId) {
     return request.put<any, LlmProviderApiKeyChange>(paths.admin.llmProviderApiKeyDeactivate(id, credentialId))
   },
   /** 删除（软删）；删除启用位时同样先顶替。 */
-  deleteLlmProviderApiKey(id: number, credentialId: number) {
+  deleteLlmProviderApiKey(id: LongId, credentialId: LongId) {
     return request.delete<any, LlmProviderApiKeyChange>(paths.admin.llmProviderApiKeyDelete(id, credentialId))
   },
   /** 验证 Provider API Key（最小请求直探端点，耗时最长约 20s）。 */
-  verifyLlmProviderApiKey(id: number) {
+  verifyLlmProviderApiKey(id: LongId) {
     return request.post<any, ApiKeyVerifyResult>(paths.admin.llmProviderVerifyApiKey(id), null, {
       timeout: 30000
     })
   },
   // ---- 模型管理（V49，模型多选配置）----
-  listProviderModels(id: number) {
+  listProviderModels(id: LongId) {
     return request.get<any, LlmProviderModelResponse[]>(paths.admin.llmProviderModels(id))
   },
-  addProviderModel(id: number, modelName: string, isDefault: boolean) {
+  addProviderModel(id: LongId, modelName: string, isDefault: boolean) {
     return request.post<any, LlmProviderModelResponse>(paths.admin.llmProviderModelCreate(id), {
       modelName,
       isDefault
     })
   },
-  saveAllProviderModels(id: number, data: SaveProviderModelsRequest) {
+  saveAllProviderModels(id: LongId, data: SaveProviderModelsRequest) {
     return request.put(paths.admin.llmProviderModelsSaveAll(id), data)
   },
-  deleteProviderModel(id: number, modelName: string) {
+  deleteProviderModel(id: LongId, modelName: string) {
     return request.delete(paths.admin.llmProviderModelDelete(id, modelName))
   },
-  toggleProviderModel(id: number, modelName: string, enabled: boolean) {
+  toggleProviderModel(id: LongId, modelName: string, enabled: boolean) {
     return request.put(paths.admin.llmProviderModelToggle(id, modelName), {
       enabled
     })
   },
-  setDefaultProviderModel(id: number, modelName: string) {
+  setDefaultProviderModel(id: LongId, modelName: string) {
     return request.put(paths.admin.llmProviderModelSetDefault(id, modelName), {})
   }
 }

@@ -1,9 +1,10 @@
 import request from './request'
+import type { LongId } from '@/types'
 
 import { paths } from './paths'
 
 export const rewardApi = {
-  getMyScore(agentId: number) {
+  getMyScore(agentId: LongId) {
     return request.get<any, Record<string, any>>(paths.scores.me, { params: { agentId } })
   },
   leaderboard() {
@@ -12,7 +13,7 @@ export const rewardApi = {
   logs(params?: { page?: number; pageSize?: number }) {
     return request.get<any, any>(paths.scores.logs, { params })
   },
-  adjust(data: { agentId: number; scoreDelta: number; reason: string; subTaskId?: number | null }) {
+  adjust(data: { agentId: LongId; scoreDelta: number; reason: string; subTaskId?: LongId | null }) {
     return request.post(paths.scores.adjust, data)
   }
 }

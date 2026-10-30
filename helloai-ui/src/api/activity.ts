@@ -1,6 +1,6 @@
 import request from './request'
 import { paths } from './paths'
-import type { ActivityLogItem } from '@/types'
+import type { ActivityLogItem, LongId } from '@/types'
 
 /**
  * 活动流列表。
@@ -10,7 +10,7 @@ import type { ActivityLogItem } from '@/types'
  * 返回类型对齐页面消费的 {@link ActivityLogItem}。</p>
  */
 export const activityApi = {
-  list(params?: { agentId?: number; subTaskId?: number; page?: number }) {
+  list(params?: { agentId?: LongId; subTaskId?: LongId; page?: number }) {
     return request.get<any, ActivityLogItem[]>(paths.activity.list, { params: { page: 0, ...params } })
   }
 }
