@@ -3,6 +3,7 @@ package com.helloai.core.planner.skill;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.SkillExecutionPhase;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
@@ -179,6 +180,23 @@ public class ConversationSkillRunner {
      */
     public Result run(Long conversationId, Long plannerAgentId, Long uploaderUserId,
                       String skillName, String userNeed) {
+        return run(conversationId, plannerAgentId, uploaderUserId, skillName, userNeed, SkillRunControl.NOOP);
+    }
+
+    /**
+     * 跑一次技能，产出文件并登记为会话附件（带运行期控制，SKX-13）。
+     *
+     * @param conversationId 会话 ID（产物归属 + 沙箱作用域）
+     * @param plannerAgentId 指定的 planner（可空 = 系统自动选）
+     * @param uploaderUserId 生成者用户 ID（可空）
+     * @param skillName      技能包名（如 {@code archify}）
+     * @param userNeed       用户原话（技能输入的唯一依据）
+     * @param control        运行期控制（阶段上报 + 中止自查）；同步调用方传 {@link SkillRunControl#NOOP}
+     * @return 产物信息
+     * @throws BizException 技能不可用 / 模型抽不出输入 / 渲染失败 / 产物读不回 / 已取消或超时
+     */
+    public Result run(Long conversationId, Long plannerAgentId, Long uploaderUserId,
+                      String skillName, String userNeed, SkillRunControl control) {
         if (conversationId == null) {
             throw new BizException("缺少会话上下文，无法执行技能");
         }
@@ -191,8 +209,11 @@ public class ConversationSkillRunner {
         String runDir = RUN_ROOT + "/" + runId;
         String htmlPath = htmlPathOf(runDir);
         try {
+            checkAborted(control);
+            control.onPhase(SkillExecutionPhase.SPEC);
             SkillSpecExtractor.ChartSpec spec = produceSpec(conversationId, plannerAgentId, skillName, userNeed);
-            Attempt attempt = renderAttempt(scopeId, skillName, spec, QUALITY_SHOWCASE, runDir);
+            checkAborted(control);
+            Attempt attempt = renderAttempt(scopeId, skillName, spec, QUALITY_SHOWCASE, runDir, control);
             // 第 1 次自动重试（2026-10-27）：布局门失败先「重新生成 spec 再渲染」。
             //   依据：同一段描述第一次 ambiguous-corridor 失败、用户手点重试就成功 —— spec 由
             //   LLM 生成，col 摆位/边集合每次都不同，成功率实际上取决于这次生成的布局输入。
@@ -200,9 +221,12 @@ public class ConversationSkillRunner {
             if (!attempt.ok() && attempt.retryable()) {
                 log.info("布局门未过，重新生成 spec 重试: conversationId={}, skill={}, runId={}, reason={}",
                         conversationId, skillName, runId, attempt.message());
+                checkAborted(control);
+                control.onPhase(SkillExecutionPhase.SPEC);
                 spec = produceSpec(conversationId, plannerAgentId, skillName,
                         userNeed + LAYOUT_RETRY_HINT.formatted(attempt.message()));
-                attempt = renderAttempt(scopeId, skillName, spec, QUALITY_SHOWCASE, runDir);
+                checkAborted(control);
+                attempt = renderAttempt(scopeId, skillName, spec, QUALITY_SHOWCASE, runDir, control);
             }
             // 第 2 次兜底：仍不过则降档 standard —— 该档对本类诊断 return []（不报），
             //   保证用户拿到一张图而不是一句失败。宁可 90 分的图，也不要零产物。
@@ -213,11 +237,14 @@ public class ConversationSkillRunner {
                 degradeReason = attempt.message();
                 log.info("降档 standard 重试: conversationId={}, skill={}, runId={}, reason={}",
                         conversationId, skillName, runId, degradeReason);
-                attempt = renderAttempt(scopeId, skillName, spec, QUALITY_STANDARD, runDir);
+                checkAborted(control);
+                attempt = renderAttempt(scopeId, skillName, spec, QUALITY_STANDARD, runDir, control);
             }
             if (!attempt.ok()) {
                 throw new BizException("技能渲染失败（" + skillName + "）：" + attempt.message());
             }
+            checkAborted(control);
+            control.onPhase(SkillExecutionPhase.EXPORT);
             SkillPackageExecutionService.Artifact artifact =
                     skillPackageExecutionService.readArtifact(scopeId, htmlPath, MAX_ARTIFACT_BYTES);
             if (artifact == null) {
@@ -377,7 +404,8 @@ public class ConversationSkillRunner {
      * 违反自定契约（外部评审 2026-10-27 指出，见 {@code review/技能执行面代码审查…} §3）。</p>
      */
     private Attempt renderAttempt(Long scopeId, String skillName, SkillSpecExtractor.ChartSpec spec,
-                                  String quality, String runDir) {
+                                  String quality, String runDir, SkillRunControl control) {
+        control.onPhase(SkillExecutionPhase.RENDER);
         SkillPackageExecutionService.RunResult runResult =
                 runRender(scopeId, skillName, spec, quality, runDir);
         if (!runResult.ok()) {
@@ -389,7 +417,7 @@ public class ConversationSkillRunner {
             return new Attempt(false, isLayoutGateFailure(runResult.output()),
                     firstLine(runResult.output()), null);
         }
-        return checkArtifact(scopeId, skillName, runDir);
+        return checkArtifact(scopeId, skillName, runDir, control);
     }
 
     /**
@@ -404,7 +432,8 @@ public class ConversationSkillRunner {
      * {@code composition.profile}。所以降档 {@code standard} 重渲后本方法依然能通过 ——
      * 补 check 不会让「降档兜底」失效（2026-10-27 本地实跑确认）。</p>
      */
-    private Attempt checkArtifact(Long scopeId, String skillName, String runDir) {
+    private Attempt checkArtifact(Long scopeId, String skillName, String runDir, SkillRunControl control) {
+        control.onPhase(SkillExecutionPhase.CHECK);
         String command = "node bin/archify.mjs check " + htmlPathOf(runDir)
                 + " --json --require-provenance";
         SkillPackageExecutionService.RunResult result =
@@ -458,9 +487,22 @@ public class ConversationSkillRunner {
         return skillPackageExecutionService.run(skillName, scopeId, command, COMMAND_TIMEOUT_SECONDS);
     }
 
-    /** 执行级目录名：8 位十六进制，容器内路径恒定安全，日志与回读能对上号。 */
+    /**
+     * 执行级目录名：8 位十六进制，容器内路径恒定安全，日志与回读能对上号。 */
     private static String newRunId() {
         return UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+    }
+
+    /**
+     * 阶段边界的中止自查（SKX-13）。
+     *
+     * <p>只在阶段边界查，不在命令执行中间强行打断 —— 沙箱命令的中断语义由 SDK 决定，
+     * 强打会引入不可控路径。代价是「取消后最多多跑一个阶段」，换来的是行为可预测。</p>
+     */
+    private static void checkAborted(SkillRunControl control) {
+        if (control != null && control.shouldAbort()) {
+            throw new BizException("技能执行已中止（已取消或超过服务端时限）");
+        }
     }
 
     private static String specPathOf(String runDir) {

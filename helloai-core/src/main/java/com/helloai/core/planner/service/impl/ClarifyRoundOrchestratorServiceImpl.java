@@ -11,12 +11,14 @@ import com.helloai.core.planner.clarify.ClarifyStallGuard;
 import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
 import com.helloai.core.planner.clarify.ConfirmCardProtocol;
 import com.helloai.core.planner.clarify.SkillDirective;
+import com.helloai.core.planner.entity.ChatSkillRun;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.search.WebSearchOutcome;
-import com.helloai.core.planner.skill.ConversationSkillRunner;
+import com.helloai.core.planner.skill.SkillExecutionWorker;
 import com.helloai.core.planner.service.ChatAttachmentService;
+import com.helloai.core.planner.service.ChatSkillRunService;
 import com.helloai.core.planner.service.ClarifyCommandSearchService;
 import com.helloai.core.planner.service.ClarifyFinalizeService;
 import com.helloai.core.planner.service.ClarifyPromptRenderService;
@@ -77,8 +79,16 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     /** 显式技能指令（2026-10-26）：「＋→技能」里选中的产出型技能包，解析 / 渲染 / 落 required_skills。 */
     private final SkillDirective skillDirective;
 
-    /** 对话内技能执行（2026-10-27）：选技能即当场跑 CLI 出文件，产物落成会话附件。 */
-    private final ConversationSkillRunner conversationSkillRunner;
+    /**
+     * 对话内技能执行（2026-10-27）：选技能即当场跑 CLI 出文件，产物落成会话附件。
+     *
+     * <p><b>2026-10-30 改为异步（SKX-13）</b>：本类不再直接执行技能，只负责「提交运行记录 +
+     * 投递后台 + 返回句柄」；真正的执行在 {@link SkillExecutionWorker}。</p>
+     */
+    private final ChatSkillRunService chatSkillRunService;
+
+    /** 技能执行 worker（SKX-13）：后台线程里跑技能、推进阶段、落产物消息。 */
+    private final SkillExecutionWorker skillExecutionWorker;
 
     /** TD-8 澄清侧 stall 守卫（用户信息量判据，纯函数）。 */
     private final ClarifyStallGuard stallGuard;
@@ -310,7 +320,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         // 重跑该消息（与 retryRound 同语义：不新增消息、不加轮数）；
         // 带技能时走技能执行段 —— 只补 assistant 结果，不再新增 user 消息。
         if (edited.hasSkill()) {
-            return executeSkillRound(conversation, edited.skillName(), edited.text());
+            return executeSkillRound(conversation, edited.skillName(), edited.text(), "EDIT");
         }
         return runRoundCore(conversation, target.getContent(), target.getPayload());
     }
@@ -436,56 +446,55 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         conversationService.updateById(conversation);
         log.info("对话内技能执行开始: conversationId={}, skill={}, needLen={}",
                 conversationId, skillName, need.length());
-        return executeSkillRound(conversation, skillName, need);
+        return executeSkillRound(conversation, skillName, need, "CHAT");
     }
 
     /**
-     * 执行技能轮（用户消息<b>已落库之后</b>的部分：跑技能 → 落 assistant 结果）。
+     * 执行技能轮（用户消息<b>已落库之后</b>的部分：提交执行 + 落 assistant 结果）。
      *
      * <p><b>为什么从 {@link #runSkillRound} 抽出</b>（2026-10-27）：编辑重发也要走技能，
      * 但编辑场景的 user 消息已被原地更新，不能再 addMessage 一条。抽成独立方法后，
      * 「新增消息 + 执行」与「更新消息 + 执行」共用同一段执行逻辑，避免两份实现漂移。</p>
      *
-     * @param skillName 技能包名（非空）
-     * @param need      已剥离前缀的用户正文
+     * <p><b>2026-10-30 改为异步（SKX-13）</b>：技能执行实测一次 377s（LLM 两轮 + 注入 +
+     * 三段门禁 + 回读 + 落库），全程挂在 HTTP 线程上 ⇒ 前端一超时就刷一屏 {@code Broken pipe}，
+     * 且长任务把线程池占满。现在本方法只做「落库一条运行记录 + 投递后台 + 立即返回句柄」，
+     * 真正的执行与产物落库都在 {@code SkillExecutionWorker} 里，
+     * 前端凭 {@code skillRunId} 轮询进度。</p>
+     *
+     * @param skillName     技能包名（非空）
+     * @param need          已剥离前缀的用户正文
+     * @param triggerSource 触发方式（{@code CHAT} / {@code EDIT}）
      */
     private ClarifyConversationDetail executeSkillRound(RequirementConversation conversation,
-                                                        String skillName, String need) {
+                                                        String skillName, String need,
+                                                        String triggerSource) {
         Long conversationId = conversation.getId();
-        ConversationSkillRunner.Result result;
+        ChatSkillRun run;
         try {
-            result = conversationSkillRunner.run(conversationId, conversation.getPlannerAgentId(),
-                    null, skillName, need);
+            // userId 传 null：与同步路径同口径（产物附件的归属本就按会话落，不按人落）。
+            //   会话本身没有 owner 概念（只有权限码），硬造一个「发起人」反而要另立归属校验。
+            run = chatSkillRunService.submit(conversationId, null, skillName, triggerSource);
         } catch (BizException e) {
-            log.warn("对话内技能执行失败: conversationId={}, skill={}, reason={}",
+            // 提交被拒（多为同会话互斥）：失败落在对话里，与执行失败同口径 ——
+            // 用户在对话里能看到原因，而历史里那句需求还有解释。
+            // 用「未能执行」而不是「生成失败」：这里根本没开始生成（互斥拒绝 / 缺会话上下文），
+            // 说「生成失败」会让用户以为技能跑挂了、去看一个不存在的错误。
+            log.warn("对话内技能执行提交失败: conversationId={}, skill={}, reason={}",
                     conversationId, skillName, e.getMessage());
             messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT,
-                    "生成失败：" + e.getMessage() + "\n\n可以补充更具体的描述后重试（例如把节点、状态、事件说清）。");
+                    "未能执行：" + e.getMessage());
             return new ClarifyConversationDetail(conversation,
                     messageService.listByConversation(conversationId));
         }
-        String content = "已生成 `" + result.chartType() + "` 图，产物见下方附件（"
-                + readableSize(result.fileSize()) + "）。";
-        // 降档留痕（2026-10-29）：正文必须说清「这是兼容布局产出的」，光在 payload 里标前端不一定展示，
-        // 而用户把它当完全通过的结果直接拿去用，代价比多一行字大得多。
-        if (result.degraded()) {
-            String reason = result.degradeReason() == null ? "" : result.degradeReason();
-            content += "\n\n> 严格布局门未通过，已用**兼容布局**产出（"
-                    + (reason.length() > 120 ? reason.substring(0, 120) + "…" : reason)
-                    + "）。图可用，但建议人工核对节点重叠与连线走向。";
-        }
-        messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_ASSISTANT, content,
-                conversationSkillRunner.payloadOf(result));
-        return new ClarifyConversationDetail(conversation,
+        // 投递后台执行：立即返回，不等（这正是 SKX-13 要修的那 377s）
+        skillExecutionWorker.executeAsync(run.getId());
+        ClarifyConversationDetail detail = new ClarifyConversationDetail(conversation,
                 messageService.listByConversation(conversationId));
-    }
-
-    /** 人类可读的文件大小（消息正文用；精确字节数在 payload 里）。 */
-    private static String readableSize(long bytes) {
-        if (bytes >= 1024L * 1024L) {
-            return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
-        }
-        return Math.max(1, Math.round(bytes / 1024.0)) + " KB";
+        detail.setSkillRunId(run.getId());
+        detail.setSkillRunStatus(run.getStatus());
+        detail.setSkillRunPhase(run.getPhase());
+        return detail;
     }
 
     /**

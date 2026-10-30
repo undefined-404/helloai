@@ -1,7 +1,7 @@
 import request from './request'
 import { paths } from './paths'
 import type { AxiosResponse } from 'axios'
-import type { ChatAttachmentItem, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, Task, LongId } from '@/types'
+import type { ChatAttachmentItem, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, SkillRunStatus, Task, LongId } from '@/types'
 
 // V29 对话式需求澄清: 每轮走一次 LLM，耗时远超全局 30s，create/send/retry 单请求覆盖 timeout
 // v1.1 修复: 澄清会话 ID 为 Snowflake 长整型，URL/比较一律按 string 处理防 JS Number 精度丢失
@@ -74,6 +74,33 @@ export const clarifyApi = {
   // 会话列表（按创建时间倒序，LIMIT 50）
   list() {
     return request.get<any, RequirementConversation[]>(paths.clarifications.list)
+  },
+
+  // ── 技能执行状态（SKX-13）────────────────────────────────────────────
+  /**
+   * 轮询一次技能执行的状态与阶段。
+   *
+   * <p>技能执行已改为「提交即返回 + 后台跑」（实测一次 377s，挂在 HTTP 线程上会
+   * 前端超时 + 服务端刷 Broken pipe），所以前端拿到 {@code skillRunId} 后靠本接口看进度。
+   * 短超时即可：本接口只读一行状态，不涉及 LLM。</p>
+   */
+  skillRun(runId: LongId) {
+    return request.get<any, SkillRunStatus>(paths.clarifications.skillRun(runId),
+      { timeout: 20_000 })
+  },
+  /** 取消技能执行（协作式：worker 在下一个阶段边界自查到就停）。 */
+  cancelSkillRun(runId: LongId) {
+    return request.post<any, boolean>(paths.clarifications.cancelSkillRun(runId))
+  },
+  /**
+   * 该会话当前有没有活跃的技能执行（PENDING/RUNNING）。
+   *
+   * <p>用于「刷新页面后恢复进度」：runId 只在提交响应里，刷新即丢，
+   * 但后台仍在跑 —— 打开会话时靠本接口把轮询接回来。没有活跃执行时返回 null。</p>
+   */
+  activeSkillRun(conversationId: LongId) {
+    return request.get<any, SkillRunStatus | null>(
+      paths.clarifications.activeSkillRun(conversationId), { timeout: 20_000 })
   },
 
   // ── 会话附件（V121，需求对话「添加文件」）─────────────────────────────

@@ -16,6 +16,8 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.tool.ToolExecutionResult;
 import com.helloai.core.agent.tool.ToolExecutor;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.common.constant.SkillExecutionPhase;
+import com.helloai.common.constant.SkillExecutionStatus;
 import com.helloai.core.planner.clarify.ChatRoundDecisionParser;
 import com.helloai.core.planner.clarify.ClarifyReplyParser;
 import com.helloai.core.planner.clarify.ClarifyStallGuard;
@@ -28,6 +30,7 @@ import com.helloai.core.planner.skill.ConversationSkillRunner;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.policy.RequirementPackageParser;
 import com.helloai.core.planner.policy.TaskContextKeys;
+import com.helloai.core.planner.entity.ChatSkillRun;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.mapper.RequirementConversationMapper;
@@ -37,7 +40,10 @@ import com.helloai.core.planner.search.WebSearchCredentialKeyStore;
 import com.helloai.core.planner.service.WebPageFetchService;
 import com.helloai.core.planner.service.SearchQueryPlannerService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.skill.SkillExecutionWorker;
+import com.helloai.core.planner.service.ChatSkillRunService;
 import com.helloai.core.planner.service.RequirementClarifyService;
+import com.helloai.core.planner.service.RequirementClarifyService.ClarifyConversationDetail;
 import com.helloai.core.planner.attachment.ChatAttachmentPromptRenderer;
 import com.helloai.core.planner.service.ChatAttachmentService;
 import com.helloai.core.planner.service.impl.ClarifyCommandSearchServiceImpl;
@@ -165,8 +171,12 @@ class RequirementClarifyServiceTest {
     private ClarifyFinalizeServiceImpl finalizeService;
     private ClarifyCommandSearchServiceImpl commandSearch;
 
-    /** 对话内技能执行器 mock（2026-10-27）：主链回归不触发技能轮，默认零操作；技能轮用例单独 stub。 */
-    private ConversationSkillRunner conversationSkillRunner;
+    /**
+     * 对话内技能执行的两个 mock（SKX-13 起技能轮改为「提交即返回 + 后台跑」）：
+     * 编排层只负责提交运行记录并投递 worker，真正的执行与产物落库在 worker 里。
+     */
+    private ChatSkillRunService chatSkillRunService;
+    private SkillExecutionWorker skillExecutionWorker;
 
     @BeforeEach
     void setUp() {
@@ -205,14 +215,17 @@ class RequirementClarifyServiceTest {
                 conversationService, messageService, taskService, agentService, agentInboxService,
                 taskTimelineService, longTermMemoryService, requirementConversationMapper,
                 new ObjectMapper(), commandSearch, skillDirective);
-        conversationSkillRunner = mock(ConversationSkillRunner.class);
+        chatSkillRunService = mock(ChatSkillRunService.class);
+        skillExecutionWorker = mock(SkillExecutionWorker.class);
         orchestrator = new ClarifyRoundOrchestratorServiceImpl(
                 commandSearch, promptRenderService, finalizeService, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
                 new ChatRoundDecisionParser(new ObjectMapper()), webSearchOrchestrator,
                 skillDirective,
-                // 对话内技能执行（2026-10-27）：主链回归不触发技能轮，mock 即可
-                conversationSkillRunner,
+                // 对话内技能执行（SKX-13 改异步）：主链回归不触发技能轮，
+                // 编排层只负责「提交运行记录 + 投递后台」，两个依赖 mock 即可
+                chatSkillRunService,
+                skillExecutionWorker,
                 // TD-8：stall 守卫（用户信息量判据）接入后新增的构造参数
                 new ClarifyStallGuard(new ObjectMapper()), mock(ChatAttachmentService.class));
         streamService = new ClarifyStreamServiceImpl(
@@ -2169,14 +2182,20 @@ class RequirementClarifyServiceTest {
         void doRound_skillCommand_skipsDecisionAndRunsSkillRound() {
             RequirementConversation conversation = chatConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
-            // 技能轮由 ConversationSkillRunner 执行：stub 成功回执（产物附件登记由 runner 内部完成）
-            when(conversationSkillRunner.run(eq(CONV_ID), isNull(), isNull(), eq("archify"),
-                    eq("画一张支付生命周期图"))).thenReturn(
-                    new ConversationSkillRunner.Result(1001L, "支付生命周期.svg", 2048L, "abc",
-                            "workflow", "showcase", null));
+            // SKX-13：技能轮已改为「提交即返回 + 后台跑」——
+            // 编排层只落一条运行记录并投递 worker，真正的执行与产物落库在 worker 里
+            ChatSkillRun run = new ChatSkillRun();
+            run.setId(9001L);
+            run.setConversationId(CONV_ID);
+            run.setSkillName("archify");
+            run.setStatus(SkillExecutionStatus.PENDING.name());
+            run.setPhase(SkillExecutionPhase.SPEC.name());
+            when(chatSkillRunService.submit(eq(CONV_ID), isNull(), eq("archify"), eq("CHAT")))
+                    .thenReturn(run);
             when(messageService.listByConversation(CONV_ID)).thenReturn(List.of());
 
-            clarifyService.sendMessage(CONV_ID, "[skill:archify] 画一张支付生命周期图");
+            ClarifyConversationDetail detail = clarifyService.sendMessage(CONV_ID,
+                    "[skill:archify] 画一张支付生命周期图");
 
             // 不进意图决策（makeRoundDecision 零调用）：不弹确认卡、不置待确认标记
             assertThat(conversation.getPendingClarifyConfirm()).isNotEqualTo(Boolean.TRUE);
@@ -2184,15 +2203,15 @@ class RequirementClarifyServiceTest {
                     argThat(task -> task != null
                             && DECISION_SCENE.equals(task.getContext() == null
                             ? null : task.getContext().get("scene"))));
-            // 技能轮执行一次（文本剥前缀后落库，payload 承载技能名）
-            verify(conversationSkillRunner).run(eq(CONV_ID), isNull(), isNull(), eq("archify"),
-                    eq("画一张支付生命周期图"));
-            // 产物消息落库（不弹确认卡）：user 消息带技能名 payload；assistant 产物消息落库
-            // （payloadOf 是 mock 实例方法 → 返回 null，故 payload 断言 null，与真实 runner 行为无关）
+            // 技能轮提交一次并投递后台（不再同步跑 runner）
+            verify(chatSkillRunService).submit(eq(CONV_ID), isNull(), eq("archify"), eq("CHAT"));
+            verify(skillExecutionWorker).executeAsync(eq(9001L));
+            // 响应带运行记录句柄：前端据此轮询，而不是等一个 377s 的同步结果
+            assertThat(detail.getSkillRunId()).isEqualTo(9001L);
+            assertThat(detail.getSkillRunStatus()).isEqualTo(SkillExecutionStatus.PENDING.name());
+            // user 消息带技能名 payload（产物消息由 worker 在后台落）
             verify(messageService).addMessage(eq(CONV_ID), eq("user"), eq("画一张支付生命周期图"),
                     contains("\"skill\":\"archify\""));
-            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), contains("已生成"),
-                    isNull());
             verify(messageService, never()).addMessage(eq(CONV_ID), eq("assistant"),
                     eq(ConfirmCardProtocol.CONFIRM_ASK_TEXT), any());
         }

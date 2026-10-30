@@ -108,6 +108,37 @@ export interface ClarifyConversationDetail {
   messages: import('./entities').RequirementMessage[]
   // 会话关联任务是否仍存在（仅 detail 返回）；FINALIZED 且为 false 时可重新生成
   taskExists?: boolean
+  /**
+   * SKX-13：技能执行的运行记录 id。非空 ⇒ 本轮是技能执行且**尚未出结果**，
+   * 前端据此启动轮询（skillRunStatus / skillRunPhase 显示进度）。
+   * 非技能轮为 undefined。
+   */
+  skillRunId?: LongId
+  /** 技能执行状态：PENDING / RUNNING / SUCCEEDED / FAILED / CANCELLED */
+  skillRunStatus?: string
+  /** 技能执行阶段：SPEC / RENDER / CHECK / EXPORT / DONE */
+  skillRunPhase?: string
+}
+
+/**
+ * SKX-13：技能执行状态（轮询端点返回）。
+ *
+ * <p>只回答「还在跑吗、跑到哪一步、失败原因是什么」——
+ * 产物本身走会话详情里那条 assistant 消息，不在这里回。</p>
+ */
+export interface SkillRunStatus {
+  id: LongId
+  conversationId: LongId
+  skillName: string
+  status: string
+  phase?: string
+  phaseDetail?: string
+  errorMessage?: string
+  attachmentId?: LongId
+  /** 是否已终态（前端据此停止轮询） */
+  terminal: boolean
+  startedAt?: string
+  finishedAt?: string
 }
 
 /** Planner 下拉选项（selectable=false 时 disabledReason 说明置灰原因） */

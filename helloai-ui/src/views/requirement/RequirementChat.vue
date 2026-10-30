@@ -606,6 +606,36 @@
                 </div>
               </div>
 
+              <!-- SKX-13：技能执行进行中占位（提交即返回，后台跑；阶段文案随轮询更新） -->
+              <div
+                v-if="skillRunId"
+                class="msg-row from-assistant"
+              >
+                <div class="msg-avatar">
+                  AI
+                </div>
+                <div class="msg-col">
+                  <div class="msg-bubble msg-loading">
+                    <el-icon class="is-loading">
+                      <Loading />
+                    </el-icon>
+                    <span>{{ skillRunPhaseDetail || '正在生成…' }}</span>
+                    <!-- A2：取消入口。取消是协作式（后端置 CANCELLED，worker 在阶段边界停），
+                         但用户不必等那一个阶段——这里立即停轮询、清占位。 -->
+                    <el-button
+                      class="skill-cancel-btn"
+                      size="small"
+                      type="danger"
+                      plain
+                      :disabled="skillCancelling"
+                      @click="requestCancelSkill"
+                    >
+                      {{ skillCancelling ? '正在停止…' : '停止生成' }}
+                    </el-button>
+                  </div>
+                </div>
+              </div>
+
               <!-- 终稿卡片（有终稿即渲染；V39 CHAT 自由对话模式不渲染，仅 CLARIFY/老会话；ACTIVE 可确认，FINALIZED 只读） -->
               <div
                 v-if="conversation?.finalTitle && !isChatMode"
@@ -1132,7 +1162,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled, Grid, TopRight } from '@element-plus/icons-vue'
@@ -1196,6 +1226,150 @@ const streamAbort = ref<AbortController | null>(null)
 const skillDisabled = computed(() => sending.value
   || finalizing.value
   || (activeId.value != null && conversation.value?.status !== 'ACTIVE'))
+
+// ── SKX-13：技能执行异步化（提交即返回 + 后台跑 + 轮询进度）────────────────
+// 技能执行实测一次 377s（LLM 两轮 + 注入 + 三段门禁 + 回读 + 落库），
+// 挂在 HTTP 线程上会「前端超时 + 服务端刷一屏 Broken pipe」，
+// 故后端改为提交即返回 runId，这里轮询进度，终态再拉一次 detail 收产物。
+const skillRunId = ref<LongId | null>(null)
+const skillRunStatus = ref<string>('')
+const skillRunPhaseDetail = ref<string>('')
+/** 是否正在向服务端确认「本会话有无后台技能在执行」（C 修复：未确认完前不判「回复失败」）。 */
+const skillCheckPending = ref(false)
+/** 取消请求进行中（防重复点击；成功后气泡会整体消失）。 */
+const skillCancelling = ref(false)
+let skillPollTimer: number | null = null
+let skillPollDelay = 1500
+/** 本次轮询归属的会话：切到别的会话就停轮询，避免把旧会话的结果塞进新会话 */
+let skillPollConversationId: LongId | null = null
+
+/** 停止技能轮询（切换会话 / 组件卸载 / 终态都调它）。 */
+function stopSkillPolling() {
+  if (skillPollTimer != null) {
+    window.clearTimeout(skillPollTimer)
+    skillPollTimer = null
+  }
+  skillPollConversationId = null
+}
+
+/**
+ * 开始轮询一次技能执行。
+ *
+ * <p>轮询失败不打断：退避重试（后端可能正在重启 / 网络抖动），
+ * 但连续失败也不该无限转圈 —— 退避上限 10s，用户总能看见「还在跑」。</p>
+ */
+function startSkillPolling(runId: LongId, conversationId: LongId | null) {
+  stopSkillPolling()
+  skillRunId.value = runId
+  skillRunStatus.value = 'RUNNING'
+  skillRunPhaseDetail.value = '正在生成…'
+  skillCancelling.value = false
+  skillPollConversationId = conversationId
+  skillPollDelay = 1500
+  const tick = async () => {
+    if (skillRunId.value !== runId) return
+    // 已切到别的会话：这次轮询没有意义，停掉（别把旧结果塞进新会话）
+    if (skillPollConversationId != null && activeId.value != null
+      && String(activeId.value) !== String(skillPollConversationId)) {
+      stopSkillPolling()
+      skillRunId.value = null
+      skillRunPhaseDetail.value = ''
+      return
+    }
+    try {
+      const st = await clarifyApi.skillRun(runId)
+      if (skillRunId.value !== runId) return
+      // 记录已不存在（库被重置 / 行被清理）：继续轮询只会空转，且 st.status 会抛错被
+      // 当成「网络抖动」无限退避重试 —— 气泡就永远转下去。这里直接收尾。
+      if (!st) {
+        stopSkillPolling()
+        skillRunId.value = null
+        skillRunPhaseDetail.value = ''
+        return
+      }
+      skillRunStatus.value = st.status
+      if (st.errorMessage) skillRunPhaseDetail.value = st.errorMessage
+      else if (st.phaseDetail) skillRunPhaseDetail.value = st.phaseDetail
+      if (st.terminal) {
+        stopSkillPolling()
+        skillRunId.value = null
+        skillRunPhaseDetail.value = ''
+        // 终态：拉一次 detail，把产物消息 / 失败消息收进对话
+        try {
+          if (activeId.value != null) detail.value = await clarifyApi.detail(activeId.value)
+        } catch { /* 拦截器已弹错 */ }
+        loadList()
+        scrollToBottom()
+        return
+      }
+    } catch {
+      // 轮询失败：退避后重试，不打断用户
+    }
+    skillPollDelay = Math.min(Math.round(skillPollDelay * 1.5), 10_000)
+    skillPollTimer = window.setTimeout(tick, skillPollDelay)
+  }
+  skillPollTimer = window.setTimeout(tick, skillPollDelay)
+}
+
+/** 会话详情里带 runId ⇒ 本轮是技能执行且尚未出结果，启动轮询。 */
+function maybeStartSkillPolling(result: ClarifyConversationDetail | null | undefined) {
+  if (result?.skillRunId != null) {
+    startSkillPolling(result.skillRunId, result.conversation?.id ?? activeId.value)
+  }
+}
+
+/**
+ * 用户点「停止生成」：协作式取消。
+ *
+ * <p>后端先置 CANCELLED，worker 在<b>下一个阶段边界</b>才停 ⇒ 服务端可能还要多跑一个阶段（1~2s）。
+ * 但用户点的是「我不想等了」，不该再盯着转圈：这里立即停轮询、清占位，再拉一次详情补齐已有消息。
+ * 取消不落「生成失败」消息（ADR-007：用户自己叫停的，再报一次失败是噪音），所以只给一个轻提示。</p>
+ */
+async function requestCancelSkill() {
+  const runId = skillRunId.value
+  if (runId == null || skillCancelling.value) return
+  skillCancelling.value = true
+  try {
+    await clarifyApi.cancelSkillRun(runId)
+    stopSkillPolling()
+    skillRunId.value = null
+    skillRunPhaseDetail.value = ''
+    ElMessage.info('已停止生成')
+    try {
+      if (activeId.value != null) detail.value = await clarifyApi.detail(activeId.value)
+    } catch { /* 拦截器已弹错 */ }
+    loadList()
+  } catch {
+    // 拦截器已弹错：保持轮询，用户可以再点一次
+  } finally {
+    skillCancelling.value = false
+  }
+}
+
+/**
+ * 打开会话时恢复进度（A3）。
+ *
+ * <p>runId 只存在于提交响应里，刷新页面/换设备就丢了 —— 后台还在跑，界面上却没有任何痕迹；
+ * 更糟的是这时候用户再发一条技能会被互斥拒掉（「已有技能在执行」），看起来就是卡死。
+ * 故打开会话后问一次「本会话有没有活跃执行」，有就接着轮询。</p>
+ */
+async function resumeActiveSkillRun(conversationId: LongId) {
+  // C 修复：确认前先把 `skillCheckPending` 置位，让 canRetry 不在这个窗口误判「回复失败」
+  //（否则 F5 后 skillRunId 尚未接回，一条无 assistant 回复的 user 消息会被当成失败）
+  skillCheckPending.value = true
+  try {
+    const active = await clarifyApi.activeSkillRun(conversationId)
+    // 请求期间用户可能已切走：切走了就别再挂气泡
+    if (!active || String(activeId.value) !== String(conversationId)) return
+    startSkillPolling(active.id, conversationId)
+    // 首屏直接显示服务端已推进到的阶段，不等第一次轮询（1.5s）
+    if (active.phaseDetail) skillRunPhaseDetail.value = active.phaseDetail
+  } catch {
+    // 静默：恢复进度是增强能力，失败不该影响正常浏览会话
+  } finally {
+    skillCheckPending.value = false
+  }
+}
 
 // 「＋」能力菜单展开态（点技能项后先收起，再挂载到输入框）
 const plusMenuVisible = ref(false)
@@ -1584,11 +1758,20 @@ watch(
 
 function onWebSearchToggle() { /* 占位：保留供后续埋点/提示扩展 */ }
 
-// 上轮 LLM 失败后可重试：ACTIVE 且最后一条是 user 消息（数据驱动，刷新后仍可重试）
+// 上轮 LLM 失败后可重试：ACTIVE 且最后一条是 user 消息（数据驱动，刷新后仍可重试）。
+// 技能执行例外（2026-10-30 SKX 修复）：技能请求是「当场执行」而非 LLM 澄清轮——异步执行期间
+// （skillRunId ≠ null）、以及结束后最后一条 user 消息仍带 skill（已取消 / 未出新消息）时，
+// 都不该算「回复生成失败」。否则整轮执行会叠一条「回复生成失败」假行，把真实占位 / 结果盖掉。
 const canRetry = computed(() => {
   if (sending.value || conversation.value?.status !== 'ACTIVE') return false
+  // C 修复：仍在向服务端确认后台技能执行态时，不急着判「回复失败」——
+  // F5 后 skillRunId 是空的（内存态被清），要等 resumeActiveSkillRun 把活跃执行接回才知道
+  if (skillRunId.value != null || skillCheckPending.value) return false
   const msgs = detail.value?.messages ?? []
-  return msgs.length > 0 && msgs[msgs.length - 1].role === 'user'
+  if (!msgs.length) return false
+  const last = msgs[msgs.length - 1]
+  if (last.role === 'user' && skillOf(last) != null) return false
+  return last.role === 'user'
 })
 
 const pinnedPlannerName = computed(() => {
@@ -1930,9 +2113,15 @@ async function selectConversation(id: LongId) {
   // 跨会话切换：临时批次只属于「尚未建会」的那一轮，换会话即作废
   clientToken.value = null
   attachments.value = []
+  // 上一轮的技能进度属于上一个会话：立即停表并清占位（A3：新会话若有活跃执行，下面再恢复）
+  stopSkillPolling()
+  skillRunId.value = null
+  skillRunPhaseDetail.value = ''
   try {
     detail.value = await clarifyApi.detail(sid)
     scrollToBottom()
+    // A3：刷新/切回一个正在跑的会话时，把轮询与阶段接回来
+    void resumeActiveSkillRun(sid)
   } catch { /* 拦截器已弹错 */ }
   void refreshAttachments()
 }
@@ -1940,6 +2129,10 @@ async function selectConversation(id: LongId) {
 function startNew() {
   if (sending.value) return
   closeEnhancePanel()
+  // 新会话与上一个会话的技能进度无关：停表并清占位（否则气泡会留在新会话里）
+  stopSkillPolling()
+  skillRunId.value = null
+  skillRunPhaseDetail.value = ''
   activeId.value = null
   detail.value = null
   input.value = ''
@@ -2073,6 +2266,8 @@ async function handleSend() {
       } else {
         const result = await clarifyApi.send(activeId.value, text)
         detail.value = result
+        // SKX-13：兜底路径同样可能命中技能执行（提交即返回 + 轮询）
+        maybeStartSkillPolling(result)
         loadList()
         scrollToBottom()
       }
@@ -2128,6 +2323,8 @@ async function sendSyncCreate(text: string, plannerId: string | null) {
     ? await clarifyApi.send(existing, text)
     : await clarifyApi.create(text, plannerId, webSearchEnabled.value, clientToken.value)
   detail.value = result
+  // SKX-13：技能执行已改为提交即返回 —— 拿到 runId 就开始轮询，不再等同步结果
+  maybeStartSkillPolling(result)
   if (existing == null) {
     activeId.value = String(result.conversation.id)
     // 建会已认领临时批次：清 token（避免下一轮误用）并按会话重新拉附件清单
@@ -2422,6 +2619,8 @@ async function submitEdit(msg: { id: string | number }) {
   try {
     const result = await clarifyApi.editMessage(activeId.value, String(msg.id), outgoing)
     detail.value = result
+    // SKX-13：编辑重发带技能时同样是「提交即返回」，需轮询进度
+    maybeStartSkillPolling(result)
     editingMsgId.value = ''
     editingDraft.value = ''
     editingSkill.value = null
@@ -2496,6 +2695,8 @@ async function handlePlannerCommand(extra: string) {
 
 async function handleRetry() {
   if (activeId.value == null || sending.value) return
+  // 技能执行期间禁止重试（canRetry 已隐藏按钮，这里兜底防竞态双击）
+  if (skillRunId.value != null) return
   sending.value = true
   scrollToBottom()
   try {
@@ -2695,6 +2896,14 @@ onMounted(() => {
   loadPlannerOptions()
   // 附件清单：仅在已有会话时拉（新会话为空，等用户上传后才出现胶囊）
   if (activeId.value != null) void refreshAttachments()
+  // C 修复：刷新落回当前会话时也要确认后台技能执行态并接回轮询——
+  // 否则刷新后 skillRunId 一直为空，技能执行中的 user 消息会被 canRetry 误判成「回复失败」
+  if (activeId.value != null) void resumeActiveSkillRun(activeId.value)
+})
+
+// SKX-13：组件卸载时停掉技能轮询（定时器泄漏会让切页后还在打后端）
+onBeforeUnmount(() => {
+  stopSkillPolling()
 })
 </script>
 
@@ -3449,6 +3658,8 @@ onMounted(() => {
   font-size: 13px;
 }
 .msg-streaming { font-size: 15px; }
+/* A2：技能执行占位里的「停止生成」——与阶段文案同行，不另起一行 */
+.skill-cancel-btn { margin-left: 4px; }
 
 /* 思考过程区（2026-10-23 重做）：
    改前三处问题——① 用 Element Plus 默认值而非品牌 token：`border-left: 3px solid var(--el-color-info-light-5)`

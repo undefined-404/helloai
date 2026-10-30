@@ -167,9 +167,9 @@ class ConversationSkillRunnerTest {
                 mock(PlatformAgentExecutionService.class), mock(PlannerAgentPicker.class),
                 mock(ChatAttachmentService.class), new ObjectMapper(), mock(ResourceLoader.class));
         Method m = ConversationSkillRunner.class.getDeclaredMethod(
-                "checkArtifact", Long.class, String.class, String.class);
+                "checkArtifact", Long.class, String.class, String.class, SkillRunControl.class);
         m.setAccessible(true);
-        return m.invoke(runner, -1L, "archify", "/workspace/runs/abc12345");
+        return m.invoke(runner, -1L, "archify", "/workspace/runs/abc12345", SkillRunControl.NOOP);
     }
 
     private static boolean attr(Object attempt, String accessor) throws Exception {

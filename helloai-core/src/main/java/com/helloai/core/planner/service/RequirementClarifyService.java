@@ -309,6 +309,20 @@ public interface RequirementClarifyService {
         private final List<RequirementMessage> messages;
         /** 会话关联任务是否仍存在（仅 detail 计算填充）；前端据此判断 FINALIZED 会话能否重新生成。 */
         private Boolean taskExists;
+
+        /**
+         * 本轮技能执行的运行记录 id（SKX-13）；非技能轮为 {@code null}。
+         *
+         * <p>技能执行已改为<b>提交即返回</b>（实测一次 377s，不能再挂在 HTTP 线程上），
+         * 所以响应里不再有产物 —— 前端拿到这个 id 就知道「去轮询状态」。</p>
+         */
+        private Long skillRunId;
+
+        /** 技能执行状态（{@code PENDING/RUNNING/SUCCEEDED/FAILED/CANCELLED}）；非技能轮为 {@code null}。 */
+        private String skillRunStatus;
+
+        /** 技能执行阶段（{@code SPEC/RENDER/CHECK/EXPORT/DONE}）；非技能轮为 {@code null}。 */
+        private String skillRunPhase;
     }
 
     /** LLM 结构化输出（未知字段容忍）：type=question 追问（双模） / type=final 终稿。 */

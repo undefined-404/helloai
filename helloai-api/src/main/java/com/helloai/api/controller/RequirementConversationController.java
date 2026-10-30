@@ -2,8 +2,10 @@ package com.helloai.api.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.requirement.ClarifyMessageRequest;
+import com.helloai.api.dto.requirement.SkillRunStatusVO;
 import com.helloai.common.base.R;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.service.ChatSkillRunService;
 import com.helloai.core.planner.service.RequirementClarifyService;
 import com.helloai.core.planner.service.RequirementClarifyService.ChatStreamEvent;
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifyConversationDetail;
@@ -32,6 +34,7 @@ public class RequirementConversationController {
 
     private final RequirementClarifyService requirementClarifyService;
     private final Executor chatStreamExecutor;
+    private final ChatSkillRunService chatSkillRunService;
 
     /**
      * 手写构造器而非 {@code @RequiredArgsConstructor}：
@@ -46,9 +49,11 @@ public class RequirementConversationController {
      */
     public RequirementConversationController(
             RequirementClarifyService requirementClarifyService,
-            @Qualifier("chatStreamExecutor") Executor chatStreamExecutor) {
+            @Qualifier("chatStreamExecutor") Executor chatStreamExecutor,
+            ChatSkillRunService chatSkillRunService) {
         this.requirementClarifyService = requirementClarifyService;
         this.chatStreamExecutor = chatStreamExecutor;
+        this.chatSkillRunService = chatSkillRunService;
     }
 
     /** SseEmitter 显式超时（与前端 120s 对话超时档位对齐，超时后连接自动关闭）。 */
@@ -298,6 +303,44 @@ public class RequirementConversationController {
     public R<ClarifyConversationDetail> sendMessageById(@PathVariable("id") Long id,
                                                     @Valid @RequestBody ClarifyMessageRequest req) {
         return R.ok(requirementClarifyService.sendMessage(id, req.getMessage(), req.getSelectedOptions()));
+    }
+
+    /**
+     * 技能执行状态轮询（SKX-13）。
+     *
+     * <p>技能执行已改为「提交即返回 + 后台跑」（实测一次 377s，不能挂在 HTTP 线程上），
+     * 所以前端拿到 {@code skillRunId} 后靠本端点轮询进度，终态后再拉一次会话详情。</p>
+     *
+     * <p>只回状态与阶段，不回产物内容 —— 产物走会话详情里的那条 assistant 消息。</p>
+     */
+    @SaCheckPermission("conversation:send")
+    @GetMapping("/skillRun/{runId}")
+    public R<SkillRunStatusVO> skillRun(@PathVariable("runId") Long runId) {
+        return R.ok(SkillRunStatusVO.from(chatSkillRunService.get(runId)));
+    }
+
+    /**
+     * 取消技能执行（SKX-13）。
+     *
+     * <p>取消是<b>协作式</b>：状态先置 CANCELLED，worker 在下一个阶段边界自查到就停。
+     * 已终态的（成功/失败）不会被改 —— 否则一次迟到的取消会把已成功的产物标成取消。</p>
+     */
+    @SaCheckPermission("conversation:send")
+    @PostMapping("/skillRun/{runId}/cancel")
+    public R<Boolean> cancelSkillRun(@PathVariable("runId") Long runId) {
+        return R.ok(chatSkillRunService.cancel(runId));
+    }
+
+    /**
+     * 该会话当前活跃的技能执行（A3：刷新页面后恢复进度）。
+     *
+     * <p>runId 只在提交响应里，前端刷新即丢；后台仍在跑时打开会话要靠本端点把轮询接回来，
+     * 否则用户既看不到进度、再发一条又会被互斥拒掉。没有活跃执行时返回 {@code null}。</p>
+     */
+    @SaCheckPermission("conversation:send")
+    @GetMapping("/skillRun/active/{conversationId}")
+    public R<SkillRunStatusVO> activeSkillRun(@PathVariable("conversationId") Long conversationId) {
+        return R.ok(SkillRunStatusVO.from(chatSkillRunService.active(conversationId)));
     }
 
     /** 重试上一轮 LLM（仅当最后一条是用户消息，即上轮 LLM 失败时可用）。 */

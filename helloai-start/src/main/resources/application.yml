@@ -180,6 +180,18 @@ helloai:
           network-policy:
             default-action: deny
           timeout-seconds: 900
+  # SKX-13（2026-10-30）对话内技能执行异步化：执行跑在独立线程池，不占 HTTP 线程。
+  # 技能执行实测一次 377s（LLM 两轮 + 注入 + 三段门禁 + 回读 + 落库），
+  # 挂在 HTTP 线程上会「前端超时 + 服务端刷一屏 Broken pipe」，
+  # 故改为「提交即返回句柄 + 后台跑 + 前端轮询」。
+  skill-execution:
+    # 执行线程池大小：沙箱按会话复用（同会话本就不该并发），池位不大。
+    pool-size: 2
+    # 队列容量：超出后由 CallerRuns 兜底（宁可提交请求慢一点，也不静默丢执行任务）。
+    queue-capacity: 50
+    # 服务端硬超时上限（秒）：到点判失败并落原因，用户不会永远转圈。
+    # 不是「预期耗时」而是「兜底不挂死」的闸——最坏分支（重生成 spec + 降档重渲）可达 170s。
+    timeout-seconds: 600
   # 调度策略 3：外部优先 / 空闲优先 / 平台内 LLM 保底
   dispatch:
     auto-assign-on-create: false

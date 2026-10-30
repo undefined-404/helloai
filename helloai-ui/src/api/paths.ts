@@ -194,6 +194,12 @@ export const paths = {
       `/requirement-conversations/editMessageById/${enc(id)}/${enc(messageId)}`,
     toClarify: (id: string | number) => `/requirement-conversations/toClarifyById/${enc(id)}`,
     toChat: (id: string | number) => `/requirement-conversations/toChatById/${enc(id)}`,
+    // SKX-13：技能执行已改为「提交即返回 + 后台跑」，前端凭 runId 轮询进度
+    skillRun: (runId: string | number) => `/requirement-conversations/skillRun/${enc(runId)}`,
+    cancelSkillRun: (runId: string | number) => `/requirement-conversations/skillRun/${enc(runId)}/cancel`,
+    // A3：打开会话时恢复进度（刷新页面后 runId 已丢，靠会话查最近一条活跃执行）
+    activeSkillRun: (conversationId: string | number) =>
+      `/requirement-conversations/skillRun/active/${enc(conversationId)}`,
     plannerOptions: '/requirement-conversations/listPlannerOptions',
     list: '/requirement-conversations',
     detail: (id: string | number) => `/requirement-conversations/getById/${enc(id)}`,
