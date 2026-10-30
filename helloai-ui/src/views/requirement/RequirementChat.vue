@@ -375,7 +375,7 @@
                           type="button"
                           class="msg-action-btn msg-edit-hover"
                           title="编辑消息"
-                          :disabled="sending || finalizing || editingSaving"
+                          :disabled="activeSending || finalizing || editingSaving"
                           @click="startEdit(row.msg)"
                         >
                           <el-icon><EditPen /></el-icon>
@@ -486,8 +486,8 @@
                       :key="String(lastMessageId)"
                       class="sq-wrap"
                       :questions="activeStructured.questions!"
-                      :disabled="sending || finalizing"
-                      :loading="sending"
+                      :disabled="activeSending || finalizing"
+                      :loading="activeSending"
                       @submit="handleStructuredSubmit"
                     />
                   </div>
@@ -527,7 +527,7 @@
               </div>
               <!-- 发送中占位气泡 -->
               <div
-                v-if="sending && pendingText"
+                v-if="activeSending && pendingText"
                 class="msg-row from-user"
               >
                 <div class="msg-avatar">
@@ -540,7 +540,7 @@
                 </div>
               </div>
               <div
-                v-if="sending"
+                v-if="activeSending"
                 class="msg-row from-assistant"
               >
                 <div class="msg-avatar">
@@ -550,52 +550,52 @@
                   <!-- 过程区（2026-10-18）：联网检索等平台步骤 + 推理模型思考内容，
                        按到达顺序混排；正文开始后自动折叠为一行可展开（对齐 DeepSeek/ChatGPT） -->
                   <div
-                    v-if="processSteps.length || thinkingText"
+                    v-if="currentStream.processSteps.length || currentStream.thinkingText"
                     class="msg-bubble msg-thinking"
                   >
                     <div
                       class="msg-thinking-head"
-                      @click="thinkingExpanded = !thinkingExpanded"
+                      @click="currentStream.thinkingExpanded = !currentStream.thinkingExpanded"
                     >
                       <el-icon class="is-loading" v-if="isProcessRunning">
                         <Loading />
                       </el-icon>
                       <span>{{ processHeadline }}</span>
                       <span class="msg-thinking-toggle">
-                        {{ thinkingExpanded || isProcessRunning ? '收起' : '展开' }}
+                        {{ currentStream.thinkingExpanded || isProcessRunning ? '收起' : '展开' }}
                       </span>
                     </div>
                     <div
-                      v-if="thinkingExpanded || isProcessRunning"
+                      v-if="currentStream.thinkingExpanded || isProcessRunning"
                       class="msg-thinking-body"
                     >
                       <div
-                        v-for="(step, si) in processSteps"
+                        v-for="(step, si) in currentStream.processSteps"
                         :key="`step-${si}`"
                         class="msg-process-step"
                       >
                         {{ step }}
                       </div>
                       <div
-                        v-if="thinkingText"
+                        v-if="currentStream.thinkingText"
                         class="msg-process-thinking"
                       >
                         <MarkdownView
                           compact
-                          :content="thinkingText"
+                          :content="currentStream.thinkingText"
                         />
                       </div>
                     </div>
                   </div>
                   <!-- S1 流式回复：token 增量渲染 Markdown；尚未产出 token 时保持思考中占位 -->
                   <div
-                    v-if="streamText"
+                    v-if="currentStream.streamText"
                     class="msg-bubble msg-streaming"
                   >
-                    <MarkdownView :content="streamText" />
+                    <MarkdownView :content="currentStream.streamText" />
                   </div>
                   <div
-                    v-else-if="!thinkingText && !processSteps.length"
+                    v-else-if="!currentStream.thinkingText && !currentStream.processSteps.length"
                     class="msg-bubble msg-loading"
                   >
                     <el-icon class="is-loading">
@@ -660,7 +660,7 @@
                       v-auth="'conversation:finalize'"
                       type="primary"
                       :loading="finalizing"
-                      :disabled="sending || finalizing"
+                      :disabled="activeSending || finalizing"
                       @click="handleFinalize"
                     >
                       创建任务并自动拆解
@@ -681,7 +681,7 @@
                         v-auth="'conversation:regenerate'"
                         type="primary"
                         :loading="finalizing"
-                        :disabled="sending || finalizing"
+                        :disabled="activeSending || finalizing"
                         @click="handleRegenerate"
                       >
                         重新生成任务和子任务
@@ -817,7 +817,7 @@
                       type="textarea"
                       :rows="4"
                       resize="none"
-                      :disabled="sending || finalizing"
+                      :disabled="activeSending || finalizing"
                       :placeholder="inputPlaceholder"
                       @keydown.enter.exact.prevent="handleSend"
                       @keydown="onComposerKeydown"
@@ -994,7 +994,7 @@
                         size="small"
                         plain
                         :loading="enhancing"
-                        :disabled="!input.trim() || sending || finalizing"
+                        :disabled="!input.trim() || activeSending || finalizing"
                         title="调用 AI 把当前输入优化为更清晰的结构化表达（仅预览，不自动发送）"
                         @click="handleEnhanceInput"
                       >
@@ -1009,7 +1009,7 @@
                         size="small"
                         type="danger"
                         plain
-                        :disabled="sending || finalizing"
+                        :disabled="activeSending || finalizing"
                         @click="handleAbandon"
                       >
                         放弃会话
@@ -1018,15 +1018,15 @@
                            流式生成中按钮变红色「停止生成」态，点击中止生成；
                            同步路径（/task 等）无法中止 → 显示「发送中」loading 态 -->
                       <el-button
-                        v-if="sending"
-                        :type="streamAbort ? 'danger' : 'primary'"
-                        :loading="!streamAbort"
+                        v-if="activeSending"
+                        :type="currentStream.streamAbort ? 'danger' : 'primary'"
+                        :loading="!currentStream.streamAbort"
                         :disabled="finalizing"
                         title="停止生成，当前回复将不会保存"
-                        @click="streamAbort && stopGenerating()"
+                        @click="currentStream.streamAbort && stopGenerating()"
                       >
-                        <el-icon v-if="streamAbort" style="margin-right: 4px"><CircleClose /></el-icon>
-                        {{ streamAbort ? '停止生成' : '发送中' }}
+                        <el-icon v-if="currentStream.streamAbort" style="margin-right: 4px"><CircleClose /></el-icon>
+                        {{ currentStream.streamAbort ? '停止生成' : '发送中' }}
                       </el-button>
                       <el-button
                         v-else
@@ -1162,7 +1162,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled, Grid, TopRight } from '@element-plus/icons-vue'
@@ -1215,15 +1215,16 @@ const inputPlaceholder = computed(() => {
 const PLANNER_COMMAND_RE = /^(?:\/planner|\/plan)(?:\s+([\s\S]+))?$/i
 
 const input = ref('')
-const pendingText = ref('')
-const sending = ref(false)
+// 待发用户气泡文本：按会话隔离（键同 sendingSet，null/'' = 新建占位），读写见 setPendingText
+const pendingTexts = ref<Record<string, string>>({})
+// S1 发送态（2026-10-30 RC-5）：改为「每会话」布尔表，而非单份全局 sending —— 否则一个会话
+// 在跑会把「切到别的会话发送」也拦掉。写入按目标会话 id 合并（只动自己那位）。
+const sendingSet = ref<Record<string, boolean>>({})
 const finalizing = ref(false)
 const streamEl = ref<HTMLElement | null>(null)
-// 停止生成（2026-10-19）：当前流式发送的 AbortController 句柄；非空 = 流在跑，展示「停止生成」按钮
-const streamAbort = ref<AbortController | null>(null)
 
 // 技能入口可用性：生成中 / 定稿中 / 会话已非 ACTIVE 时禁用（避免点了没反应）
-const skillDisabled = computed(() => sending.value
+const skillDisabled = computed(() => activeSending.value
   || finalizing.value
   || (activeId.value != null && conversation.value?.status !== 'ACTIVE'))
 
@@ -1707,24 +1708,105 @@ const enhancing = ref(false)
 const enhancePanelVisible = ref(false)
 const enhancedDraft = ref('')
 
-// S1 Chat SSE 流式：streamText 为流式回复增量全文（60ms 节流写入），done 后拉 detail 收敛清空
-const streamText = ref('')
-let streamBuffer = ''
-let streamFlushTimer: number | null = null
-// CLARIFY 模式流式：LLM 输出「正文 + ```json 块」——检测到围栏后截断显示（只展示正文打字机，
-// JSON 结构不裸露，done 后收敛为卡片/终稿）；CHAT 模式不截断（正文可能含用户要求的代码块）
-let jsonFenceSeen = false
+// S1 Chat SSE 流式（2026-10-30 RC-4）：流式态按「会话」隔离成 Map，随 activeId 惰性取用。
+// 原先这些是单份全局 ref（RequirementChat.vue:1711-1727），切换会话时下一轮会直接把上一会话
+// 的流式内容覆盖掉；Map 化后各会话的流式过程互不串扰，切走再切回仍能继续看（流收尾后保留）。
+// 模板统一经 computed `currentStream` 投影当前激活会话的实例，模板绑定改动最小。
+interface PerConversationStream {
+  streamText: string
+  streamBuffer: string
+  streamFlushTimer: number | null
+  // CLARIFY 模式流式：LLM 输出「正文 + ```json 块」——检测到围栏后截断显示（只展示正文打字机，
+  // JSON 结构不裸露，done 后收敛为卡片/终稿）；CHAT 模式不截断（正文可能含用户要求的代码块）
+  jsonFenceSeen: boolean
+  thinkingText: string
+  reasoningBuffer: string
+  reasoningFlushTimer: number | null
+  // reasoningActive 标记「当前是否仍处于思考阶段」（正文首帧到达即置 false）
+  reasoningActive: boolean
+  thinkingExpanded: boolean
+  // 过程步骤（2026-10-18）：联网检索等平台动作，与思考内容按到达顺序混排展示
+  // （对齐 DeepSeek「已搜索 N 个网页」/ ChatGPT「Searching the web」）
+  processSteps: string[]
+  // 停止生成：该会话当前流式发送的 AbortController 句柄；非空 = 本会话流在跑
+  streamAbort: AbortController | null
+}
+const streamStates = new Map<string, PerConversationStream>()
 
-// 思考过程流式（2026-10-18）：推理模型的 reasoning 帧独立展示，与正文分区渲染
-// reasoningActive 标记「当前是否仍处于思考阶段」（正文首帧到达即置 false）
-const thinkingText = ref('')
-let reasoningBuffer = ''
-let reasoningFlushTimer: number | null = null
-let reasoningActive = false
-const thinkingExpanded = ref(true)
-// 过程步骤（2026-10-18）：联网检索等平台动作，与思考内容按到达顺序混排展示
-// （对齐 DeepSeek「已搜索 N 个网页」/ ChatGPT「Searching the web」）
-const processSteps = ref<string[]>([])
+/** 流式态实例必须是响应式的：Map 里的普通对象不会被 Vue 追踪，打字机/思考/展开都更新不了视图。 */
+function createStream(): PerConversationStream {
+  return reactive<PerConversationStream>({
+    streamText: '',
+    streamBuffer: '',
+    streamFlushTimer: null,
+    jsonFenceSeen: false,
+    thinkingText: '',
+    reasoningBuffer: '',
+    reasoningFlushTimer: null,
+    reasoningActive: false,
+    thinkingExpanded: true,
+    processSteps: [],
+    streamAbort: null
+  }) as PerConversationStream
+}
+
+/** 无激活会话时模板读到的空投影（模块级常量，避免每次求值新建对象）。 */
+const EMPTY_STREAM = createStream()
+
+/** 惰性取某会话的流式态（不存在则建空实例；流收尾后保留在 Map 上，供切回继续展示）。 */
+function getOrCreateStream(convId: string): PerConversationStream {
+  let cs = streamStates.get(convId)
+  if (!cs) {
+    cs = createStream()
+    streamStates.set(convId, cs)
+  }
+  return cs
+}
+
+// 新建会话在首帧 session 回来前没有 id，发送态与气泡文本先存在占位键上，
+// 首帧到达后由 migratePlaceholderState 迁到真实 id。
+const PLACEHOLDER_KEY = ''
+
+/** 会话级发送态（2026-10-30 RC-5）：仅当 targetId 对应的会话正在跑时置 true；null = 新建窗口的占位键。 */
+function sendingOf(targetId: string | number | null | undefined): boolean {
+  return !!sendingSet.value[String(targetId ?? '')]
+}
+
+const currentStream = computed(() =>
+  activeId.value != null ? getOrCreateStream(String(activeId.value)) : EMPTY_STREAM
+)
+/** 当前激活会话是否正在发送（模板 disabled / loading / 占位统一走它）。 */
+const activeSending = computed(() => sendingOf(activeId.value))
+
+/** 当前激活会话的待发气泡文本（模板 `v-if="activeSending && pendingText"` 直接读它）。 */
+const pendingText = computed(() => pendingTexts.value[String(activeId.value ?? '')] ?? '')
+
+/** 写入某会话的发送态（覆盖式，见 sendingSet 注释；显式合并，保留其他会话的位）。 */
+function setSending(targetId: string | number | null | undefined, on: boolean) {
+  sendingSet.value = { ...sendingSet.value, [String(targetId ?? '')]: on }
+}
+
+/** 用户气泡文本按会话隔离（自由切换后全局单份会把 A 会话的待发文本显示到 B 会话里）。 */
+function setPendingText(targetId: string | number | null | undefined, text: string) {
+  pendingTexts.value = { ...pendingTexts.value, [String(targetId ?? '')]: text }
+}
+
+/** 新建会话首帧到达：把占位键上的发送态与气泡文本迁到真实 id（否则闸门与气泡都留在占位键上）。 */
+function migratePlaceholderState(newId: LongId) {
+  const realKey = String(newId)
+  const nextSending = { ...sendingSet.value }
+  if (nextSending[PLACEHOLDER_KEY]) {
+    nextSending[PLACEHOLDER_KEY] = false
+    nextSending[realKey] = true
+    sendingSet.value = nextSending
+  }
+  const nextPending = { ...pendingTexts.value }
+  if (nextPending[PLACEHOLDER_KEY]) {
+    nextPending[realKey] = nextPending[PLACEHOLDER_KEY]
+    nextPending[PLACEHOLDER_KEY] = ''
+    pendingTexts.value = nextPending
+  }
+}
 // 历史消息的过程区展开态（存 msg.id；同时只展开一条，避免长会话页面被撑爆）
 const expandedHistoryProcess = ref<string>('')
 
@@ -1763,7 +1845,7 @@ function onWebSearchToggle() { /* 占位：保留供后续埋点/提示扩展 */
 // （skillRunId ≠ null）、以及结束后最后一条 user 消息仍带 skill（已取消 / 未出新消息）时，
 // 都不该算「回复生成失败」。否则整轮执行会叠一条「回复生成失败」假行，把真实占位 / 结果盖掉。
 const canRetry = computed(() => {
-  if (sending.value || conversation.value?.status !== 'ACTIVE') return false
+  if (activeSending.value || conversation.value?.status !== 'ACTIVE') return false
   // C 修复：仍在向服务端确认后台技能执行态时，不急着判「回复失败」——
   // F5 后 skillRunId 是空的（内存态被清），要等 resumeActiveSkillRun 把活跃执行接回才知道
   if (skillRunId.value != null || skillCheckPending.value) return false
@@ -1799,7 +1881,7 @@ const lastMessageId = computed(() => {
 // 可交互的结构化追问：会话 ACTIVE 且最后一条消息是 assistant 的 structured payload；
 // V39 曾禁 CHAT 模式交互卡；V40.2 放开——CHAT 模式 LLM 追问（容错双模）同样渲染推荐卡片
 const activeStructured = computed(() => {
-  if (conversation.value?.status !== 'ACTIVE' || sending.value) return null
+  if (conversation.value?.status !== 'ACTIVE' || activeSending.value) return null
   const msgs = detail.value?.messages ?? []
   if (!msgs.length) return null
   const p = assistantPayloadOf(msgs[msgs.length - 1])
@@ -2106,7 +2188,8 @@ async function scrollToBottom() {
 }
 
 async function selectConversation(id: LongId) {
-  if (sending.value) return
+  // RC-5：只拦「目标会话正在跑」，不拦其他会话在跑——从而自由切换到别的会话发送
+  if (sendingOf(id)) return
   closeEnhancePanel()
   const sid = String(id)
   activeId.value = sid
@@ -2127,7 +2210,7 @@ async function selectConversation(id: LongId) {
 }
 
 function startNew() {
-  if (sending.value) return
+  // RC-5：新会话没有在跑（sendingOf 目标为空恒 false），不拦
   closeEnhancePanel()
   // 新会话与上一个会话的技能进度无关：停表并清占位（否则气泡会留在新会话里）
   stopSkillPolling()
@@ -2146,7 +2229,7 @@ function startNew() {
 // 优化输入：基于当前输入框内容调 LLM 生成结构化表达，结果进预览面板（不改动输入框、不发送）
 async function handleEnhanceInput() {
   const text = input.value.trim()
-  if (!text || enhancing.value || sending.value || finalizing.value) return
+  if (!text || enhancing.value || activeSending.value || finalizing.value) return
   enhancing.value = true
   try {
     const result = await promptEnhanceApi.enhance(text)
@@ -2193,12 +2276,14 @@ function matchSkillCommand(raw: string): { name: string; rest: string } | null {
 async function handleSend() {
   const raw = input.value.trim()
   if (!raw) {
-    if (activeSkill.value && !sending.value) {
+    if (activeSkill.value && !activeSending.value) {
       ElMessage.warning(`已选「${activeSkillLabel.value}」，先在输入框里写一句需求再按 Enter`)
     }
     return
   }
-  if (sending.value) return
+  // RC-5：只拦「目标会话正在跑」——当前无 activeId（新会话）或 activeId 会话不跑则放行，
+  // 从而在别的会话生成时也能点「发送」进入本会话
+  if (activeId.value != null && sendingOf(activeId.value)) return
   // `/技能名 需求`：菜单可能还没加载过（用户没点过「＋」），先补一次再判定
   if (!activeSkill.value && raw.startsWith('/') && !packageSkills.value.length) {
     await loadPackageSkills()
@@ -2235,9 +2320,11 @@ async function handleSend() {
   closeEnhancePanel()
   input.value = ''
   activeSkill.value = null
-  // 气泡展示用户原文（不带 /task、[skill:x]、/技能名 前缀），保证命令语法不出现在可见面
-  pendingText.value = need
-  sending.value = true
+  // 本次发送的目标会话（null = 新建窗口的占位键）。finally 必须用它清位而不能读 activeId：
+  // 自由切换后期间 activeId 可能已改（用户切走，或首帧把 activeId 换成新会话）。
+  const sendTargetId = activeId.value
+  setPendingText(sendTargetId, need)
+  setSending(sendTargetId, true)
   scrollToBottom()
   try {
     const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
@@ -2298,8 +2385,8 @@ async function handleSend() {
       }
     }
   } finally {
-    pendingText.value = ''
-    sending.value = false
+    setPendingText(sendTargetId, '')
+    setSending(sendTargetId, false)
   }
 }
 
@@ -2339,88 +2426,91 @@ async function sendSyncCreate(text: string, plannerId: string | null) {
 }
 
 // ── S1 Chat SSE 流式发送：节流渲染 + done 后 detail 收敛 ──
+// 2026-10-30 RC-4：所有流式函数改为显式接收目标会话的 PerConversationStream 实例，
+// 由发送入口在「发起时」解析绑死（而非每次取 currentStream）——否则切走会话后，旧会话
+// 还在后台 flush 的 token 会被写进新会话的流状态里（正是 Map 化要堵的串扰）。
 
 // 60ms 节流：token 累积到 buffer，定时 flush 进 streamText 驱动 MarkdownView 全量重渲染
-function flushStreamText() {
-  streamFlushTimer = null
-  if (streamBuffer) {
-    streamText.value += streamBuffer
-    streamBuffer = ''
+function flushStreamText(cs: PerConversationStream) {
+  cs.streamFlushTimer = null
+  if (cs.streamBuffer) {
+    cs.streamText += cs.streamBuffer
+    cs.streamBuffer = ''
     scrollToBottom()
   }
 }
 
-function appendStreamToken(token: string) {
+function appendStreamToken(token: string, cs: PerConversationStream) {
   // 思考阶段结束、正文开始：思考区自动折叠（用户仍可点「展开」回看）
-  if (reasoningActive) {
-    reasoningActive = false
-    thinkingExpanded.value = false
+  if (cs.reasoningActive) {
+    cs.reasoningActive = false
+    cs.thinkingExpanded = false
   }
   // CHAT 模式：纯文本正文不截断（正文可能含用户要求的 ``` 代码块）
   if (!isChatMode.value) {
-    if (jsonFenceSeen) return
-    streamBuffer += token
-    const shown = streamText.value + streamBuffer
+    if (cs.jsonFenceSeen) return
+    cs.streamBuffer += token
+    const shown = cs.streamText + cs.streamBuffer
     const fence = shown.indexOf('```')
     if (fence !== -1) {
       // 截断：只保留 json 围栏前的正文，后续 token 全部忽略（done 后收敛卡片/终稿）
-      streamText.value = shown.slice(0, fence)
-      streamBuffer = ''
-      jsonFenceSeen = true
-      if (streamFlushTimer != null) {
-        window.clearTimeout(streamFlushTimer)
-        streamFlushTimer = null
+      cs.streamText = shown.slice(0, fence)
+      cs.streamBuffer = ''
+      cs.jsonFenceSeen = true
+      if (cs.streamFlushTimer != null) {
+        window.clearTimeout(cs.streamFlushTimer)
+        cs.streamFlushTimer = null
       }
       return
     }
   } else {
-    streamBuffer += token
+    cs.streamBuffer += token
   }
-  if (streamFlushTimer == null) {
-    streamFlushTimer = window.setTimeout(flushStreamText, 60)
+  if (cs.streamFlushTimer == null) {
+    cs.streamFlushTimer = window.setTimeout(() => flushStreamText(cs), 60)
   }
 }
 
 // 思考过程增量（reasoning 帧）：独立缓冲 + 更短节流（思考流高频、用户希望「看到在动」）
-function appendStreamReasoning(text: string) {
-  reasoningActive = true
-  reasoningBuffer += text
-  if (reasoningFlushTimer == null) {
-    reasoningFlushTimer = window.setTimeout(() => {
-      reasoningFlushTimer = null
-      if (reasoningBuffer) {
-        thinkingText.value += reasoningBuffer
-        reasoningBuffer = ''
+function appendStreamReasoning(text: string, cs: PerConversationStream) {
+  cs.reasoningActive = true
+  cs.reasoningBuffer += text
+  if (cs.reasoningFlushTimer == null) {
+    cs.reasoningFlushTimer = window.setTimeout(() => {
+      cs.reasoningFlushTimer = null
+      if (cs.reasoningBuffer) {
+        cs.thinkingText += cs.reasoningBuffer
+        cs.reasoningBuffer = ''
         scrollToBottom()
       }
     }, 80)
   }
 }
 
-function flushReasoningText() {
-  if (reasoningFlushTimer != null) {
-    window.clearTimeout(reasoningFlushTimer)
-    reasoningFlushTimer = null
+function flushReasoningText(cs: PerConversationStream) {
+  if (cs.reasoningFlushTimer != null) {
+    window.clearTimeout(cs.reasoningFlushTimer)
+    cs.reasoningFlushTimer = null
   }
-  if (reasoningBuffer) {
-    thinkingText.value += reasoningBuffer
-    reasoningBuffer = ''
+  if (cs.reasoningBuffer) {
+    cs.thinkingText += cs.reasoningBuffer
+    cs.reasoningBuffer = ''
   }
 }
 
 // 流收尾：冲残留 buffer → 拉 detail 对齐落库全文（同 tick 内 streamText 清空，无闪烁）；
 // 失败场景刷新详情暴露重试条（user 消息已落库）
-async function settleStream(id: LongId, success: boolean) {
-  flushStreamText()
+async function settleStream(id: LongId, success: boolean, cs: PerConversationStream) {
+  flushStreamText(cs)
   try {
     detail.value = await clarifyApi.detail(id)
     activeId.value = String(detail.value?.conversation.id ?? id)
     loadList()
-    streamText.value = ''
+    cs.streamText = ''
     scrollToBottom()
   } catch {
     // 拦截器已弹错；流式占位随 sending 结束不再渲染，重试条/重新进入会话兜底
-    streamText.value = ''
+    cs.streamText = ''
     if (success) ElMessage.warning('回复已生成，但详情刷新失败，请重新进入会话查看')
   }
 }
@@ -2431,24 +2521,27 @@ async function settleStream(id: LongId, success: boolean) {
 // 通道后可见打字机增量（后端 runStreamRound 早已支持 selections 参数）。
 async function streamSendActiveMessage(id: LongId, text: string,
                                       selections: ClarifySelection[] | null = null) {
-  resetStreamState()
+  // 流收尾的 settle 要落地到「本次发送的目标会话」，故先取再传（切走后仍写回原会话，不污染新会话）
+  const targetId = String(id)
+  const cs = streamStates.get(targetId) ?? getOrCreateStream(targetId)
+  resetStreamState(cs)
   const abort = new AbortController()
-  streamAbort.value = abort
+  cs.streamAbort = abort
   try {
     await streamSendConversation(id, text, selections, {
-      onToken: appendStreamToken,
-      onReasoning: appendStreamReasoning,
-      onProgress: appendProcessStep,
-      onDone: () => { void settleStream(id, true) },
+      onToken: (t) => appendStreamToken(t, cs),
+      onReasoning: (t) => appendStreamReasoning(t, cs),
+      onProgress: (t) => appendProcessStep(t, cs),
+      onDone: () => { void settleStream(id, true, cs) },
       onError: (msg) => {
         ElMessage.error(msg)
-        void settleStream(id, false)
+        void settleStream(id, false, cs)
       },
-      onAbort: () => { void settleStream(id, false) }
+      onAbort: () => { void settleStream(id, false, cs) }
     }, abort.signal)
   } finally {
-    streamAbort.value = null
-    cleanupStreamState()
+    cs.streamAbort = null
+    cleanupStreamState(cs, targetId)
   }
 }
 
@@ -2458,54 +2551,67 @@ async function streamSendActiveMessage(id: LongId, text: string,
  */
 async function streamSendOrCreate(text: string, plannerId: string | null,
                                   attachmentIds: string[] | null = null) {
-  resetStreamState()
   const existingId = activeId.value
-  // 新会话：id 由首帧 session 事件带回；done 前可能仍为 null，收敛时以 streamCreatedId 为准
+  // 新建会话在首帧 session 前尚无 id，先建一个占位实例承接首帧到达前的流式增量
+  const placeholderKey = '__pending__'
+  const existingCs = existingId != null
+    ? streamStates.get(String(existingId)) ?? getOrCreateStream(String(existingId))
+    : null
+  // 新会话：id 由首帧 session 事件带回；done 前可能仍为 null
   let streamCreatedId: LongId | null = existingId
   const settleId = () => streamCreatedId
+  // 当前实际承载流式增量的实例：老会话从已有 Map 取；新会话用占位实例，首帧后迁移到真实 key
+  let cs = existingCs ?? getOrCreateStream(placeholderKey)
+  resetStreamState(cs)
   // 停止生成：新建会话与老会话共用同一个 AbortController（streamCreate 首帧回 id 后仍可中止）
   const abort = new AbortController()
-  streamAbort.value = abort
+  cs.streamAbort = abort
   try {
     if (existingId != null) {
       await streamSendConversation(existingId, text, null, {
-        onToken: appendStreamToken,
-        onReasoning: appendStreamReasoning,
-        onProgress: appendProcessStep,
-        onDone: () => { void settleStream(existingId, true) },
+        onToken: (t) => appendStreamToken(t, cs),
+        onReasoning: (t) => appendStreamReasoning(t, cs),
+        onProgress: (t) => appendProcessStep(t, cs),
+        onDone: () => { void settleStream(existingId, true, cs) },
         onError: (msg) => {
           ElMessage.error(msg)
-          void settleStream(existingId, false)
+          void settleStream(existingId, false, cs)
         },
-        onAbort: () => { void settleStream(existingId, false) }
+        onAbort: () => { void settleStream(existingId, false, cs) }
       }, abort.signal, attachmentIds)
     } else {
       await streamCreateConversation(text, plannerId, webSearchEnabled.value, {
         onSession: (newId) => {
           streamCreatedId = newId
+          // 占位实例迁移到真实会话 key：切走后由 Map 按 id 取回，不再随占位丢失
+          const realKey = String(newId)
+          streamStates.set(realKey, cs)
+          streamStates.delete(placeholderKey)
+          // 发送闸门与气泡文本同迁移：否则新会话的 activeSending 一直是 false（按钮可点、无停止）
+          migratePlaceholderState(newId)
           // 立刻切到新会话（左侧列表随后由 settleStream 的 detail 拉取刷新）
           activeId.value = newId
           // 后端已在建会时认领临时批次：清 token 并按会话重拉附件
           clientToken.value = null
           void refreshAttachments()
         },
-        onToken: appendStreamToken,
-        onReasoning: appendStreamReasoning,
-        onProgress: appendProcessStep,
+        onToken: (t) => appendStreamToken(t, cs),
+        onReasoning: (t) => appendStreamReasoning(t, cs),
+        onProgress: (t) => appendProcessStep(t, cs),
         onDone: () => {
           const id = settleId()
-          if (id == null) { sending.value = false; return }
-          void settleStream(id, true)
+          if (id == null) { setSending(null, false); return }
+          void settleStream(id, true, cs)
         },
         onError: (msg) => {
           ElMessage.error(msg)
           const id = settleId()
-          if (id != null) void settleStream(id, false)
+          if (id != null) void settleStream(id, false, cs)
         },
         onAbort: () => {
           const id = settleId()
           if (id != null) {
-            void settleStream(id, false)
+            void settleStream(id, false, cs)
             return
           }
           // 极端时序：session 事件尚未到达即被中止——会话已落库（含 user 消息），
@@ -2522,56 +2628,57 @@ async function streamSendOrCreate(text: string, plannerId: string | null,
         attachmentIds)
     }
   } finally {
-    streamAbort.value = null
-    cleanupStreamState()
+    cs.streamAbort = null
+    // 清「本次实际占用」的那个键：首帧后已迁移到新 id，仍按占位键清会漏掉真实会话的闸门
+    cleanupStreamState(cs, streamCreatedId != null ? String(streamCreatedId) : null)
   }
 }
 
 /** 过程步骤增量（progress 帧）：一行一条，直接追加并保持展开（用户要看到「在做什么」）。 */
-function appendProcessStep(text: string) {
+function appendProcessStep(text: string, cs: PerConversationStream) {
   if (!text) return
   // 同一行重复推送（正在检索 → 已检索）不去重：它们语义不同，按序展示更符合「过程」直觉
-  processSteps.value = [...processSteps.value, text]
+  cs.processSteps = [...cs.processSteps, text]
   scrollToBottom()
 }
 
 /** 过程区是否仍在进行（思考流未结束且正文未开始）——决定转圈图标与是否强制展开。 */
 const isProcessRunning = computed(() =>
-  !streamText.value && (reasoningActive || processSteps.value.length > 0)
+  !currentStream.value.streamText && (currentStream.value.reasoningActive || currentStream.value.processSteps.length > 0)
 )
 
 /** 过程区标题：进行中显示「思考中…（已 N 步）」，结束后显示「思考与检索过程」。 */
 const processHeadline = computed(() => {
-  const stepCount = processSteps.value.length
+  const stepCount = currentStream.value.processSteps.length
   if (isProcessRunning.value) {
     return stepCount > 0 ? `思考中…（已 ${stepCount} 步）` : '思考中…'
   }
   return stepCount > 0 ? `思考与检索过程（${stepCount} 步）` : '思考过程'
 })
 
-/** 流式状态复位（正文/思考/步骤/围栏标记/缓冲）。 */
-function resetStreamState() {
-  streamText.value = ''
-  thinkingText.value = ''
-  thinkingExpanded.value = true
-  processSteps.value = []
-  streamBuffer = ''
-  reasoningBuffer = ''
-  reasoningActive = false
-  jsonFenceSeen = false
+/** 流式状态复位（正文/思考/步骤/围栏标记/缓冲）——只复位指定会话，不影响其他会话的流式态。 */
+function resetStreamState(cs: PerConversationStream) {
+  cs.streamText = ''
+  cs.thinkingText = ''
+  cs.thinkingExpanded = true
+  cs.processSteps = []
+  cs.streamBuffer = ''
+  cs.reasoningBuffer = ''
+  cs.reasoningActive = false
+  cs.jsonFenceSeen = false
 }
 
-/** 流式状态清理（定时器/缓冲/发送态）。 */
-function cleanupStreamState() {
-  if (streamFlushTimer != null) {
-    window.clearTimeout(streamFlushTimer)
-    streamFlushTimer = null
+/** 流式状态清理（定时器/缓冲/发送态）——只清理指定会话的发送闸门。 */
+function cleanupStreamState(cs: PerConversationStream, targetId: string | null | undefined) {
+  if (cs.streamFlushTimer != null) {
+    window.clearTimeout(cs.streamFlushTimer)
+    cs.streamFlushTimer = null
   }
-  flushReasoningText()
-  streamBuffer = ''
-  reasoningBuffer = ''
-  pendingText.value = ''
-  sending.value = false
+  flushReasoningText(cs)
+  cs.streamBuffer = ''
+  cs.reasoningBuffer = ''
+  setPendingText(targetId, '')
+  setSending(targetId, false)
 }
 
 /**
@@ -2579,8 +2686,9 @@ function cleanupStreamState() {
  * 生成立即停止且未完成回复不落库；随后 settleStream 拉详情（user 消息已落库 → 出现重试条）。
  */
 function stopGenerating() {
-  if (!streamAbort.value) return
-  streamAbort.value.abort()
+  const cs = currentStream.value
+  if (!cs.streamAbort) return
+  cs.streamAbort.abort()
   ElMessage.info('已停止生成')
 }
 
@@ -2588,7 +2696,7 @@ function stopGenerating() {
 
 /** 进入编辑态：预填原文与技能。发送中/终稿中/已放弃不可编辑。 */
 function startEdit(msg: RequirementMessage) {
-  if (sending.value || finalizing.value) return
+  if (activeSending.value || finalizing.value) return
   editingMsgId.value = String(msg.id)
   editingDraft.value = msg.content ?? ''
   // 原文里已不含技能前缀（后端落库时剥掉了），技能只存在于 payload ⇒ 从 payload 读回
@@ -2658,11 +2766,13 @@ async function recoverAbortedNewConversation(text: string) {
 // V40.2 /planner 命令处理：新会话先建 CHAT 会话再调 toClarify；已有会话直接调 toClarifyById
 // （附加文本落库进上下文后切 CLARIFY，首轮强制 structured → 推荐卡片）
 async function handlePlannerCommand(extra: string) {
-  if (sending.value) return
+  if (activeSending.value) return
   input.value = ''
+  // 同 handleSend：目标会话先取定，finally 不读可能已切换的 activeId
+  const targetId = activeId.value
   // 气泡展示用户意图文案，不再回显 /planner 语法
-  pendingText.value = extra || '请帮我整理一份技术方案'
-  sending.value = true
+  setPendingText(targetId, extra || '请帮我整理一份技术方案')
+  setSending(targetId, true)
   scrollToBottom()
   try {
     const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
@@ -2674,6 +2784,9 @@ async function handlePlannerCommand(extra: string) {
       const initMsg = extra || '请帮我整理一份技术方案'
       result = await clarifyApi.create(initMsg, plannerId, webSearchEnabled.value)
       activeId.value = String(result.conversation.id)
+      // 新 id 出现即迁移占位闸门：toClarify 首轮是同步 LLM（数百秒），
+      // 闸门留在占位键上会让新会话的发送按钮在整个切换轮期间都可点。
+      migratePlaceholderState(activeId.value)
       result = await clarifyApi.toClarify(activeId.value, null)
     } else {
       result = await clarifyApi.toClarify(activeId.value, extra || null)
@@ -2688,23 +2801,31 @@ async function handlePlannerCommand(extra: string) {
       try { detail.value = await clarifyApi.detail(activeId.value) } catch { /* 拦截器已弹错 */ }
     }
   } finally {
-    pendingText.value = ''
-    sending.value = false
+    setPendingText(targetId, '')
+    setSending(targetId, false)
+    // 新会话首轮：闸门已随 migratePlaceholderState 迁到真实 id，这里补清，
+    // 否则迁移过去的那一位永远为 true，输入框会被永久禁用
+    const currentId = activeId.value
+    if (currentId != null && String(currentId) !== String(targetId ?? '')) {
+      setPendingText(currentId, '')
+      setSending(currentId, false)
+    }
   }
 }
 
 async function handleRetry() {
-  if (activeId.value == null || sending.value) return
+  if (activeId.value == null || activeSending.value) return
   // 技能执行期间禁止重试（canRetry 已隐藏按钮，这里兜底防竞态双击）
   if (skillRunId.value != null) return
-  sending.value = true
+  const targetId = activeId.value
+  setSending(targetId, true)
   scrollToBottom()
   try {
     detail.value = await clarifyApi.retry(activeId.value)
     activeId.value = String(detail.value?.conversation.id ?? activeId.value)
     scrollToBottom()
   } catch { /* 拦截器已弹错；保持现状可再次重试 */ }
-  finally { sending.value = false }
+  finally { setSending(targetId, false) }
 }
 
 // V33 结构化选项提交：可读文本走 content（LLM 上下文），选择快照走 payload（回显）
@@ -2712,15 +2833,15 @@ async function handleRetry() {
 // 用户体感是「卡住很久然后一次性刷出」，且看不到思考过程。
 async function handleStructuredSubmit(payload: { text: string; selections: ClarifySelection[] }) {
   const id = activeId.value
-  if (id == null || sending.value) return
-  pendingText.value = payload.text
-  sending.value = true
+  if (id == null || activeSending.value) return
+  setPendingText(id, payload.text)
+  setSending(id, true)
   scrollToBottom()
   try {
     await streamSendActiveMessage(id, payload.text, payload.selections)
   } finally {
-    pendingText.value = ''
-    sending.value = false
+    setPendingText(id, '')
+    setSending(id, false)
   }
 }
 
@@ -2738,9 +2859,9 @@ async function triggerTaskReview(taskId: string) {
 
 async function handleFinalize() {
   const conv = conversation.value
-  // 并发守卫：对话轮在跑（sending）或已在终稿确认中（finalizing）时拒绝重复提交，
+  // 并发守卫：对话轮在跑（activeSending）或已在终稿确认中（finalizing）时拒绝重复提交，
   // 防重复点击与轮中并发 finalize 竞态（后端另有 CAS + 幂等兜底）
-  if (!conv || sending.value || finalizing.value) return
+  if (!conv || activeSending.value || finalizing.value) return
   try {
     await ElMessageBox.confirm(
       `将以终稿「${conv.finalTitle}」创建任务，并提交 AI 拆解（草案在后台生成，通常需要一段时间：几十秒到几分钟不等，视任务复杂程度而定）。是否继续？`,
@@ -2759,7 +2880,7 @@ async function handleFinalize() {
 async function handleRegenerate() {
   const conv = conversation.value
   // 并发守卫：与 handleFinalize 同语义，防对话轮在跑时重复提交重建任务
-  if (!conv || sending.value || finalizing.value) return
+  if (!conv || activeSending.value || finalizing.value) return
   try {
     await ElMessageBox.confirm(
       `原任务已不存在，将以终稿「${conv.finalTitle}」重新创建任务，并提交 AI 拆解（草案在后台生成，通常需要一段时间：几十秒到几分钟不等，视任务复杂程度而定）。是否继续？`,

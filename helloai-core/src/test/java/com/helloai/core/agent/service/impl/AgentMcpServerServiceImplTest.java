@@ -48,7 +48,9 @@ class AgentMcpServerServiceImplTest {
             "uploadArtifact", "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
             "checkIn", "checkOut");
 
-    /** REF-8.1/8.3：内部 LLM 进程内固有工具通道（InternalLlmExecutorTools @Tool name，逐个列出以冻结清单）。 */
+    /** REF-8.1/8.3：内部 LLM 进程内固有工具通道（InternalLlmExecutorTools @Tool name，逐个列出以冻结清单）。
+     *  SKX-8（2026-10-26）新增的三个技能工具同属内部通道（{@code SkillExecutionToolContributor}），
+     *  不是 MCP 会话工具，故一并冻结在此；遗漏会让「可注入面 = 内部工具」的断言变成假红。 */
     private static final List<String> INTERNAL_LLM_TOOLS = List.of(
             "internal_get_sub_task_detail",
             "internal_get_deps_summary",
@@ -58,7 +60,10 @@ class AgentMcpServerServiceImplTest {
             "internal_list_skills",
             "internal_load_skill",
             "internal_report_blocked",
-            "internal_run_in_sandbox");
+            "internal_run_in_sandbox",
+            "internal_run_skill",
+            "internal_read_artifact",
+            "internal_export_artifact");
 
     private AgentMcpServerServiceImpl service;
     private LambdaQueryChainWrapper<AgentMcpServer> chain;

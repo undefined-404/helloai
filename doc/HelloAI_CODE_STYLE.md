@@ -502,6 +502,7 @@ planner/
 ├── policy            # 规划粒度与需求包（Granularity / RequirementPackage）
 ├── prompt
 ├── search
+├── support           # 跨入口共用的同步段基础设施（2026-10-30：对话轮次互斥锁 ConversationRoundLock / Locker）
 └── tool              # WebSearch 工具回调
 ```
 

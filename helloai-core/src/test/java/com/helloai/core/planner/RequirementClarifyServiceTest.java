@@ -56,6 +56,7 @@ import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
 import com.helloai.core.planner.search.WebPageContent;
 import com.helloai.core.planner.search.WebSearchResult;
+import com.helloai.core.planner.support.ConversationRoundLocker;
 import com.helloai.core.task.port.TaskDraft;
 import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.service.TaskService;
@@ -178,6 +179,10 @@ class RequirementClarifyServiceTest {
     private ChatSkillRunService chatSkillRunService;
     private SkillExecutionWorker skillExecutionWorker;
 
+    /** RC-1：每会话轮次互斥锁。测试态直接 mock：runLocked 无非锁外行为，锁内同步前置段照跑即可。 */
+    @Mock
+    private ConversationRoundLocker roundLocker;
+
     @BeforeEach
     void setUp() {
         // 元词过滤（2026-10-23 附件+联网修复）：本类存量用例走的是「规划器无产出 →
@@ -227,11 +232,13 @@ class RequirementClarifyServiceTest {
                 chatSkillRunService,
                 skillExecutionWorker,
                 // TD-8：stall 守卫（用户信息量判据）接入后新增的构造参数
-                new ClarifyStallGuard(new ObjectMapper()), mock(ChatAttachmentService.class));
+                new ClarifyStallGuard(new ObjectMapper()), mock(ChatAttachmentService.class),
+                // RC-1：每会话轮次互斥锁（mock：锁内同步前置段照跑，锁行为由 ConversationRoundLockerTest 覆盖）
+                roundLocker);
         streamService = new ClarifyStreamServiceImpl(
                 orchestrator, promptRenderService, commandSearch, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
-                webSearchOrchestrator, skillDirective);
+                webSearchOrchestrator, roundLocker, skillDirective);
         clarifyService = new RequirementClarifyServiceImpl(
                 conversationService, messageService, taskService, plannerAgentPicker,
                 orchestrator, streamService, finalizeService, commandSearch);
@@ -246,6 +253,11 @@ class RequirementClarifyServiceTest {
         // 终稿字段定点写改走 Mapper（jsonb ::jsonb 转换，见 RequirementConversationMapper.xml）
         lenient().when(requirementConversationMapper.updateFinalDraftFields(anyLong(), any(), any(), any()))
                 .thenReturn(1);
+        // RC-1：锁 mock 直接执行临界区 lambda（锁行为本身由 ConversationRoundLockerTest 覆盖）
+        lenient().when(roundLocker.runLocked(anyLong(), any())).thenAnswer(inv -> {
+            java.util.function.Supplier<?> section = inv.getArgument(1);
+            return section.get();
+        });
     }
 
     /** web_search 工具输出 JSON（provider + results；省略 answer 键 → record 反序列化缺省 null）。
@@ -357,6 +369,25 @@ class RequirementClarifyServiceTest {
         verify(messageService).addMessage(CONV_ID, "user", "做一个报表", null);
         verify(messageService).addMessage(CONV_ID, "assistant", "请问验收标准是什么？", null);
         verify(conversationService, org.mockito.Mockito.times(1)).updateById(conversation);
+    }
+
+    @Test
+    @DisplayName("RC-1 并发轮次：锁内重读最新行再 +1，不用锁外快照（防覆盖并发轮的自增）")
+    void sendMessage_incrementsRoundCountFromFreshRowInsideLock() {
+        RequirementConversation snapshot = activeConversation();
+        RequirementConversation fresh = activeConversation();
+        fresh.setRoundCount(5);
+        // 第 1 次 = requireActive 的锁外快照（1）；第 2 次 = 锁内重读的最新行（5）
+        when(conversationService.getById(CONV_ID)).thenReturn(snapshot, fresh);
+        stubLlmRound("""
+                {"type":"question","message":"请问验收标准是什么？"}
+                """);
+
+        clarifyService.sendMessage(CONV_ID, "做一个报表");
+
+        // 基于最新行 5 → 6；沿用快照会写成 2，把并发那轮的自增覆盖掉
+        assertThat(snapshot.getRoundCount()).isEqualTo(6);
+        verify(conversationService).updateById(snapshot);
     }
 
     @Test
@@ -2764,6 +2795,27 @@ class RequirementClarifyServiceTest {
                 .noneMatch(e -> e.type() == RequirementClarifyService.ChatStreamEvent.Type.TOKEN);
         verify(messageService).addMessage(CONV_ID, "user", "你好", null);
         verify(messageService, never()).addMessage(eq(CONV_ID), eq("assistant"), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("RC-1 流式轮：锁内重读最新行再 +1（与同步轮同口径，不覆盖并发自增）")
+    void streamRound_incrementsRoundCountFromFreshRowInsideLock() {
+        RequirementConversation snapshot = streamChatConversation();
+        RequirementConversation fresh = streamChatConversation();
+        fresh.setRoundCount(7);
+        when(conversationService.getById(CONV_ID)).thenReturn(snapshot, fresh);
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        when(messageService.listByConversation(CONV_ID))
+                .thenReturn(List.of(message("user", "你好", 1)));
+        stubDecisionRound(DECISION_CHAT_NO_SEARCH);
+        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
+                .thenReturn(Flux.error(new RuntimeException("上游 LLM 超时")));
+
+        clarifyService.streamRound(CONV_ID, "你好", null).collectList().block();
+
+        // 前置段在流段之前完成：基于最新行 7 → 8
+        assertThat(snapshot.getRoundCount()).isEqualTo(8);
+        verify(conversationService).updateById(snapshot);
     }
 
     @Test

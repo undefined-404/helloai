@@ -30,6 +30,7 @@ import com.helloai.core.planner.service.RequirementClarifyService.ClarifySelecti
 import com.helloai.core.planner.service.RoundProcess;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
+import com.helloai.core.planner.support.ConversationRoundLocker;
 import com.helloai.core.task.port.TaskView;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -104,6 +105,9 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
 
     /** 会话附件认领（新建会话时把 clientToken 下的临时附件挂到会话上）。 */
     private final ChatAttachmentService chatAttachmentService;
+
+    /** 每会话轮次互斥锁（RC-1）：同步轮 + 内部 round 出口的前置段持锁，与流式共用同一把锁。 */
+    private final ConversationRoundLocker roundLocker;
 
     // ══════════════════════════════════════════════════════════════
     //  对外轮次入口
@@ -229,7 +233,14 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
             log.info("用户取消转方案，继续自由对话（记拒绝记忆）: conversationId={}", conversation.getId());
         }
         conversation.setPendingClarifyConfirm(false);
-        conversationService.updateById(conversation);
+        // 定点写而非整行回写：本方法在锁外执行（确认卡前置），入参实体可能是早于并发轮的旧快照，
+        // 整行 updateById 会把并发轮刚写入的 round_count 覆盖掉。
+        conversationService.lambdaUpdate()
+                .eq(RequirementConversation::getId, conversation.getId())
+                .set(RequirementConversation::getMode, conversation.getMode())
+                .set(RequirementConversation::getClarifyDeclined, conversation.getClarifyDeclined())
+                .set(RequirementConversation::getPendingClarifyConfirm, false)
+                .update();
         return confirmAccepted;
     }
 
@@ -352,29 +363,50 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
                     conversationId, extraText.length());
             return enterClarify(conversationId, extraText.isEmpty() ? null : extraText);
         }
-        messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, userMessage, userPayload);
-        int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
-        conversation.setRoundCount(rounds + 1);
-        conversationService.updateById(conversation);
+        // RC-1 每会话互斥：同步前置段（落 user 消息 + 自增轮数）持锁串行化，解锁后再进 runRoundCore。
+        // 竞态全在前置段「读 roundCount → addMessage → setRoundCount(+1) → updateById」，
+        // 抢占失败即抛 BizException；unlock 由 runLocked finally 保障（§4.1：不进 LLM 流段）。
+        roundLocker.runLocked(conversationId, () -> {
+            messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, userMessage, userPayload);
+            // 锁内重读轮数（§7.2 读改写回写用最新行）：直接基于锁外快照 +1 会覆盖并发轮的自增
+            conversation.setRoundCount(latestRoundCount(conversationId, conversation) + 1);
+            conversationService.updateById(conversation);
+            return null;
+        });
         return runRoundCore(conversation, userMessage, userPayload);
+    }
+
+    /** 锁内取最新轮数；行被并发删除时退回调用方快照（不阻断本轮落库）。 */
+    private int latestRoundCount(Long conversationId, RequirementConversation fallback) {
+        RequirementConversation latest = conversationService.getById(conversationId);
+        Integer rounds = latest != null ? latest.getRoundCount() : fallback.getRoundCount();
+        return rounds != null ? rounds : 0;
     }
 
     @Override
     public ClarifyConversationDetail enterClarify(Long conversationId, String extraMessage) {
-        if (extraMessage != null && !extraMessage.isBlank()) {
-            messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, extraMessage.trim(), null);
-            log.info("澄清会话斜杠命令附加文本落库: conversationId={}", conversationId);
-        }
+        // RC-1 每会话互斥：转澄清轮前置段（追加 user 消息 + 切 mode + 清标记）持锁串行化。
+        // 锁内只做同步写（分配 seq / 切 mode），runLlmRound 是同步 LLM（实测数百秒），
+        // 必须在锁释放后执行（§4.1：临界区只覆盖前置段，长 LLM 持锁放大故障面）。
+        roundLocker.runLocked(conversationId, () -> {
+            if (extraMessage != null && !extraMessage.isBlank()) {
+                messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER,
+                        extraMessage.trim(), null);
+                log.info("澄清会话斜杠命令附加文本落库: conversationId={}", conversationId);
+            }
+            RequirementConversation conversation = commandSearch.requireActive(conversationId);
+            String from = conversation.getMode();
+            conversation.setMode(RequirementClarifyService.MODE_CLARIFY);
+            // 手动切换时一并清除意图词待确认标记与拒绝记忆（用户显式转方案，重置冷却期）
+            conversation.setPendingClarifyConfirm(false);
+            conversation.setClarifyDeclined(false);
+            conversationService.updateById(conversation);
+            log.info("澄清会话切换模式: conversationId={}, from={}, to={}",
+                    conversationId, from, RequirementClarifyService.MODE_CLARIFY);
+            return null;
+        });
+        // 锁已释放；切换轮不做联网搜索（后续再评估）；澄清模板基于全量历史直接产草案/追问
         RequirementConversation conversation = commandSearch.requireActive(conversationId);
-        String from = conversation.getMode();
-        conversation.setMode(RequirementClarifyService.MODE_CLARIFY);
-        // 手动切换时一并清除意图词待确认标记与拒绝记忆（用户显式转方案，重置冷却期）
-        conversation.setPendingClarifyConfirm(false);
-        conversation.setClarifyDeclined(false);
-        conversationService.updateById(conversation);
-        log.info("澄清会话切换模式: conversationId={}, from={}, to={}",
-                conversationId, from, RequirementClarifyService.MODE_CLARIFY);
-        // 切换轮不做联网搜索（后续再评估）；澄清模板基于全量历史直接产草案/追问
         return runLlmRound(conversation, null, true, null);
     }
 
@@ -438,12 +470,17 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         if (need.isEmpty()) {
             throw new BizException("请说明要生成什么内容（例如「画一张分布式支付的生命周期图」）");
         }
-        // 用户消息：文本剥掉前缀，技能名进 payload（气泡只展示原文，历史仍可回溯选了哪个技能）
-        messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, need,
-                skillDirective.mergePayload(null, skillName));
-        int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
-        conversation.setRoundCount(rounds + 1);
-        conversationService.updateById(conversation);
+        // RC-1 每会话互斥：技能轮前置段（落 user 消息 + 自增轮数）持锁串行化；
+        // executeSkillRound 是异步投递（SKX-13 后台 worker），锁不跨异步执行。
+        roundLocker.runLocked(conversationId, () -> {
+            // 用户消息：文本剥掉前缀，技能名进 payload（气泡只展示原文，历史仍可回溯选了哪个技能）
+            messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, need,
+                    skillDirective.mergePayload(null, skillName));
+            // 锁内重读轮数（§7.2）：锁外快照 +1 会覆盖并发轮的自增
+            conversation.setRoundCount(latestRoundCount(conversationId, conversation) + 1);
+            conversationService.updateById(conversation);
+            return null;
+        });
         log.info("对话内技能执行开始: conversationId={}, skill={}, needLen={}",
                 conversationId, skillName, need.length());
         return executeSkillRound(conversation, skillName, need, "CHAT");
@@ -503,28 +540,40 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     private ClarifyConversationDetail runTaskDirectRound(RequirementConversation conversation,
                                                          String userMessage) {
         Long conversationId = conversation.getId();
-        if (!RequirementClarifyService.MODE_CLARIFY.equals(conversation.getMode())) {
-            conversation.setMode(RequirementClarifyService.MODE_CLARIFY);
-            conversation.setPendingClarifyConfirm(false);
-            conversationService.updateById(conversation);
-        }
-        // 2026-10-27 起显式技能不再走本方法（改为 runSkillRound 当场执行）；
-        // 这里保留解析只为「历史消息里带过 [skill:x]」的兼容：旧数据 /task 消息 parse 出 null，行为不变。
-        SkillDirective.Parsed parsed = skillDirective.parse(userMessage);
-        String extraText = parsed.hasSkill() ? parsed.text() : commandSearch.taskCommandExtra(userMessage);
-        if (!extraText.isEmpty()) {
-            messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, extraText,
-                    parsed.hasSkill() ? skillDirective.mergePayload(null, parsed.skillName()) : null);
-            int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
-            conversation.setRoundCount(rounds + 1);
-            conversationService.updateById(conversation);
-        }
-        log.info("/task 直达拆解轮: conversationId={}, extraLen={}, skill={}",
-                conversationId, extraText.length(), parsed.skillName());
+        // RC-1 每会话互斥：/task 直达拆解轮前置段（切 mode + 落 user 消息 + 自增轮数）持锁串行化；
+        // runFinalizeLlmRound 是同步 LLM，锁必须在其中前释放（§4.1：临界区只覆盖前置段）。
+        roundLocker.runLocked(conversationId, () -> {
+            // 先同步锁内最新轮数：随后的「切 mode」是整行回写，用锁外快照会覆盖并发轮的自增
+            int rounds = latestRoundCount(conversationId, conversation);
+            conversation.setRoundCount(rounds);
+            if (!RequirementClarifyService.MODE_CLARIFY.equals(conversation.getMode())) {
+                conversation.setMode(RequirementClarifyService.MODE_CLARIFY);
+                conversation.setPendingClarifyConfirm(false);
+                conversationService.updateById(conversation);
+            }
+            // 2026-10-27 起显式技能不再走本方法（改为 runSkillRound 当场执行）；
+            // 这里保留解析只为「历史消息里带过 [skill:x]」的兼容：旧数据 /task 消息 parse 出 null，行为不变。
+            SkillDirective.Parsed parsed = skillDirective.parse(userMessage);
+            String extraText = parsed.hasSkill() ? parsed.text() : commandSearch.taskCommandExtra(userMessage);
+            if (!extraText.isEmpty()) {
+                messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, extraText,
+                        parsed.hasSkill() ? skillDirective.mergePayload(null, parsed.skillName()) : null);
+                conversation.setRoundCount(rounds + 1);
+                conversationService.updateById(conversation);
+                log.info("/task 直达拆解轮: conversationId={}, extraLen={}, skill={}",
+                        conversationId, extraText.length(), parsed.skillName());
+                return extraText;
+            }
+            return "";
+        });
+        // 锁已释放（§4.1）。webSearch 与 runFinalizeLlmRound 回到主链路；extraText 只在锁内逗留，
+        // 这里重新解析以保持「无附加文本」分支可读（锁外仅读不做写）。
+        SkillDirective.Parsed outerParsed = skillDirective.parse(userMessage);
+        String outerExtra = outerParsed.hasSkill() ? outerParsed.text() : commandSearch.taskCommandExtra(userMessage);
         WebSearchOutcome webSearchOutcome = null;
         if (commandSearch.isWebSearchEnabled(conversation)) {
             webSearchOutcome = webSearchOrchestrator.doWebSearch(
-                    commandSearch.resolveSearchSource(conversationId, extraText, null));
+                    commandSearch.resolveSearchSource(conversationId, outerExtra, null));
         }
         return runFinalizeLlmRound(conversation, webSearchOutcome);
     }
@@ -657,7 +706,12 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
                 confirmCardProtocol.buildAskText(),
                 confirmCardProtocol.buildAskPayload());
         conversation.setPendingClarifyConfirm(true);
-        conversationService.updateById(conversation);
+        // 定点写而非整行回写：本方法在锁释放后的流段执行，实体可能是早于并发轮的旧快照，
+        // 整行 updateById 会把并发轮刚写入的 round_count 覆盖掉。
+        conversationService.lambdaUpdate()
+                .eq(RequirementConversation::getId, conversationId)
+                .set(RequirementConversation::getPendingClarifyConfirm, true)
+                .update();
         log.info("联合决策 intent=clarify，落库单条确认卡: conversationId={}, question(下一轮重新生成)={}",
                 conversationId, question);
         return new ClarifyConversationDetail(conversation,

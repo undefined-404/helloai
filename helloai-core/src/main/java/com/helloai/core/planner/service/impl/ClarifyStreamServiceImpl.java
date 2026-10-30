@@ -23,6 +23,7 @@ import com.helloai.core.planner.service.RequirementClarifyService.ClarifySelecti
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RoundProcess;
 import com.helloai.core.planner.service.RequirementMessageService;
+import com.helloai.core.planner.support.ConversationRoundLocker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -65,6 +66,9 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
     private final ConfirmCardProtocol confirmCardProtocol;
     private final ClarifyWebSearchOrchestrator webSearchOrchestrator;
 
+    /** 每会话轮次互斥锁（RC-1）：同步前置段持锁、解锁后再入 LLM 流段。 */
+    private final ConversationRoundLocker roundLocker;
+
     /** 显式技能判定（2026-10-26）：技能消息不走流式，与 /task 同口径拒绝。 */
     private final SkillDirective skillDirective;
 
@@ -106,17 +110,16 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
         // 此前这里是「抛 BizException 要求走普通发送」，会把「确认卡点确认」误拦
         // （结构化卡提交已改走流式），故改为与同步路径同口径。
         orchestrator.resolvePendingClarifyConfirm(conversation, selections);
-        int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
-        if (rounds >= ClarifyRoundOrchestratorServiceImpl.MAX_CHAT_ROUNDS) {
-            throw new BizException("对话轮数已达上限 " + ClarifyRoundOrchestratorServiceImpl.MAX_CHAT_ROUNDS
-                    + "，可输入 /planner 转为方案模式，或新建会话");
-        }
         String userPayload = replyParser.buildSelectionPayload(selections);
-        messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, trimmed, userPayload);
-        conversation.setRoundCount(rounds + 1);
-        conversationService.updateById(conversation);
+        // RC-1 每会话互斥：同步前置段（校验/落库/自增轮数）持锁串行化，解锁后再入 LLM 流段。
+        // 竞态全在前置段「读 roundCount → addMessage → setRoundCount(+1) → updateById」，
+        // 抢占失败即抛 BizException（前端可读）。unlock 由 runLocked finally 保障，异常不成对泄漏。
+        roundLocker.runLocked(conversationId, () -> {
+            doStreamRoundPrelude(conversation, trimmed, userPayload);
+            return null;
+        });
         log.info("流式对话轮开始: conversationId={}, round={}, mode={}",
-                conversationId, rounds + 1, conversation.getMode());
+                conversationId, conversation.getRoundCount(), conversation.getMode());
 
         // CLARIFY 模式：绕过意图决策，规则搜索后真流式主回复（结构化 JSON 正文流式展示）
         if (commandSearch.isClarifyMode(conversation)) {
@@ -124,7 +127,30 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
         }
 
         // CHAT 模式主回复段（决策 + 三态搜索 + 流式主回复），与 streamCreate 首轮共用
-        return runChatStream(conversation, trimmed, userPayload, rounds + 1, attachmentIds);
+        return runChatStream(conversation, trimmed, userPayload, conversation.getRoundCount(), attachmentIds);
+    }
+
+    /** RC-1 流式轮同步前置段：轮数上限校验 → 落 user 消息 → 自增轮数（加锁保护，见 §4.1）。 */
+    private void doStreamRoundPrelude(RequirementConversation conversation, String trimmed,
+                                      String userPayload) {
+        Long conversationId = conversation.getId();
+        // 锁内重读轮数（§7.2 读改写回写用最新行）：conversation 是锁外快照，
+        // 并发轮次下直接基于它 +1 会把别人的自增覆盖掉（丢轮数）。
+        int rounds = latestRoundCount(conversationId, conversation);
+        if (rounds >= ClarifyRoundOrchestratorServiceImpl.MAX_CHAT_ROUNDS) {
+            throw new BizException("对话轮数已达上限 " + ClarifyRoundOrchestratorServiceImpl.MAX_CHAT_ROUNDS
+                    + "，可输入 /planner 转为方案模式，或新建会话");
+        }
+        messageService.addMessage(conversationId, ClarifyCommandSearchServiceImpl.ROLE_USER, trimmed, userPayload);
+        conversation.setRoundCount(rounds + 1);
+        conversationService.updateById(conversation);
+    }
+
+    /** 锁内取最新轮数；行被并发删除时退回调用方快照（不阻断本轮落库）。 */
+    private int latestRoundCount(Long conversationId, RequirementConversation fallback) {
+        RequirementConversation latest = conversationService.getById(conversationId);
+        Integer rounds = latest != null ? latest.getRoundCount() : fallback.getRoundCount();
+        return rounds != null ? rounds : 0;
     }
 
     /**
@@ -300,9 +326,14 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
         }
         RequirementConversation conversation =
                 orchestrator.createConversation(trimmed, plannerAgentId, webSearchEnabled, clientToken);
-        messageService.addMessage(conversation.getId(), ClarifyCommandSearchServiceImpl.ROLE_USER, trimmed, null);
-        conversation.setRoundCount(1);
-        conversationService.updateById(conversation);
+        // RC-1 每会话互斥：首轮前置段同样持锁（键 = chat:conversation:{id}:round，与老会话共锁一致），
+        // 保证新建会话落首条消息 + round_count=1 的过程不被并发的首轮重复追加。
+        roundLocker.runLocked(conversation.getId(), () -> {
+            messageService.addMessage(conversation.getId(), ClarifyCommandSearchServiceImpl.ROLE_USER, trimmed, null);
+            conversation.setRoundCount(1);
+            conversationService.updateById(conversation);
+            return null;
+        });
         log.info("流式会话首轮开始: conversationId={}, mode={}, webSearchEnabled={}",
                 conversation.getId(), conversation.getMode(), webSearchEnabled);
         // 首帧必须给前端会话 id（否则 done 后无从拉 detail / 后续消息发错会话）
