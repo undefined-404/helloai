@@ -175,51 +175,64 @@
               {{ fmtTime(row.createTime) }}
             </template>
           </el-table-column>
+          <!-- 操作列遵循 design-system.css 的「主操作外置 + 其余收进更多」：
+               行内一律默认 small 按钮，不用 link 文字按钮（与页面头部的主/次按钮层级一致）；
+               列宽用 ACTION.MAIN_WITH_MORE（规范值 172）。 -->
           <el-table-column
             label="操作"
-            :width="ACTION.FOUR"
+            :width="ACTION.MAIN_WITH_MORE"
             fixed="right"
           >
             <template #default="{ row }">
               <div class="action-cell">
+                <!-- 主操作：成员（最高频）外置 -->
                 <el-button
                   v-auth="'team:member'"
                   size="small"
-                  link
-                  type="primary"
                   @click="openMembers(row)"
                 >
                   成员
                 </el-button>
-                <el-button
-                  v-if="row.status === 'DRAFT'"
-                  v-auth="'team:edit'"
-                  size="small"
-                  link
-                  type="primary"
-                  @click="onPublish(row)"
+                <!-- 下拉项不能用 v-auth：ElDropdownItem 根节点是 fragment，自定义指令会被
+                     静默忽略；一律 v-if + auth.hasPermission，无可用项时整个下拉不渲染 -->
+                <el-dropdown
+                  v-if="hasMoreActions(row)"
+                  trigger="click"
+                  @command="(cmd: string) => handleMoreCommand(cmd, row)"
                 >
-                  发布
-                </el-button>
-                <el-button
-                  v-if="row.status !== 'ARCHIVED'"
-                  v-auth="'team:edit'"
-                  size="small"
-                  link
-                  @click="openEdit(row)"
-                >
-                  编辑
-                </el-button>
-                <el-button
-                  v-if="row.status !== 'ARCHIVED'"
-                  v-auth="'team:archive'"
-                  size="small"
-                  link
-                  type="warning"
-                  @click="onArchive(row)"
-                >
-                  归档
-                </el-button>
+                  <el-button
+                    size="small"
+                    :aria-label="`Team「${row.name}」更多操作`"
+                  >
+                    更多
+                    <el-icon class="el-icon--right">
+                      <ArrowDown />
+                    </el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item
+                        v-if="row.status === 'DRAFT' && auth.hasPermission('team:edit')"
+                        command="publish"
+                      >
+                        发布
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="row.status !== 'ARCHIVED' && auth.hasPermission('team:edit')"
+                        command="edit"
+                      >
+                        编辑
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="row.status !== 'ARCHIVED' && auth.hasPermission('team:archive')"
+                        command="archive"
+                        divided
+                      >
+                        <span class="dropdown-danger">归档</span>
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </div>
             </template>
           </el-table-column>
@@ -324,8 +337,8 @@
           <template #default="{ row }">
             <el-button
               size="small"
-              link
               type="danger"
+              plain
               @click="onRemoveMember(row)"
             >
               移除
@@ -387,13 +400,17 @@ import {
   UserFilled,
   VideoPlay,
   Bell,
-  Box
+  Box,
+  ArrowDown
 } from '@element-plus/icons-vue'
 import { teamApi } from '@/api/team'
 import { agentApi } from '@/api/agent'
 import type { Agent, Team, TeamMember, LongId } from '@/types'
 import { fmtTime, ACTION } from '@/utils/tableConfig'
 import { sameId } from '@/utils/id'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
 
 const loading = ref(false)
 const rows = ref<Team[]>([])
@@ -562,6 +579,20 @@ async function onArchive(row: Team) {
   await teamApi.archive(row.id)
   ElMessage.success('已归档')
   await load()
+}
+
+/** 「更多」下拉是否渲染：任一操作可用才渲染（规范要求无可用项时不渲染整个下拉） */
+function hasMoreActions(row: Team): boolean {
+  const canEdit = auth.hasPermission('team:edit')
+  const canArchive = auth.hasPermission('team:archive')
+  if (row.status === 'DRAFT' && canEdit) return true
+  return row.status !== 'ARCHIVED' && (canEdit || canArchive)
+}
+
+function handleMoreCommand(cmd: string, row: Team) {
+  if (cmd === 'publish') void onPublish(row)
+  else if (cmd === 'edit') openEdit(row)
+  else if (cmd === 'archive') void onArchive(row)
 }
 
 async function openMembers(row: Team) {

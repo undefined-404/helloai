@@ -14,11 +14,16 @@ export const COL = {
 } as const
 
 // ---- 操作列宽度 ----
+// 「主操作外置 + 更多」是列表页的标准操作列形态（见 styles/design-system.css 的
+// 「List Page Template」小节）：行内主按钮保持外置，其余操作收进「更多」下拉。
+// MAIN_WITH_MORE = 该形态的规范列宽（一个主按钮 + 一个带箭头图标的「更多」）。
 export const ACTION = {
   ONE: 80,
   TWO: 150,
   THREE: 220,
   FOUR: 280,
+  /** 「主按钮 + 更多下拉」形态（design-system.css 规范值） */
+  MAIN_WITH_MORE: 172,
 } as const
 
 // ---- 时间格式化 ----

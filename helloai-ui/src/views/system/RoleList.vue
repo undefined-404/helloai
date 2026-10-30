@@ -98,39 +98,53 @@
           />
           <el-table-column
             label="操作"
-            :width="ACTION.THREE"
+            :width="ACTION.MAIN_WITH_MORE"
             fixed="right"
           >
             <template #default="{ row }">
               <div class="action-cell">
+                <!-- 主操作外置 + 其余收进「更多」（design-system.css / List Page Template） -->
                 <el-button
                   v-auth="'role:edit'"
                   size="small"
-                  link
-                  type="primary"
                   @click="openEdit(row)"
                 >
                   编辑
                 </el-button>
-                <el-button
-                  v-auth="'role:assign-perm'"
-                  size="small"
-                  link
-                  type="primary"
-                  @click="openAssignPermissions(row)"
+                <!-- 下拉项不能用 v-auth：ElDropdownItem 根节点是 fragment，指令会被静默忽略 -->
+                <el-dropdown
+                  v-if="hasMoreActions()"
+                  trigger="click"
+                  @command="(cmd: string) => handleMoreCommand(cmd, row)"
                 >
-                  分配权限
-                </el-button>
-                <el-button
-                  v-auth="'role:delete'"
-                  size="small"
-                  link
-                  type="danger"
-                  :disabled="row.code === 'SUPER_ADMIN'"
-                  @click="removeRole(row)"
-                >
-                  删除
-                </el-button>
+                  <el-button
+                    size="small"
+                    :aria-label="`角色「${row.name}」更多操作`"
+                  >
+                    更多
+                    <el-icon class="el-icon--right">
+                      <ArrowDown />
+                    </el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item
+                        v-if="auth.hasPermission('role:assign-perm')"
+                        command="assign-perm"
+                      >
+                        分配权限
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="auth.hasPermission('role:delete')"
+                        command="delete"
+                        divided
+                        :disabled="row.code === 'SUPER_ADMIN'"
+                      >
+                        <span class="dropdown-danger">删除</span>
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </div>
             </template>
           </el-table-column>
@@ -264,12 +278,15 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Plus, UserFilled } from '@element-plus/icons-vue'
+import { Plus, UserFilled, ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { rbacApi } from '@/api/rbac'
 import type { SysPermission, SysRole } from '@/types'
 import type { LongId } from '@/types'
 import { ACTION } from '@/utils/tableConfig'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
 
 const list = ref<SysRole[]>([])
 const loading = ref(false)
@@ -372,6 +389,16 @@ const permissionGroups = computed(() => {
   if (api.length > 0) groups.push({ label: '接口权限', items: api })
   return groups
 })
+
+/** 「更多」是否渲染：任一操作可用才渲染（无可用项时整个下拉不渲染） */
+function hasMoreActions(): boolean {
+  return auth.hasPermission('role:assign-perm') || auth.hasPermission('role:delete')
+}
+
+function handleMoreCommand(cmd: string, row: SysRole) {
+  if (cmd === 'assign-perm') void openAssignPermissions(row)
+  else if (cmd === 'delete') void removeRole(row)
+}
 
 async function openAssignPermissions(row: SysRole) {
   permTarget.value = row
