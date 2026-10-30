@@ -8,7 +8,7 @@
 #       运行本脚本把这些资源同步进 docs-site/，保持在线站点最新。
 # 流程：
 #   1. 主页面：若存在上游源则覆盖，否则保留现有 docs-site/index.html
-#   2. 同步 6 个交互图 iframe + 9 个 SVG + 4 张 PNG 资源
+#   2. 同步 6 个交互图 iframe + 9 个 SVG + 28 张 PNG 资源
 #   3. 校验站点内所有相对引用可达
 # 注意：
 #   - 本站是「单页 + 图片资源」部署；index.html 中指向仓库文件的链接
@@ -56,13 +56,44 @@ cp doc/diagrams/external-agent-flow.svg \
    "$SITE/doc/diagrams/"
 echo "✓ 9 张 SVG"
 
-# 2.3 UI 截图（4 张 PNG，index.html 引用的）
-cp doc/images/clarify-chat.png \
-   doc/images/dag-view.png \
-   "doc/images/helloai任务旅程.png" \
-   doc/images/quality-dashboard.png \
-   "$SITE/doc/images/"
-echo "✓ 4 张 PNG"
+# 2.3 UI 截图（28 张 PNG：索引页引用 18 张 + 归档 8 张 + 设计图 2 张）
+for img in \
+  "clarify-chat.png" \
+  "chat-artifact.png" \
+  "dag-view.png" \
+  "iteration-view.png" \
+  "overview.png" \
+  "task-list.png" \
+  "agents.png" \
+  "teams.png" \
+  "subtask-detail.png" \
+  "subtask-conversation.png" \
+  "quality-dashboard.png" \
+  "reviews.png" \
+  "event-stream.png" \
+  "inbox.png" \
+  "duty-leases.png" \
+  "role-list.png" \
+  "permission-list.png" \
+  "menu-list.png" \
+  "user-list.png" \
+  "depart-list.png" \
+  "settings.png" \
+  "subtask-list.png" \
+  "activity.png" \
+  "rules.png" \
+  "attachments.png" \
+  "login.png" \
+  "helloai任务旅程.png" \
+  "helloai一句话看懂.png"
+do
+  if [ -f "doc/images/$img" ]; then
+    cp "doc/images/$img" "$SITE/doc/images/"
+  else
+    echo "⚠ 源图缺失，跳过：doc/images/$img"
+  fi
+done
+echo "✓ UI 截图（28 张）"
 
 # 3. 校验：站点内所有相对引用可达
 echo
