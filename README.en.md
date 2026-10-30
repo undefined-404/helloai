@@ -309,9 +309,60 @@ git pull && docker compose -f docker-compose.server.yml up -d --build
 
 ## 📸 Screenshots
 
-| Requirement clarification | Dependency DAG | Quality dashboard |
-|---|---|---|
-| ![Requirement clarification with Planner](doc/images/clarify-chat.png) | ![Dependency DAG view](doc/images/dag-view.png) | ![Quality dashboard](doc/images/quality-dashboard.png) |
+<div align="center">
+
+| Requirement clarification | Chat artifacts | Dependency DAG |
+|:---:|:---:|:---:|
+| ![Requirement clarification with Planner](doc/images/clarify-chat.png) | ![Chat artifacts panel](doc/images/chat-artifact.png) | ![Dependency DAG view](doc/images/dag-view.png) |
+
+| Overview | Task management | Agent management |
+|:---:|:---:|:---:|
+| ![Overview dashboard](doc/images/overview.png) | ![Task list](doc/images/task-list.png) | ![Agent management](doc/images/agents.png) |
+
+| Team composition | Execution iterations | Subtask detail |
+|:---:|:---:|:---:|
+| ![Team composition](doc/images/teams.png) | ![Execution iterations](doc/images/iteration-view.png) | ![Subtask detail](doc/images/subtask-detail.png) |
+
+</div>
+
+<details>
+<summary><b>Details: execution transcript / quality dashboard / review center</b></summary>
+
+<table>
+<tr>
+<td width="33%" valign="top"><img src="doc/images/subtask-conversation.png" alt="Execution transcript"><br><sub>Execution transcript — task context / reasoning / output / verification</sub></td>
+<td width="33%" valign="top"><img src="doc/images/quality-dashboard.png" alt="Quality dashboard"><br><sub>Quality dashboard — first-pass rate / rework rounds / rejection reasons</sub></td>
+<td width="33%" valign="top"><img src="doc/images/reviews.png" alt="Review center"><br><sub>Review center — item-by-item reviewer verdicts and scores</sub></td>
+</tr>
+</table>
+
+</details>
+
+<details>
+<summary><b>External agent onboarding: event replay / inbox / duty leases</b></summary>
+
+<table>
+<tr>
+<td width="33%" valign="top"><img src="doc/images/event-stream.png" alt="Event stream workbench"><br><sub>Event stream workbench — agent event replay and audit tracing</sub></td>
+<td width="33%" valign="top"><img src="doc/images/inbox.png" alt="Agent inbox"><br><sub>Agent inbox — dispatch / notification / rework message delivery</sub></td>
+<td width="33%" valign="top"><img src="doc/images/duty-leases.png" alt="Agent duty leases"><br><sub>Duty leases — on-duty state / session lease / expiry</sub></td>
+</tr>
+</table>
+
+</details>
+
+<details>
+<summary><b>Enterprise RBAC: roles / API permissions / menu routes</b></summary>
+
+<table>
+<tr>
+<td width="33%" valign="top"><img src="doc/images/role-list.png" alt="Role management"><br><sub>Role management — super admin / admin / normal user / guest</sub></td>
+<td width="33%" valign="top"><img src="doc/images/permission-list.png" alt="Permission management"><br><sub>Permission management — API-level action permissions and row-level data rules</sub></td>
+<td width="33%" valign="top"><img src="doc/images/menu-list.png" alt="Menu management"><br><sub>Menu management — sidebar / directory hierarchy / route registration</sub></td>
+</tr>
+</table>
+
+</details>
 
 More screenshots in [`doc/images/`](doc/images/).
 

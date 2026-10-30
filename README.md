@@ -294,9 +294,60 @@ cd helloai-ui && npm install && npm run dev
 
 ## 📸 界面预览
 
-| 需求澄清 | 依赖 DAG | 质量看板 |
-|---|---|---|
-| ![需求澄清](doc/images/clarify-chat.png) | ![依赖 DAG](doc/images/dag-view.png) | ![质量看板](doc/images/quality-dashboard.png) |
+<div align="center">
+
+| 需求澄清 | 对话产物 | 依赖 DAG |
+|:---:|:---:|:---:|
+| ![需求澄清](doc/images/clarify-chat.png) | ![对话产物](doc/images/chat-artifact.png) | ![依赖 DAG](doc/images/dag-view.png) |
+
+| 概览 | 任务管理 | Agent 管理 |
+|:---:|:---:|:---:|
+| ![概览](doc/images/overview.png) | ![任务管理](doc/images/task-list.png) | ![Agent 管理](doc/images/agents.png) |
+
+| Team 组合 | 执行迭代 | 子任务详情 |
+|:---:|:---:|:---:|
+| ![Team 组合](doc/images/teams.png) | ![执行迭代](doc/images/iteration-view.png) | ![子任务详情](doc/images/subtask-detail.png) |
+
+</div>
+
+<details>
+<summary><b>展开看细节：执行对话流 / 质量看板 / 审查中心</b></summary>
+
+<table>
+<tr>
+<td width="33%" valign="top"><img src="doc/images/subtask-conversation.png" alt="执行对话流"><br><sub>执行对话流 —— 任务上下文 / 思考 / 产出 / 核验全过程</sub></td>
+<td width="33%" valign="top"><img src="doc/images/quality-dashboard.png" alt="质量看板"><br><sub>质量看板 —— 一次通过率 / 返工轮次 / 驳回原因</sub></td>
+<td width="33%" valign="top"><img src="doc/images/reviews.png" alt="审查中心"><br><sub>审查中心 —— Reviewer 逐项验收与评分</sub></td>
+</tr>
+</table>
+
+</details>
+
+<details>
+<summary><b>展开：外部 Agent 接入三件套（事件流回放 / 收件箱 / 打卡值班）</b></summary>
+
+<table>
+<tr>
+<td width="33%" valign="top"><img src="doc/images/event-stream.png" alt="事件流工作台"><br><sub>事件流工作台 —— Agent 事件回放与审计追溯</sub></td>
+<td width="33%" valign="top"><img src="doc/images/inbox.png" alt="Agent 收件箱"><br><sub>Agent 收件箱 —— 派单 / 通知 / 返工消息投递</sub></td>
+<td width="33%" valign="top"><img src="doc/images/duty-leases.png" alt="Agent 打卡上班"><br><sub>打卡上班 —— 在岗状态 / 会话租约 / 到期时间</sub></td>
+</tr>
+</table>
+
+</details>
+
+<details>
+<summary><b>展开：企业级权限体系（角色 / 接口权限 / 菜单路由）</b></summary>
+
+<table>
+<tr>
+<td width="33%" valign="top"><img src="doc/images/role-list.png" alt="角色管理"><br><sub>角色管理 —— 超管 / 管理员 / 普通用户 / 游客</sub></td>
+<td width="33%" valign="top"><img src="doc/images/permission-list.png" alt="权限管理"><br><sub>权限管理 —— 接口级动作权限与行级数据规则</sub></td>
+<td width="33%" valign="top"><img src="doc/images/menu-list.png" alt="菜单管理"><br><sub>菜单管理 —— 侧边栏 / 目录层级 / 路由注册</sub></td>
+</tr>
+</table>
+
+</details>
 
 更多截图见 [`doc/images/`](doc/images/)。
 
