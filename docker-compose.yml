@@ -198,8 +198,12 @@ configs:
       [docker]
       network_mode = "bridge"
       host_ip = "host.docker.internal"
-      port_range_min = 40000
-      port_range_max = 60000
+      # Windows 宿主存在动态端口排除段（55347-56346 等，见 `netsh interface ipv4
+      # show excludedportrange protocol=tcp`），原 40000-60000 会撞上这些被排
+      # 除端口导致 egress sidecar 绑不上宿主端口（小结，见 LOG）。2026-10-31
+      # 收敛到 20000-32000，避开全部排除段。
+      port_range_min = 20000
+      port_range_max = 32000
       drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
       no_new_privileges = true
       pids_limit = 4096

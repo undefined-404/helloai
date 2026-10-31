@@ -1,5 +1,6 @@
 package com.helloai.core.planner.skill;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.SkillPackageExecutionService;
@@ -12,7 +13,10 @@ import org.springframework.core.io.DefaultResourceLoader;
 import org.springframework.core.io.ResourceLoader;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -329,5 +333,194 @@ class ConversationSkillRunnerTest {
         assertThat(p2.path("artifact").path("degraded").asBoolean()).isTrue();
         assertThat(p2.path("artifact").path("qualityProfile").asText()).isEqualTo("standard");
         assertThat(p2.path("artifact").path("degradeReason").asText()).contains("composition=fail");
+    }
+
+    // ===== SKX-14 spec 预校验与自动纠偏（2026-10-31） =====
+
+    /**
+     * 构造带用 mock 的 runner，并反射调用预校验私有方法。
+     *
+     * <p>预校验是纯函数：不碰 LLM / 沙箱 / 附件，只把 schema 与 spec 喂进去，
+     * 所以这里直接用 {@code newRunner()}（真实 ObjectMapper + DefaultResourceLoader）即可。</p>
+     */
+    private static SpecFixProxy prevalidate(String schemaJson, String specJson) throws Exception {
+        Method m = ConversationSkillRunner.class.getDeclaredMethod(
+                "prevalidate", JsonNode.class, JsonNode.class);
+        m.setAccessible(true);
+        var om = new ObjectMapper();
+        JsonNode schema = schemaJson == null ? null : om.readTree(schemaJson);
+        JsonNode spec = specJson == null ? null : om.readTree(specJson);
+        Object ret = m.invoke(newRunner(), schema, spec);
+        Method fixedM = ret.getClass().getDeclaredMethod("fixed");
+        Method diagM = ret.getClass().getDeclaredMethod("diagnostics");
+        fixedM.setAccessible(true);
+        diagM.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<String> diag = (List<String>) diagM.invoke(ret);
+        return new SpecFixProxy((JsonNode) fixedM.invoke(ret), diag);
+    }
+
+    /** 反射封闭 {@code SpecFix} record 的轻量视图，避免测试依赖内部 record 类型。 */
+    private record SpecFixProxy(JsonNode fixed, List<String> diagnostics) {
+
+        String diagJoined() {
+            return String.join("\n", diagnostics);
+        }
+    }
+
+    private static final String WF_SCHEMA = """
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["schema_version", "diagram_type", "meta"],
+              "properties": {
+                "schema_version": {"type": "integer", "minimum": 1, "maximum": 2},
+                "diagram_type": {"const": "workflow"},
+                "meta": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["title", "output"],
+                  "properties": {
+                    "title": {"type": "string", "minLength": 1},
+                    "output": {"type": "string", "minLength": 1},
+                    "visual_preset": {"enum": ["classic", "signal-flow", "blueprint", "editorial"]},
+                    "quality_profile": {"enum": ["standard", "showcase"]}
+                  }
+                },
+                "messages": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["label", "y"],
+                    "properties": {
+                      "label": {"type": "string", "minLength": 1},
+                      "y": {"type": "integer", "minimum": 160}
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+    @Test
+    @DisplayName("★ $ref 内联展开：common 枚举直接可见，不再依赖跨文件推理")
+    void inlineRefs_expandsCommonDefs() throws Exception {
+        var om = new ObjectMapper();
+        // 合并 defs：把 common 定义表当作「已灌入」的表传入
+        Map<String, JsonNode> defs = new HashMap<>();
+        defs.put("visualPreset", om.readTree("{\"enum\":[\"classic\",\"signal-flow\",\"blueprint\",\"editorial\"]}"));
+        defs.put("componentType", om.readTree("{\"enum\":[\"frontend\",\"backend\",\"database\"]}"));
+        String schemaJson = """
+                {"type":"object","properties":{
+                  "visual_preset":{"$ref":"common.schema.json#/$defs/visualPreset"},
+                  "noRef":{"enum":["x","y"]}
+                }}
+                """;
+        JsonNode root = om.readTree(schemaJson);
+        Method m = ConversationSkillRunner.class.getDeclaredMethod(
+                "inlineRefs", JsonNode.class, Map.class, List.class);
+        m.setAccessible(true);
+        List<String> missing = new ArrayList<>();
+        JsonNode out = (JsonNode) m.invoke(newRunner(), root, defs, missing);
+
+        JsonNode vp = out.path("properties").path("visual_preset");
+        assertThat(vp.has("$ref")).as("$ref 必须被内联展开，不是只留一个引用").isFalse();
+        assertThat(vp.path("enum").isArray()).isTrue();
+        assertThat(vp.path("enum")).extracting(JsonNode::asText)
+                .contains("classic", "blueprint");
+        // 无 $ref 的节点原样保留
+        assertThat(out.path("properties").path("noRef").path("enum").get(0).asText()).isEqualTo("x");
+        // defs 有全部引用 ⇒ missing 为空
+        assertThat(missing).as("所有引用都能解析，不得有未解析 $ref").isEmpty();
+    }
+
+    @Test
+    @DisplayName("$ref 未解析：收集原文并保留原样，不得静默吞掉")
+    void inlineRefs_unresolved_collectsMissing() throws Exception {
+        var om = new ObjectMapper();
+        String schemaJson = """
+                {"type":"object","properties":{"unknown":{"$ref":"common.schema.json#/$defs/nope"}}}
+                """;
+        Method m = ConversationSkillRunner.class.getDeclaredMethod(
+                "inlineRefs", JsonNode.class, Map.class, List.class);
+        m.setAccessible(true);
+        List<String> missing = new ArrayList<>();
+        JsonNode out = (JsonNode) m.invoke(newRunner(),
+                om.readTree(schemaJson), new HashMap<>(), missing);
+        assertThat(missing).as("未解析的 $ref 必须点名原文，供上层拒绝").contains("common.schema.json#/$defs/nope");
+        assertThat(out.path("properties").path("unknown").path("$ref").asText())
+                .isEqualTo("common.schema.json#/$defs/nope");
+    }
+
+    @Test
+    @DisplayName("★ 未知键剥除：additionalProperties:false 的字段被删并点名路径")
+    void prevalidate_stripsUnknownKeys() throws Exception {
+        SpecFixProxy r = prevalidate(WF_SCHEMA, """
+                {"schema_version":1,"diagram_type":"workflow",
+                 "meta":{"title":"t","output":"o","visual_preset":"classic","spurious":"x"},
+                 "messages":[{"label":"m","y":200}],"extraTop":1}
+                """);
+        assertThat(r.fixed().has("extraTop")).as("顶层额外键必须剥除").isFalse();
+        assertThat(r.fixed().path("meta").has("spurious")).as("meta 下额外键必须剥除").isFalse();
+        assertThat(r.diagJoined()).contains("extraTop").contains("meta.spurious");
+    }
+
+    @Test
+    @DisplayName("★ 必填缺失补默认值：meta 缺 title/output、messages 缺 label/y 各自补上并留痕")
+    void prevalidate_fillsRequiredDefaults() throws Exception {
+        SpecFixProxy r = prevalidate(WF_SCHEMA, """
+                {"schema_version":1,"diagram_type":"workflow",
+                 "meta":{"visual_preset":"classic"},
+                 "messages":[{"y":200},{"label":"m"}]}
+                """);
+        assertThat(r.fixed().path("meta").path("title").asText()).isEqualTo("");
+        assertThat(r.fixed().path("meta").path("output").asText()).isEqualTo("");
+        assertThat(r.diagJoined()).contains("meta.title").contains("meta.output");
+        assertThat(r.diagJoined()).contains("messages[0].label").contains("messages[1].y");
+    }
+
+    @Test
+    @DisplayName("★ 数值越界夹紧：y < 160 提到 160，schema_version 超 max 收到 2")
+    void prevalidate_clampsNumeric() throws Exception {
+        SpecFixProxy r = prevalidate(WF_SCHEMA, """
+                {"schema_version":9,"diagram_type":"workflow",
+                 "meta":{"title":"t","output":"o"},
+                 "messages":[{"label":"m","y":120}]}
+                """);
+        assertThat(r.fixed().path("messages").get(0).path("y").asInt()).isEqualTo(160);
+        assertThat(r.fixed().path("schema_version").asInt()).isEqualTo(2);
+        assertThat(r.diagJoined()).contains("y").contains("schema_version");
+    }
+
+    @Test
+    @DisplayName("★ 枚举越界拒绝并点名路径：visual_preset 编错值不猜值、整轮留痕")
+    void prevalidate_rejectsBadEnum() throws Exception {
+        SpecFixProxy r = prevalidate(WF_SCHEMA, """
+                {"schema_version":1,"diagram_type":"workflow",
+                 "meta":{"title":"t","output":"o","visual_preset":"neon"},
+                 "messages":[{"label":"m","y":200}]}
+                """);
+        assertThat(r.diagJoined())
+                .as("枚举越界必须点名 meta.visual_preset，让 alignType 带正确 schema 补产")
+                .contains("meta.visual_preset");
+        // 枚举值不改（平台不硬造赢面），但整轮仍继续纠偏其他
+        assertThat(r.fixed().path("meta").path("visual_preset").asText()).isEqualTo("neon");
+    }
+
+    @Test
+    @DisplayName("★ 5 类坏 spec 全被拦/纠偏：综合样例逐类点名，零静默")
+    void prevalidate_coversAllFiveClasses() throws Exception {
+        SpecFixProxy r = prevalidate(WF_SCHEMA, """
+                {"schema_version":0,"diagram_type":"workflow",
+                 "meta":{"title":"t","output":"o","visual_preset":"neon","surprise":1},
+                 "messages":[{"label":"m"}],"zzz":{}}
+                """);
+        assertThat(r.diagJoined())
+                .contains("schema_version")      // 数值越界(0<1)夹到 1
+                .contains("meta.visual_preset")  // 枚举越界
+                .contains("meta.surprise")       // 未知键剥除
+                .contains("zzz")                 // 未知键剥除
+                .contains("messages[0].y");      // 必填缺失
     }
 }

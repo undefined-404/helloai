@@ -2,6 +2,8 @@ package com.helloai.core.planner.skill;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SkillExecutionPhase;
 import com.helloai.core.agent.domain.AgentResult;
@@ -24,6 +26,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -102,6 +105,9 @@ public class ConversationSkillRunner {
      */
     private static final Pattern LAYOUT_GATE_DIAGNOSTIC =
             Pattern.compile("(?:composition|clean-flow)/[a-z-]+");
+
+    /** {@code $ref} 定义名抽取：{@code common.schema.json#/$defs/visualPreset} ⇒ {@code visualPreset}。 */
+    private static final Pattern REF_DEFS = Pattern.compile("#/\\$defs/([A-Za-z0-9_-]+)");
 
     /**
      * 布局失败后回喂模型的纠正指令。
@@ -332,8 +338,12 @@ public class ConversationSkillRunner {
                 SkillSpecExtractor.ChartSpec spec = specExtractor.extract(output);
                 // 类型一致性兜底：模型选了「未注入全文」的类型时按那个类型补产一次，
                 // 而不是等 validate 失败后再走「渲染重试」——后者要重跑一遍 CLI，前者只补一次生成。
-                return alignType(spec, conversationId, plannerAgentId, skillName, trimmedBody,
+                spec = alignType(spec, conversationId, plannerAgentId, skillName, trimmedBody,
                         userNeed, injected);
+                // 落库前预校验 + 纠偏（SKX-14）：$ref 内联展开后按 schema 校验；
+                // 硬诊断（枚举越界 / 未解析 $ref 等）抛 SpecExtractException 进下方重产循环回喂模型。
+                spec = prevalidateSpec(skillName, spec);
+                return spec;
             } catch (SkillSpecExtractor.SpecExtractException e) {
                 lastError = e.getMessage();
                 log.warn("技能输入抽取失败（第 {}/{} 次）: skill={}, reason={}",
@@ -905,5 +915,339 @@ public class ConversationSkillRunner {
         }
         String text = output.strip();
         return text.length() > 800 ? text.substring(0, 800) + "…" : text;
+    }
+
+    // ===== SKX-14 spec 预校验与自动纠偏（2026-10-31） =====
+
+    /**
+     * 从 {@code $ref} 文本里取定义名：{@code common.schema.json#/$defs/visualPreset} ⇒
+     * {@code visualPreset}；{@code #/$defs/side} ⇒ {@code side}。
+     *
+     * <p>为什么只认 {@code #/$defs/X} 形态：archify 的 schema {@code $ref} 全是「同文件
+     * {@code $defs} 自引用」或「跨文件 {@code common.schema.json#/$defs/X}」两种，不存在
+     * JSON Pointer 深链。取 blob 全名（含文件名）拿不到定义，必须剥离到定义名。</p>
+     *
+     * @return 定义名；不匹配返回 {@code null}（保持原样，不阻断）
+     */
+    private static String derefName(String ref) {
+        if (ref == null) {
+            return null;
+        }
+        var m = REF_DEFS.matcher(ref);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /** 预校验产物（{@code fixed} 为纠偏后的 spec，{@code diagnostics} 为「点名路径」的诊断行）。 */
+    private record SpecFix(JsonNode fixed, List<String> diagnostics) {
+
+        boolean intact() {
+            return diagnostics.isEmpty();
+        }
+    }
+
+    /**
+     * 对象/数组递归内联展开：把 schema 里的 {@code $ref} 替换成对应 {@code $defs} 定义，
+     * 使枚举 / 模式直接可见（跨文件引用在注入前依赖调用方先灌入合并的 {@code defs} 表）。
+     *
+     * <p><b>为什么需要复制而不原位替换</b>：同一份普通 schema（无 {@code $ref}）每次执行都要
+     * 注入，原位改会留下第一次内联的痕迹；复制输出保证对同一输入恒等、可重复。</p>
+     *
+     * @param node   待展开节点
+     * @param defs   合并的定义表（key = 定义名，value = 定义节点）
+     * @param missing 输出参数：收集「未解析的 {@code $ref} 原文」（供上层拒绝并点名路径）
+     */
+    private JsonNode inlineRefs(JsonNode node, Map<String, JsonNode> defs, List<String> missing) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return node;
+        }
+        if (node.isObject()) {
+            JsonNode ref = node.get("$ref");
+            if (ref != null && ref.isTextual()) {
+                String name = derefName(ref.asText());
+                if (name != null) {
+                    JsonNode def = defs.get(name);
+                    if (def != null) {
+                        return inlineRefs(def, defs, missing);
+                    }
+                    missing.add(ref.asText());
+                    return node.deepCopy();
+                }
+            }
+            ObjectNode out = objectMapper.createObjectNode();
+            node.fields().forEachRemaining(e ->
+                    out.set(e.getKey(), inlineRefs(e.getValue(), defs, missing)));
+            return out;
+        }
+        if (node.isArray()) {
+            ArrayNode out = objectMapper.createArrayNode();
+            node.forEach(e -> out.add(inlineRefs(e, defs, missing)));
+            return out;
+        }
+        return node.deepCopy();
+    }
+
+    /**
+     * 生产链路落库前预校验门户（SKX-14）：加载当前技能包 per-type schema → 合并 {@code $defs}
+     * 灌入 {@link #inlineRefs} → 按 schema {@link #prevalidate} 纠偏 → 把 {@code fixed} 重序列化回
+     * {@code ChartSpec}。
+     *
+     * <p><b>为什么在这包一层而不是直接在 {@code produceSpec} 里展开</b>：schema 的加载与类型
+     * 相关（要按 {@code chartType} 取 {@code <type>.schema.json}），而 {@code inlineRefs}/{@code prevalidate}
+     * 是纯函数、不依赖 {@code produceSpec} 的执行细节。抽出本方法让单测能对「门户」整体打
+     * （mock 掉 {@link #loadSchema}），又让纠偏逻辑保持纯函数可单测。</p>
+     *
+     * <p><b>失败不阻断</b>：schema 读不出 / {@code $defs} 表空时退化「按原样返回」，不因预校验
+     * 自身的问题把本来能出的图拦掉——预校验是提升成功率的手段，不是新的失败点。</p>
+     */
+    private SkillSpecExtractor.ChartSpec prevalidateSpec(String skillName, SkillSpecExtractor.ChartSpec spec) {
+        JsonNode schemaRoot = loadSchema(skillName, spec.chartType());
+        if (schemaRoot == null) {
+            return spec;
+        }
+        // $defs 表合并两份：per-type schema 自己的（如 workflow 的 semanticRelation）
+        // + common.schema.json 的共享定义（如 visualPreset / side）。
+        Map<String, JsonNode> defs = loadDefs(skillName);
+        schemaRoot.path("$defs").fields().forEachRemaining(e -> defs.put(e.getKey(), e.getValue()));
+        List<String> missing = new ArrayList<>();
+        JsonNode expanded = inlineRefs(schemaRoot, defs, missing);
+        if (!missing.isEmpty()) {
+            log.warn("spec schema 存在未解析 $ref: skill={}, chartType={}, refs={}",
+                    skillName, spec.chartType(), missing);
+        }
+        try {
+            JsonNode specJson = objectMapper.readTree(spec.specJson());
+            SpecFix fixed = prevalidate(expanded, specJson);
+            if (fixed.intact()) {
+                return spec;
+            }
+            log.warn("spec 预校验未全过，纠偏后留痕: skill={}, chartType={}, diagnostics={}",
+                    skillName, spec.chartType(), fixed.diagnostics());
+            // 有「不可自动纠偏」的硬诊断（枚举越界 / 常量不匹配 / 必填缺失 / $ref 未解析）：
+            // 平台不硬造值，把结构化路径抛给重产循环回喂模型修正。
+            // 只有软纠偏（未知键剥除 / 补默认 / 数值夹紧）则自身已修好，直接返回。
+            boolean hard = !missing.isEmpty()
+                    || fixed.diagnostics().stream().anyMatch(d -> !isSoftFix(d));
+            if (hard) {
+                throw new SkillSpecExtractor.SpecExtractException(
+                        "spec 不符合 schema，需修正：" + joinedPaths(fixed.diagnostics(), missing));
+            }
+            return new SkillSpecExtractor.ChartSpec(spec.chartType(),
+                    objectMapper.writeValueAsString(fixed.fixed()));
+        } catch (SkillSpecExtractor.SpecExtractException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("spec 预校验执行失败，按原样返回: skill={}, chartType={}, err={}",
+                    skillName, spec.chartType(), e.getMessage());
+            return spec;
+        }
+    }
+
+    /** 三段确定性「软纠偏」诊断前缀（自身已修好，无需重产）。 */
+    private static boolean isSoftFix(String diagnostic) {
+        return diagnostic.startsWith("未知键被剥除:")
+                || diagnostic.startsWith("必填缺失已补默认:")
+                || diagnostic.startsWith("数值越界已夹紧:");
+    }
+
+    private static String joinedPaths(List<String> diagnostics, List<String> missing) {
+        StringBuilder sb = new StringBuilder();
+        diagnostics.forEach(d -> {
+            if (sb.length() > 0) {
+                sb.append("；");
+            }
+            sb.append(d);
+        });
+        if (!missing.isEmpty()) {
+            if (sb.length() > 0) {
+                sb.append("；");
+            }
+            sb.append("未解析的 $ref: ").append(String.join(", ", missing));
+        }
+        return sb.toString();
+    }
+
+    /** 按类型加载 per-type schema（读不出返回 {@code null}，不阻断）。 */
+    private JsonNode loadSchema(String skillName, String chartType) {
+        var pkg = agentSkillSpecService.getPackage(skillName);
+        if (pkg == null || pkg.version().isBlank()) {
+            return null;
+        }
+        String base = "classpath:skills/packages/" + pkg.name() + "/" + pkg.version() + "/schemas/";
+        try {
+            Resource resource = resourceLoader.getResource(base + chartType + ".schema.json");
+            if (!resource.exists()) {
+                return null;
+            }
+            try (var in = resource.getInputStream()) {
+                return objectMapper.readTree(in);
+            }
+        } catch (Exception e) {
+            log.debug("per-type schema 读取失败（跳过预校验）: skill={}, type={}, err={}",
+                    skillName, chartType, e.getMessage());
+            return null;
+        }
+    }
+
+    /** 合并 {@code common.schema.json} 的 {@code $defs} 表（供 {@link #inlineRefs} 展开跨文件引用）。 */
+    private Map<String, JsonNode> loadDefs(String skillName) {
+        Map<String, JsonNode> defs = new HashMap<>();
+        var pkg = agentSkillSpecService.getPackage(skillName);
+        if (pkg == null || pkg.version().isBlank()) {
+            return defs;
+        }
+        String common = "classpath:skills/packages/" + pkg.name() + "/" + pkg.version()
+                + "/schemas/common.schema.json";
+        try {
+            Resource resource = resourceLoader.getResource(common);
+            if (!resource.exists()) {
+                return defs;
+            }
+            try (var in = resource.getInputStream()) {
+                JsonNode root = objectMapper.readTree(in);
+                root.path("$defs").fields().forEachRemaining(e -> defs.put(e.getKey(), e.getValue()));
+            }
+        } catch (Exception e) {
+            log.debug("common schema 读取失败（跳过 $defs 展开）: skill={}, err={}", skillName, e.getMessage());
+        }
+        return defs;
+    }
+
+    /**
+     * 落库前 JSON Schema 预校验 + 纠偏（返回 record）。
+     *
+     * <p><b>纠偏只做确定性安全的三类</b>，其余两类「检测并点名路径」：
+     * ① 必填缺失 ⇒ 补默认值（{{\@code title:""}/{@code output:""}/{@code label:""}}，
+     *    缺什么按类型给什么，数字给 0）；
+     * ② 未知键（{@code additionalProperties:false}）⇒ 剥除并记录路径；
+     * ③ 数值越界 ⇒ 夹紧（{@code y < 160} ⇒ 160，超出 {@code maximum} ⇒ 收紧）；
+     * ④ 枚举越界 ⇒ 无法猜意图，<b>拒绝并点名路径</b>（{@code meta.visual_preset}）；
+     * ⑤ {@code $ref} 未解析 ⇒ 拒绝并点名 {@code $ref} 原文。
+     * ④⑤ 的「猜值」交给 {@code alignType} 的带 schema 补产，而不是在此硬造。</p>
+     */
+    private SpecFix prevalidate(JsonNode schema, JsonNode spec) {
+        if (schema == null || schema.isMissingNode() || spec == null || spec.isMissingNode()) {
+            return new SpecFix(spec == null ? null : spec.deepCopy(), new ArrayList<>());
+        }
+        List<String> diagnostics = new ArrayList<>();
+        JsonNode fixed = prevalidateNode(schema, spec, diagnostics, "$");
+        return new SpecFix(fixed, diagnostics);
+    }
+
+    private JsonNode prevalidateNode(JsonNode schema, JsonNode value, List<String> diag, String path) {
+        if (value == null || value.isNull()) {
+            return value;
+        }
+        // 数组：按 items 逐元素
+        JsonNode items = schema.path("items");
+        if (value.isArray()) {
+            if (!items.isMissingNode()) {
+                ArrayNode out = objectMapper.createArrayNode();
+                for (int i = 0; i < value.size(); i++) {
+                    out.add(prevalidateNode(items, value.get(i), diag, path + "[" + i + "]"));
+                }
+                return out;
+            }
+            return value.deepCopy();
+        }
+        if (!value.isObject()) {
+            return strictScalar(schema, value, diag, path);
+        }
+        JsonNode allowed = schema.path("additionalProperties");
+        boolean strictKeys = allowed.isBoolean() && allowed.booleanValue() == false;
+        ObjectNode out = objectMapper.createObjectNode();
+        JsonNode properties = schema.path("properties");
+        // 未知键剥除（strictKeys）或透传
+        value.fields().forEachRemaining(e -> {
+            String key = e.getKey();
+            JsonNode childSchema = properties.path(key);
+            if (childSchema.isMissingNode()) {
+                if (strictKeys) {
+                    diag.add("未知键被剥除: " + path + "." + key);
+                } else {
+                    out.set(key, e.getValue().deepCopy());
+                }
+                return;
+            }
+            out.set(key, prevalidateNode(childSchema, e.getValue(), diag, path + "." + key));
+        });
+        // 必填缺失 ⇒ 补默认值
+        JsonNode required = schema.path("required");
+        if (required.isArray()) {
+            for (JsonNode nameNode : required) {
+                String key = nameNode.asText();
+                if (!out.has(key)) {
+                    JsonNode childSchema = properties.path(key);
+                    String defaultVal = pickDefault(childSchema);
+                    if (defaultVal != null) {
+                        if (childSchema.path("enum").isArray()) {
+                            // 枚举必填却缺失：不猜值，点名路径（交给 alignType 补产）
+                            diag.add("必填枚举缺失: " + path + "." + key);
+                        } else {
+                            out.put(key, defaultVal);
+                            diag.add("必填缺失已补默认: " + path + "." + key);
+                        }
+                    } else {
+                        diag.add("必填缺失: " + path + "." + key);
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    /** 标量节点：枚举越界拒绝点名路径；数值夹紧；字符串 minLength 放行。 */
+    private JsonNode strictScalar(JsonNode childSchema, JsonNode value, List<String> diag, String path) {
+        JsonNode enumNode = childSchema.path("enum");
+        if (enumNode.isArray()) {
+            boolean hit = false;
+            for (JsonNode v : enumNode) {
+                if (v.equals(value)) {
+                    hit = true;
+                    break;
+                }
+            }
+            if (!hit) {
+                // 枚举无「赢面」的自动纠偏——就近猜值可能在语义上更错（如把主管道 type
+                // 纠成另一个组件），点名路径让 alignType 带正确 schema 补产。
+                diag.add("枚举越界: " + path + " (不得为 " + value.asText() + ")");
+            }
+            return value.deepCopy();
+        }
+        JsonNode constNode = childSchema.path("const");
+        if (!constNode.isMissingNode() && !constNode.equals(value)) {
+            diag.add("常量不匹配: " + path + " (期望 " + constNode.asText() + ")");
+            return value.deepCopy();
+        }
+        if (value.isNumber()) {
+            double n = value.asDouble();
+            double clamped = n;
+            boolean touched = false;
+            if (childSchema.path("minimum").isNumber() && n < childSchema.path("minimum").asDouble()) {
+                clamped = childSchema.path("minimum").asDouble();
+                touched = true;
+            }
+            if (childSchema.path("maximum").isNumber() && clamped > childSchema.path("maximum").asDouble()) {
+                clamped = childSchema.path("maximum").asDouble();
+                touched = true;
+            }
+            if (touched) {
+                diag.add("数值越界已夹紧: " + path + " (" + n + " → " + clamped + ")");
+                return objectMapper.getNodeFactory().numberNode(clamped);
+            }
+        }
+        return value.deepCopy();
+    }
+
+    /** 给必填缺省拣一个「确定性安全」的默认值；枚举/复合给不出安全值返回 {@code null}。 */
+    private static String pickDefault(JsonNode childSchema) {
+        if (childSchema == null || childSchema.isMissingNode() || childSchema.path("enum").isArray()) {
+            return null;
+        }
+        String type = childSchema.path("type").asText("");
+        return switch (type) {
+            case "string" -> "";
+            case "integer", "number" -> "0";
+            default -> null;
+        };
     }
 }
