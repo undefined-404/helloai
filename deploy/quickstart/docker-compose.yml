@@ -212,8 +212,9 @@ services:
       # The PORT is overridable because 8090 is a common collision: a second
       #   HelloAI stack (e.g. a dev stack) usually owns it already. Note that
       #   two sandbox servers on the SAME docker socket still fight over the
-      #   40000-60000 sandbox port range, so run only one at a time -- changing
-      #   the port is for co-existence with a NON-sandbox stack, not for two.
+      #   sandbox port range (20000-32000 on this side), so run only one at a
+      #   time -- changing the port is for co-existence with a NON-sandbox
+      #   stack, not for two.
       - "127.0.0.1:${HELLOAI_SANDBOX_PORT:-8090}:8090"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -287,8 +288,12 @@ configs:
       [docker]
       network_mode = "bridge"
       host_ip = "host.docker.internal"
-      port_range_min = 40000
-      port_range_max = 60000
+      # Windows 宿主存在动态端口排除段（Hyper-V，见 `netsh interface ipv4 show
+      # excludedportrange protocol=tcp`）；原 40000-60000 会撞上被排除端口，
+      # 导致 egress sidecar 绑不上宿主端口。2026-10-31 收敛到 20000-32000，
+      # 避开排除段（详见 LOG-20261031）。
+      port_range_min = 20000
+      port_range_max = 32000
       drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
       no_new_privileges = true
       pids_limit = 4096

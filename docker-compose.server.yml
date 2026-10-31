@@ -514,6 +514,12 @@ configs:
       [docker]
       network_mode = "bridge"
       host_ip = "host.docker.internal"
+      # SKX-15 (2026-10-31): publish_host deliberately unset (defaults to 0.0.0.0) so the
+      #   sandbox/egress sidecar ports stay reachable from opensandbox-net containers via
+      #   host-published ports (host.docker.internal) -- a narrower bind would break the
+      #   egress path. Exposure is closed at the network boundary: the 40000-60000 host
+      #   range MUST be firewalled CLOSED at the cloud security group (see preflight
+      #   section 7 / SKX-15 plan note).
       port_range_min = 40000
       port_range_max = 60000
       drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]

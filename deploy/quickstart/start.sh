@@ -197,6 +197,13 @@ check_memory() {
   fi
   log "docker memory available: ${mb} MB (recommended >= ${need} MB)"
   if [ "$mb" -lt "$need" ]; then
+    # Fail-close in sandbox mode only: on a box below the sandbox minimum the app
+    #   is OOM-killed during Flyway / LLM reporting (measured 2026-10-27), so
+    #   continuing only moves the failure a few minutes later as a confusing
+    #   partial deploy. Core mode stays a warning -- 3.5 GB is a soft guideline.
+    if [ "$WITH_SANDBOX" -eq 1 ]; then
+      die "Docker has only ${mb} MB but --with-sandbox needs >= ${need} MB. Raise the Docker Desktop memory limit (or add swap), or run core mode; otherwise the app will be OOM-killed during startup."
+    fi
     warn "Docker has only ${mb} MB. Raise the Docker Desktop memory limit, or the app may be OOM-killed during Flyway/LLM reporting."
   fi
 }

@@ -358,6 +358,8 @@ else
 fi
 info "NOTE: 15432/26379/25672/25673/29000/29001 must be closed at the cloud security group"
 info "      (G-017 pending action) - this script cannot see the security group, check the console."
+info "      Sandbox sidecar ports use the host range 40000-60000; see the same note at"
+info "      the end of section 7."
 
 # ------------------------------------------------------------
 sec "6. Compose file feature support"
@@ -433,6 +435,13 @@ SANDBOX_IMAGE_LIST
   info "NOTE: egress sidecars publish their proxy ports on 0.0.0.0 (e.g. 0.0.0.0:47xxx->8080)."
   info "      The range is configs [docker] port_range_min/max 40000-60000; keep it CLOSED"
   info "      at the cloud security group, otherwise the sandbox egress proxy is public."
+  info "      (SKX-15, 2026-10-31) Bind-narrowing to 127.0.0.1/172.17.0.1 was ruled out: the"
+  info "      app reaches sandboxes across bridge networks through host-published ports, and"
+  info "      a specific bind rejects that forwarding. This cross-bridge reachability cannot"
+  info "      be verified off a Docker host, so the exposure is closed at the firewall, not"
+  info "      in config. When the security group is verified closed, the 40000-60000 host"
+  info "      range is NOT in the port list in section 5 on purpose -- it is not a fixed port"
+  info "      and changes per sandbox; close the RANGE, not individual ports."
 else
   warn "docker not usable - cannot verify sandbox runtime images"
 fi

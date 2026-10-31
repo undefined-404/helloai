@@ -495,6 +495,17 @@ configs:
       [docker]
       network_mode = "bridge"
       host_ip = "host.docker.internal"
+      # SKX-15 (2026-10-31): publish_host is intentionally NOT set, so it defaults to
+      #   0.0.0.0 and every sandbox sidecar port (execd 44772 / http 8080 / egress api
+      #   18080, plus any extra) is published on all host interfaces within the range
+      #   below. Narrowing it to 127.0.0.1 / 172.17.0.1 would BREAK the egress path: the
+      #   app and this server sit on opensandbox-net while sandboxes run on the docker0
+      #   bridge, and both reach the sandbox through host-published ports resolved to
+      #   host.docker.internal -- a specific-bind DNAT (dest-IP constrained) rejects that
+      #   cross-bridge forwarding. Cannot be verified off a Docker host, so the exposure
+      #   is closed at the network boundary instead: the 40000-60000 host range MUST be
+      #   firewalled CLOSED at the cloud security group (see deploy/docker-host-preflight.sh
+      #   section 7 and the SKX-15 plan note).
       port_range_min = 40000
       port_range_max = 60000
       drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
