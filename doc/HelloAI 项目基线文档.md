@@ -325,6 +325,19 @@ Resource Limit        → 已落地（ISOLATED，spec.resourceLimits K8s 风格�
 Credential Boundary   → 已落地（ISOLATED，沙箱不注入 app 凭据；Vault 双层隔离属后置增强）
 ```
 
+**技能执行面已验证能力（SKX-1~SKX-15，2026-11-01 收口）**——只写已验事实，未验标「待核」：
+
+```text
+技能包入库           已落地：受控存储（PG 元数据 + MinIO zip），版本锚 + 清单 + 许可（SKX-4）
+技能包文件注入       已落地：逐文件 writeFile / tar 注入通道实测（SKX-3 / SKX-6）
+沙箱规格按调用分层   已落地：槽 key 带规格指纹（node:20-bookworm-slim，SKX-5）
+internal_run_skill   已落地：工具面生效开关（SKX-8）；模型在工具循环自主触发已真机验真（SKX-9）
+产物按路径回传       已落地：readFile 三件套（files().readFile，未经命令输出通路，SKX-7 / SKX-11）
+技能执行异步化       已落地：脱离 HTTP 线程（SKX-13）；spec 预校验 + $ref 内联自动纠偏（SKX-14）
+部署面收口           已落地：SANDBOX_* 贯通 + preflight fail-close + 侧车端口收敛（SKX-15，用户自测通过）
+平台级 sha256 三方对账 待核：SKX-9 执行侧死信（7059 DEAD_LETTER / 7060 PENDING），技能按通过回填但不宣称自动化通过
+```
+
 # 11. 当前 Workflow / Team
 
 当前已具备：
@@ -385,3 +398,4 @@ REWORK
 | 内部 LLM 能力面 | `G-021` | `API_KEY_LLM` 工具面已解封（`internal_*` **进程内通道**，与 MCP 会话解耦：读详情 / 读依赖 / 读状态 / 读附件 / 交付登记 / 技能目录 / 技能惰性加载 / 自报阻塞）；技能装配为「全量目录 + 惰性加载」；`systemPrompt` 非空（角色 + persona 槽位 + 工具指引 + 输出契约 + 验证证据围栏）；循环预算按接入类型分档；上下文压缩两道（剪枝 + 摘要）。**循环面 1 → 5 处**（基线 1 + 任务拆解 / 子任务核验 / 终报告整合 / 终报告审查），其余 11 面按 `plan §10.6` 明确留单次，插点为单咽喉 + `scene` 白名单 + 异常回落单次 | `plan/HelloAI 借鉴落地实施计划.md` §10；`design/Agent_Runtime.md` |
 | RAG 知识库 | `G-019` | `kb_chunk`（`V107`，`vector(1024)` + HNSW-cosine）**PG 单后端** + `JdbcTemplate` 余弦检索 + `search_knowledge` 工具（**无 KB 即摘**）+ `char_budget` 注入预算 + 引用溯源 marker（`[kb:source#idx]`，喂模型前剥离、前端渲染可点开卡片）+ 管理端 `/api/kb/*`；生产启用（内容入口与开关）属运维决策（新能力默认关闭） | `design/adr/ADR-002-embedding-provider.md`；差距表 `G-019` |
 | 内部 LLM 运行时合同 | `G-023` | 取消 / 超时树（装配点收敛为 `AgentLoopInput` 紧凑构造器「唯一咽喉」，单工具超时降级为失败 observation 交模型决策）；`max-tokens` 截断独立终态 `MAX_TOKENS` + **sticky**（全部出口在 `beforeTerminate` 挂点前定性）；观测面 `AgentUsage` 互斥五分量 + latency 落 `AGENT_COMPLETED` payload；**独立预算闸 `REF-8.9` 登记不启动**（参照实现同样不做，非对齐项） | `plan/HelloAI 借鉴落地实施计划.md` §10.10~§10.12；`review/内部 LLM 执行链运行时合同核对·以 DSH 为基准的重判（2026-10-16）.md` |
+| 技能执行面 | `SKX-1`~`SKX-15` | 技能包入库（受控存储 + 版本锚 + 清单 + 许可）、注入通道（writeFile / tar）、沙箱规格按调用分层（node:20-bookworm-slim）、`internal_run_skill` 工具面 + **模型在工具循环自主触发已真机验真**、产物按路径回传（`files().readFile`）、技能执行异步化、spec 预校验 + `$ref` 内联自动纠偏、部署面收口（`SANDBOX_*` 贯通 / preflight fail-close / 侧车端口收敛）。**平台级 sha256 三方对账待核**（技能按通过回填但非自动化通过） | `plan/HelloAI 技能执行面接入实施计划（2026-10-26）.md`；`review/HelloAI SKX-9 端到端验收记录（2026-11-01）.md` |
