@@ -88,6 +88,10 @@ helloai:
     dashscope:
       read-timeout-ms: ${DASHSCOPE_READ_TIMEOUT_MS:600000}
 
+  # G-026 额度抓取开关：体验版默认关（外部 key 未必就绪），基线上已给齐其余参数
+  quota:
+    enabled: ${QUOTA_ENABLED:false}
+
   security:
     credential:
       # credential_vault 加密密钥：无默认值，缺失即启动失败。

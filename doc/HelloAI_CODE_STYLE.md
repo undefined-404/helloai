@@ -5,7 +5,7 @@
 > 当前架构：Spring Boot 单体 + DDD 业务域 + RabbitMQ + PostgreSQL + Redis + Vue 3\
 > 文档定位：**当前有效的代码与架构工程规范**\
 > 版本：V2.1\
-> 最后更新：2026-10-23
+> 最后更新：2026-11-02（§5.5 登记 `system/quota` 能力包）
 >
 > **重要：本文件只描述“当前有效规则”，不记录历史迭代过程。**
 >
@@ -636,6 +636,7 @@ system/
 ├── crypto            # 凭据加解密（CredentialCryptoService）
 ├── port              # §7 端口
 ├── projection        # 只读投影
+├── quota             # LLM 额度与用量监控（余额快照 / 外部抓取 / 缓存与熔断）
 └── storage           # 对象存储（MinIO）
 ```
 

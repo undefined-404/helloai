@@ -1,11 +1,11 @@
 # HelloAI LLM 额度与用量监控设计
 
-> **Status**: `Planned`
+> **Status**: `Implemented`（状态事实源见 [`../HelloAI 实现差距表.md`](../HelloAI%20实现差距表.md) `G-026`：已「已完成」——用户确认「额度监控没问题」，可视化验收通过；实施计划已归档 `../archive/implemented/`）
 > **Scope**：
 > - **含**：外部供应商的**余额查询**（DeepSeek / Moonshot / MiniMax / 博查）+ 余额快照缓存 + 只读悬浮控件。
 > - **不含**：AGENT 级凭据余额（22 条）、通义千问（无公开余额接口）、调度联动、阈值告警、MCP 工具、峰谷价精算、token 五分量拆分。
 > **差距锚点**: `G-026`
-> **最后更新**: 2026-10-26
+> **最后更新**: 2026-11-02（实施完成，`Q-1`~`Q-10` 已完成；验收证据见 `archive/implemented/HelloAI 额度与用量监控实施计划（2026-11-02）.md` §8）
 >
 > 本文是**设计**（怎么建）。实施顺序与批次另立 `plan/`。外部项目的详细调研结论见 §2，其原文仓库不再单独归档（结论已在此固化，拆分存储会产生「设计引用了过期调研」的漂移）。
 
@@ -195,9 +195,9 @@ public interface BalanceCredentialResolver {
 }
 ```
 
-两个实现：
-- `VaultCredentialResolver`：查 `credential_vault`，取 `ACTIVE` 那条（与 `PlatformProviderConfigService` 同源，不另建查询逻辑）
-- `SysConfigCredentialResolver`：委托 `WebSearchCredentialKeyStore`（**不重写解密逻辑**）
+两个实现（均为 `system.quota.impl` 下的**薄适配器**，通过 `system.port` 端口调用提供方，避免 `system → agent/planner` 反向依赖）：
+- `PlatformApiKeyResolver`：委托 `PlatformApiKeyPort`（由 `agent.adapter.PlatformApiKeyPortAdapter` 实现，内部走 `PlatformProviderConfigService`，与 vault 同源、不另建查询逻辑）
+- `WebSearchApiKeyResolver`：委托 `WebSearchApiKeyPort`（由 `planner.adapter.WebSearchApiKeyPortAdapter` 实现，内部走 `WebSearchCredentialKeyStore`，**不重写解密逻辑**）
 
 **注册表按 provider 选择 resolver**，而不是让每个 provider 自己去找 key —— 因为「key 在哪」是部署形态问题，不是协议问题。
 
@@ -220,6 +220,8 @@ CREATE TABLE llm_balance_snapshot (
 CREATE INDEX idx_llm_balance_snapshot_provider_time
     ON llm_balance_snapshot (provider_key, fetched_at DESC);
 ```
+
+> 实现按仓库既有约定（与 `V105__platform_backup.sql` 同款）：`id BIGINT` 由应用雪花生成（非 `BIGSERIAL`）、补 `BaseEntity` 审计列、部分索引带 `WHERE deleted = 0`；完整 DDL 以 `V129__llm_balance_snapshot.sql` 为唯一事实源。
 
 **为什么不建另外两张表**（对外部建议的有意否决）：
 
@@ -246,11 +248,15 @@ CREATE INDEX idx_llm_balance_snapshot_provider_time
 
 | 参数 | 默认 | 理由 |
 |---|---|---|
-| 缓存 TTL | 60s | 前端 30s 轮询时，一半命中缓存；余额是日级变化数据 |
+| 缓存 TTL | 60s | 前端轮询周期可配（默认 60s，见 §4.6）；余额是日级变化数据 |
 | 抓取超时 | 5s | 与 `deepseek.connect-timeout-ms` 同量级 |
-| 定时采集间隔 | 15 min | 4 家 × 96 次/天 = 384 次/天，可控 |
+| 定时采集间隔 | 15 min | 4 家 × 96 次/天 = 384 次/天，可控；若运营侧把自动刷新间隔调大，定时采集会按间隔跳过，不把节奏打回 15 分钟 |
 | 失败缓存 TTL | 30s | 失败时不要每次点开都重打 |
 | 熔断 | `quotaFetch`：失败率 50% / 窗口 10 / 断开 60s | 单家长期挂掉时不拖慢 overview |
+
+**外部请求成本**：4 家的余额查询都是供应商的账户查询接口（`/user/balance` 等），不经过模型推理，
+**不消耗 LLM Token**；自动刷新产生的是 HTTP 请求与供应商侧请求配额。因此刷新频率默认 60s，
+并允许运营侧收敛到 1 小时或「仅手动」，避免无意义的网络请求。
 
 **并发**：4 家**并行**查询（`CompletableFuture` + 统一超时），overview 总耗时 ≈ 最慢一家（≤5s），而非 4 家之和。
 
@@ -279,13 +285,13 @@ CREATE INDEX idx_llm_balance_snapshot_provider_time
 
 | 项 | 约定 |
 |---|---|
-| 位置 | 右下角，可拖动，位置存 `localStorage` |
-| 刷新 | 打开面板时刷新一次 + 30s 轮询（页面可见时）；隐藏时不轮询 |
+| 位置 | 右下角，折叠态可拖动（横向/纵向均可达视口内边界），位置存 `localStorage` |
+| 刷新 | 打开面板时刷新一次 + 按 `sys_config["quota.refresh.interval-seconds"]` 轮询（页面可见时）；默认 60s，60~3600 可配；`0`=仅手动刷新（不轮询、打开面板只读落库快照不触网）；隐藏时不轮询 |
 | 失败显示 | 灰色文字「上次 ¥92.30 · 刷新失败」，不显示 0 |
 | 额度型供应商 | 显示百分比 + 进度条，不强行换算成金额 |
-| 开关 | 系统设置里的一个 `sys_config` 布尔项，关闭后不渲染组件（也不发请求） |
+| 开关 | 系统设置「额度监控」区：`quota.widget.enabled` 控制渲染与请求；`quota.refresh.interval-seconds` 控制自动刷新间隔 |
 
-**不采用 SSE**。理由：余额是 15 分钟级数据，SSE 要处理连接管理、重连、多实例广播；而项目已经踩过「MCP 会话跨实例」的坑。30s 轮询 + 60s 后端缓存，代码量不到 SSE 的 1/3，且无状态。
+**不采用 SSE**。理由：余额是日级/小时级数据，SSE 要处理连接管理、重连、多实例广播；而项目已经踩过「MCP 会话跨实例」的坑。可配轮询（默认 60s，最长 1 小时或手动）+ 60s 后端缓存，代码量不到 SSE 的 1/3，且无状态。
 
 ---
 
@@ -324,7 +330,7 @@ CREATE INDEX idx_llm_balance_snapshot_provider_time
 | V2 | 博查余额接口在 `api.bochaai.com` 是否可用（新文档写 `api.bocha.cn`） | 两个域名各打一次 | 决定 base-url 用哪个 / 是否需要回落 |
 | V3 | MiniMax `token_plan/remains` 的实际返回结构 | 用真实 key 打一次 | 决定 `quotaPercent` 还是「剩余次数」字段 |
 | V4 | `deepseek-v4-flash` 是否仍适用峰谷价 | 查官方定价页脚注 | 只影响是否做峰谷标记（M1 不做） |
-| V5 | `credential_vault` 同 provider 多条 ACTIVE 时的取数规则 | 读 `PlatformProviderConfigService` 现有逻辑 | 决定 `VaultCredentialResolver` 是复用还是新增选择逻辑 |
+| V5 | `credential_vault` 同 provider 多条 ACTIVE 时的取数规则 | 读 `PlatformProviderConfigService` 现有逻辑 | 决定 `PlatformApiKeyResolver` 是复用还是新增选择逻辑 |
 
 ---
 
@@ -337,6 +343,7 @@ CREATE INDEX idx_llm_balance_snapshot_provider_time
 5. **多实例不重复抓**：两个 app 实例并发请求 overview，外部接口只被调用一次（Redis 缓存命中）。
 6. **单家失败不拖垮**：把 Moonshot 的 key 改成非法值，overview 仍能在 5s 内返回其余 3 家。
 7. **开关生效**：`sys_config` 关闭后，前端不渲染组件且不发请求。
+8. **刷新频率可配**：设为 `0` 时前端不轮询、打开面板只读落库快照（不触网），定时采集不抓；设为 N 秒（60~3600）时按 N 秒轮询，且定时采集在「各家最近快照均不早于 N 秒前」时跳过。
 
 ---
 

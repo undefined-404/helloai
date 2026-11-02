@@ -161,7 +161,12 @@ export const paths = {
     teamMember: (id: string | number, agentId: string | number) => `/admin/teams/${enc(id)}/members/${enc(agentId)}`,
     // N-003 Browser 会话展示（C3 配套：登记/展示语义，无反向写端点）
     browserSessions: '/admin/browser-sessions',
-    browserSessionById: (id: string | number) => `/admin/browser-sessions/${enc(id)}`
+    browserSessionById: (id: string | number) => `/admin/browser-sessions/${enc(id)}`,
+    // G-026 LLM 额度与用量监控：聚合余额快照（读缓存，未命中才实时抓）/ 单家手动刷新
+    quotaOverview: '/admin/quota/overview',
+    quotaRefresh: (key: string) => `/admin/quota/refresh/${enc(key)}`,
+    // G-026 浮球运行期配置（quota:view 保护，避免依赖未绑 ADMIN 的 config:view）
+    quotaWidgetConfig: '/admin/quota/widget-config'
   },
   activity: {
     list: '/activity/list'

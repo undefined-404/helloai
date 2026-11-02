@@ -152,6 +152,9 @@
       v-model="passwordDialogVisible"
       :on-changed="handlePasswordChanged"
     />
+
+    <!-- G-026 LLM 额度浮球（右下角只读余额监控；由 quota:view + sys_config 开关双重闸门） -->
+    <QuotaFloatWidget />
   </el-container>
 </template>
 
@@ -167,6 +170,7 @@ import { rbacApi } from '@/api/rbac'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
+import QuotaFloatWidget from '@/components/QuotaFloatWidget.vue'
 import type { SysPermission } from '@/types'
 
 /** DB 菜单图标列存 @element-plus/icons-vue 组件名，动态映射；未知图标回退 Menu */

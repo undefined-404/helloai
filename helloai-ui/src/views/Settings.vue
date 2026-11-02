@@ -519,13 +519,65 @@
             </div>
           </div>
 
-          <!-- 4 通知配置 -->
+          <!-- 4 额度监控 -->
           <div
             class="section-block"
           >
             <div class="section-header">
               <div class="section-mark">
                 <span class="section-mark-num">4</span>
+                <h2 class="section-mark-title">
+                  额度监控
+                </h2>
+              </div>
+            </div>
+            <el-form-item label="显示额度浮球">
+              <div class="switch-field">
+                <el-switch v-model="form.quotaWidgetEnabled" />
+                <span
+                  class="switch-state"
+                  :class="form.quotaWidgetEnabled ? 'on' : 'off'"
+                >{{ form.quotaWidgetEnabled ? '已开启' : '已关闭' }}</span>
+              </div>
+              <div class="form-hint">
+                关闭后右下角余额浮球不渲染，也不发起任何余额查询请求。
+              </div>
+            </el-form-item>
+            <el-form-item label="自动刷新">
+              <div class="switch-field">
+                <el-switch v-model="form.quotaAutoRefresh" />
+                <span
+                  class="switch-state"
+                  :class="form.quotaAutoRefresh ? 'on' : 'off'"
+                >{{ form.quotaAutoRefresh ? '自动刷新' : '仅手动刷新' }}</span>
+                <template v-if="form.quotaAutoRefresh">
+                  <span class="refresh-interval-label">间隔</span>
+                  <el-input-number
+                    v-model="form.quotaRefreshMinutes"
+                    :min="1"
+                    :max="60"
+                    :step="1"
+                    :precision="0"
+                    controls-position="right"
+                    class="refresh-interval-input"
+                  />
+                  <span class="refresh-interval-unit">分钟</span>
+                </template>
+              </div>
+              <div class="form-hint">
+                余额查询走供应商的余额接口，不消耗 LLM Token，每次刷新仅产生一次网络请求。
+                选「仅手动刷新」时不会自动查询，只在点击浮球「刷新」按钮时获取。
+              </div>
+            </el-form-item>
+          </div>
+
+          <!-- 5 通知配置 -->
+          <div
+            class="section-block"
+          >
+            <div class="section-header">
+              <div class="section-mark">
+                <span class="section-mark-num">5</span>
                 <h2 class="section-mark-title">
                   通知配置
                 </h2>
@@ -736,11 +788,16 @@ import type { CatalogProvider } from './settings/providerCatalog'
 import type { LongId } from '@/types'
 
 const formRef = ref()
+/** 「仅手动刷新」时输入框的占位分钟数（切回自动刷新时的默认值）。 */
+const DEFAULT_REFRESH_MINUTES = 5
 const form = reactive({
   externalUrl: '',
   qualityGateEnabled: false,
   webSearchApiKey: '',
-  notifyChannels: ['web'] as string[]
+  notifyChannels: ['web'] as string[],
+  quotaWidgetEnabled: true,
+  quotaAutoRefresh: true,
+  quotaRefreshMinutes: 1
 })
 
 // 博查 Key 加载时的脱敏回显值（'********'）；未改动则保存时跳过提交，避免把掩码当 Key 写入。
@@ -753,12 +810,18 @@ const webSearchDirty = computed(() => form.webSearchApiKey !== webSearchKeyLoade
 /** 未保存变更指示：加载快照与当前表单值比对（保存成功后同步快照）。 */
 const loadedExternalUrl = ref('')
 const loadedQualityGate = ref(false)
+const loadedQuotaWidgetEnabled = ref(true)
+const loadedQuotaAutoRefresh = ref(true)
+const loadedQuotaRefreshMinutes = ref(1)
 const saving = ref(false)
 
 const isDirty = computed(() =>
   form.externalUrl !== loadedExternalUrl.value
   || form.qualityGateEnabled !== loadedQualityGate.value
   || form.webSearchApiKey !== webSearchKeyLoaded.value
+  || form.quotaWidgetEnabled !== loadedQuotaWidgetEnabled.value
+  || form.quotaAutoRefresh !== loadedQuotaAutoRefresh.value
+  || (form.quotaAutoRefresh && form.quotaRefreshMinutes !== loadedQuotaRefreshMinutes.value)
 )
 
 const providers = ref<LlmProviderResponse[]>([])
@@ -916,6 +979,9 @@ function handleReset() {
   form.externalUrl = loadedExternalUrl.value
   form.qualityGateEnabled = loadedQualityGate.value
   form.webSearchApiKey = webSearchKeyLoaded.value
+  form.quotaWidgetEnabled = loadedQuotaWidgetEnabled.value
+  form.quotaAutoRefresh = loadedQuotaAutoRefresh.value
+  form.quotaRefreshMinutes = loadedQuotaRefreshMinutes.value
   ElMessage.success('已重置为上次保存的版本')
 }
 
@@ -967,6 +1033,21 @@ async function load() {
       loadedQualityGate.value = form.qualityGateEnabled
       webSearchKeyLoaded.value = form.webSearchApiKey
       webSearchKeyConfigured.value = !!form.webSearchApiKey
+
+      // 额度浮球：0=仅手动刷新；60~3600=自动刷新间隔（后端读取时同样归一化，空值回退 60s）
+      const rawIntervalValue = config['quota.refresh.interval-seconds']
+      const rawInterval = rawIntervalValue == null || rawIntervalValue === ''
+        ? 60
+        : Number(rawIntervalValue)
+      const intervalSeconds = Number.isFinite(rawInterval) ? rawInterval : 60
+      form.quotaWidgetEnabled = config['quota.widget.enabled'] !== '0'
+      form.quotaAutoRefresh = intervalSeconds > 0
+      form.quotaRefreshMinutes = intervalSeconds > 0
+        ? Math.min(60, Math.max(1, Math.round(intervalSeconds / 60)))
+        : DEFAULT_REFRESH_MINUTES
+      loadedQuotaWidgetEnabled.value = form.quotaWidgetEnabled
+      loadedQuotaAutoRefresh.value = form.quotaAutoRefresh
+      loadedQuotaRefreshMinutes.value = form.quotaRefreshMinutes
     }
   } catch {
     ElMessage.error('加载配置失败')
@@ -1068,7 +1149,9 @@ async function handleSave() {
   try {
     await settingsApi.batchUpdateConfig({
       'helloai.base-url': form.externalUrl,
-      'admin.quality.enabled': form.qualityGateEnabled ? 'true' : 'false'
+      'admin.quality.enabled': form.qualityGateEnabled ? 'true' : 'false',
+      'quota.widget.enabled': form.quotaWidgetEnabled ? '1' : '0',
+      'quota.refresh.interval-seconds': String(form.quotaAutoRefresh ? form.quotaRefreshMinutes * 60 : 0)
     })
     // 博查 Key 走专用加密端点；未改动（仍是脱敏回显值）时跳过，清空则视为移除。
     if (form.webSearchApiKey !== webSearchKeyLoaded.value) {
@@ -1084,6 +1167,9 @@ async function handleSave() {
     }
     loadedExternalUrl.value = form.externalUrl
     loadedQualityGate.value = form.qualityGateEnabled
+    loadedQuotaWidgetEnabled.value = form.quotaWidgetEnabled
+    loadedQuotaAutoRefresh.value = form.quotaAutoRefresh
+    loadedQuotaRefreshMinutes.value = form.quotaRefreshMinutes
     ElMessage.success('保存成功')
   } catch {
     ElMessage.error('保存失败')
@@ -1402,6 +1488,16 @@ onMounted(() => {
 }
 .switch-state.on {
   color: var(--ha-success-text);
+}
+
+/* 额度刷新间隔：开关 + 分钟输入同排 ============================== */
+.refresh-interval-label,
+.refresh-interval-unit {
+  font-size: 13px;
+  color: var(--ha-ink-secondary);
+}
+.refresh-interval-input {
+  width: 120px;
 }
 
 /* 通知复选框 ===================================================== */

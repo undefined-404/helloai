@@ -13,7 +13,7 @@ spring:
     exclude: org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
   # === 默认激活 dev 环境（云服务器联调），本地 Docker 开发切换 local 使用 spring.profiles.active=local ===
   profiles:
-    active: local
+    active: dev
   # === 时区锁定：与 HelloAIApplication.main() 的 TimeZone.setDefault 一致 ===
   # Date / LocalDateTime 等不带时区偏移的类型也按北京时间序列化，避免 UTC 少 8 小时
   jackson:
@@ -477,6 +477,15 @@ helloai:
     dimensions: 1024
     connect-timeout-ms: 5000
     read-timeout-ms: 60000
+  # G-026 LLM 额度与用量监控：余额抓取缓存/超时/采集参数
+  # 覆盖项若在 environment profile（local/dev/quickstart）有差异，各自覆写
+  quota:
+    enabled: true
+    cache-ttl-seconds: 60
+    failure-cache-ttl-seconds: 30
+    fetch-timeout-ms: 5000
+    collect-interval-ms: 900000
+    snapshot-retention-days: 30
 
 
 logging:
@@ -523,6 +532,9 @@ resilience4j:
           - com.helloai.common.base.AgentUnavailableException
     instances:
       agentDispatch:
+        base-config: default
+      # G-026 余额抓取熔断：单家外部供应商长期挂掉不拖慢 overview
+      quotaFetch:
         base-config: default
 
 # === Actuator 指标暴露（v2.4 §4.8 + 监控栈阶段1：Prometheus 抓取） ===

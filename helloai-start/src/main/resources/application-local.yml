@@ -92,3 +92,6 @@ helloai:
       enabled: ${SANDBOX_ENABLED:true}
       url: ${SANDBOX_URL:http://localhost:8090}
       api-key: ${SANDBOX_API_KEY:dev-test-key}
+  # G-026 额度抓取开关：本地开发默认开（本地已配好外部 key）
+  quota:
+    enabled: ${QUOTA_ENABLED:true}

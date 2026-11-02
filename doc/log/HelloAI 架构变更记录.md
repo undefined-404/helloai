@@ -176,3 +176,26 @@ Event 消费面 **Timeline / Replay / Audit / Recovery 四项全落**；Fork 维
 
 ### Boundary
 不改状态机语义、不改表结构、不改跨域依赖方向；投影助手只迁包不改行为。
+
+## ARCH-20261102-001 — 额度监控 provider 装配与端口反转（system 依赖不反向）
+
+> 汇总自 `G-026` / `LOG-20261102-002`；条文为汇总，决策原文与验收证据以差距表与计划 §8 为准。
+
+### Decision
+1. **装配收口**：4 个余额 provider（deepseek / moonshot / minimax / bocha）与 `BalanceProviderRegistry` 由 `core.system.quota.QuotaConfig` 显式装配（`@Bean`）；注册表用**显式有序列表**构造，锁定 overview 返回顺序 = deepseek→moonshot→minimax→bocha，不依赖容器注入顺序。
+2. **复用优先 + 端口反转（CODE_STYLE §7.2 情形①）**：Key 取数仍复用既有实现——agent 侧 `PlatformProviderConfigService#getApiKey`、planner 侧 `WebSearchCredentialKeyStore#resolveBochaApiKey`，**不另建第二处取数/解密逻辑**；但 system 域不直接 import 这两个上层域：
+   - 端口定义在消费方 `system.port`：`PlatformApiKeyPort` / `WebSearchApiKeyPort`；
+   - 提供方实现适配器：`agent.adapter.PlatformApiKeyPortAdapter` / `planner.adapter.WebSearchApiKeyPortAdapter`；
+   - 依赖方向据此为 `agent → system` / `planner → system`（顺向）。
+3. **线程池生命周期**：`BalanceQueryService` 自建抓取线程池（命名 `quota-fetch`、守护线程）加 `@PreDestroy` 关闭。
+
+### Rationale
+余额查询是 `system` 域平台能力，provider 是无状态协议实现，集中装配比散落 `@Component` 更易锁定顺序；复用取数逻辑避免「同 provider 多条 ACTIVE / 博查解密」出现第二处定义（设计 §2.4）。若 system 直接依赖 agent/planner，会形成 §6 明令禁止的反向依赖；按 §7.2 情形①「消费方低于提供方时端口放消费方」，端口放 system、提供方实现，既保住单一定义，又让依赖落在顺向一侧。装配缺失会导致 `BalanceQueryService` 启动即缺依赖——`Q-9` 验证时发现并补齐。
+
+### Consequence
+- `system->agent` / `system->planner` 反向依赖计数保持 **0**，`scripts/ci/arch-baseline.txt` 无需为本次改动放宽；新增两条顺向依赖 `agent->system` / `planner->system`（§6 合法）。
+- `QuotaConfig` 为唯一装配入口；新增 provider 需同时改 `QuotaConfig` 的有序列表以保证 overview 顺序。
+- 端口与实现分离：Key 取数口径变更只改提供方适配器，`system.quota` 不动。
+
+### Boundary
+不改各域已有取数/解密实现；线程池只做命名与关闭钩子、不改抓取语义；不得以「复用」为由在其他域新增对 `system.quota` 的依赖。
