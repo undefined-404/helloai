@@ -54,6 +54,19 @@ public interface AttachmentService extends IService<Attachment> {
     List<Attachment> listReadable(Long subTaskId, Long agentId);
 
     /**
+     * 「我的产物」execution 源（PA-5）：某用户名下任务的<b>有效</b>附件。
+     *
+     * <p>借道 {@code sub_task.task_id → task.owner_id = 当前用户} 推导归属（计划 §9 D1 直滤，
+     * 详见 {@code MyArtifactsQueryService}）；只取 {@code ACTIVE}，同名多版本不与聚合展示。
+     * 返回行已回填 {@code taskId/taskTitle/subTaskTitle}。</p>
+     *
+     * @param ownerId 当前用户 id（非空）
+     * @param limit   单次上限
+     * @return 该用户名下任务的活跃附件（绝不返回 null）
+     */
+    List<Attachment> listActiveByTaskOwner(Long ownerId, int limit);
+
+    /**
      * 校验指定 agent 可读该附件；不可读抛 {@link BizException}(403)。
      *
      * <p>判据唯一来源为 {@code AttachmentVisibilityPolicy}（"声明范围 × 任务成员关系"），

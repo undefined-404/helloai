@@ -26,7 +26,8 @@ public record TaskDraft(
         TaskStatus status,
         Map<String, Object> context,
         String taskArchetype,
-        List<String> requiredSkills
+        List<String> requiredSkills,
+        Long ownerId
 ) {
 
     public TaskDraft {
@@ -34,10 +35,18 @@ public record TaskDraft(
     }
 
     /**
+     * 兼容构造器（6 参）：未传 owner 的既有调用方（含测试）零改动，owner 为 NULL 宽松并入。
+     */
+    public TaskDraft(String title, String description, TaskStatus status, Map<String, Object> context,
+                     String taskArchetype, List<String> requiredSkills) {
+        this(title, description, status, context, taskArchetype, requiredSkills, null);
+    }
+
+    /**
      * 兼容构造器（5 参）：未选技能的既有调用方（含测试）零改动。
      */
     public TaskDraft(String title, String description, TaskStatus status, Map<String, Object> context,
                      String taskArchetype) {
-        this(title, description, status, context, taskArchetype, null);
+        this(title, description, status, context, taskArchetype, null, null);
     }
 }

@@ -1,7 +1,7 @@
 import request from './request'
 import { paths } from './paths'
 import type { AxiosResponse } from 'axios'
-import type { ChatAttachmentItem, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, SkillRunStatus, Task, LongId } from '@/types'
+import type { ArtifactItem, AssistantProfile, ChatAttachmentItem, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, SkillRunStatus, Task, LongId, Workbench } from '@/types'
 
 // V29 对话式需求澄清: 每轮走一次 LLM，耗时远超全局 30s，create/send/retry 单请求覆盖 timeout
 // v1.1 修复: 澄清会话 ID 为 Snowflake 长整型，URL/比较一律按 string 处理防 JS Number 精度丢失
@@ -70,6 +70,20 @@ export const clarifyApi = {
   // Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）
   plannerOptions() {
     return request.get<any, PlannerOption[]>(paths.clarifications.plannerOptions)
+  },
+  // PA-3 当前用户活跃的助理身份（读取面；后端按用户置顶→…→默认兜底）
+  assistantProfile() {
+    return request.get<any, AssistantProfile>(paths.clarifications.assistantProfile)
+  },
+  // PA-5 我的产物聚合读取（会话附件 + 子任务执行产物两源归一，按时间倒序）
+  myArtifacts(limit?: number) {
+    return request.get<any, ArtifactItem[]>(paths.clarifications.myArtifacts, {
+      params: limit ? { limit } : undefined
+    })
+  },
+  // PA-4 个人工作台聚合读取（身份卡 + 最近任务 + 产物 + 项目历史，一次拉齐）
+  workbench() {
+    return request.get<any, Workbench>(paths.clarifications.workbench)
   },
   // 会话列表（按创建时间倒序，LIMIT 50）
   list() {
@@ -146,6 +160,16 @@ export const clarifyApi = {
   /** 内嵌预览文本通道（md / 源码 / html 等 → 项目 MarkdownView / <pre> 渲染；超限或不可预览由后端 413 兜底）。 */
   attachmentPreviewText(id: LongId) {
     return request.get<any, AxiosResponse<string>>(paths.chatAttachments.previewById(id), { responseType: 'text' })
+  },
+  // ── 执行产物（子任务 attachment 语义）：独立表与端点，不能复用 chat-attachments 的 id ──
+  executionArtifactDownloadBlob(id: LongId) {
+    return request.get<any, AxiosResponse<Blob>>(paths.attachments.download(id), { responseType: 'blob' })
+  },
+  executionArtifactPreviewBlob(id: LongId) {
+    return request.get<any, AxiosResponse<Blob>>(paths.attachments.preview(id), { responseType: 'blob' })
+  },
+  executionArtifactPreviewText(id: LongId) {
+    return request.get<any, AxiosResponse<string>>(paths.attachments.preview(id), { responseType: 'text' })
   },
   // 会话详情（含全部消息按 seq 升序）
   detail(id: LongId) {

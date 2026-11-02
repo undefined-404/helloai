@@ -95,6 +95,16 @@ public interface TaskService extends IService<Task> {
     IPage<Task> pageTasks(TaskStatus status, Integer page, int pageSize);
 
     /**
+     * 当前用户「进行中」任务（PLANNING + IN_PROGRESS），按更新时间倒序。
+     *
+     * <p>个人工作台「最近任务」用（PA-4 改版，2026-11-02）：只展示仍在推进的任务，
+     * 口径与 {@link #pageTasks} 的 owner 宽松并入一致。</p>
+     *
+     * @param limit 条数上限（≤0 时按实现默认值）
+     */
+    List<Task> listActiveTasksForOwner(int limit);
+
+    /**
      * 更新任务状态；任务不存在时返回 null（由 Controller 转 R.fail）。
      *
      * @param id     任务 ID

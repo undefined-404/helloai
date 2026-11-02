@@ -13,7 +13,28 @@ import java.util.List;
 @Mapper
 public interface AttachmentMapper extends BaseMapper<Attachment> {
 
-    /** 物理删除某任务下全部附件行（外键引用 sub_task.id，必须先于子任务删除，仅供任务级联删除使用）。 */
+    /**
+     * 窄查询（PA-5）：某用户名下任务（{@code task.owner_id = 当前用户}）的<b>有效</b>附件。
+     *
+     * <p>「我的产物」execution 源专用：{@code attachment} 表无用户字段，借道
+     * {@code sub_task.task_id → task.owner_id} 推导「任务归属 = 用户归属」（计划 §9 D1 直滤）。
+     * 只取 {@code deleted = 0 AND status = 'ACTIVE'}（当前有效版本），避免同名多版本污染聚合展示。</p>
+     *
+     * @param ownerId 当前用户 id（null 时语义未定义，调用方保证非空）
+     * @param limit   单次上限
+     * @return 该用户名下任务的活跃附件行（按 create_time 倒序）
+     */
+    @Select("SELECT a.* FROM attachment a "
+            + "JOIN sub_task s ON s.id = a.sub_task_id "
+            + "JOIN task t ON t.id = s.task_id "
+            + "WHERE t.owner_id = #{ownerId} AND t.deleted = 0 "
+            + "AND s.deleted = 0 AND a.deleted = 0 AND a.status = 'ACTIVE' "
+            + "ORDER BY a.create_time DESC LIMIT #{limit}")
+    List<Attachment> selectActiveByTaskOwner(@Param("ownerId") Long ownerId,
+                                             @Param("limit") int limit);
+
+    /**
+     * 物理删除某任务下全部附件行（外键引用 sub_task.id，必须先于子任务删除，仅供任务级联删除使用）。 */
     @Delete("DELETE FROM attachment WHERE sub_task_id IN (SELECT id FROM sub_task WHERE task_id = #{taskId})")
     int physicalDeleteByTaskId(@Param("taskId") Long taskId);
 

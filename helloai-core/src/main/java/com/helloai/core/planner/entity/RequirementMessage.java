@@ -28,6 +28,9 @@ public class RequirementMessage extends BaseEntity {
     /** 会话内序号（从 1 递增） */
     private Integer seq;
 
+    /** 归属用户 id（PA-1，V132）：与所属会话 owner 一致，供个人维度检索。 */
+    private Long ownerId;
+
     /**
      * 结构化附加数据（JSON 文本）。一列两用：
      * assistant 行存结构化问题 {@code {"mode","progress","questions":[...]}}，

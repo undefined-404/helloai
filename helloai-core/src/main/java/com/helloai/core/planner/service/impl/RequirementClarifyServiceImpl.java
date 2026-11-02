@@ -12,6 +12,7 @@ import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
 import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.service.TaskService;
+import com.helloai.core.shared.util.CurrentUser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -314,7 +315,11 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     /** 会话列表（按创建时间倒序，LIMIT 50，首期不分页）。 */
     @Override
     public List<RequirementConversation> listConversations() {
+        Long userId = CurrentUser.userId();
         return conversationService.lambdaQuery()
+                // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属（老数据）」，未登录取全部
+                .and(userId != null, w -> w.isNull(RequirementConversation::getOwnerId)
+                        .or().eq(RequirementConversation::getOwnerId, userId))
                 .orderByDesc(RequirementConversation::getCreateTime)
                 .last("LIMIT " + LIST_LIMIT)
                 .list();

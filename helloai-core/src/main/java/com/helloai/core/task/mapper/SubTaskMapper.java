@@ -2,6 +2,8 @@ package com.helloai.core.task.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.projection.ActiveAgentLoadRow;
+import com.helloai.core.task.projection.OwnedTaskOverviewRow;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -102,6 +104,23 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
      * @return 在飞任务数（&gt;= 0）
      */
     int countInFlightAll();
+
+    /**
+     * 个人工作台任务概况（PA-4 改版）：按任务归属聚合执行中任务数与子任务三态计数。
+     *
+     * @param ownerId 当前用户 id（非 null；调用方保证登录态）
+     * @return 单行计数（无匹配时各列为 0，绝不返回 null）
+     */
+    OwnedTaskOverviewRow selectOwnedOverview(@Param("ownerId") Long ownerId);
+
+    /**
+     * 正在执行任务的活跃 Agent（按子任务 IN_PROGRESS 分组，并发条数倒序）。
+     *
+     * @param ownerId 当前用户 id（非 null）
+     * @param limit   最多返回几个 Agent（2×2 宫格取 4）
+     */
+    List<ActiveAgentLoadRow> selectActiveAgentLoads(@Param("ownerId") Long ownerId,
+                                                    @Param("limit") int limit);
 
     /**
      * 查询 ASSIGNED 超时未 claim 的子任务（按 update_time 升序，limit 上限）。

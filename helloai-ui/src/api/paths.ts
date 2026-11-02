@@ -205,6 +205,14 @@ export const paths = {
     // A3：打开会话时恢复进度（刷新页面后 runId 已丢，靠会话查最近一条活跃执行）
     activeSkillRun: (conversationId: string | number) =>
       `/requirement-conversations/skillRun/active/${enc(conversationId)}`,
+    // PA-3：当前用户活跃的助理身份（读取面，用户置顶→用户→平台置顶→平台→默认兜底）
+    assistantProfile: '/requirement-conversations/assistantProfile',
+    // PA-5：我的产物聚合读取（会话附件 + 子任务执行产物两源归一，按时间倒序）
+    myArtifacts: '/requirement-conversations/myArtifacts',
+    // PA-4：个人工作台聚合读取（身份卡 + 最近任务 + 产物 + 项目历史）
+    workbench: '/requirement-conversations/workbench',
+    // PA-6：工作台事件推送（SSE，任务状态变化时提示前端重拉聚合）
+    workbenchStream: '/requirement-conversations/workbench/stream',
     plannerOptions: '/requirement-conversations/listPlannerOptions',
     list: '/requirement-conversations',
     detail: (id: string | number) => `/requirement-conversations/getById/${enc(id)}`,

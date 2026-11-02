@@ -63,6 +63,9 @@ public interface ChatAttachmentService {
     /** 按会话列附件（Prompt 注入用；不做鉴权，调用方已具备会话上下文）。 */
     List<ChatAttachment> listByConversation(Long conversationId);
 
+    /** 窄查询（PA-5）：按上传/生成用户列会话附件（conversation 源「我的产物」），按上传倒序。 */
+    List<ChatAttachment> listByUploaderUserId(Long userId, int limit);
+
     /**
      * 存储对账用：全量读取「存储地址 + 字节数」，<b>包含逻辑删除行</b>（保守口径）。
      *

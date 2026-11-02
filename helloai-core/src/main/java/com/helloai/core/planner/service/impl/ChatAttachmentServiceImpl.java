@@ -184,6 +184,12 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
     }
 
     @Override
+    public List<ChatAttachment> listByUploaderUserId(Long userId, int limit) {
+        return userId == null || limit <= 0 ? List.of()
+                : baseMapper.listByUploaderUserId(userId, limit);
+    }
+
+    @Override
     public List<ChatAttachment> listStorageRefsIncludingDeleted() {
         return baseMapper.selectStorageRefAllIncludingDeleted();
     }

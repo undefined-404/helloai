@@ -37,6 +37,13 @@ public interface ChatAttachmentMapper extends BaseMapper<ChatAttachment> {
             "SELECT COALESCE(SUM(file_size), 0) FROM chat_attachment WHERE conversation_id = #{conversationId} AND deleted = 0")
     long sumFileSizeByConversationId(@Param("conversationId") Long conversationId);
 
+    /** 窄查询（PA-5）：某用户上传 / 生成的会话附件（conversation 源），按上传顺序。 */
+    @org.apache.ibatis.annotations.Select(
+            "SELECT * FROM chat_attachment WHERE uploader_user_id = #{userId} AND deleted = 0 "
+                    + "ORDER BY create_time DESC, id ASC LIMIT #{limit}")
+    List<ChatAttachment> listByUploaderUserId(@Param("userId") Long userId,
+                                              @Param("limit") int limit);
+
     @org.apache.ibatis.annotations.Select(
             "SELECT COUNT(*) FROM chat_attachment WHERE conversation_id = #{conversationId} AND deleted = 0")
     int countByConversationId(@Param("conversationId") Long conversationId);

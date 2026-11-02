@@ -131,4 +131,7 @@ public class Task extends BaseEntity {
      */
     @Version
     private Integer version;
+
+    /** 归属用户 id（PA-1，V132）：建任务时继承澄清会话 owner，NULL 宽松并入。 */
+    private Long ownerId;
 }

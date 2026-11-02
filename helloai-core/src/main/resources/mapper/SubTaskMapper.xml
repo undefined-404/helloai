@@ -357,5 +357,45 @@
         ORDER BY st.update_time ASC
         LIMIT #{limit}
     </select>
+    <!--
+        个人工作台任务概况（PA-4 改版，2026-11-02）：按任务归属一次聚合。
+
+        归属口径与 TaskService.pageTasks 一致（宽松并入）：owner_id = 当前用户 OR owner_id IS NULL。
+        「待人工」合并 BLOCKED（阻塞）与 DEAD_LETTER（人工死信池）——对用户是同一个动作面。
+    -->
+    <select id="selectOwnedOverview" resultType="com.helloai.core.task.projection.OwnedTaskOverviewRow">
+        SELECT
+            (SELECT COUNT(*) FROM task t
+             WHERE t.deleted = 0
+               AND t.status = 'IN_PROGRESS'
+               AND (t.owner_id = #{ownerId} OR t.owner_id IS NULL)) AS in_progress_tasks,
+            COUNT(*) FILTER (WHERE st.status = 'PENDING') AS pending_dispatch,
+            COUNT(*) FILTER (WHERE st.status = 'REVIEW') AS pending_review,
+            COUNT(*) FILTER (WHERE st.status IN ('BLOCKED', 'DEAD_LETTER')) AS pending_manual
+        FROM sub_task st
+        JOIN task t ON t.id = st.task_id
+        WHERE st.deleted = 0
+          AND t.deleted = 0
+          AND (t.owner_id = #{ownerId} OR t.owner_id IS NULL)
+    </select>
+
+    <!--
+        活跃 Agent（PA-4 改版）：正在执行（IN_PROGRESS）的子任务按 Agent 分组。
+        并发条数倒序；同条数按最近活跃时间倒序。limit 由调用方给（宫格 4 格）。
+    -->
+    <select id="selectActiveAgentLoads" resultType="com.helloai.core.task.projection.ActiveAgentLoadRow">
+        SELECT st.assigned_agent_id AS agent_id,
+               COUNT(*) AS running_count
+        FROM sub_task st
+        JOIN task t ON t.id = st.task_id
+        WHERE st.deleted = 0
+          AND st.status = 'IN_PROGRESS'
+          AND st.assigned_agent_id IS NOT NULL
+          AND t.deleted = 0
+          AND (t.owner_id = #{ownerId} OR t.owner_id IS NULL)
+        GROUP BY st.assigned_agent_id
+        ORDER BY COUNT(*) DESC, MAX(st.update_time) DESC
+        LIMIT #{limit}
+    </select>
 
 </mapper>

@@ -12,6 +12,7 @@ import com.helloai.core.planner.memory.ConversationMemorySummarizer;
 import com.helloai.core.planner.memory.entity.LongTermMemory;
 import com.helloai.core.planner.memory.mapper.LongTermMemoryMapper;
 import com.helloai.core.planner.memory.service.LongTermMemoryService;
+import com.helloai.core.shared.util.CurrentUser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -59,6 +60,8 @@ public class LongTermMemoryServiceImpl
         memory.setRefId(conversation.getId());
         memory.setTag(summary.tag());
         memory.setMemoryTime(OffsetDateTime.now());
+        // PA-1：会话摘要继承会话 owner（宽松并入：owner 为 NULL 的老会话不参与个人过滤）
+        memory.setOwnerId(conversation.getOwnerId());
         memoryMapper.insert(memory);
         log.info("会话摘要已归档: conversationId={}, title={}", conversation.getId(), summary.title());
     }
@@ -70,18 +73,26 @@ public class LongTermMemoryServiceImpl
             return List.of();
         }
         String kw = keyword.trim();
+        Long userId = CurrentUser.userId();
         return memoryMapper.selectList(new LambdaQueryWrapper<LongTermMemory>()
                 .and(w -> w.like(LongTermMemory::getTag, kw)
                         .or().like(LongTermMemory::getTitle, kw)
                         .or().like(LongTermMemory::getContent, kw))
+                // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属」，未登录取全部
+                .and(userId != null, w -> w.isNull(LongTermMemory::getOwnerId)
+                        .or().eq(LongTermMemory::getOwnerId, userId))
                 .orderByDesc(LongTermMemory::getMemoryTime)
                 .last("LIMIT " + safeLimit));
     }
 
     @Override
     public IPage<LongTermMemory> page(long page, long size, LongTermMemoryType type) {
+        Long userId = CurrentUser.userId();
         LambdaQueryWrapper<LongTermMemory> wrapper = new LambdaQueryWrapper<LongTermMemory>()
                 .eq(type != null, LongTermMemory::getType, type)
+                // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属」，未登录取全部
+                .and(userId != null, w -> w.isNull(LongTermMemory::getOwnerId)
+                        .or().eq(LongTermMemory::getOwnerId, userId))
                 .orderByDesc(LongTermMemory::getMemoryTime);
         return baseMapper.selectPage(new Page<>(page, size), wrapper);
     }

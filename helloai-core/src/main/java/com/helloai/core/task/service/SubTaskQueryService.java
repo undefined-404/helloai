@@ -18,6 +18,19 @@ import java.util.Map;
  */
 public interface SubTaskQueryService {
 
+    /** 个人工作台任务概况（PA-4 改版）：执行中任务 + 子任务三态计数。 */
+    record TaskOverview(long inProgressTasks, long pendingDispatch, long pendingReview, long pendingManual) {
+        public static final TaskOverview EMPTY = new TaskOverview(0, 0, 0, 0);
+    }
+
+    /** 活跃 Agent 负载（正在执行的子任务条数）。 */
+    record ActiveAgentLoad(Long agentId, long runningCount) {
+    }
+
+    TaskOverview overviewForOwner(Long ownerId);
+
+    List<ActiveAgentLoad> activeAgentLoadsForOwner(Long ownerId, int limit);
+
     List<String> requiredSkillsOf(Long taskId);
 
     List<String> mergeSkills(SubTask subTask);

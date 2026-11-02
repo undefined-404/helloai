@@ -260,6 +260,16 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
         return result;
     }
 
+    @Override
+    public List<Attachment> listActiveByTaskOwner(Long ownerId, int limit) {
+        if (ownerId == null || limit <= 0) {
+            return List.of();
+        }
+        List<Attachment> result = baseMapper.selectActiveByTaskOwner(ownerId, limit);
+        fillBrowseTitles(result);
+        return result;
+    }
+
     /**
      * 驳回打回时将该子任务全部有效（ACTIVE）附件批量置为 INACTIVE。
      *

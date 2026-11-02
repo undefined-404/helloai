@@ -1,9 +1,17 @@
 package com.helloai.api.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.stp.StpUtil;
+import com.helloai.api.dto.requirement.ArtifactItemVO;
+import com.helloai.api.dto.requirement.AssistantProfileVO;
 import com.helloai.api.dto.requirement.ClarifyMessageRequest;
 import com.helloai.api.dto.requirement.SkillRunStatusVO;
+import com.helloai.api.dto.requirement.WorkbenchVO;
+import com.helloai.api.support.WorkbenchEventHub;
 import com.helloai.common.base.R;
+import com.helloai.core.planner.assistant.service.AssistantProfileService;
+import com.helloai.core.planner.assistant.service.MyArtifactsQueryService;
+import com.helloai.core.planner.assistant.service.WorkbenchQueryService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.ChatSkillRunService;
 import com.helloai.core.planner.service.RequirementClarifyService;
@@ -35,6 +43,10 @@ public class RequirementConversationController {
     private final RequirementClarifyService requirementClarifyService;
     private final Executor chatStreamExecutor;
     private final ChatSkillRunService chatSkillRunService;
+    private final AssistantProfileService assistantProfileService;
+    private final MyArtifactsQueryService myArtifactsQueryService;
+    private final WorkbenchQueryService workbenchQueryService;
+    private final WorkbenchEventHub workbenchEventHub;
 
     /**
      * 手写构造器而非 {@code @RequiredArgsConstructor}：
@@ -50,10 +62,18 @@ public class RequirementConversationController {
     public RequirementConversationController(
             RequirementClarifyService requirementClarifyService,
             @Qualifier("chatStreamExecutor") Executor chatStreamExecutor,
-            ChatSkillRunService chatSkillRunService) {
+            ChatSkillRunService chatSkillRunService,
+            AssistantProfileService assistantProfileService,
+            MyArtifactsQueryService myArtifactsQueryService,
+            WorkbenchQueryService workbenchQueryService,
+            WorkbenchEventHub workbenchEventHub) {
         this.requirementClarifyService = requirementClarifyService;
         this.chatStreamExecutor = chatStreamExecutor;
         this.chatSkillRunService = chatSkillRunService;
+        this.assistantProfileService = assistantProfileService;
+        this.myArtifactsQueryService = myArtifactsQueryService;
+        this.workbenchQueryService = workbenchQueryService;
+        this.workbenchEventHub = workbenchEventHub;
     }
 
     /** SseEmitter 显式超时（与前端 120s 对话超时档位对齐，超时后连接自动关闭）。 */
@@ -295,6 +315,57 @@ public class RequirementConversationController {
     @GetMapping("/listPlannerOptions")
     public R<List<PlannerAgentPicker.PlannerOption>> listPlannerOptions() {
         return R.ok(requirementClarifyService.listPlannerOptions());
+    }
+
+    /**
+     * 对话页头部身份卡（PA-3）。
+     *
+     * <p>用户级助理优先，回退平台预置；表空/异常由服务给默认值兜底，永不 404。
+     * 无鉴权注解：身份卡是对话页通用展示，不依赖登录态（未登录返回默认值）。</p>
+     */
+    @GetMapping("/assistantProfile")
+    public R<AssistantProfileVO> assistantProfile() {
+        Long userId = null;
+        try {
+            userId = Long.valueOf(StpUtil.getLoginId().toString());
+        } catch (Exception ignore) {
+            // 未登录：仅取平台预置/默认
+        }
+        return R.ok(AssistantProfileVO.from(assistantProfileService.getActiveByUser(userId)));
+    }
+
+    /**
+     * 「我的产物」聚合读取（PA-5）：会话附件 + 子任务执行产物两源归一，按时间倒序。
+     *
+     * <p>只做查询聚合展示（计划 §0 ④），无下载/预览凭据；下载/预览走既有
+     * {@code /chat-attachments/*} 与 {@code /attachments/*}。无 {@code @SaCheckPermission}：
+     * 登录态由当前用户取 userId 决定（Interceptors 已注入 {@code UserContext}），
+     * 未登录返回空列表。</p>
+     */
+    @GetMapping("/myArtifacts")
+    public R<List<ArtifactItemVO>> myArtifacts(
+            @RequestParam(value = "limit", required = false) Integer limit) {
+        return R.ok(ArtifactItemVO.fromList(myArtifactsQueryService.myArtifacts(limit)));
+    }
+
+    /**
+     * 个人工作台聚合读取（PA-4）：身份卡 + 最近任务 + 工作产物 + 项目历史。
+     *
+     * <p>只读聚合，四段各复用既有读取面；未登录返回默认身份 + 空列表，
+     * 前端开右栏时一次拉齐，不再分打四个接口。</p>
+     */
+    @GetMapping("/workbench")
+    public R<WorkbenchVO> workbench() {
+        return R.ok(WorkbenchVO.from(workbenchQueryService.aggregate()));
+    }
+
+    /**
+     * 工作台事件推送（PA-6）：任务状态变化时推一帧 {@code event: task}，前端收到后
+     * 重拉 {@code /workbench}。帧里不带业务数据，权限过滤只在聚合读取侧做一次。
+     */
+    @GetMapping(value = "/workbench/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter workbenchStream() {
+        return workbenchEventHub.connect();
     }
 
     /** 追加一条用户消息并走一轮 LLM 澄清（可附结构化选项回答快照）。 */

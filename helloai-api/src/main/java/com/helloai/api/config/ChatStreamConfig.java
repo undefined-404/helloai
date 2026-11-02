@@ -1,5 +1,6 @@
 package com.helloai.api.config;
 
+import com.helloai.core.shared.util.UserContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -36,6 +37,21 @@ public class ChatStreamConfig {
         executor.setQueueCapacity(200);
         executor.setThreadNamePrefix("chat-stream-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        // PA-2a：异步链路需要取登录用户 id。Sa-Token 1.44 Context Filter 仅注册 REQUEST，
+        // 异步线程无 Sa-Token ThreadLocal；用 TaskDecorator 在提交时捕获请求线程的 UserContext、
+        // 执行时在异步线程恢复（finally 清理，避免线程池复用串号）。与项目既有「异步丢上下文」
+        // 的解法一致，不侵入拦截器/注解。
+        executor.setTaskDecorator(runnable -> {
+            Long userId = UserContext.userId();
+            return () -> {
+                UserContext.set(userId);
+                try {
+                    runnable.run();
+                } finally {
+                    UserContext.clear();
+                }
+            };
+        });
         executor.initialize();
         log.info("Chat 流式执行线程池初始化: core=4, max=8, queue=200");
         return executor;

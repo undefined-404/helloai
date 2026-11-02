@@ -1,6 +1,7 @@
 package com.helloai.core.planner.service.impl;
 
 import com.helloai.common.base.BizException;
+import com.helloai.core.shared.util.CurrentUser;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
@@ -151,6 +152,9 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         conversation.setWebSearchEnabled(webSearchEnabled);
         // 新会话始终 CHAT 自由对话（auto 意图路由 + /planner 命令触发转方案）
         conversation.setMode(RequirementClarifyService.MODE_CHAT);
+        // PA-1：同步创建线程写真实登录用户；流式异步线程（chatStreamExecutor）取不到时为 NULL，
+        // 查询按「owner == 当前用户 OR owner IS NULL」宽松并入，老数据不受影响。
+        conversation.setOwnerId(CurrentUser.userId());
         conversationService.save(conversation);
         // 认领新会话首句前上传的临时附件（clientToken → conversationId）。
         // 必须在 save 之后：claim 的 WHERE 条件是 conversation_id IS NULL，需要有会话 id 才写得进去。

@@ -28,6 +28,7 @@ FILES=(
   "HelloAI 需求对话附件实施计划（2026-10-22）.md"
   "HelloAI 任务拆解领域无关化实施计划（2026-10-24）.md"
   "HelloAI 技能执行面接入实施计划（2026-10-26）.md"
+  "HelloAI 个人助理工作台实施计划（2026-11-02）.md"
 )
 
 PY=""
@@ -49,8 +50,8 @@ for f in "${FILES[@]}"; do
 import io, re, sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 S = ["待开始","设计中","实现中","验证中","已完成","部分完成","阻塞","暂缓","明确不做"]
-ID = re.compile(r"^\| \*{0,2}((?:SKX|PC|S|W|ATT|TD|REF|M|Q)-\d+)[^|]*\|")
-SEC = re.compile(r"^#{2,4} \*{0,2}((?:SKX|PC|S|W|ATT|TD|Q)-\d+)")
+ID = re.compile(r"^\| \*{0,2}((?:SKX|PA|PC|S|W|ATT|TD|REF|M|Q)-\d+)[^|]*\|")
+SEC = re.compile(r"^#{2,4} \*{0,2}((?:SKX|PA|PC|S|W|ATT|TD|Q)-\d+)")
 ls = io.open(sys.argv[1], encoding="utf-8").read().split("\n")
 bad, checked = [], 0
 for i, l in enumerate(ls):

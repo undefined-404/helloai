@@ -6,6 +6,7 @@ import com.helloai.api.interceptor.AdminOnlyInterceptor;
 import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.api.interceptor.RequestLogInterceptor;
 import com.helloai.api.interceptor.SetupLockInterceptor;
+import com.helloai.api.interceptor.UserContextInterceptor;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
 import com.helloai.core.system.service.RequestLogService;
@@ -64,6 +65,12 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .excludePathPatterns("/api/setup/**")
                 // 活动流公开接口
                 .excludePathPatterns("/api/feed/**");
+
+        // 请求级用户上下文（PA-2a）：把当前登录用户 id 写入 UserContext ThreadLocal，
+        // 供 core 侧任意线程读取。排在认证之后（依赖其放行断言），但必须为独立拦截器：
+        // 认证拦截器对未登录白名单是放行而非设置用户，UserContext 置 null 即可。
+        registry.addInterceptor(new UserContextInterceptor())
+                .addPathPatterns("/api/**");
 
         // 管理面路径限定：/api/admin/** 仅允许平台账号（拒绝外部 Agent 的 API Key）
         // 认证与授权分离：本拦截器不判角色；细粒度授权由 @SaCheckPermission 动作码承担

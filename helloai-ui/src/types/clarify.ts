@@ -153,6 +153,69 @@ export interface PlannerOption {
   disabledReason: string | null
 }
 
+/** PA-3 助理身份（读取面；vo 由 AssistantProfileService.getActiveByUser 按优先级兜底给出） */
+export interface AssistantProfile {
+  name: string
+  identity: string
+  model: string
+  skillIds: LongId[]
+  greeting: string
+}
+
+/** PA-4 工作台「最近任务」条目 */
+export interface WorkbenchRecentTask {
+  id: LongId
+  title: string
+  status: string | null
+  createTime: string
+}
+
+/** PA-4 工作台任务概况第一屏（执行中任务 + 子任务三态） */
+export interface WorkbenchTaskOverview {
+  /** 执行中任务数（task.status = IN_PROGRESS） */
+  inProgressTasks: number
+  /** 待分配子任务数 */
+  pendingDispatch: number
+  /** 待审查子任务数 */
+  pendingReview: number
+  /** 待人工子任务数（阻塞 + 人工死信） */
+  pendingManual: number
+}
+
+/** PA-4 工作台任务概况第二屏：正在执行任务的活跃 Agent */
+export interface WorkbenchActiveAgent {
+  agentId: LongId
+  name: string
+  /** true = 内部 LLM；false = 外部 AI Agent */
+  internal: boolean
+  runningCount: number
+}
+
+/** PA-4 个人工作台聚合响应（任务概况 + 最近任务 + 最近产物） */
+export interface Workbench {
+  profile: AssistantProfile
+  taskOverview: WorkbenchTaskOverview
+  activeAgents: WorkbenchActiveAgent[]
+  recentTasks: WorkbenchRecentTask[]
+  artifacts: ArtifactItem[]
+}
+
+/** PA-5 我的产物聚合条目（两源归一；前端据此分栏 + 路由下载/预览端点） */
+export interface ArtifactItem {
+  /** conversation | execution */
+  source: string
+  id: LongId
+  fileName: string
+  fileType?: string | null
+  mimeType?: string | null
+  fileSize?: number | null
+  /** 上下文标题（会话标题或任务标题） */
+  contextTitle?: string | null
+  /** 上下文 id（会话 id 或任务 id） */
+  contextId?: LongId | null
+  createdAt?: string | null
+}
+
 /**
  * 会话附件（V121 / 需求对话「添加文件」）。
  *

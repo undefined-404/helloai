@@ -11,6 +11,7 @@ import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.projection.OwnedTaskOverviewRow;
 import com.helloai.core.task.projection.SubTaskProjection;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.SubTaskNotificationService;
@@ -63,6 +64,41 @@ public class SubTaskQueryServiceImpl implements SubTaskQueryService {
     private final ObjectProvider<TaskService> taskServiceProvider;
     /** 审查侧读数经 ReviewPort 收口（§6.146），不直捅 review 域。 */
     private final ReviewPort reviewPort;
+
+    // ══════════════════════════════════════════════════════════════
+    //  个人工作台任务概况（PA-4 改版，2026-11-02）
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    public TaskOverview overviewForOwner(Long ownerId) {
+        if (ownerId == null) {
+            return TaskOverview.EMPTY;
+        }
+        OwnedTaskOverviewRow row = subTaskMapper.selectOwnedOverview(ownerId);
+        if (row == null) {
+            return TaskOverview.EMPTY;
+        }
+        return new TaskOverview(
+                nvl(row.getInProgressTasks()),
+                nvl(row.getPendingDispatch()),
+                nvl(row.getPendingReview()),
+                nvl(row.getPendingManual()));
+    }
+
+    @Override
+    public List<ActiveAgentLoad> activeAgentLoadsForOwner(Long ownerId, int limit) {
+        if (ownerId == null || limit <= 0) {
+            return List.of();
+        }
+        return subTaskMapper.selectActiveAgentLoads(ownerId, limit).stream()
+                .filter(row -> row.getAgentId() != null)
+                .map(row -> new ActiveAgentLoad(row.getAgentId(), nvl(row.getRunningCount())))
+                .toList();
+    }
+
+    private static long nvl(Long value) {
+        return value == null ? 0L : value;
+    }
 
     // ══════════════════════════════════════════════════════════════
     //  技能 / 认领约束（只读派生：读 Task 级 required_skills + agent_policy）

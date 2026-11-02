@@ -271,7 +271,9 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
         }
         TaskView task = taskService.createFromDraft(new TaskDraft(conversation.getFinalTitle(),
                 describeWithSkill(conversation.getFinalDescription(), requiredSkills),
-                TaskStatus.PENDING, context, archetype, effectiveSkills));
+                TaskStatus.PENDING, context, archetype, effectiveSkills,
+                // PA-1：任务 owner 继承澄清会话 owner（宽松并入）
+                conversation.getOwnerId()));
         log.info("澄清终稿建任务: conversationId={}, taskId={}, title={}, event={}, archetype={}, fallback={}",
                 conversationId, task.id(), task.title(), timelineEvent, archetype,
                 archetypeDecision.fallbackReason());

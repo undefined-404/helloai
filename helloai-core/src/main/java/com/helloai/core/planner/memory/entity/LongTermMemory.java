@@ -39,4 +39,7 @@ public class LongTermMemory extends BaseEntity {
     private String tag;
 
     private OffsetDateTime memoryTime;
+
+    /** 归属用户 id（PA-1，V132）：会话摘要继承会话 owner，空 NULL 宽松并入。 */
+    private Long ownerId;
 }

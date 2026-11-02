@@ -97,4 +97,12 @@ public class RequirementConversation extends BaseEntity {
      */
     @TableField(typeHandler = SmallIntBooleanTypeHandler.class)
     private Boolean clarifyDeclined;
+
+    /**
+     * 归属用户 id（PA-1，V132）。
+     *
+     * <p>同步创建线程写真实登录用户；流式异步线程取不到时为 NULL。查询按
+     * 「owner == 当前用户 OR owner IS NULL」过滤（宽松并入）。</p>
+     */
+    private Long ownerId;
 }
