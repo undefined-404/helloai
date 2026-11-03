@@ -216,6 +216,10 @@ export const paths = {
     // PA-11：助理对话（检索增强问答；不产出任务草案）
     assistantCreate: '/requirement-conversations/assistant/create',
     assistantSend: (id: string | number) => `/requirement-conversations/assistant/send/${enc(id)}`,
+    // PA-11 SSE 流式（2026-11-03）：与同步端点同参，事件协议与需求对话一致（含停止生成）
+    assistantStreamCreate: '/requirement-conversations/assistant/streamCreate',
+    assistantStreamSend: (id: string | number) =>
+      `/requirement-conversations/assistant/streamSend/${enc(id)}`,
     assistantCreateTaskFromContext: (id: string | number) => `/requirement-conversations/assistant/createTaskFromContextById/${enc(id)}`,
     // PA-12：上下文窗口占用 / 手动压缩
     contextWindow: (id: string | number) => `/requirement-conversations/contextWindowById/${enc(id)}`,

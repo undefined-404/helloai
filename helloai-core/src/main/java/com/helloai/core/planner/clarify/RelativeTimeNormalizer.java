@@ -23,6 +23,7 @@ import java.util.regex.Pattern;
  *   <li>周内点：本周X（周一~周日）、上周X（周一~周日）</li>
  *   <li>周/月区间：本周、上周（本周一起点语义）、最近一周/近一周/最近7天/近7天</li>
  *   <li>天数区间：最近N天/近N天（含首末两天）</li>
+ *   <li>裸「最近」（无窗口限定）：近 30 天区间</li>
  * </ul>
  *
  * <p>替换顺序自长到短（先"最近一周"后"最近N天"、先"上周五"后"上周"），
@@ -43,6 +44,19 @@ public class RelativeTimeNormalizer {
     /** 周区间：最近一周 / 近一周 / 最近7天 / 近7天（先于 RECENT_DAYS_PATTERN 命中的全称写法）。 */
     private static final Pattern RECENT_WEEK_PATTERN =
             Pattern.compile("最近一周|近一周|最近7天|近7天");
+
+    /**
+     * 裸「最近」：无更短/更长区间限定时按近 30 天处理（召回优先）。
+     *
+     * <p>负向排除更长表达（最近一周/一个月/30天/一年/几年/最近N天），这些由
+     * {@link #RECENT_WEEK_PATTERN} / {@link #RECENT_DAYS_PATTERN} 各自处理，
+     * 裸词规则只兜住「最近的 AI 新闻」这类没有明确窗口的写法。</p>
+     */
+    private static final Pattern RECENT_BARE_PATTERN =
+            Pattern.compile("最近(?!一周|一个月|1个?月|7天|30天|一年|几年|邻|公共|\\d)");
+
+    /** 裸「最近」的默认窗口（自然日，含首末两天）。 */
+    private static final int BARE_RECENT_DAYS = 30;
 
     /** 无星期的周区间：上周 / 本周（周一起点，周末取今天/上周日）。 */
     private static final Pattern WEEK_RANGE_PATTERN = Pattern.compile("上周|本周");
@@ -90,6 +104,8 @@ public class RelativeTimeNormalizer {
             int span = Math.max(1, days - 1);
             return range(today.minusDays(span), today);
         });
+        s = replaceAll(s, RECENT_BARE_PATTERN, m ->
+                range(today.minusDays(BARE_RECENT_DAYS - 1L), today));
         s = replaceAll(s, WEEKDAY_POINT_PATTERN, m -> {
             String prefix = m.group(1);
             Integer idx = WEEKDAY_INDEX.get(m.group(2).charAt(0));
@@ -129,9 +145,10 @@ public class RelativeTimeNormalizer {
      *   <li>含「今天/今日/昨天/昨日/实时/最新消息」→ {@code oneDay}；</li>
      *   <li>含「本周/上周/最近一周/近一周/最近7天/近7天/最近N天(N≤7)」→ {@code oneWeek}；</li>
      *   <li>含「本月/上月/最近30天」→ {@code oneMonth}；</li>
-     *   <li>含「今年/去年/最新」→ {@code oneYear}；</li>
+     *   <li>含「今年/去年/最新/最近一年」→ {@code oneYear}；</li>
      *   <li>含已归一化的绝对日期（yyyy-MM-dd）→ 按距 today 天数收紧（&le;1 天 oneDay、
      *       &le;7 天 oneWeek、&le;30 天 oneMonth、&le;365 天 oneYear）；</li>
+     *   <li>含裸「最近」（无更短/更长窗口限定）→ {@code oneMonth}；</li>
      *   <li>以上均未命中 → {@code noLimit}。</li>
      * </ul>
      *
@@ -164,7 +181,8 @@ public class RelativeTimeNormalizer {
             return "oneMonth";
         }
         // 档位四：年区间（"最新"宽泛时效，兜底年档）
-        if (text.contains("今年") || text.contains("去年") || text.contains("最新")) {
+        if (text.contains("今年") || text.contains("去年") || text.contains("最新")
+                || text.contains("最近一年") || text.contains("近一年")) {
             return "oneYear";
         }
         // 档位五：已归一化的绝对日期反推（normalize 输出的 yyyy-MM-dd）
@@ -181,6 +199,10 @@ public class RelativeTimeNormalizer {
             } catch (Exception ignore) {
                 // 非法日期（如 2026-02-31）：忽略，走 noLimit 兜底
             }
+        }
+        // 档位六：裸「最近」（无更短/更长窗口限定）→ 月档，与 normalize 的 30 天窗口同源
+        if (RECENT_BARE_PATTERN.matcher(text).find()) {
+            return "oneMonth";
         }
         return "noLimit";
     }

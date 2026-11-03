@@ -102,6 +102,22 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
                     + "分析一下|分析|看看|看一下|研究一下|"
                     + "判断|是否正确|对不对|行不行|有没有问题|的中|的|了|吗|呢|吧");
 
+    /**
+     * 对话追问碎片：指代上一轮/元动作/检索动作，单独成词时没有检索价值。
+     *
+     * <p>只用于「候选是否全是碎片」的判定（{@link #isMetaOnlyQuery}），不做全局清洗：
+     * 「总结 React 19 新特性」剥掉动作词后仍保留实体，不能因此整条丢弃。</p>
+     *
+     * <p>实测来源（2026-11-03）：用户问「最近的 AI 相关新闻，这次联网查询后，展开详细说说吧」，
+     * 规则层按逗号拆出「最近的 AI 相关新闻」「这次联网查询后」「展开详细说说」三条，
+     * 后两条全部进入检索并白跑超时。</p>
+     */
+    private static final Pattern FOLLOWUP_FILLER_PATTERN = Pattern.compile(
+            "这次|本次|此次|再次|重新|接着|刚才|刚刚|上面|上述|之前|"
+                    + "展开|详细|说说|讲一讲|聊一聊|综合|综合性|梳理|总结一下|总结|"
+                    + "联网查询后|联网查询|查询后|查一下|查询|"
+                    + "一点|一下|继续|具体");
+
     /** 疑问/祈使标记：整句带这些标记且无任何外部标识时，判为「问句照搬」。 */
     private static final Pattern INTERROGATIVE_PATTERN = Pattern.compile(
             "是否|是不是|对不对|行不行|有没有|怎么样|如何|为什么|吗|呢|？|\\?");
@@ -232,12 +248,14 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
         return kept;
     }
 
-    /** 判定单条候选是否为「纯元词」：剥元词后剩不下实词，或整句问句照搬。 */
+    /** 判定单条候选是否为「纯元词」：剥元词/追问碎片后剩不下实词，或整句问句照搬。 */
     private boolean isMetaOnlyQuery(String query) {
         if (query == null || query.isBlank()) {
             return true;
         }
-        String residual = META_WORD_PATTERN.matcher(query).replaceAll("").replaceAll("\\s+", "");
+        String residual = META_WORD_PATTERN.matcher(query).replaceAll("");
+        residual = FOLLOWUP_FILLER_PATTERN.matcher(residual).replaceAll("")
+                .replaceAll("\\s+", "");
         if (residual.length() < 2) {
             return true;
         }
@@ -252,17 +270,26 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
     }
 
     /**
-     * LLM 改写条件触发判定：开关开 + 规则产出单一候选词（或规则多候选词但原文超长
-     * 需 LLM 精化），且原文超阈值长度或含疑问句式才改写；短而干净的消息零额外成本。
-     * 凭证由平台内执行链供给（系统设置页平台级 Key），不再检查独立快模型 Key。
+     * LLM 改写条件触发判定：开关开 + 规则产出含不可检索碎片（或为空），或规则产出单一
+     * 候选词（或多候选但原文超长需精化），且原文超阈值长度或含疑问句式才改写；
+     * 短而干净的消息零额外成本。
      *
      * <p>W-4 放宽：规则产出 2~N 个候选词时，若原文仍超 {@link #LLM_REWRITE_MULTI_TEXT_LIMIT}，
      * 也进 LLM——多主题长句被连接符拆碎后各词仍过长/语义不完整，LLM 可产正交查询
      * （对齐 Kimi/DeepSeek 网页版 query expansion）。</p>
+     *
+     * <p>2026-11-03 补口：规则候选里只要出现「这次联网查询后」「展开详细说说」这类
+     * 纯追问碎片，即使原文短、候选数多也必须进 LLM——碎片词不可检索，交给规则过滤
+     * 只能得到更少候选，不能得到正确的独立搜索词。</p>
      */
     private boolean shouldLlmRewrite(String text, List<String> ruleQueries) {
-        if (!properties.isQueryRewriteEnabled()) {
+        if (!properties.isQueryRewriteEnabled() || text == null || text.isBlank()) {
             return false;
+        }
+        boolean hasUnretrievable = ruleQueries.isEmpty()
+                || ruleQueries.stream().anyMatch(this::isMetaOnlyQuery);
+        if (hasUnretrievable) {
+            return true;
         }
         if (ruleQueries.size() > 1 && text.length() <= LLM_REWRITE_MULTI_TEXT_LIMIT) {
             return false;

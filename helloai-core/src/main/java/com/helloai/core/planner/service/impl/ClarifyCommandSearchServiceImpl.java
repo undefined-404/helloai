@@ -120,6 +120,12 @@ public class ClarifyCommandSearchServiceImpl implements ClarifyCommandSearchServ
         if (conversation == null) {
             throw new BizException("澄清会话不存在: " + conversationId);
         }
+        // PA-11：助理会话与需求会话共用存储，澄清写入链路（发送/重试/编辑/切模式/终稿/放弃）
+        // 全部经本守卫，这里统一拒绝跨 kind，避免助理会话被澄清编排接管
+        if (conversation.getKind() != null
+                && !RequirementClarifyService.KIND_REQUIREMENT.equals(conversation.getKind())) {
+            throw new BizException("该会话为助理对话，不能使用需求澄清接口: conversationId=" + conversationId);
+        }
         if (!RequirementClarifyService.STATUS_ACTIVE.equals(conversation.getStatus())) {
             throw new BizException("会话已结束（" + conversation.getStatus()
                     + "），请新建会话: conversationId=" + conversationId);

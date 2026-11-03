@@ -105,6 +105,11 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
         if (conversation == null) {
             throw new BizException("澄清会话不存在: " + conversationId);
         }
+        // regenerate 只查 FINALIZED、不经 requireActive，这里单独补 kind 守卫
+        if (conversation.getKind() != null
+                && !RequirementClarifyService.KIND_REQUIREMENT.equals(conversation.getKind())) {
+            throw new BizException("该会话为助理对话，不能使用需求澄清接口: conversationId=" + conversationId);
+        }
         if (!RequirementClarifyService.STATUS_FINALIZED.equals(conversation.getStatus())) {
             throw new BizException("仅已建任务（FINALIZED）的会话可重新生成: conversationId=" + conversationId
                     + ", status=" + conversation.getStatus());

@@ -262,6 +262,26 @@ class AiSearchWebSearchServiceImplTest {
                 .contains("\"answer\":false");
     }
 
+    // ════════════════════════════════════════════════════════════
+    //  A3：AI Search 无结果回退基础 Web Search（请求体字段）
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("A3 回退请求体：summary=true + count + 动态 freshness，无 answer/stream 字段")
+    void buildFallbackRequestBody_baseWebSearchShape() {
+        AiSearchWebSearchServiceImpl service = newService();
+
+        String body = service.buildFallbackRequestBody("最近的 AI 相关新闻", 15, "oneMonth");
+
+        assertThat(body)
+                .contains("\"query\":\"最近的 AI 相关新闻\"")
+                .contains("\"summary\":true")
+                .contains("\"count\":15")
+                .contains("\"freshness\":\"oneMonth\"")
+                .doesNotContain("\"answer\"")
+                .doesNotContain("\"stream\"");
+    }
+
     // ---------- W-7 模态卡消费 ----------
 
     @Test

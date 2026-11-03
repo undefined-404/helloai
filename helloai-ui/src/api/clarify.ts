@@ -144,8 +144,11 @@ export const clarifyApi = {
     return request.get<any, Workbench>(paths.clarifications.workbench)
   },
   // 会话列表（按创建时间倒序，LIMIT 50）
-  list() {
-    return request.get<any, RequirementConversation[]>(paths.clarifications.list)
+  // kind：需求会话 / 助理会话共用存储，读取侧分流；缺省由后端按 REQUIREMENT 兜底
+  list(kind?: 'REQUIREMENT' | 'ASSISTANT') {
+    return request.get<any, RequirementConversation[]>(paths.clarifications.list, {
+      params: kind ? { kind } : undefined
+    })
   },
 
   // ── 技能执行状态（SKX-13）────────────────────────────────────────────

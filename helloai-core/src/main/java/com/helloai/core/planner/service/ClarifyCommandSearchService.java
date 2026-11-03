@@ -38,7 +38,12 @@ public interface ClarifyCommandSearchService {
     /** /task 命令附加文本（需求描述体，即终稿直出轮的输入）；非 /task 命令返回空串。 */
     String taskCommandExtra(String message);
 
-    /** 校验会话存在且处于 ACTIVE，返回会话实体；否则抛 {@code BizException}。 */
+    /**
+     * 校验会话存在、类型为 REQUIREMENT 且处于 ACTIVE，返回会话实体；否则抛 {@code BizException}。
+     *
+     * <p>澄清写入链路（发送/重试/编辑/切模式/终稿/放弃）统一经此守卫，助理会话（{@code kind=ASSISTANT}）
+     * 会被拒绝，不能借道澄清编排写入。</p>
+     */
     RequirementConversation requireActive(Long conversationId);
 
     /** 是否方案澄清模式：NULL 老数据按 CLARIFY 兼容。 */

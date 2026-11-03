@@ -3,21 +3,6 @@
     <el-card class="chat-card">
       <template #header>
         <div class="card-header chat-header">
-          <div class="chat-header-title">
-            <!-- PA-3 助理身份卡：名称 + 身份 + 模型；读取失败/为空时回退「新建对话（AI 助手）」原名 -->
-            <span class="chat-header-main">
-              <template v-if="assistantProfile">{{ assistantProfile.name }}</template>
-              <template v-else>新建对话（AI 助手）</template>
-            </span>
-            <span
-              v-if="assistantProfile"
-              class="chat-header-sub"
-            >{{ assistantProfile.identity }}<template v-if="assistantProfile.model"> · {{ assistantProfile.model }}</template></span>
-            <span
-              v-else
-              class="chat-header-sub"
-            >与 AI 助手自由对话；点「＋」→ 技能：要成体系选「方案整理」，跳过澄清直接建任务选「直接拆解」，要产出文件（如架构图 / 业务流程图）选对应的产出型技能</span>
-          </div>
           <div class="header-actions">
             <!-- 模式 chip + 操作组（刷新 / 分享 / 更多）；新建会话入口收敛在左栏顶部「新建对话」 -->
             <el-tag
@@ -1279,7 +1264,7 @@ import { saveBlobResponse } from '@/utils/download'
 import StructuredQuestionCard from './StructuredQuestionCard.vue'
 import WebSearchBar from './WebSearchBar.vue'
 import MarkdownView from '@/components/MarkdownView.vue'
-import type { AssistantProfile, ChatAttachmentItem, ClarifyArtifactRef, ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, ContextUsage, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, RoundProcessTrace, WebSearchTrace } from '@/types'
+import type { ChatAttachmentItem, ClarifyArtifactRef, ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, ContextUsage, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, RoundProcessTrace, WebSearchTrace } from '@/types'
 import { sameId } from '@/utils/id'
 
 const route = useRoute()
@@ -1289,14 +1274,6 @@ const conversations = ref<RequirementConversation[]>([])
 const activeId = ref<LongId | null>(null)
 const detail = ref<ClarifyConversationDetail | null>(null)
 const conversation = computed(() => detail.value?.conversation ?? null)
-// PA-3 助理身份（读取面；后端按「用户置顶→用户→平台置顶→平台→默认兜底」出值，
-// 读取失败时优雅隐藏身份卡，不影响对话主链路）
-const assistantProfile = ref<AssistantProfile | null>(null)
-async function loadAssistantProfile() {
-  try {
-    assistantProfile.value = await clarifyApi.assistantProfile()
-  } catch { assistantProfile.value = null }
-}
 // 设计图：左栏顶部 + 搜索框 + 状态 tabs
 const searchKeyword = ref('')
 const statusTab = ref<'all' | 'ACTIVE' | 'FINALIZED'>('all')
@@ -2352,7 +2329,7 @@ const groupedConversations = computed(() => {
 
 async function loadList() {
   try {
-    conversations.value = await clarifyApi.list()
+    conversations.value = await clarifyApi.list('REQUIREMENT')
   } catch { /* 拦截器已弹错 */ }
 }
 
@@ -3201,7 +3178,6 @@ function handleMoreAction(cmd: string) {
 onMounted(() => {
   loadList()
   loadPlannerOptions()
-  void loadAssistantProfile()
   // PA-11：从助理对话创建任务后跳转时按 query.id 打开目标需求会话
   const queryId = route.query.id
   if (typeof queryId === 'string' && queryId) {
@@ -3271,31 +3247,12 @@ onBeforeUnmount(() => {
 .card-header { display: flex; align-items: center; justify-content: space-between; }
 .header-actions { display: flex; gap: 8px; }
 
-/* ── 顶bar（设计图）：左侧标题 + 副标题双行，右侧操作按钮组 ── */
+/* ── 顶bar（设计图）：左侧标题已移除，右侧操作按钮组右对齐 ── */
 .chat-header {
+  justify-content: flex-end;
   align-items: center;
   gap: 16px;
   padding-top: 2px;
-}
-.chat-header-title {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  flex: 1;
-}
-.chat-header-main {
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--ha-ink);
-  line-height: 1.3;
-  letter-spacing: -0.01em;
-}
-.chat-header-sub {
-  font-size: 13px;
-  color: var(--ha-muted);
-  line-height: 1.5;
-  letter-spacing: 0;
 }
 /* 设计图：右组操作按钮紧凑 + 与左侧内容上下居中对齐 */
 .chat-header .header-actions {

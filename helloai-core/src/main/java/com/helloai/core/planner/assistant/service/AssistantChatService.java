@@ -1,6 +1,8 @@
 package com.helloai.core.planner.assistant.service;
 
+import com.helloai.core.planner.service.RequirementClarifyService.ChatStreamEvent;
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifyConversationDetail;
+import reactor.core.publisher.Flux;
 
 /**
  * 个人助理对话服务（PA-11）。
@@ -23,6 +25,25 @@ public interface AssistantChatService {
      */
     ClarifyConversationDetail createConversation(String firstMessage, Long plannerAgentId,
                                                  AssistantRoundInput input);
+
+    /**
+     * 流式新建助理会话并跑首轮（SSE）：首帧 {@code session}（data=会话 id），
+     * 随后 {@code progress}/{@code reasoning}/{@code token} 增量，终帧 {@code done}/{@code error}。
+     *
+     * <p>与同步 {@link #createConversation} 同语义：检索增强预注入、联网搜索/技能/附件、
+     * 幂等落 user 消息；差别只在主回复走 {@code executeStream}，且落库附带
+     * {@code webSearch}/{@code process} 过程 payload。</p>
+     */
+    Flux<ChatStreamEvent> streamCreateConversation(String firstMessage, Long plannerAgentId,
+                                                   AssistantRoundInput input);
+
+    /**
+     * 在助理会话里流式追加一条消息并跑一轮（SSE），事件协议同 {@link #streamCreateConversation}。
+     *
+     * <p>同步前置段（落 user 消息 / 自动压缩）持会话锁串行化，解锁后再跑检索与 LLM 流，
+     * 保证「停止生成」时不会占着会话锁。</p>
+     */
+    Flux<ChatStreamEvent> streamSendMessage(Long conversationId, String message, AssistantRoundInput input);
 
     /**
      * 在助理会话里追加一条消息并跑一轮问答。

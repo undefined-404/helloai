@@ -83,7 +83,62 @@ export async function streamCreateConversation(
   )
 }
 
-/** SSE 消费内核（两个入口共用）：建连 → 逐帧解析 → 分派到 handlers。 */
+/**
+ * 助理对话：新建会话 + 首轮流式（PA-11，2026-11-03）。
+ *
+ * <p>与需求对话共用同一 SSE 消费内核与事件协议，仅端点与请求体不同（多一个本轮技能
+ * {@code skill}）。工作台此前只有同步端点，联网检索与整段生成期间无任何反馈、
+ * 也无法停止；改走本入口后与 RequirementChat 的流式体验对齐。</p>
+ */
+export async function streamAssistantCreate(
+  message: string,
+  plannerAgentId: LongId | null,
+  webSearchEnabled: boolean | null,
+  skill: string | null,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal,
+  clientToken?: string | null,
+  attachmentIds?: (string | number)[] | null
+): Promise<void> {
+  return consumeSse(
+    `/api${paths.clarifications.assistantStreamCreate}`,
+    {
+      message,
+      plannerAgentId,
+      webSearchEnabled,
+      skill: skill ?? null,
+      clientToken: clientToken ?? null,
+      attachmentIds: attachmentIds?.length ? attachmentIds : null
+    },
+    handlers,
+    signal
+  )
+}
+
+/** 助理对话：已有会话追加消息并流式跑一轮（PA-11）。 */
+export async function streamAssistantSend(
+  id: LongId,
+  message: string,
+  webSearchEnabled: boolean | null,
+  skill: string | null,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal,
+  attachmentIds?: (string | number)[] | null
+): Promise<void> {
+  return consumeSse(
+    `/api${paths.clarifications.assistantStreamSend(id)}`,
+    {
+      message,
+      webSearchEnabled,
+      skill: skill ?? null,
+      attachmentIds: attachmentIds?.length ? attachmentIds : null
+    },
+    handlers,
+    signal
+  )
+}
+
+/** SSE 消费内核（需求对话 / 助理对话共用）：建连 → 逐帧解析 → 分派到 handlers。 */
 async function consumeSse(
   url: string,
   payload: unknown,

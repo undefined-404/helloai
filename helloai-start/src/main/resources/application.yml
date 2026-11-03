@@ -245,6 +245,10 @@ helloai:
   web-search:
     provider: bocha-ai-search
     ai-search-max-results: 15
+    # 2026-11-03：AI Search 关闭博查侧总结（最终回复由主 LLM 总结），并把单次超时从 25s
+    # 收到 15s；超时/空结果由实现内部回退基础 Web Search（8s 上限），保证预算内仍有结果。
+    ai-search-answer: false
+    ai-search-timeout-ms: 15000
     # ai-search-answer: true
     # ai-search-max-rounds: 2
     # modal-cards-enabled: true

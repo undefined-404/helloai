@@ -243,4 +243,55 @@ class SearchQueryPlannerServiceImplTest {
         assertThat(planner.isRetrievable(null)).isFalse();
         assertThat(planner.isRetrievable("《运输机场使用许可规定》手册编制要求")).isTrue();
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  A1：对话追问碎片（指代 + 元动作）不再进入检索
+    //
+    //  实测现场（2026-11-03）：用户问「最近的 AI 相关新闻，这次联网查询后，
+    //  展开详细说说吧」，规则层拆出三条候选，后两条纯碎片全部白跑超时。
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("A1 原话（关闭改写）：只保留可检索主题词，丢弃追问碎片")
+    void planQueries_a1_originalMessageFragments_dropped() {
+        properties.setQueryRewriteEnabled(false);
+
+        List<String> queries = planner.planQueries("最近的 AI 相关新闻，这次联网查询后，展开详细说说吧");
+
+        assertThat(queries).containsExactly("最近的 AI 相关新闻");
+    }
+
+    @Test
+    @DisplayName("A1 原话（开启改写）：含不可检索碎片时强制进 LLM，产出独立主题词")
+    void planQueries_a1_originalMessage_triggersLlmRewrite() {
+        when(plannerAgentPicker.pick(isNull())).thenReturn(mock(AgentProfileSnapshot.class));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("[\"AI 行业 最新动态\"]", "stop", "llm", 100));
+
+        List<String> queries = planner.planQueries("最近的 AI 相关新闻，这次联网查询后，展开详细说说吧");
+
+        assertThat(queries).containsExactly("AI 行业 最新动态");
+    }
+
+    @Test
+    @DisplayName("A1 纯追问碎片单独成词：不可检索，全部丢弃")
+    void planQueries_a1_followupFragmentsOnly_allDropped() {
+        properties.setQueryRewriteEnabled(false);
+
+        assertThat(planner.planQueries("这次联网查询后")).isEmpty();
+        assertThat(planner.planQueries("展开详细说说")).isEmpty();
+        assertThat(planner.isRetrievable("这次联网查询后")).isFalse();
+        assertThat(planner.isRetrievable("展开详细说说")).isFalse();
+    }
+
+    @Test
+    @DisplayName("A1 实体不被误杀：动作词 + 实体、附件 + 法规锚点仍保留")
+    void planQueries_a1_entityWithActionWord_kept() {
+        properties.setQueryRewriteEnabled(false);
+
+        assertThat(planner.planQueries("总结 React 19 新特性"))
+                .anyMatch(q -> q.contains("React 19 新特性"));
+        assertThat(planner.planQueries("结合附件分析机场许可规定"))
+                .anyMatch(q -> q.contains("机场许可规定"));
+    }
 }

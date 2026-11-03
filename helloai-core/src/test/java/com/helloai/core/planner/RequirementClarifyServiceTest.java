@@ -1,5 +1,7 @@
 package com.helloai.core.planner;
 
+import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
+import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
@@ -56,6 +58,7 @@ import com.helloai.core.planner.service.impl.ClarifyStreamServiceImpl;
 import com.helloai.core.planner.service.impl.RequirementClarifyServiceImpl;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
+import com.helloai.core.shared.util.CurrentUser;
 import com.helloai.core.planner.search.WebPageContent;
 import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.support.ConversationRoundLocker;
@@ -70,6 +73,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 
@@ -95,6 +99,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -1125,6 +1130,57 @@ class RequirementClarifyServiceTest {
         assertThatThrownBy(() -> clarifyService.delete(CONV_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("澄清会话不存在");
+        verify(messageService, never()).removeByConversation(anyLong());
+        verify(conversationService, never()).removeById(anyLong());
+    }
+
+    @Test
+    @DisplayName("listConversations：按 kind 分流，缺省 REQUIREMENT，显式值原样下推")
+    void shouldFilterConversationListByKind() {
+        LambdaQueryChainWrapper<RequirementConversation> chain = mock(LambdaQueryChainWrapper.class);
+        when(conversationService.lambdaQuery()).thenReturn(chain);
+        when(chain.eq(any(), any())).thenReturn(chain);
+        when(chain.and(any())).thenReturn(chain);
+        // orderByDesc(R) 与 orderByDesc(List<R>) 重载在有参匹配下歧义，显式收窄到单列版本
+        when(chain.orderByDesc((SFunction<RequirementConversation, ?>) any())).thenReturn(chain);
+        when(chain.last(anyString())).thenReturn(chain);
+        when(chain.list()).thenReturn(List.of(activeConversation()));
+
+        try (MockedStatic<CurrentUser> currentUser = mockStatic(CurrentUser.class)) {
+            currentUser.when(CurrentUser::userId).thenReturn(7L);
+            clarifyService.listConversations(null);
+            clarifyService.listConversations("assistant");
+        }
+
+        ArgumentCaptor<Object> kinds = ArgumentCaptor.forClass(Object.class);
+        verify(chain, times(2)).eq(any(), kinds.capture());
+        assertThat(kinds.getAllValues()).containsExactly("REQUIREMENT", "ASSISTANT");
+    }
+
+    @Test
+    @DisplayName("kind 守卫：助理会话不能借道澄清发送链路写入")
+    void shouldRejectAssistantConversationOnClarifySend() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setKind(RequirementClarifyService.KIND_ASSISTANT);
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+
+        assertThatThrownBy(() -> clarifyService.sendMessage(CONV_ID, "继续"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("助理对话");
+        verify(messageService, never()).addMessage(anyLong(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("kind 守卫：助理会话不能被需求对话删除入口删除")
+    void shouldRejectDeletingAssistantConversation() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setKind(RequirementClarifyService.KIND_ASSISTANT);
+        conversation.setStatus(RequirementClarifyService.STATUS_ABANDONED);
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+
+        assertThatThrownBy(() -> clarifyService.delete(CONV_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("助理对话");
         verify(messageService, never()).removeByConversation(anyLong());
         verify(conversationService, never()).removeById(anyLong());
     }

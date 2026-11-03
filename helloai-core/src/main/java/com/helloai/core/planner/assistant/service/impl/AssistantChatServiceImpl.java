@@ -6,6 +6,8 @@ import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.assistant.AssistantPromptBuilder;
+import com.helloai.core.planner.assistant.AssistantSearchQueryPlanner;
+import com.helloai.core.planner.assistant.AssistantSearchQueryPlanner.AssistantSearchPlan;
 import com.helloai.core.planner.assistant.AssistantSkillDirective;
 import com.helloai.core.planner.assistant.entity.ConversationContextState;
 import com.helloai.core.planner.assistant.service.AssistantChatService;
@@ -16,6 +18,7 @@ import com.helloai.core.planner.assistant.service.ConversationContextStateServic
 import com.helloai.core.planner.assistant.service.ConversationHistorySearchService;
 import com.helloai.core.planner.assistant.service.ConversationHistorySearchService.HistoryHit;
 import com.helloai.core.planner.attachment.ChatAttachmentPromptRenderer;
+import com.helloai.core.planner.clarify.ClarifyReplyParser;
 import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
@@ -25,11 +28,14 @@ import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.search.WebSearchOutcome;
 import com.helloai.core.planner.service.ChatAttachmentService;
 import com.helloai.core.planner.service.RequirementClarifyService;
+import com.helloai.core.planner.service.RequirementClarifyService.ChatStreamEvent;
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifyConversationDetail;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
+import com.helloai.core.planner.service.RoundProcess;
 import com.helloai.core.planner.support.AssistantRoundLockTtlResolver;
 import com.helloai.core.planner.support.ConversationRoundLocker;
+import com.helloai.core.planner.support.RoundProgressText;
 import com.helloai.core.shared.util.CurrentUser;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +44,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -96,12 +103,16 @@ public class AssistantChatServiceImpl implements AssistantChatService {
     private final PlatformTransactionManager transactionManager;
     /** 联网搜索编排（与需求澄清链路同一套检索与降级语义）。 */
     private final ClarifyWebSearchOrchestrator webSearchOrchestrator;
+    /** 助理检索决策（历史 + 附件 + 时间 → 独立搜索词 / 附件优先跳过）。 */
+    private final AssistantSearchQueryPlanner searchQueryPlanner;
     /** 会话附件 → prompt 文本（清单 + 正文按预算注入）。 */
     private final ChatAttachmentPromptRenderer attachmentPromptRenderer;
     /** 会话附件查询（判断本会话是否挂了附件，避免把占位符塞进 prompt）。 */
     private final ChatAttachmentService chatAttachmentService;
     /** 本轮技能约束渲染（方案整理 / 直接拆解 / 产出型技能包）。 */
     private final AssistantSkillDirective skillDirective;
+    /** 消息 payload 构造（webSearch / process），与澄清链路同源，避免两套序列化口径。 */
+    private final ClarifyReplyParser replyParser;
 
     private TransactionTemplate transactionTemplate;
 
@@ -122,6 +133,75 @@ public class AssistantChatServiceImpl implements AssistantChatService {
         Long userId = requireUser();
         AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
         String trimmed = firstMessage.trim();
+        RequirementConversation conversation = newConversation(trimmed, plannerAgentId, roundInput, userId);
+        try {
+            return doRound(conversation, trimmed, userId, roundInput);
+        } catch (RuntimeException e) {
+            // 首轮失败：清理刚建的会话（含已落的 user 消息），不留空/半截会话
+            cleanupCreatedConversation(conversation.getId());
+            throw e;
+        }
+    }
+
+    @Override
+    public Flux<ChatStreamEvent> streamCreateConversation(String firstMessage, Long plannerAgentId,
+                                                          AssistantRoundInput input) {
+        return Flux.defer(() -> {
+            if (firstMessage == null || firstMessage.isBlank()) {
+                throw new BizException("消息不能为空");
+            }
+            if (plannerAgentId != null) {
+                plannerAgentPicker.validateSelectable(plannerAgentId);
+            }
+            Long userId = requireUser();
+            AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
+            String trimmed = firstMessage.trim();
+            RequirementConversation conversation = newConversation(trimmed, plannerAgentId, roundInput, userId);
+            // 首帧必须是会话 id：done 后前端据此拉 detail、后续消息才能发到正确会话
+            return Flux.concat(
+                    Flux.just(ChatStreamEvent.session(String.valueOf(conversation.getId()))),
+                    runAssistantRound(conversation, trimmed, userId, roundInput));
+        }).onErrorResume(e -> {
+            log.warn("助理流式新建会话失败: err={}", e.getMessage());
+            return Flux.just(ChatStreamEvent.error(streamErrorMessage(e)));
+        });
+    }
+
+    @Override
+    public ClarifyConversationDetail sendMessage(Long conversationId, String message, AssistantRoundInput input) {
+        if (message == null || message.isBlank()) {
+            throw new BizException("消息不能为空");
+        }
+        Long userId = requireUser();
+        RequirementConversation conversation = requireAssistantConversation(conversationId, userId);
+        AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
+        applyWebSearchFlag(conversation, roundInput);
+        return doRound(conversation, message.trim(), userId, roundInput);
+    }
+
+    @Override
+    public Flux<ChatStreamEvent> streamSendMessage(Long conversationId, String message, AssistantRoundInput input) {
+        return Flux.defer(() -> {
+            if (message == null || message.isBlank()) {
+                throw new BizException("消息不能为空");
+            }
+            Long userId = requireUser();
+            RequirementConversation conversation = requireAssistantConversation(conversationId, userId);
+            AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
+            applyWebSearchFlag(conversation, roundInput);
+            String trimmed = message.trim();
+            log.info("助理流式对话轮开始: conversationId={}, round={}, webSearchEnabled={}",
+                    conversationId, conversation.getRoundCount(), conversation.getWebSearchEnabled());
+            return runAssistantRound(conversation, trimmed, userId, roundInput);
+        }).onErrorResume(e -> {
+            log.warn("助理流式对话轮失败: conversationId={}, err={}", conversationId, e.getMessage());
+            return Flux.just(ChatStreamEvent.error(streamErrorMessage(e)));
+        });
+    }
+
+    /** 建会话实体并落库（同步/流式首轮共用），含 clientToken 附件认领。 */
+    private RequirementConversation newConversation(String trimmed, Long plannerAgentId,
+                                                    AssistantRoundInput roundInput, Long userId) {
         RequirementConversation conversation = new RequirementConversation();
         conversation.setTitle(trimmed.length() <= TITLE_LIMIT ? trimmed : trimmed.substring(0, TITLE_LIMIT));
         conversation.setStatus(RequirementClarifyService.STATUS_ACTIVE);
@@ -141,34 +221,20 @@ public class AssistantChatServiceImpl implements AssistantChatService {
         log.info("助理会话创建: id={}, title={}, plannerAgentId={}, ownerId={}, webSearchEnabled={}",
                 conversation.getId(), conversation.getTitle(), plannerAgentId, userId,
                 conversation.getWebSearchEnabled());
-        try {
-            return doRound(conversation, trimmed, userId, roundInput);
-        } catch (RuntimeException e) {
-            // 首轮失败：清理刚建的会话（含已落的 user 消息），不留空/半截会话
-            cleanupCreatedConversation(conversation.getId());
-            throw e;
-        }
+        return conversation;
     }
 
-    @Override
-    public ClarifyConversationDetail sendMessage(Long conversationId, String message, AssistantRoundInput input) {
-        if (message == null || message.isBlank()) {
-            throw new BizException("消息不能为空");
+    /** 联网搜索开关可中途切换：请求带值时定点回写会话，后续轮次沿用（不整行 updateById，避免覆盖并发自增的轮数）。 */
+    private void applyWebSearchFlag(RequirementConversation conversation, AssistantRoundInput input) {
+        Boolean enabled = input.webSearchEnabled();
+        if (enabled == null || enabled.equals(conversation.getWebSearchEnabled())) {
+            return;
         }
-        Long userId = requireUser();
-        RequirementConversation conversation = requireAssistantConversation(conversationId, userId);
-        AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
-        // 联网搜索开关可中途切换：请求带值时回写会话，后续轮次沿用
-        if (roundInput.webSearchEnabled() != null
-                && !roundInput.webSearchEnabled().equals(conversation.getWebSearchEnabled())) {
-            // 定点写：整行 updateById 会把读到的旧 roundCount 覆盖回库，与并发轮竞态
-            conversationService.lambdaUpdate()
-                    .set(RequirementConversation::getWebSearchEnabled, roundInput.webSearchEnabled())
-                    .eq(RequirementConversation::getId, conversationId)
-                    .update();
-            conversation.setWebSearchEnabled(roundInput.webSearchEnabled());
-        }
-        return doRound(conversation, message.trim(), userId, roundInput);
+        conversationService.lambdaUpdate()
+                .set(RequirementConversation::getWebSearchEnabled, enabled)
+                .eq(RequirementConversation::getId, conversation.getId())
+                .update();
+        conversation.setWebSearchEnabled(enabled);
     }
 
     @Override
@@ -209,6 +275,135 @@ public class AssistantChatServiceImpl implements AssistantChatService {
                                                     String message, Long userId,
                                                     AssistantRoundInput input) {
         Long conversationId = conversation.getId();
+        RoundSeed seed = prepareRound(conversation, message, userId);
+        PromptContext context = loadPromptContext(conversationId, message, userId, input, seed);
+
+        AssistantSearchPlan searchPlan = resolveSearchPlan(conversation, message, context.hasAttachments());
+        String webSearchContext = resolveWebSearchContext(conversation, message, searchPlan);
+        String systemPrompt = buildSystemPrompt(context, webSearchContext);
+        AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        AgentTask task = buildAgentTask(conversationId, message, systemPrompt);
+        AgentResult result = platformAgentExecutionService.executeSync(planner.id(), task);
+        if (result == null || !result.isSuccess()) {
+            String reason = result == null ? "空响应" : result.getErrorMessage();
+            throw new BizException("助理回复生成失败: " + reason);
+        }
+        String output = result.getOutput() == null ? "" : result.getOutput().trim();
+
+        // LLM 不进 DB 事务；仅把「助手消息 + roundCount」两个写原子化
+        List<RequirementMessage> transcript = seed.transcript();
+        transactionTemplate.executeWithoutResult(status -> {
+            transcript.add(messageService.addMessage(conversationId, ROLE_ASSISTANT, output));
+            conversation.setRoundCount(
+                    (conversation.getRoundCount() == null ? 0 : conversation.getRoundCount()) + 1);
+            conversationService.updateById(conversation);
+        });
+        log.info("助理问答完成: conversationId={}, ownerId={}, recentHits={}, relatedHits={}, memories={}, webSearch={}",
+                conversationId, userId, context.recentWork().size(), context.related().size(),
+                context.memories().size(),
+                webSearchContext == null || webSearchContext.isBlank() ? "未启用" : "已注入");
+        return new ClarifyConversationDetail(conversation, transcript);
+    }
+
+    /**
+     * 流式一轮助理问答：前置段（落 user 消息 / 自动压缩）持会话锁串行化，
+     * 解锁后跑检索与 LLM 流——与澄清链路同口径，避免「停止生成」时仍占着会话锁。
+     */
+    private Flux<ChatStreamEvent> runAssistantRound(RequirementConversation conversation, String message,
+                                                    Long userId, AssistantRoundInput input) {
+        Long conversationId = conversation.getId();
+        // 过程数据随消息 payload 落库：done 后/刷新后仍可回看（对齐澄清链路）
+        StringBuilder thinking = new StringBuilder();
+        List<String> steps = new ArrayList<>();
+        // 先发进度帧，再 defer 执行耗时前置与检索（否则用户要等前置跑完才看到任何反馈）
+        return Flux.concat(
+                Flux.just(ChatStreamEvent.progress("正在检索历史与记忆…")),
+                Flux.defer(() -> {
+                    RoundSeed seed = roundLocker.runLocked(conversationId,
+                            roundLockTtlResolver.effectiveTtlSeconds(),
+                            () -> prepareRound(conversation, message, userId));
+                    PromptContext context = loadPromptContext(conversationId, message, userId, input, seed);
+                    if (!Boolean.TRUE.equals(conversation.getWebSearchEnabled())) {
+                        return runStreamMainReply(conversation, context, null, steps, thinking);
+                    }
+                    AssistantSearchPlan searchPlan = resolveSearchPlan(conversation, message,
+                            context.hasAttachments());
+                    if (searchPlan.skipSearch()) {
+                        String skipStep = "附件内容可回答，本轮跳过联网检索";
+                        steps.add(skipStep);
+                        return Flux.concat(
+                                Flux.just(ChatStreamEvent.progress(skipStep)),
+                                runStreamMainReply(conversation, context, null, steps, thinking));
+                    }
+                    String searchStep = RoundProgressText.searching(message);
+                    steps.add(searchStep);
+                    return Flux.concat(
+                            Flux.just(ChatStreamEvent.progress(searchStep)),
+                            Flux.defer(() -> {
+                                WebSearchOutcome outcome = doWebSearch(conversationId, message, searchPlan);
+                                steps.add(RoundProgressText.searchResult(outcome));
+                                return runStreamMainReply(conversation, context, outcome, steps, thinking);
+                            }));
+                }));
+    }
+
+    /** 流式主回复段：检索完成后执行 LLM 流，token/reasoning 增量转发，终态落库并 done。 */
+    private Flux<ChatStreamEvent> runStreamMainReply(RequirementConversation conversation,
+                                                     PromptContext context, WebSearchOutcome outcome,
+                                                     List<String> steps, StringBuilder thinking) {
+        Long conversationId = conversation.getId();
+        String webSearchContext = outcome == null ? "" : outcome.toContextText();
+        String systemPrompt = buildSystemPrompt(context, webSearchContext);
+        AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        AgentTask task = buildAgentTask(conversationId, context.message(), systemPrompt);
+        // 检索完成后补发结果步骤（此时 outcome 已确定），再进主回复流
+        Flux<ChatStreamEvent> resultSteps = steps.size() > 1
+                ? Flux.just(ChatStreamEvent.progress(steps.get(steps.size() - 1)))
+                : Flux.empty();
+        StringBuilder buffer = new StringBuilder();
+        return Flux.concat(resultSteps,
+                platformAgentExecutionService.executeStream(planner.id(), task)
+                        .map(chunk -> {
+                            // 思考只走 reasoning 帧，不并入正文与落库正文（避免污染最终回复）
+                            if (chunk.isReasoning()) {
+                                thinking.append(chunk.text());
+                                return ChatStreamEvent.reasoning(chunk.text());
+                            }
+                            buffer.append(chunk.text());
+                            return ChatStreamEvent.token(chunk.text());
+                        })
+                        .concatWith(Flux.defer(() -> {
+                            // 停止生成 = 下游 dispose，本 defer 不执行 ⇒ 不落库（user 消息已落库，可重发）
+                            persistStreamOutcome(conversationId, buffer.toString(), outcome, thinking, steps);
+                            return Flux.just(ChatStreamEvent.done());
+                        })));
+    }
+
+    /** 流式终态落库：assistant 消息（含 webSearch/process payload）+ round_count 原子自增。 */
+    private void persistStreamOutcome(Long conversationId, String output, WebSearchOutcome outcome,
+                                      StringBuilder thinking, List<String> steps) {
+        String content = output == null ? "" : output.trim();
+        String payload = replyParser.buildWebSearchOnlyPayload(outcome,
+                new RoundProcess(thinking.toString(), steps));
+        transactionTemplate.executeWithoutResult(status -> {
+            messageService.addMessage(conversationId, ROLE_ASSISTANT, content, payload);
+            // 流式轮不持锁跨 LLM，轮数用库内自增，避免基于锁外快照回写覆盖并发轮次
+            conversationService.lambdaUpdate()
+                    .setSql("round_count = COALESCE(round_count, 0) + 1")
+                    .eq(RequirementConversation::getId, conversationId)
+                    .update();
+        });
+        log.info("助理流式轮完成并落库: conversationId={}, thinkingChars={}, steps={}, webSearch={}",
+                conversationId, thinking.length(), steps.size(),
+                outcome == null ? "未启用" : "已注入");
+    }
+
+    /**
+     * 同步前置段：幂等落 user 消息 → 自动压缩 → 取上下文状态与最近对话。
+     * 调用方负责加锁（同步整轮 / 流式仅前置段）。
+     */
+    private RoundSeed prepareRound(RequirementConversation conversation, String message, Long userId) {
+        Long conversationId = conversation.getId();
         // 一次查询复用：末条同句 user 消息（上轮失败重试）不重复落库，保证轻量幂等
         List<RequirementMessage> transcript = new ArrayList<>(messageService.listByConversation(conversationId));
         RequirementMessage last = transcript.isEmpty() ? null : transcript.get(transcript.size() - 1);
@@ -224,65 +419,107 @@ public class AssistantChatServiceImpl implements AssistantChatService {
         }
         ConversationContextState contextState = contextStateService.getOrInit(conversationId, userId);
         List<String> recentConversation = recentConversationLines(transcript, contextState.getCompactedUntilSeq());
+        return new RoundSeed(transcript, contextState, recentConversation);
+    }
 
+    /** 轮前检索：画像 / 记忆 / 近期工作 / 相关历史 / 附件 / 技能（不含联网搜索，搜索单独控进度）。 */
+    private PromptContext loadPromptContext(Long conversationId, String message, Long userId,
+                                            AssistantRoundInput input, RoundSeed seed) {
         AssistantProfileService.AssistantSnapshot profile = assistantProfileService.getActiveByUser(userId);
         List<LongTermMemory> memories = longTermMemoryService.searchForRecall(message, MEMORY_LIMIT);
         List<HistoryHit> recentWork = historySearchService.recentWork(userId, RECENT_LIMIT);
         List<HistoryHit> related = historySearchService.search(userId, message, HIT_LIMIT);
-        String webSearchContext = resolveWebSearchContext(conversation, message);
-        String attachmentContext = resolveAttachmentContext(conversationId, message, input.attachmentIds());
+        AttachmentBundle attachment = resolveAttachmentBundle(conversationId, message, input.attachmentIds());
         String skillInstruction = skillDirective.render(input.skill());
-        String systemPrompt = AssistantPromptBuilder.build(profile, memories, recentWork, related,
-                contextState.getSummary(), recentConversation, webSearchContext, attachmentContext,
-                skillInstruction);
+        return new PromptContext(message, profile, memories, recentWork, related, seed,
+                attachment.context(), attachment.present(), skillInstruction);
+    }
 
-        AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
-        AgentTask task = AgentTask.builder()
+    private static String buildSystemPrompt(PromptContext context, String webSearchContext) {
+        return AssistantPromptBuilder.build(context.profile(), context.memories(), context.recentWork(),
+                context.related(), context.seed().contextState().getSummary(),
+                context.seed().recentConversation(), webSearchContext,
+                context.attachmentContext(), context.skillInstruction());
+    }
+
+    private static AgentTask buildAgentTask(Long conversationId, String message, String systemPrompt) {
+        return AgentTask.builder()
                 .systemPrompt(systemPrompt)
                 .userPrompt(message)
                 .context(Map.of("conversationId", conversationId, "scene", "assistant_chat"))
                 .requiredCapabilities(Map.of())
                 .build();
-        AgentResult result = platformAgentExecutionService.executeSync(planner.id(), task);
-        if (result == null || !result.isSuccess()) {
-            String reason = result == null ? "空响应" : result.getErrorMessage();
-            throw new BizException("助理回复生成失败: " + reason);
-        }
-        String output = result.getOutput() == null ? "" : result.getOutput().trim();
-
-        // LLM 不进 DB 事务；仅把「助手消息 + roundCount」两个写原子化
-        transactionTemplate.executeWithoutResult(status -> {
-            transcript.add(messageService.addMessage(conversationId, ROLE_ASSISTANT, output));
-            conversation.setRoundCount(
-                    (conversation.getRoundCount() == null ? 0 : conversation.getRoundCount()) + 1);
-            conversationService.updateById(conversation);
-        });
-        log.info("助理问答完成: conversationId={}, ownerId={}, recentHits={}, relatedHits={}, memories={}, webSearch={}",
-                conversationId, userId, recentWork.size(), related.size(), memories.size(),
-                webSearchContext == null || webSearchContext.isBlank() ? "未启用" : "已注入");
-        return new ClarifyConversationDetail(conversation, transcript);
     }
 
     /**
-     * 联网检索资料段：开关关闭时直接跳过；开启时复用澄清链路的检索编排，
-     * 失败/无命中一律降级为空串（不阻断本轮问答）。
+     * 联网检索：开关关闭时直接跳过；开启时先做本轮检索决策，LLM 优化词作为优先候选，
+     * 规则词兜底。任何失败一律降级为 null（不阻断本轮问答）。
      */
-    private String resolveWebSearchContext(RequirementConversation conversation, String message) {
-        Boolean enabled = conversation.getWebSearchEnabled();
-        if (enabled == null || !enabled) {
-            return "";
-        }
+    private WebSearchOutcome doWebSearch(Long conversationId, String message, AssistantSearchPlan plan) {
         try {
-            WebSearchOutcome outcome = webSearchOrchestrator.doWebSearch(message);
-            if (outcome == null) {
-                return "";
-            }
-            return outcome.toContextText();
+            List<String> priority = (plan == null || plan.priorityQuery() == null
+                    || plan.priorityQuery().isBlank()) ? null : List.of(plan.priorityQuery());
+            return webSearchOrchestrator.doWebSearch(message, priority);
         } catch (Exception e) {
             log.warn("助理联网搜索失败（降级为不注入资料）: conversationId={}, err={}",
-                    conversation.getId(), e.getMessage());
+                    conversationId, e.getMessage());
+            return null;
+        }
+    }
+
+    private String resolveWebSearchContext(RequirementConversation conversation, String message,
+                                           AssistantSearchPlan plan) {
+        if (!Boolean.TRUE.equals(conversation.getWebSearchEnabled())) {
             return "";
         }
+        if (plan != null && plan.skipSearch()) {
+            log.info("助理联网搜索跳过（附件优先）: conversationId={}, attachmentIntent={}",
+                    conversation.getId(), plan.attachmentIntent());
+            return "";
+        }
+        WebSearchOutcome outcome = doWebSearch(conversation.getId(), message, plan);
+        return outcome == null ? "" : outcome.toContextText();
+    }
+
+    /** 本轮检索决策；开关关闭时不调用 LLM，直接返回 disabled（行为与改造前一致）。 */
+    private AssistantSearchPlan resolveSearchPlan(RequirementConversation conversation, String message,
+                                                  boolean hasAttachments) {
+        if (!Boolean.TRUE.equals(conversation.getWebSearchEnabled())) {
+            return AssistantSearchPlan.disabledPlan();
+        }
+        return searchQueryPlanner.plan(conversation, message, hasAttachments);
+    }
+
+    /** 流式错误事件文本：取根因 message（BizException 友好信息），缺失时回落类名。 */
+    private static String streamErrorMessage(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root.getMessage() == null || root.getMessage().isBlank()
+                ? root.getClass().getSimpleName() : root.getMessage();
+    }
+
+    /** 前置段产物（锁内计算，供后续检索与落库复用）。 */
+    private record RoundSeed(List<RequirementMessage> transcript,
+                             ConversationContextState contextState,
+                             List<String> recentConversation) {
+    }
+
+    /** 轮前检索产物（prompt 装配输入）。 */
+    private record PromptContext(String message,
+                                 AssistantProfileService.AssistantSnapshot profile,
+                                 List<LongTermMemory> memories,
+                                 List<HistoryHit> recentWork,
+                                 List<HistoryHit> related,
+                                 RoundSeed seed,
+                                 String attachmentContext,
+                                 boolean hasAttachments,
+                                 String skillInstruction) {
+    }
+
+    /** 附件段产物：注入文本 + 会话是否确有附件（后者决定 answerable 能否跳过联网）。 */
+    private record AttachmentBundle(String context, boolean present) {
     }
 
     /**
@@ -290,19 +527,31 @@ public class AssistantChatServiceImpl implements AssistantChatService {
      *
      * <p>本会话没有附件时不注入任何占位文本——助理的 prompt 以「检索历史 + 记忆」为主，
      * 塞一段「（本轮无附件）」只会稀释注意力。</p>
+     *
+     * <p>{@code present} 与会话附件存在性同源，供检索决策判断 {@code answerable}
+     * 是否真的能跳过联网（渲染失败但附件存在时仍视为有附件）。</p>
      */
-    private String resolveAttachmentContext(Long conversationId, String message, List<Long> attachmentIds) {
+    private AttachmentBundle resolveAttachmentBundle(Long conversationId, String message, List<Long> attachmentIds) {
+        boolean present;
         try {
-            if (!chatAttachmentService.listByConversation(conversationId).isEmpty()) {
-                ChatAttachmentPromptRenderer.Rendered rendered =
-                        attachmentPromptRenderer.render(conversationId, message, attachmentIds, null);
-                return rendered.manifest() + "\n" + rendered.context();
-            }
+            present = !chatAttachmentService.listByConversation(conversationId).isEmpty();
+        } catch (Exception e) {
+            log.warn("助理附件清单读取失败（降级为无附件）: conversationId={}, err={}",
+                    conversationId, e.getMessage());
+            return new AttachmentBundle("", false);
+        }
+        if (!present) {
+            return new AttachmentBundle("", false);
+        }
+        try {
+            ChatAttachmentPromptRenderer.Rendered rendered =
+                    attachmentPromptRenderer.render(conversationId, message, attachmentIds, null);
+            return new AttachmentBundle(rendered.manifest() + "\n" + rendered.context(), true);
         } catch (Exception e) {
             log.warn("助理附件注入失败（降级为不注入附件）: conversationId={}, err={}",
                     conversationId, e.getMessage());
+            return new AttachmentBundle("", true);
         }
-        return "";
     }
 
     /** 首轮失败清理刚建的会话（逻辑删消息 + 会话），避免留下空/半截会话。 */

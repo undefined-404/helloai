@@ -12,13 +12,13 @@
               <span class="wb-topbar-name-text">{{ profile.name }}</span>
               <span v-if="currentTitle" class="wb-topbar-conv-chip">{{ currentTitle }}</span>
             </div>
-            <div class="wb-topbar-sub">{{ profile.identity }} · {{ profile.model }}</div>
+            <div class="wb-topbar-sub">{{ profile.identity }} · {{ agentLabel }}</div>
           </div>
         </div>
         <div class="wb-topbar-ops">
-          <span class="wb-model-chip" :title="`当前助理模型：${profile.model}`">
+          <span class="wb-model-chip" :title="`当前助手：${agentLabel}`">
             <span class="wb-model-dot" />
-            <span>{{ profile.model }}</span>
+            <span>{{ agentLabel }}</span>
           </span>
           <el-dropdown trigger="click" @command="onHistoryCommand">
             <button class="wb-icon-btn" type="button" title="历史对话">
@@ -46,10 +46,7 @@
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="new">
-                  <el-icon><Plus /></el-icon>新建对话
-                </el-dropdown-item>
-                <el-dropdown-item command="enhance">
-                  <el-icon><MagicStick /></el-icon>优化输入
+                  <el-icon><Plus /></el-icon>开启新话题
                 </el-dropdown-item>
                 <el-dropdown-item command="chat">
                   <el-icon><ChatDotRound /></el-icon>打开需求对话页
@@ -92,27 +89,60 @@
 
         <div v-else class="wb-thread">
           <article
-            v-for="m in messages"
-            :key="String(m.id)"
+            v-for="row in renderMessages"
+            :key="String(row.msg.id)"
             class="wb-msg"
-            :class="m.role === 'user' ? 'is-user' : 'is-assistant'"
+            :class="row.msg.role === 'user' ? 'is-user' : 'is-assistant'"
           >
-            <span v-if="m.role === 'assistant'" class="wb-msg-avatar">
+            <span v-if="row.msg.role === 'assistant'" class="wb-msg-avatar">
               <el-icon><MagicStick /></el-icon>
             </span>
             <div class="wb-msg-col">
-              <div class="wb-bubble" :class="{ 'is-user': m.role === 'user' }">
-                <MarkdownView v-if="m.role === 'assistant' && m.content.trim()" :content="m.content" />
-                <div v-else-if="m.role === 'assistant'" class="wb-msg-empty">
+              <!-- 联网搜索查验条（历史消息）：与需求对话同一组件，payload 有 trace 才渲染 -->
+              <WebSearchBar v-if="row.webSearch" :trace="row.webSearch" />
+              <!-- 历史过程区：思考 + 检索步骤随 payload 落库，默认折叠、可展开回看 -->
+              <div
+                v-if="row.process && (row.process.thinking || (row.process.steps && row.process.steps.length))"
+                class="wb-process"
+              >
+                <div class="wb-process-head" @click="toggleHistoryProcess(row.msg.id)">
+                  <span>{{ historyProcessHeadline(row.process) }}</span>
+                  <span class="wb-process-toggle">
+                    {{ expandedHistoryProcess === String(row.msg.id) ? '收起' : '展开' }}
+                  </span>
+                </div>
+                <div v-if="expandedHistoryProcess === String(row.msg.id)" class="wb-process-body">
+                  <div
+                    v-for="(step, si) in row.process.steps || []"
+                    :key="`hstep-${si}`"
+                    class="wb-process-step"
+                  >
+                    {{ step }}
+                  </div>
+                  <div v-if="row.process.thinking" class="wb-process-thinking">
+                    <MarkdownView compact :content="row.process.thinking" />
+                  </div>
+                </div>
+              </div>
+              <div class="wb-bubble" :class="{ 'is-user': row.msg.role === 'user' }">
+                <MarkdownView
+                  v-if="row.msg.role === 'assistant' && row.msg.content.trim()"
+                  :content="row.msg.content"
+                />
+                <div v-else-if="row.msg.role === 'assistant'" class="wb-msg-empty">
                   助手未返回内容（可能是模型服务繁忙），请重试。
                 </div>
-                <template v-else>{{ m.content }}</template>
+                <template v-else>{{ row.msg.content }}</template>
               </div>
-              <div v-if="m.role === 'assistant'" class="wb-msg-actions">
-                <button class="wb-act" type="button" @click="copyMessage(m)">
+              <div v-if="row.msg.role === 'user'" class="wb-msg-meta">
+                <span class="wb-msg-time">{{ messageTime(row.msg.createTime) }}</span>
+                <span class="wb-msg-me"><el-icon><User /></el-icon></span>
+              </div>
+              <div v-if="row.msg.role === 'assistant'" class="wb-msg-actions">
+                <button class="wb-act" type="button" @click="copyMessage(row.msg)">
                   <el-icon><CopyDocument /></el-icon>复制
                 </button>
-                <button class="wb-act" type="button" @click="toTask(m)">
+                <button class="wb-act" type="button" @click="toTask(row.msg)">
                   <el-icon><Tickets /></el-icon>转为任务
                 </button>
               </div>
@@ -123,7 +153,32 @@
               <el-icon><MagicStick /></el-icon>
             </span>
             <div class="wb-msg-col">
-              <div class="wb-typing">正在思考…</div>
+              <!-- 过程区：检索步骤 + 推理思考混排；正文开始后自动折叠，可展开回看 -->
+              <div v-if="processSteps.length || thinkingText" class="wb-process">
+                <div class="wb-process-head" @click="thinkingExpanded = !thinkingExpanded">
+                  <el-icon v-if="isProcessRunning" class="is-loading"><Loading /></el-icon>
+                  <span>{{ processHeadline }}</span>
+                  <span class="wb-process-toggle">
+                    {{ thinkingExpanded || isProcessRunning ? '收起' : '展开' }}
+                  </span>
+                </div>
+                <div v-if="thinkingExpanded || isProcessRunning" class="wb-process-body">
+                  <div
+                    v-for="(step, si) in processSteps"
+                    :key="`step-${si}`"
+                    class="wb-process-step"
+                  >
+                    {{ step }}
+                  </div>
+                  <div v-if="thinkingText" class="wb-process-thinking">
+                    <MarkdownView compact :content="thinkingText" />
+                  </div>
+                </div>
+              </div>
+              <div v-if="streamText" class="wb-bubble">
+                <MarkdownView :content="streamText" />
+              </div>
+              <div v-else-if="!thinkingText && !processSteps.length" class="wb-typing">正在思考…</div>
             </div>
           </article>
         </div>
@@ -160,7 +215,7 @@
             v-model="input"
             class="wb-input"
             type="textarea"
-            :autosize="{ minRows: 1, maxRows: 8 }"
+            :autosize="{ minRows: 4, maxRows: 8 }"
             resize="none"
             placeholder="把拆解出来的任务直接派发给空闲 Agent，并同步到审查中心"
             @keydown.enter.exact.prevent="onEnter"
@@ -293,22 +348,102 @@
             </div>
 
             <div class="wb-toolbar-right">
-              <button
-                class="wb-tool-btn is-icon"
-                type="button"
-                title="压缩上下文"
-                :disabled="activeId == null || compacting"
-                @click="compactContext"
+              <!-- 上下文窗口：点击展开五项明细 + 手动压缩（复用 RequirementChat 的上下文面板与压缩逻辑） -->
+              <el-popover
+                placement="top-end"
+                :width="300"
+                trigger="click"
+                popper-class="wb-ctx-popover"
+                @show="loadContextUsage"
               >
-                <el-icon><Histogram /></el-icon>
+                <template #reference>
+                  <button
+                    type="button"
+                    class="ctx-ring"
+                    :class="{ 'is-warn': contextRatioPct >= 80, 'is-empty': !contextUsage }"
+                    :title="ctxRingTitle"
+                    aria-label="上下文窗口占用"
+                  >
+                    <svg
+                      class="ctx-ring-svg"
+                      viewBox="0 0 32 32"
+                      aria-hidden="true"
+                    >
+                      <circle
+                        class="ctx-ring-track"
+                        cx="16"
+                        cy="16"
+                        r="13"
+                      />
+                      <circle
+                        class="ctx-ring-fill"
+                        cx="16"
+                        cy="16"
+                        r="13"
+                        :stroke-dasharray="ctxRingCircumference"
+                        :stroke-dashoffset="ctxRingOffset"
+                      />
+                    </svg>
+                    <el-icon
+                      v-if="!contextUsage"
+                      class="ctx-ring-icon"
+                    >
+                      <Histogram />
+                    </el-icon>
+                    <span
+                      v-else
+                      class="ctx-ring-label"
+                    >{{ contextRatioPct }}%</span>
+                  </button>
+                </template>
+                <div class="ctx-panel">
+                  <div class="ctx-head">
+                    <span>上下文窗口</span>
+                    <span class="ctx-ratio">{{ contextUsage ? contextRatioPct : 0 }}%</span>
+                  </div>
+                  <div v-if="contextUsage" class="ctx-bar">
+                    <div class="ctx-bar-fill" :style="{ width: contextRatioPct + '%' }" />
+                  </div>
+                  <template v-if="contextUsage">
+                    <div class="ctx-row"><span>系统提示词</span><span>{{ contextUsage.systemPromptTokens }}</span></div>
+                    <div class="ctx-row"><span>系统工具</span><span>{{ contextUsage.toolTokens }}</span></div>
+                    <div class="ctx-row"><span>Skill</span><span>{{ contextUsage.skillTokens }}</span></div>
+                    <div class="ctx-row"><span>消息</span><span>{{ contextUsage.messageTokens }}</span></div>
+                    <div class="ctx-row"><span>其他</span><span>{{ contextUsage.otherTokens }}</span></div>
+                    <div class="ctx-row ctx-total"><span>合计 / 窗口</span><span>{{ contextUsage.totalTokens }} / {{ contextUsage.contextSize }}</span></div>
+                    <div class="ctx-meta">已压缩到 seq {{ contextUsage.compactedUntilSeq }} · 摘要 v{{ contextUsage.summaryVersion }}</div>
+                  </template>
+                  <div v-else class="ctx-empty">打开会话后可查看占用</div>
+                  <el-button
+                    size="small"
+                    type="primary"
+                    plain
+                    class="ctx-compact-btn"
+                    :loading="compacting"
+                    :disabled="activeId == null"
+                    @click="compactContext"
+                  >压缩上下文</el-button>
+                </div>
+              </el-popover>
+
+              <!-- 优化输出：把当前输入改写为更清晰的结构化表达（回填输入框，不自动发送） -->
+              <button
+                class="wb-tool-btn is-icon is-optimize"
+                type="button"
+                title="优化输出"
+                :disabled="!input.trim() || sending || enhancing"
+                @click="optimizeInput"
+              >
+                <el-icon :class="{ 'is-loading': enhancing }"><MagicStick /></el-icon>
               </button>
 
+              <!-- 语音输入：暂未开放，先置灰 -->
               <button
                 class="wb-mic-btn"
                 :class="{ 'is-recording': recording }"
                 type="button"
                 :title="micTitle"
-                :disabled="!micSupported || sending"
+                disabled
                 @click="toggleMic"
               >
                 <el-icon><Microphone /></el-icon>
@@ -316,19 +451,16 @@
 
               <button
                 class="wb-send-btn"
+                :class="{ 'is-stop': sending }"
                 type="button"
-                title="发送"
-                :disabled="!input.trim() || sending"
-                @click="send"
+                :title="sending ? '停止生成，当前回复将不会保存' : '发送'"
+                :disabled="!sending && !input.trim()"
+                @click="sending ? stopGenerating() : send()"
               >
-                <el-icon><ArrowUp /></el-icon>
+                <el-icon><component :is="sending ? CircleClose : ArrowUp" /></el-icon>
               </button>
             </div>
           </div>
-        </div>
-
-        <div class="wb-footer">
-          <span class="wb-disclaimer">内容由 AI 生成，仅供参考</span>
         </div>
       </div>
     </section>
@@ -368,7 +500,7 @@
               <span class="wb-status-avatar"><el-icon><MagicStick /></el-icon></span>
               <div class="wb-status-text">
                 <div class="wb-status-name">{{ profile.name }}</div>
-                <div class="wb-status-model">{{ profile.model }}</div>
+                <div class="wb-status-model">{{ agentLabel }}</div>
               </div>
             </div>
             <span class="wb-ready-pill">
@@ -394,7 +526,7 @@
         </div>
 
         <!-- 任务概况 -->
-        <section class="wb-section">
+        <section class="wb-section wb-section--overview">
           <div class="wb-section-head">
             <h3 class="wb-section-title">任务概况</h3>
           </div>
@@ -410,7 +542,7 @@
         </section>
 
         <!-- 活跃 Agent -->
-        <section class="wb-section">
+        <section class="wb-section wb-section--agents">
           <div class="wb-section-head">
             <h3 class="wb-section-title">活跃 Agent</h3>
             <span class="wb-section-count">{{ activeAgents.length }}</span>
@@ -418,7 +550,7 @@
           </div>
           <div v-if="!activeAgents.length" class="wb-empty">暂无可用 Agent</div>
           <div v-else class="wb-agent-list">
-            <div v-for="a in activeAgents" :key="String(a.agentId)" class="wb-agent" :title="agentTitle(a)">
+            <div v-for="a in visibleAgents" :key="String(a.agentId)" class="wb-agent" :title="agentTitle(a)">
               <span class="wb-agent-avatar" :class="agentRoleClass(a)">
                 <el-icon><component :is="agentIcon(a)" /></el-icon>
               </span>
@@ -431,14 +563,14 @@
         </section>
 
         <!-- 最近任务 -->
-        <section class="wb-section">
+        <section class="wb-section wb-section--tasks">
           <div class="wb-section-head">
             <h3 class="wb-section-title">最近任务</h3>
             <span class="wb-section-count">{{ recentTasks.length }}</span>
             <span class="wb-section-link" @click="router.push('/tasks')">查看全部</span>
           </div>
           <div v-if="!recentTasks.length" class="wb-empty">暂无进行中的任务</div>
-          <div v-for="t in recentTasks" :key="String(t.id)" class="wb-task-item">
+          <div v-for="t in visibleTasks" :key="String(t.id)" class="wb-task-item">
             <span class="wb-task-dot" :style="{ background: taskStatusColor(t.status) }" />
             <div class="wb-task-body">
               <div class="wb-task-title">{{ t.title }}</div>
@@ -451,14 +583,14 @@
         </section>
 
         <!-- 最近产物 -->
-        <section class="wb-section">
+        <section class="wb-section wb-section--artifacts">
           <div class="wb-section-head">
             <h3 class="wb-section-title">最近产物</h3>
             <span class="wb-section-count">{{ artifacts.length }}</span>
             <span class="wb-section-link" @click="router.push('/attachments')">更多</span>
           </div>
           <div v-if="!artifacts.length" class="wb-empty">暂无产物</div>
-          <div v-for="a in artifacts" :key="a.source + '-' + String(a.id)" class="wb-artifact">
+          <div v-for="a in visibleArtifacts" :key="a.source + '-' + String(a.id)" class="wb-artifact">
             <span class="wb-artifact-icon"><el-icon><Document /></el-icon></span>
             <div class="wb-artifact-body">
               <div class="wb-artifact-name">{{ a.fileName }}</div>
@@ -472,11 +604,6 @@
           </div>
         </section>
 
-        <!-- 提示卡（空闲态） -->
-        <div v-if="isIdle" class="wb-tip-card">
-          <el-icon class="wb-tip-icon"><Opportunity /></el-icon>
-          <span class="wb-tip-text">在左侧对话框描述需求，AI 会自动拆解任务并回填到这里</span>
-        </div>
       </div>
     </aside>
   </div>
@@ -495,22 +622,25 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowDown, ArrowUp, ChatDotRound, Check, Clock, Close, Connection, CopyDocument, Cpu, Document,
-  Download, EditPen, Grid, Histogram, MagicStick, Microphone, MoreFilled, Opportunity, Plus, Refresh,
-  Stamp, Tickets, Tools, User
+  ArrowDown, ArrowUp, ChatDotRound, Check, CircleClose, Clock, Close, Connection, CopyDocument, Cpu,
+  Document, Download, EditPen, Grid, Histogram, Loading, MagicStick, Microphone, MoreFilled, Plus,
+  Refresh, Stamp, Tickets, Tools, User
 } from '@element-plus/icons-vue'
 import MarkdownView from '@/components/MarkdownView.vue'
+import WebSearchBar from '@/views/requirement/WebSearchBar.vue'
 import { clarifyApi } from '@/api/clarify'
+import { streamAssistantCreate, streamAssistantSend, type ChatStreamHandlers } from '@/api/chatStream'
 import { skillApi, type ChatSkillOption } from '@/api/skill'
 import { quotaApi, type QuotaSnapshot } from '@/api/quota'
 import { promptEnhanceApi } from '@/api/promptEnhance'
 import { streamWorkbenchEvents } from '@/api/workbenchStream'
 import { useAuthStore } from '@/stores/auth'
 import { saveBlobResponse } from '@/utils/download'
-import { fmtTime } from '@/utils/tableConfig'
+import { fmtTime, splitDateTime } from '@/utils/tableConfig'
 import type {
-  ArtifactItem, ChatAttachmentItem, ClarifyConversationDetail, ContextUsage, LongId, PlannerOption,
-  RequirementConversation, RequirementMessage, Workbench, WorkbenchActiveAgent
+  ArtifactItem, ChatAttachmentItem, ClarifyAssistantPayload, ClarifyConversationDetail,
+  ContextUsage, LongId, PlannerOption, RequirementConversation, RequirementMessage,
+  RoundProcessTrace, WebSearchTrace, Workbench, WorkbenchActiveAgent
 } from '@/types'
 
 const router = useRouter()
@@ -780,6 +910,25 @@ const webSearchEnabled = ref(false)
 /** 语音输入进行中。 */
 const recording = ref(false)
 
+// ── SSE 流式状态（PA-11，2026-11-03）：与需求对话同一事件协议 ──
+/** 已刷入界面的正文（60ms 节流后累加，避免高频帧打爆渲染）。 */
+const streamText = ref('')
+/** 思考过程全文（reasoning 帧，80ms 节流）。 */
+const thinkingText = ref('')
+const thinkingExpanded = ref(true)
+/** 思考阶段标记：正文首帧到达即置 false，用于过程区的转圈与强制展开。 */
+const reasoningActive = ref(false)
+/** 平台动作步骤（progress 帧：检索发起 / 检索结果）。 */
+const processSteps = ref<string[]>([])
+let streamBuffer = ''
+let reasoningBuffer = ''
+let streamFlushTimer: number | null = null
+let reasoningFlushTimer: number | null = null
+/** 当前流式对话的 AbortController（「停止生成」/ 切换会话时中断）。 */
+let chatStreamAbort: AbortController | null = null
+/** 本轮流式回复所属会话（首帧 session 后确定）；用于收尾时只在仍停留该会话时回写详情。 */
+let settlingConversationId: string | null = null
+
 // ── 派生数据 ──
 const profile = computed(() => workbench.value?.profile ?? {
   name: 'AI 助手',
@@ -792,6 +941,49 @@ const profile = computed(() => workbench.value?.profile ?? {
 const messages = computed(() => detail.value?.messages ?? [])
 /** 空闲态 = 没有会话或会话内没有任何消息（设计稿的空态区）。 */
 const isIdle = computed(() => messages.value.length === 0)
+
+/** assistant 消息 payload（webSearch / process 过程数据）；非 assistant 或解析失败返回 null。 */
+function assistantPayloadOf(msg: RequirementMessage): ClarifyAssistantPayload | null {
+  if (msg.role !== 'assistant' || !msg.payload) return null
+  try {
+    const parsed = JSON.parse(msg.payload)
+    return parsed && typeof parsed === 'object' ? parsed as ClarifyAssistantPayload : null
+  } catch { return null }
+}
+
+/** 消息流渲染行：历史消息的联网搜索 trace 与过程数据从 payload 重建。 */
+const renderMessages = computed(() => messages.value.map((msg) => {
+  const payload = assistantPayloadOf(msg)
+  const webSearch: WebSearchTrace | null = payload?.webSearch ?? null
+  const process: RoundProcessTrace | null = payload?.process ?? null
+  return { msg, webSearch, process }
+}))
+
+/** 历史过程区展开态（同一时间只展开一条）。 */
+const expandedHistoryProcess = ref('')
+function historyProcessHeadline(process: RoundProcessTrace): string {
+  const steps = process.steps?.length ?? 0
+  const hasThinking = !!process.thinking
+  if (steps > 0 && hasThinking) return `思考与检索过程（${steps} 步）`
+  if (steps > 0) return `检索过程（${steps} 步）`
+  return '思考过程'
+}
+function toggleHistoryProcess(id: LongId) {
+  const key = String(id)
+  expandedHistoryProcess.value = expandedHistoryProcess.value === key ? '' : key
+}
+
+/** 过程区是否仍在进行（正文未开始且仍有思考/步骤）——决定转圈图标与是否强制展开。 */
+const isProcessRunning = computed(() =>
+  !streamText.value && (reasoningActive.value || processSteps.value.length > 0))
+/** 过程区标题：进行中显示已执行步数，结束后显示可回看的过程摘要。 */
+const processHeadline = computed(() => {
+  const stepCount = processSteps.value.length
+  if (isProcessRunning.value) {
+    return stepCount > 0 ? `思考中…（已 ${stepCount} 步）` : '思考中…'
+  }
+  return stepCount > 0 ? `思考与检索过程（${stepCount} 步）` : '思考过程'
+})
 const currentTitle = computed(() => {
   const t = detail.value?.conversation?.title
   return t ? displayTitle(t) : ''
@@ -806,6 +998,11 @@ const taskOverview = computed(() => workbench.value?.taskOverview ?? {
 const activeAgents = computed(() => workbench.value?.activeAgents ?? [])
 const recentTasks = computed(() => workbench.value?.recentTasks ?? [])
 const artifacts = computed(() => workbench.value?.artifacts ?? [])
+
+// 右栏各模块固定高度，只展示设计稿约定的条数，其余走「管理 / 查看全部 / 更多」
+const visibleAgents = computed(() => activeAgents.value.slice(0, 3))
+const visibleTasks = computed(() => recentTasks.value.slice(0, 3))
+const visibleArtifacts = computed(() => artifacts.value.slice(0, 2))
 
 /** 任务概况 2×2 计数卡（设计稿：标题 + 数值 + 状态点说明）。 */
 const statCards = computed(() => [
@@ -845,6 +1042,29 @@ const plannerLabel = computed(() => {
   return opt ? opt.name : '规划者'
 })
 
+/**
+ * 头部/状态卡展示的 Agent：当前会话绑定的 Planner 优先（历史会话），
+ * 新会话回落到输入区选中的 Planner；都没有时才用助理身份默认模型。
+ */
+const agentLabel = computed(() => {
+  const plannerId = detail.value?.conversation?.plannerAgentId ?? selectedPlannerId.value
+  if (plannerId == null) return profile.value.model
+  const opt = plannerOptions.value.find(o => String(o.id) === String(plannerId))
+  return opt ? opt.name : profile.value.model
+})
+
+/** 上下文占用百分比（0-100），用于输入区上下文按钮与其浮层。 */
+const contextRatioPct = computed(() => {
+  const ratio = contextUsage.value?.ratio ?? 0
+  return Math.min(100, Math.max(0, Math.round(ratio * 100)))
+})
+// 输入框内圆形占用环：r=13 的周长，按占用比例做 stroke-dashoffset（与需求对话页同口径）
+const ctxRingCircumference = 2 * Math.PI * 13
+const ctxRingOffset = computed(() => ctxRingCircumference * (1 - contextRatioPct.value / 100))
+const ctxRingTitle = computed(() => contextUsage.value
+  ? `上下文窗口：已用 ${contextRatioPct.value}%（点击查看明细 / 手动压缩）`
+  : '上下文窗口：打开会话后可查看')
+
 // ── 加载 ──
 async function loadWorkbench() {
   try {
@@ -867,8 +1087,7 @@ async function loadPlannerOptions() {
 
 async function loadConversations() {
   try {
-    const rows = await clarifyApi.list()
-    conversations.value = rows.filter(c => c.kind === 'ASSISTANT')
+    conversations.value = await clarifyApi.list('ASSISTANT')
   } catch { /* 拦截器已弹错 */ }
   if (activeId.value != null || !conversations.value.length) return
   const latest = [...conversations.value].sort((a, b) => {
@@ -880,6 +1099,8 @@ async function loadConversations() {
 }
 
 async function selectConversation(id: LongId) {
+  // 切走前中断在跑的流（后端未完成回复不落库；收尾读到新会话时不会覆盖详情）
+  chatStreamAbort?.abort()
   activeId.value = id
   contextUsage.value = null
   try {
@@ -895,6 +1116,7 @@ async function selectConversation(id: LongId) {
 }
 
 function startNew() {
+  chatStreamAbort?.abort()
   activeId.value = null
   detail.value = null
   contextUsage.value = null
@@ -918,7 +1140,7 @@ async function refreshAll() {
   await Promise.all([loadWorkbench(), loadQuota()])
 }
 
-// ── 发送 ──
+// ── 发送（SSE 流式，与需求对话同一事件协议）──
 function onEnter() {
   void send()
 }
@@ -926,34 +1148,164 @@ function onEnter() {
 async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
-  sending.value = true
   const existing = activeId.value
-  const options = {
-    webSearchEnabled: webSearchEnabled.value,
-    skill: activeSkill.value,
-    attachmentIds: effectiveAttachmentIds()
+  const webSearch = webSearchEnabled.value
+  const skill = activeSkill.value
+  const attachmentIds = effectiveAttachmentIds()
+  sending.value = true
+  input.value = ''
+  resetStreamState()
+  // 收尾落点：已有会话立即可知；新会话等首帧 session 再确定
+  settlingConversationId = existing != null ? String(existing) : null
+  const abort = new AbortController()
+  chatStreamAbort = abort
+  // done/error/abort 后的详情收尾是异步的：在 finally 里等它完成再撤占位，避免闪一下空白
+  let settleTask: Promise<void> = Promise.resolve()
+  const handlers: ChatStreamHandlers = {
+    onSession: (id) => {
+      // 新会话首帧：确定会话 id，后续停止/收尾都落到它；附件批次已被后端认领
+      activeId.value = id
+      settlingConversationId = id
+      clientToken.value = null
+    },
+    onToken: (token) => appendStreamToken(token),
+    onReasoning: (text) => appendStreamReasoning(text),
+    onProgress: (text) => appendProcessStep(text),
+    onDone: () => { settleTask = settleStream(true) },
+    onError: (message) => {
+      ElMessage.error(message)
+      settleTask = settleStream(false)
+    },
+    onAbort: () => { settleTask = settleStream(false) }
   }
   try {
-    const result = existing != null
-      ? await clarifyApi.assistantSend(existing, text, options)
-      : await clarifyApi.assistantCreate(text, selectedPlannerId.value,
-        { ...options, clientToken: clientToken.value })
-    detail.value = result
-    if (existing == null) activeId.value = result.conversation.id
-    webSearchEnabled.value = result.conversation?.webSearchEnabled === true
-    input.value = ''
-    // 首句已发：临时附件批次已被后端认领到会话，token 作废
-    clientToken.value = null
-    await scrollToBottom()
-    void loadConversations()
-    void loadContextUsage()
-    void refreshAttachments()
-  } catch (e) {
-    // HTTP 失败由拦截器弹错；非 HTTP 异常在此兜底上报，避免静默失败
-    console.error('[workbench] 助理对话发送失败', e)
+    if (existing != null) {
+      await streamAssistantSend(existing, text, webSearch, skill,
+        handlers, abort.signal, attachmentIds)
+    } else {
+      await streamAssistantCreate(text, selectedPlannerId.value, webSearch, skill,
+        handlers, abort.signal, clientToken.value, attachmentIds)
+    }
   } finally {
+    await settleTask
+    chatStreamAbort = null
+    cleanupStreamTimers()
     sending.value = false
   }
+}
+
+/** 流收尾：冲残留缓冲 → 拉详情对齐落库全文（含过程 payload）→ 刷新侧栏统计。 */
+async function settleStream(ok: boolean) {
+  flushStreamText()
+  flushReasoningText()
+  const id = settlingConversationId
+  settlingConversationId = null
+  if (id != null) {
+    try {
+      const fresh = await clarifyApi.detail(id)
+      // 切换会话后旧流的收尾不得覆盖新会话详情
+      if (String(activeId.value ?? '') === id) {
+        detail.value = fresh
+        webSearchEnabled.value = fresh.conversation?.webSearchEnabled === true
+      }
+      void loadConversations()
+      void loadContextUsage()
+      void refreshAttachments()
+    } catch {
+      // 拦截器已弹错；成功语义下额外提示，避免用户以为回复丢失
+      if (ok) ElMessage.warning('回复已生成，但详情刷新失败，请重新进入会话查看')
+    }
+  }
+  resetStreamState()
+  await scrollToBottom()
+}
+
+/** 正文增量：思考阶段结束即自动折叠过程区；60ms 节流后刷入界面。 */
+function appendStreamToken(token: string) {
+  if (reasoningActive.value) {
+    reasoningActive.value = false
+    thinkingExpanded.value = false
+  }
+  streamBuffer += token
+  if (streamFlushTimer == null) {
+    streamFlushTimer = window.setTimeout(() => {
+      streamFlushTimer = null
+      flushStreamText()
+      void scrollToBottom()
+    }, 60)
+  }
+}
+
+function flushStreamText() {
+  if (streamFlushTimer != null) {
+    window.clearTimeout(streamFlushTimer)
+    streamFlushTimer = null
+  }
+  if (streamBuffer) {
+    streamText.value += streamBuffer
+    streamBuffer = ''
+  }
+}
+
+/** 思考增量：独立缓冲 + 更短节流（高频小帧，用户要看到「在动」）。 */
+function appendStreamReasoning(text: string) {
+  reasoningActive.value = true
+  reasoningBuffer += text
+  if (reasoningFlushTimer == null) {
+    reasoningFlushTimer = window.setTimeout(() => {
+      reasoningFlushTimer = null
+      flushReasoningText()
+      void scrollToBottom()
+    }, 80)
+  }
+}
+
+function flushReasoningText() {
+  if (reasoningFlushTimer != null) {
+    window.clearTimeout(reasoningFlushTimer)
+    reasoningFlushTimer = null
+  }
+  if (reasoningBuffer) {
+    thinkingText.value += reasoningBuffer
+    reasoningBuffer = ''
+  }
+}
+
+/** 过程步骤（progress 帧）：一行一条，按到达顺序追加。 */
+function appendProcessStep(text: string) {
+  if (!text) return
+  processSteps.value = [...processSteps.value, text]
+  void scrollToBottom()
+}
+
+/** 流式状态复位（正文/思考/步骤/缓冲/定时器）。 */
+function resetStreamState() {
+  streamText.value = ''
+  thinkingText.value = ''
+  thinkingExpanded.value = true
+  reasoningActive.value = false
+  processSteps.value = []
+  streamBuffer = ''
+  reasoningBuffer = ''
+  cleanupStreamTimers()
+}
+
+function cleanupStreamTimers() {
+  if (streamFlushTimer != null) {
+    window.clearTimeout(streamFlushTimer)
+    streamFlushTimer = null
+  }
+  if (reasoningFlushTimer != null) {
+    window.clearTimeout(reasoningFlushTimer)
+    reasoningFlushTimer = null
+  }
+}
+
+/** 停止生成：中断 SSE → 后端 dispose LLM 订阅，未完成回复不落库；收尾拉详情保留已落库的 user 消息。 */
+function stopGenerating() {
+  if (!chatStreamAbort) return
+  chatStreamAbort.abort()
+  ElMessage.info('已停止生成')
 }
 
 async function scrollToBottom() {
@@ -1020,10 +1372,13 @@ async function compactContext() {
   if (activeId.value == null || compacting.value) return
   compacting.value = true
   try {
-    const r = await clarifyApi.compact(activeId.value)
-    ElMessage.success(r.evictedMessages > 0
-      ? `已压缩 ${r.evictedMessages} 条历史消息`
-      : '当前上下文无需压缩')
+    // 与 RequirementChat 同一口径：区分「已压缩 / 无需压缩」，并回报压缩前后占用比
+    const result = await clarifyApi.compact(activeId.value)
+    if (result.compacted) {
+      ElMessage.success(`已压缩 ${result.evictedMessages} 条（${Math.round(result.beforeRatio * 100)}% → ${Math.round(result.afterRatio * 100)}%）`)
+    } else {
+      ElMessage.info(`未压缩：${result.reason}`)
+    }
     await loadContextUsage()
   } catch {
     // 拦截器已统一弹错
@@ -1056,7 +1411,7 @@ function speechRecognitionCtor(): SpeechRecognitionCtor | null {
 
 const micSupported = computed(() => speechRecognitionCtor() !== null)
 const micTitle = computed(() => (micSupported.value
-  ? (recording.value ? '停止语音输入' : '语音输入')
+  ? '语音输入（暂未开放）'
   : '当前浏览器不支持语音输入'))
 
 let recognition: SpeechRecognitionLike | null = null
@@ -1111,7 +1466,6 @@ function onHistoryCommand(cmd: string) {
 function onTopCommand(cmd: string) {
   if (cmd === 'new') startNew()
   else if (cmd === 'chat') router.push('/requirement-chat')
-  else if (cmd === 'enhance') void optimizeInput()
 }
 
 function onPanelCommand(cmd: string) {
@@ -1144,6 +1498,11 @@ function displayTitle(title: string | null | undefined): string {
   const raw = (title ?? '').trim()
   const stripped = raw.replace(/^\[skill:[A-Za-z0-9][A-Za-z0-9._-]*]\s*/i, '').trim()
   return stripped || raw
+}
+
+/** 消息气泡下的时间只取时分（设计稿 "13:12"）。 */
+function messageTime(createTime: string): string {
+  return splitDateTime(createTime)?.time.slice(0, 5) ?? ''
 }
 
 const TASK_STATUS_COLOR: Record<string, string> = {
@@ -1226,6 +1585,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   streamAbort?.abort()
+  chatStreamAbort?.abort()
   if (reconnectTimer) clearTimeout(reconnectTimer)
   if (parsePollTimer != null) window.clearInterval(parsePollTimer)
   recognition?.stop()
@@ -1493,22 +1853,25 @@ html.dark .wb-page {
   color: var(--wb-ink-sub);
 }
 
-/* ── 对话态 ── */
+/* ── 对话态（设计稿：消息列表 744 宽 + 区域左右 36 内边距 + 条目间距 20） ── */
 .wb-thread {
-  max-width: 744px;
+  width: 100%;
+  max-width: 816px;
   margin: 0 auto;
-  padding: 28px 36px 20px;
+  padding: 28px 36px;
   display: flex;
   flex-direction: column;
   gap: 20px;
+  min-width: 0;
 }
 .wb-msg {
   display: flex;
   gap: 12px;
   align-items: flex-start;
+  min-width: 0;
 }
 .wb-msg.is-user {
-  flex-direction: row-reverse;
+  justify-content: flex-end;
 }
 .wb-msg-avatar {
   width: 28px;
@@ -1528,7 +1891,13 @@ html.dark .wb-page {
   flex-direction: column;
   gap: 6px;
 }
+/* 助手消息占满头像右侧（设计稿 704 = 744 - 28 头像 - 12 间距） */
+.wb-msg.is-assistant .wb-msg-col {
+  flex: 1 1 auto;
+  gap: 12px;
+}
 .wb-msg.is-user .wb-msg-col {
+  flex: 0 1 auto;
   align-items: flex-end;
 }
 .wb-bubble {
@@ -1544,7 +1913,27 @@ html.dark .wb-page {
   border-radius: 14px 4px 14px 14px;
   padding: 12px 16px;
   white-space: pre-wrap;
-  max-width: 560px;
+  max-width: 520px;
+}
+/* 用户消息元信息（设计稿：气泡下方右侧，时间 + 20px 圆形头像） */
+.wb-msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.wb-msg-time {
+  font-size: 10px;
+  color: var(--wb-ink-faint);
+}
+.wb-msg-me {
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  background: var(--wb-tint);
+  color: var(--wb-primary);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
 }
 /* 助手空回复（模型侧失败返回空内容）：给出可读提示，避免渲染成空白气泡 */
 .wb-msg-empty {
@@ -1557,10 +1946,10 @@ html.dark .wb-page {
 .wb-msg-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding-left: 2px;
+  gap: 4px;
 }
 .wb-act {
+  height: 28px;
   border: none;
   background: transparent;
   color: var(--wb-ink-sub);
@@ -1569,8 +1958,8 @@ html.dark .wb-page {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 4px;
-  border-radius: 6px;
+  padding: 0 8px;
+  border-radius: 8px;
 }
 .wb-act:hover {
   color: var(--wb-ink-strong);
@@ -1581,9 +1970,48 @@ html.dark .wb-page {
   font-size: 13px;
 }
 
-/* ── 输入区 ── */
+/* ── 过程区（思考 + 检索步骤）：流式进行中与历史消息共用折叠样式 ── */
+.wb-process {
+  border: 1px solid var(--wb-card-border);
+  border-radius: 10px;
+  background: var(--wb-panel-bg);
+  overflow: hidden;
+}
+.wb-process-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  color: var(--wb-ink-sub);
+  transition: background 0.15s;
+}
+.wb-process-head:hover { background: var(--wb-chip-soft); }
+.wb-process-toggle { margin-left: auto; color: var(--wb-ink-faint); }
+.wb-process-body {
+  border-top: 1px solid var(--wb-divider);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wb-process-step { font-size: 12px; color: var(--wb-ink-sub); line-height: 1.6; }
+.wb-process-thinking {
+  font-size: 12px;
+  color: var(--wb-ink-sub);
+  line-height: 1.7;
+  border-left: 2px solid var(--wb-tint-border);
+  padding-left: 10px;
+}
+
+/* ── 输入区（设计稿：输入区宽 872、左右 36 内边距、底部 12） ── */
 .wb-composer-wrap {
   flex-shrink: 0;
+  width: 100%;
+  max-width: 872px;
+  margin: 0 auto;
   padding: 0 36px 12px;
 }
 .wb-composer {
@@ -1619,6 +2047,10 @@ html.dark .wb-page {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+/* 右侧工具栏按设计稿收紧为 6px（左侧维持 8px） */
+.wb-toolbar-right {
+  gap: 6px;
 }
 .wb-tool-btn {
   display: inline-flex;
@@ -1656,6 +2088,74 @@ html.dark .wb-page {
   color: var(--wb-primary);
   border-color: var(--wb-primary);
 }
+/* 右侧图标按钮（Calicat 设计稿：优化输出，无边框 28×28 圆角 8） */
+.wb-tool-btn.is-optimize {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 15px;
+  color: var(--wb-ink-sub);
+}
+.wb-tool-btn.is-optimize:hover:not(:disabled) {
+  background: var(--wb-chip-soft);
+  border: none;
+  color: var(--wb-ink-strong);
+}
+/* 上下文占用环（与需求对话页 RequirementChat 同款；点击展开明细 / 压缩） */
+.ctx-ring {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--wb-ink-sub);
+  cursor: pointer;
+}
+.ctx-ring:hover { background: var(--wb-chip-soft); }
+.ctx-ring-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+.ctx-ring-track {
+  fill: none;
+  stroke: var(--wb-input-border);
+  stroke-width: 2.5;
+}
+.ctx-ring-fill {
+  fill: none;
+  stroke: var(--wb-primary);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.18s ease, stroke 0.18s ease;
+}
+.ctx-ring.is-warn .ctx-ring-fill { stroke: var(--wb-dot-amber); }
+.ctx-ring.is-warn .ctx-ring-label { color: var(--wb-dot-amber); }
+.ctx-ring-label {
+  position: relative;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--wb-ink-sub);
+}
+.ctx-ring-icon {
+  position: relative;
+  font-size: 13px;
+  color: var(--wb-ink-sub);
+}
 .wb-caret {
   font-size: 11px;
 }
@@ -1663,7 +2163,7 @@ html.dark .wb-page {
   width: 32px;
   height: 32px;
   border: none;
-  border-radius: 50%;
+  border-radius: 10px;
   background: var(--wb-primary);
   color: #fff;
   cursor: pointer;
@@ -1671,11 +2171,17 @@ html.dark .wb-page {
   align-items: center;
   justify-content: center;
   font-size: 16px;
+  box-shadow: 0 4px 12px rgba(124, 92, 252, 0.28);
   transition: opacity 0.15s;
 }
 .wb-send-btn:disabled {
   opacity: 0.45;
+  box-shadow: none;
   cursor: not-allowed;
+}
+.wb-send-btn.is-stop {
+  background: var(--el-color-danger, #F56C6C);
+  box-shadow: 0 4px 12px rgba(245, 108, 108, 0.28);
 }
 
 /* ── 「＋」按钮（圆形）── */
@@ -1726,32 +2232,32 @@ html.dark .wb-page {
   font-size: 13px;
 }
 
-/* ── 语音输入 ── */
+/* ── 语音输入（设计稿右侧 28×28；暂未开放，维持置灰）── */
 .wb-mic-btn {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
-  border-radius: 10px;
-  border: 1px solid var(--wb-card-border);
+  border-radius: 8px;
+  border: none;
   background: var(--wb-chip-soft);
   color: var(--wb-ink-sub);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  font-size: 14px;
+  transition: color 0.15s, background 0.15s;
 }
 .wb-mic-btn:hover:not(:disabled) {
   color: var(--wb-ink-strong);
 }
 .wb-mic-btn.is-recording {
   background: #EF4444;
-  border-color: #EF4444;
   color: #fff;
 }
 .wb-mic-btn:disabled {
-  opacity: 0.45;
+  opacity: 1;
+  color: var(--wb-ink-faint);
   cursor: not-allowed;
 }
 
@@ -1808,6 +2314,62 @@ html.dark .wb-page {
   background: var(--wb-chip);
   color: var(--wb-ink-strong);
 }
+
+/* ── 上下文浮层（popover 挂在 body 上，须走 :global 并补一份本页令牌）── */
+:global(.wb-ctx-popover) {
+  --wb-ink: #2B2836;
+  --wb-ink-sub: #8A8798;
+  --wb-chip-soft: #F7F6FB;
+  --wb-primary: #7C5CFC;
+  --wb-card-border: #EEEDF4;
+}
+:global(html.dark .wb-ctx-popover) {
+  --wb-ink: #EEF2F8;
+  --wb-ink-sub: #A9B4C7;
+  --wb-chip-soft: rgba(255, 255, 255, 0.06);
+  --wb-primary: #8B6BFF;
+  --wb-card-border: #242D47;
+}
+:global(.wb-ctx-popover .ctx-panel) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--wb-ink);
+}
+:global(.wb-ctx-popover .ctx-head) {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+:global(.wb-ctx-popover .ctx-ratio) { color: var(--wb-ink-sub); }
+:global(.wb-ctx-popover .ctx-bar) {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--wb-chip-soft);
+  overflow: hidden;
+}
+:global(.wb-ctx-popover .ctx-bar-fill) {
+  height: 100%;
+  background: var(--wb-primary);
+  transition: width 0.15s ease;
+}
+:global(.wb-ctx-popover .ctx-row) {
+  display: flex;
+  justify-content: space-between;
+  color: var(--wb-ink-sub);
+}
+:global(.wb-ctx-popover .ctx-total) {
+  color: var(--wb-ink);
+  border-top: 1px solid var(--wb-card-border);
+  padding-top: 6px;
+}
+:global(.wb-ctx-popover .ctx-meta) {
+  color: var(--wb-ink-sub);
+  font-size: 11px;
+}
+:global(.wb-ctx-popover .ctx-empty) { color: var(--wb-ink-sub); }
+:global(.wb-ctx-popover .ctx-compact-btn) { width: 100%; }
 
 /* ── 「＋」面板（popover 挂在 body 上，样式须走 :global）──
    popover 不在 .wb-page 内，拿不到本页的 --wb-* 变量，故在面板自身补一份同值令牌。 */
@@ -1900,19 +2462,6 @@ html.dark .wb-page {
   color: var(--wb-ink-faint);
   font-weight: 400;
   font-size: 11px;
-}
-
-
-/* ── 底部提示行 ── */
-.wb-footer {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 36px 20px;
-}
-.wb-disclaimer {
-  font-size: 11px;
-  color: var(--wb-ink-faint);
 }
 
 /* ══════════ 右侧信息栏（320px） ══════════ */
@@ -2057,17 +2606,25 @@ html.dark .wb-page {
   font-weight: 600;
 }
 
-/* ── 分段 ── */
+/* ── 分段（设计稿：每个模块固定高度，尺寸不随数据量抖动） ── */
 .wb-section {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 0;
+  overflow: hidden;
 }
+.wb-section--overview { height: 212px; gap: 12px; }
+.wb-section--agents { height: 216px; }
+.wb-section--tasks { height: 282px; }
+.wb-section--artifacts { height: 142px; }
 .wb-section-head {
+  flex: 0 0 auto;
+  height: 18px;
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 20px;
 }
 .wb-section-title {
   margin: 0;
@@ -2119,7 +2676,7 @@ html.dark .wb-page {
   gap: 6px;
 }
 .wb-stat-label {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--wb-ink-sub);
 }
 .wb-stat-value {
@@ -2132,7 +2689,7 @@ html.dark .wb-page {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--wb-ink-faint);
 }
 .wb-stat-dot {
@@ -2141,56 +2698,61 @@ html.dark .wb-page {
   border-radius: 50%;
 }
 
-/* ── 活跃 Agent ── */
+/* ── 活跃 Agent（设计稿：56 高浅紫卡，3 条） ── */
 .wb-agent-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  min-height: 0;
 }
 .wb-agent {
+  flex: 0 0 56px;
+  height: 56px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--wb-card-border);
-  background: var(--wb-main-bg);
-  box-shadow: var(--wb-shadow-card);
+  padding: 0 16px;
+  border-radius: 16px;
+  border: 1px solid var(--wb-tint-border);
+  background: var(--wb-tint);
 }
 .wb-agent-avatar {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
   border-radius: 8px;
+  background: var(--wb-main-bg);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 13px;
 }
 .wb-agent-avatar.is-executor {
-  background: rgba(99, 102, 241, 0.12);
   color: #6366f1;
 }
 .wb-agent-avatar.is-reviewer {
-  background: rgba(16, 185, 129, 0.12);
   color: #10b981;
 }
 .wb-agent-name {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--wb-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 状态徽标：彩色圆点 + 文案（设计稿右侧形态） */
+/* 状态徽标：白底胶囊 + 彩色圆点 + 文案（设计稿右侧形态） */
 .wb-agent-status {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 9999px;
+  background: var(--wb-main-bg);
+  font-size: 10px;
   color: var(--wb-ink-sub);
 }
 .wb-agent-dot {
@@ -2212,8 +2774,10 @@ html.dark .wb-page {
   background: #f59e0b;
 }
 
-/* ── 最近任务 ── */
+/* ── 最近任务（设计稿：78 高白卡，3 条） ── */
 .wb-task-item {
+  flex: 0 0 78px;
+  height: 78px;
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -2221,7 +2785,7 @@ html.dark .wb-page {
   border-radius: 12px;
   border: 1px solid var(--wb-card-border);
   background: var(--wb-main-bg);
-  box-shadow: var(--wb-shadow-card);
+  overflow: hidden;
 }
 .wb-task-dot {
   width: 6px;
@@ -2238,9 +2802,9 @@ html.dark .wb-page {
   gap: 6px;
 }
 .wb-task-title {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--wb-ink-strong);
-  line-height: 1.45;
+  line-height: 17px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -2249,23 +2813,25 @@ html.dark .wb-page {
 .wb-task-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 .wb-task-tag {
   height: 18px;
-  padding: 0 7px;
+  padding: 0 6px;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 10px;
   display: inline-flex;
   align-items: center;
 }
 .wb-task-time {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--wb-ink-faint);
 }
 
-/* ── 最近产物 ── */
+/* ── 最近产物（设计稿：52 高白卡，2 条） ── */
 .wb-artifact {
+  flex: 0 0 52px;
+  height: 52px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2273,11 +2839,11 @@ html.dark .wb-page {
   border-radius: 12px;
   border: 1px solid var(--wb-card-border);
   background: var(--wb-main-bg);
-  box-shadow: var(--wb-shadow-card);
+  overflow: hidden;
 }
 .wb-artifact-icon {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   border-radius: 8px;
   background: var(--wb-tint);
@@ -2285,49 +2851,79 @@ html.dark .wb-page {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 15px;
 }
 .wb-artifact-body {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
 }
 .wb-artifact-name {
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 17px;
   color: var(--wb-ink-strong);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .wb-artifact-sub {
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 14px;
   color: var(--wb-ink-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* ── 提示卡 ── */
-.wb-tip-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px;
-  border-radius: 12px;
-  border: 1px solid var(--wb-card-border);
-  background: var(--wb-main-bg);
+/* ── 高度不足时的右栏降级：先隐藏助理状态卡，再依次收起最近产物 / 活跃 Agent，
+      保证 4 个模块固定尺寸时整体不出滚动条 ── */
+@media (min-width: 1181px) and (max-height: 1239px) {
+  .wb-status-card {
+    display: none;
+  }
 }
-.wb-tip-icon {
-  color: #F59E0B;
-  font-size: 14px;
-  flex-shrink: 0;
+@media (min-width: 1181px) and (max-height: 1069px) {
+  .wb-panel-body {
+    gap: 16px;
+    padding-bottom: 16px;
+  }
+  /* 产物只留 1 条 */
+  .wb-section--artifacts {
+    height: 80px;
+  }
+  .wb-artifact:nth-child(n+3) {
+    display: none;
+  }
 }
-.wb-tip-text {
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--wb-ink-sub);
+@media (min-width: 1181px) and (max-height: 949px) {
+  /* Agent / 任务各留 2 条 */
+  .wb-section--agents {
+    height: 150px;
+  }
+  .wb-agent:nth-child(n+3) {
+    display: none;
+  }
+  .wb-section--tasks {
+    height: 194px;
+  }
+  .wb-task-item:nth-child(n+4) {
+    display: none;
+  }
+}
+@media (min-width: 1181px) and (max-height: 839px) {
+  /* 再压低模块间距与任务条数，保证「最近产物」至少能用 1 条的形式留在首屏 */
+  .wb-panel-body {
+    gap: 12px;
+    padding-bottom: 12px;
+  }
+  .wb-section--tasks {
+    height: 106px;
+  }
+  .wb-task-item:nth-child(n+3) {
+    display: none;
+  }
 }
 
 /* ── 窄屏：右栏落到下方，避免挤压对话区 ── */
@@ -2344,6 +2940,17 @@ html.dark .wb-page {
     width: 100%;
     border-left: none;
     border-top: 1px solid var(--wb-divider);
+  }
+  /* 窄屏右栏落到下方：模块按可用宽度自动分列，页面整体滚动 */
+  .wb-panel-body {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    align-items: start;
+    gap: 20px;
+    overflow: visible;
+  }
+  .wb-status-card {
+    grid-column: 1 / -1;
   }
   .wb-suggestions {
     grid-template-columns: repeat(2, minmax(0, 1fr));

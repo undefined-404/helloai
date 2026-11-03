@@ -24,6 +24,7 @@ import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RoundProcess;
 import com.helloai.core.planner.service.RequirementMessageService;
 import com.helloai.core.planner.support.ConversationRoundLocker;
+import com.helloai.core.planner.support.RoundProgressText;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -51,9 +52,6 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
 
     /** 确认卡流式播放片间延时（毫秒）：模拟逐字节奏，避免瞬间整段出现。 */
     private static final long CLARIFY_PLAY_DELAY_MS = 12L;
-
-    /** 过程步骤里「正在联网检索：xxx」的检索词展示上限（防止把整段消息塞进过程区）。 */
-    private static final int PROGRESS_TEXT_LIMIT = 60;
 
     private final ClarifyRoundOrchestratorService orchestrator;
     private final ClarifyPromptRenderService promptRenderService;
@@ -191,7 +189,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                     }
                     boolean willSearch = commandSearch.isWebSearchEnabled(conversation);
                     String searchStep = willSearch
-                            ? "正在联网检索：" + abbreviate(userMessage, PROGRESS_TEXT_LIMIT)
+                            ? RoundProgressText.searching(userMessage)
                             : "本轮未联网检索（会话搜索开关关闭）";
                     steps.add(searchStep);
                     return Flux.concat(
@@ -201,7 +199,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                                         conversation, userMessage, userPayload,
                                         roundDecision.decision(), roundDecision.degraded());
                                 if (willSearch) {
-                                    steps.add(describeSearchResult(outcome));
+                                    steps.add(RoundProgressText.searchResult(outcome));
                                 }
                                 return runChatMainReply(conversation, outcome, steps, thinking, roundNo,
                                         roundDecision.decision().shouldInjectAttachment(),
@@ -249,40 +247,6 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                             conversationId, roundNo, thinking.length(), steps.size());
                     return Flux.just(ChatStreamEvent.done());
                 })));
-    }
-
-    /**
-     * 检索结果 → 一行过程步骤文本（前端过程区展示用）。
-     *
-     * <p>对齐 DeepSeek「已搜索 N 个网页」/ ChatGPT「Searching the web」：让用户知道
-     * 「搜了什么词、拿到几条、花了多久」，而不仅仅是一个转圈。</p>
-     */
-    private static String describeSearchResult(WebSearchOutcome outcome) {
-        if (outcome == null) {
-            // 搜索未执行（开关关闭）、调用被短路，或候选词全是元词被过滤：
-            // 措辞用「未返回结果」而非「未执行」，因为调用方无法区分二者。
-            // 结尾用「本轮可用资料」而不是「模型自有知识」——有附件时答案来自附件，
-            // 说成"自有知识"会让用户误以为附件没被读到。
-            return "联网检索未返回结果（将基于本轮可用资料回答）";
-        }
-        if (outcome.isFailed()) {
-            return "联网检索失败，已降级为模型自有知识回答";
-        }
-        String queries = outcome.getQueries() == null || outcome.getQueries().isEmpty()
-                ? "" : "（检索词：" + String.join(" / ", outcome.getQueries()) + "）";
-        String cards = outcome.getModalCards() == null || outcome.getModalCards().isEmpty()
-                ? "" : "，含 " + outcome.getModalCards().size() + " 条结构化数据";
-        return "已检索 " + outcome.getTotal() + " 条结果" + cards + queries
-                + "，耗时 " + String.format(java.util.Locale.ROOT, "%.1fs", outcome.getCostMs() / 1000.0);
-    }
-
-    /** 过程步骤文本截断（防止把整段用户消息塞进过程区）。 */
-    private static String abbreviate(String text, int limit) {
-        if (text == null) {
-            return "";
-        }
-        String oneLine = text.replaceAll("\\s+", " ").trim();
-        return oneLine.length() <= limit ? oneLine : oneLine.substring(0, limit) + "…";
     }
 
     /**
@@ -355,7 +319,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
         List<String> steps = new ArrayList<>();
         boolean willSearch = commandSearch.isWebSearchEnabled(conversation);
         String searchStep = willSearch
-                ? "正在联网检索：" + abbreviate(userMessage, PROGRESS_TEXT_LIMIT)
+                ? RoundProgressText.searching(userMessage)
                 : "本轮未联网检索（会话搜索开关关闭）";
         steps.add(searchStep);
         // 分层 defer：先发「正在检索」进度帧，再把同步阻塞的检索放进 defer 执行
@@ -368,7 +332,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                                     commandSearch.resolveSearchSource(conversationId, userMessage, userPayload))
                             : null;
                     if (willSearch) {
-                        steps.add(describeSearchResult(outcome));
+                        steps.add(RoundProgressText.searchResult(outcome));
                     }
                     return runClarifyMainReply(conversation, userMessage, outcome, steps, thinking);
                 }));

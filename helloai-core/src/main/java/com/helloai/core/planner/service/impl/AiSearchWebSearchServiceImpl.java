@@ -42,7 +42,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * 结果条数走 provider 级 {@link WebSearchProperties#getAiSearchMaxResults()}（默认 15，上限 50），
  * 不受通用 {@code maxResults} 护栏约束——该供应商以「高容量检索」为定位。</p>
  *
- * <p>失败语义：捕获所有异常返回空列表，不抛出（{@link WebSearchService} 契约）。</p>
+ * <p>失败语义：捕获所有异常返回空列表，不抛出（{@link WebSearchService} 契约）。
+ * AI Search 超时 / 非 2xx / 解析为空时，在实现内部回退一次基础 Web Search
+ * （{@code /v1/web-search}），回退也失败才返回空列表。</p>
  */
 @Slf4j
 @Service
@@ -51,6 +53,9 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
 
     /** 博查 AI Search 单次 count 上限（官方：最多 50 条）。 */
     private static final int MAX_AI_SEARCH_COUNT = 50;
+
+    /** 基础 Web Search 回退的请求超时上限（毫秒）：为回退留出预算，不跟随 AI Search 的 25s 配置。 */
+    private static final long FALLBACK_TIMEOUT_MS = 8_000L;
 
     private final WebSearchProperties properties;
     private final WebSearchCredentialKeyStore credentialKeyStore;
@@ -214,12 +219,78 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
             if (response.statusCode() / 100 != 2) {
                 log.warn("博查 AI Search 返回非 2xx: status={}, body={}", response.statusCode(),
                         truncate(response.body(), 200));
+                return fallbackBaseWebSearch(query, limit, apiKey);
+            }
+            List<WebSearchResult> results = parseResponse(response.body(), limit, query);
+            if (!results.isEmpty()) {
+                return results;
+            }
+            return fallbackBaseWebSearch(query, limit, apiKey);
+        } catch (Exception e) {
+            log.warn("博查 AI Search 失败，尝试基础 Web Search 回退: query={}, err={}", query, e.getMessage());
+            return fallbackBaseWebSearch(query, limit, apiKey);
+        }
+    }
+
+    /**
+     * AI Search 无结果（超时 / 非 2xx / 解析为空）时的回退：直接调用博查基础
+     * Web Search（{@code /v1/web-search}）。
+     *
+     * <p>为什么在实现内部回退而不新增 Bean：{@code provider=bocha-ai-search} 时
+     * {@link BochaWebSearchServiceImpl} 因条件装配不存在，路由层拿不到基础搜索实现；
+     * 回退放在这里才能保证「高级搜索失败仍有基础检索兜底」。</p>
+     *
+     * <p>失败语义不变：回退也失败时返回空列表，不抛异常。回退超时固定上限
+     * {@link #FALLBACK_TIMEOUT_MS}，避免 AI Search 已耗时 15~25s 后再拖满一个长超时。</p>
+     */
+    private List<WebSearchResult> fallbackBaseWebSearch(String query, int limit, String apiKey) {
+        long t0 = System.currentTimeMillis();
+        int fallbackLimit = Math.max(1, Math.min(limit, properties.getMaxResults()));
+        try {
+            String freshness = relativeTimeNormalizer.freshnessFor(query, LocalDate.now());
+            String body = buildFallbackRequestBody(query, fallbackLimit, freshness);
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(properties.getBochaBaseUrl()))
+                    .timeout(Duration.ofMillis(Math.max(1L,
+                            Math.min(properties.getTimeoutMs(), FALLBACK_TIMEOUT_MS))))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> response = httpClient.send(request,
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() / 100 != 2) {
+                log.warn("基础 Web Search 回退返回非 2xx: status={}, body={}", response.statusCode(),
+                        truncate(response.body(), 200));
                 return List.of();
             }
-            return parseResponse(response.body(), limit, query);
+            List<WebSearchResult> results = parseResponse(response.body(), fallbackLimit, query);
+            log.info("AI Search 无结果，回退基础 Web Search: query={}, hits={}, costMs={}",
+                    query, results.size(), elapsed(t0));
+            return results;
         } catch (Exception e) {
-            log.warn("博查 AI Search 失败（已降级为空列表）: query={}, err={}", query, e.getMessage());
+            log.warn("基础 Web Search 回退失败（已降级为空列表）: query={}, err={}", query, e.getMessage());
             return List.of();
+        }
+    }
+
+    /**
+     * 组装基础 Web Search 回退请求体（包私有，供单测断言字段）。
+     *
+     * <p>与 AI Search 的差异：字段是 {@code summary}（不是 {@code answer}），
+     * 且没有 {@code stream}；count 使用通用 {@code max-results} 护栏后的条数。</p>
+     */
+    String buildFallbackRequestBody(String query, int limit, String freshness) {
+        try {
+            return objectMapper.writeValueAsString(Map.of(
+                    "query", query,
+                    "summary", true,
+                    "count", limit,
+                    "freshness", freshness
+            ));
+        } catch (Exception e) {
+            log.warn("基础 Web Search 回退请求体序列化失败，降级最小请求体: err={}", e.getMessage());
+            return "{\"query\":\"" + query + "\",\"freshness\":\"noLimit\"}";
         }
     }
 

@@ -183,4 +183,50 @@ class RelativeTimeNormalizerTest {
         assertThat(normalizer.freshnessFor(null, ANCHOR)).isEqualTo("noLimit");
         assertThat(normalizer.freshnessFor("   ", ANCHOR)).isEqualTo("noLimit");
     }
+
+    // ════════════════════════════════════════════════════════════
+    //  A2：裸「最近」→ 近 30 天窗口 / oneMonth
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("A2 裸「最近」：归一化为近 30 天区间（含首末两天）")
+    void normalize_bareRecent_normalizedToThirtyDayRange() {
+        assertThat(normalizer.normalize("最近的 AI 相关新闻", ANCHOR))
+                .isEqualTo("2026-08-02 2026-08-31的 AI 相关新闻");
+    }
+
+    @Test
+    @DisplayName("A2 裸「最近」：freshness 为 oneMonth，且归一化后日期反推一致")
+    void freshnessFor_bareRecent_oneMonth() {
+        assertThat(normalizer.freshnessFor("最近的 AI 相关新闻", ANCHOR)).isEqualTo("oneMonth");
+        String normalized = normalizer.normalize("最近的 AI 相关新闻", ANCHOR);
+        assertThat(normalizer.freshnessFor(normalized, ANCHOR)).isEqualTo("oneMonth");
+    }
+
+    @Test
+    @DisplayName("A2 不回归：最近一周仍 oneWeek，最近一年仍 oneYear（不被裸词规则吞掉）")
+    void normalize_bareRecent_excludesLongerExpressions() {
+        assertThat(normalizer.normalize("最近一周的 AI 新闻", ANCHOR))
+                .isEqualTo("2026-08-25 2026-08-31的 AI 新闻");
+        assertThat(normalizer.freshnessFor("最近一周的 AI 新闻", ANCHOR)).isEqualTo("oneWeek");
+
+        assertThat(normalizer.normalize("最近一年的 AI 新闻", ANCHOR))
+                .isEqualTo("最近一年的 AI 新闻");
+        assertThat(normalizer.freshnessFor("最近一年的 AI 新闻", ANCHOR)).isEqualTo("oneYear");
+    }
+
+    @Test
+    @DisplayName("A2 幂等：裸「最近」二次归一化不再变化")
+    void normalize_bareRecent_idempotent() {
+        String once = normalizer.normalize("最近的 AI 新闻", ANCHOR);
+        assertThat(normalizer.normalize(once, ANCHOR)).isEqualTo(once);
+    }
+
+    @Test
+    @DisplayName("A2 技术术语保护：最近邻 / 最近公共祖先 不被当作时效词")
+    void normalize_bareRecent_technicalTermsUntouched() {
+        assertThat(normalizer.normalize("最近邻算法", ANCHOR)).isEqualTo("最近邻算法");
+        assertThat(normalizer.normalize("最近公共祖先", ANCHOR)).isEqualTo("最近公共祖先");
+        assertThat(normalizer.freshnessFor("最近邻算法", ANCHOR)).isEqualTo("noLimit");
+    }
 }

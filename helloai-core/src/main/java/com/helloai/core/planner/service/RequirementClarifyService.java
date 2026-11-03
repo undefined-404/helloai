@@ -302,8 +302,13 @@ public interface RequirementClarifyService {
      */
     ClarifyConversationDetail switchToChat(Long conversationId);
 
-    /** 会话列表（创建时间倒序，LIMIT 50，首期不分页）。 */
-    List<RequirementConversation> listConversations();
+    /**
+     * 会话列表（创建时间倒序，LIMIT 50，首期不分页）。
+     *
+     * @param kind 会话类型：空/空白默认 {@link #KIND_REQUIREMENT}；
+     *             {@link #KIND_ASSISTANT} 供个人工作台读取，两类会话不再混排
+     */
+    List<RequirementConversation> listConversations(String kind);
 
     /** 会话详情：会话 + 消息按 seq 升序。 */
     ClarifyConversationDetail detail(Long conversationId);

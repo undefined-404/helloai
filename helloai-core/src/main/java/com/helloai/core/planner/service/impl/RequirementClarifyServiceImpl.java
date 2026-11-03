@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 对话式需求澄清编排服务的<b>薄门面</b>（需求模糊 → 多轮追问 → 终稿 → 创建任务）。
@@ -262,6 +263,11 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         if (conversation == null) {
             throw new BizException("澄清会话不存在: " + conversationId);
         }
+        // 删除走 ABANDONED 校验、不经 requireActive，这里单独补 kind 守卫，
+        // 防止助理会话被需求对话的删除入口误删
+        if (conversation.getKind() != null && !KIND_REQUIREMENT.equals(conversation.getKind())) {
+            throw new BizException("该会话为助理对话，不能使用需求澄清接口: conversationId=" + conversationId);
+        }
         if (!STATUS_ABANDONED.equals(conversation.getStatus())) {
             throw new BizException("仅已放弃的会话可删除，当前状态: " + conversation.getStatus()
                     + ", conversationId=" + conversationId);
@@ -312,15 +318,25 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 messageService.listByConversation(conversationId));
     }
 
-    /** 会话列表（创建时间倒序，LIMIT 50，首期不分页）。 */
+    /**
+     * 会话列表（创建时间倒序，LIMIT 50，首期不分页）。
+     *
+     * <p>需求会话与助理会话共用本表（PA-11），读取侧必须按 {@code kind} 分流，
+     * 否则两个入口会互相看到对方的会话。</p>
+     */
     @Override
-    public List<RequirementConversation> listConversations() {
+    public List<RequirementConversation> listConversations(String kind) {
         Long userId = CurrentUser.userId();
         if (userId == null) {
             // 无法识别调用者（如外部 Agent 通道无用户态）时不外泄任何会话
             return List.of();
         }
+        // 缺省 REQUIREMENT：老前端未传参数时行为不变
+        String effectiveKind = kind == null || kind.isBlank()
+                ? KIND_REQUIREMENT
+                : kind.trim().toUpperCase(Locale.ROOT);
         return conversationService.lambdaQuery()
+                .eq(RequirementConversation::getKind, effectiveKind)
                 // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属（老数据）」
                 .and(w -> w.isNull(RequirementConversation::getOwnerId)
                         .or().eq(RequirementConversation::getOwnerId, userId))

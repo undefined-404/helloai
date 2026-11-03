@@ -1,11 +1,11 @@
 # HelloAI 助理对话与上下文窗口设计
 
-> **Status**: `Planned`（设计中；任务登记见 `plan/HelloAI 个人助理工作台实施计划（2026-11-02）.md` `PA-11` / `PA-12`，状态事实源以该计划 §3 为准）
+> **Status**: `Implemented`（v1 已落地；任务登记见 `plan/HelloAI 个人助理工作台实施计划（2026-11-02）.md` `PA-11` / `PA-12`，状态事实源以该计划 §3 为准；2026-11-03 补齐助理链路 SSE 流式 / 思考过程 / 停止生成）
 > **Scope**：
 > - **含**：① 个人工作台中间框改为「助理对话」（跨历史检索、不产出任务草案）；② 助理会话与需求会话**同构存储、按 `kind` 分流行为**；③ 新建/助理会话统一的「上下文窗口」——token 占用分项展示 + 手动压缩 + 自动压缩；④ 「从当前对话创建任务」的显式工具与血缘。
 > - **不含**：多租户隔离、向量检索（一期用 `pg_trgm`/ILIKE）、助理人格市场、IM/移动端。
 > **差距锚点**：`PA-x`（差距表 §0 / §1.1）
-> **最后更新**：2026-11-03（设计初版；参考 QwenPaw / Yuxi / LobsterAI / Dify / LangGraph 源码逻辑）
+> **最后更新**：2026-11-03（设计初版；同日补「助理流式对齐」：与需求对话共用同一 SSE 协议与 Controller 骨架）
 
 ---
 
@@ -144,8 +144,12 @@ CREATE UNIQUE INDEX uk_conversation_context_state_conv
 | GET | `/requirement-conversations/contextWindowById/{id}` | 返回分项占用、百分比、已压缩到的 seq、摘要版本、阈值 |
 | POST | `/requirement-conversations/compactById/{id}` | 手动压缩，返回压缩前后 token 与淘汰条数 |
 | GET | `/requirement-conversations?kind=ASSISTANT` | 助理会话列表（左栏历史） |
+| POST | `/requirement-conversations/assistant/streamCreate` | 助理新建会话 + 首轮流式（SSE，2026-11-03；同步 `assistant/create` 保留兜底） |
+| POST | `/requirement-conversations/assistant/streamSend/{id}` | 助理追加消息流式（SSE，支持停止生成；同步 `assistant/send/{id}` 保留兜底） |
 
 前端：对话页/工作台增加「上下文窗口」浮层（环形或进度条 + 分项行 + 「压缩上下文」按钮 + 接近阈值的自动提示）；工作台中间框为助理模式，左栏历史可搜索，命中历史可「继续问」。
+
+**流式口径（2026-11-03 补记）**：助理对话与需求对话共用同一 `ChatStreamEvent` 协议（`session` / `progress` / `reasoning` / `token` / `done` / `error`）与同一 Controller SSE 骨架（`streamSse`：客户端断开即 dispose 订阅 = 停止生成；`Flux.defer` 兜底同步异常）。流式轮只在「落 user 消息 / 自动压缩」前置段持会话锁，LLM 段不持锁；终态在 `concatWith(Flux.defer(...))` 内落 assistant 消息（含 `webSearch` / `process` payload）并原子自增 `round_count`——客户端中止时该 defer 不执行，未完成回复不落库。过程文案由 `RoundProgressText` 统一生成，避免两条链路文案漂移。同步端点保留作兜底，前端默认走流式。
 
 **授权口径（CODE_STYLE §43 登记）**：`assistantProfile` / `myArtifacts` / `workbench` / `workbenchStream` / `contextWindowById` 为**登录即可读**——按 `owner` 过滤，无用户态（如外部 Agent 通道）返回空/默认值；`compactById` 为写动作，复用 `conversation:send` 动作码。此为既定口径。
 

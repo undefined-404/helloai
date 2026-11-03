@@ -34,7 +34,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 
 /**
  * 对话式需求澄清（薄转发，编排收口在 {@link RequirementClarifyService}）。
@@ -105,55 +107,9 @@ public class RequirementConversationController {
     public SseEmitter streamSendById(@PathVariable("id") Long id,
                                      @Valid @RequestBody ClarifyMessageRequest req,
                                      HttpServletResponse response) {
-        // 反代缓冲关闭（Nginx 需逐帧透传，X-Accel-Buffering 对 1.7.11+ 生效）：SSE 帧不被中间层攒批
-        response.setHeader("X-Accel-Buffering", "no");
-        response.setHeader("Cache-Control", "no-cache");
-        SseEmitter emitter = new SseEmitter(STREAM_EMITTER_TIMEOUT_MS);
-        // ★停止生成核心：保存订阅句柄，连接断开（客户端 abort / 超时 / 异常）时 dispose 取消 LLM 流。
-        // 正常 done 完成路径 completeQuietly 后 onCompletion 也会触发 dispose——此时订阅已结束，
-        // dispose 为幂等 no-op，无副作用。
-        // cancelled 标记覆盖「连接在订阅创建前就断开」的竞态（chatStreamExecutor 异步执行）：
-        // 断开已发生则不再启动订阅，避免拉起一条注定无人接收的 LLM 流。
-        AtomicBoolean cancelled = new AtomicBoolean(false);
-        Disposable[] subscription = new Disposable[1];
-        Runnable cancelStream = () -> {
-            cancelled.set(true);
-            Disposable d = subscription[0];
-            if (d != null) {
-                d.dispose();
-            }
-        };
-        emitter.onCompletion(cancelStream);
-        emitter.onTimeout(() -> {
-            log.warn("流式对话连接超时: conversationId={}", id);
-            cancelStream.run();
-            try {
-                emitter.complete();
-            } catch (Exception ignore) {
-                // 连接可能已断，忽略二次异常
-            }
-        });
-        emitter.onError(e -> {
-            log.warn("流式对话连接异常: conversationId={}, err={}", id, e.toString());
-            cancelStream.run();
-        });
-        StreamFrameAggregator aggregator = new StreamFrameAggregator(emitter);
-        chatStreamExecutor.execute(() -> {
-            if (cancelled.get()) {
-                // 连接已在订阅启动前断开：不再启动流（user 消息未落库，前端重发即可）
-                return;
-            }
-            subscription[0] = requirementClarifyService.streamRound(id, req.getMessage(), req.getSelectedOptions(),
-                            req.getAttachmentIds())
-                    .subscribe(aggregator::onEvent,
-                            // 服务层已将异常转 error 事件（onErrorResume），此处为订阅侧防御
-                            error -> aggregator.onEvent(ChatStreamEvent.error(fallbackErrorMessage(error))),
-                            () -> {
-                                aggregator.flush();
-                                completeQuietly(emitter);
-                            });
-        });
-        return emitter;
+        return streamSse(response, "流式对话(conversationId=" + id + ")",
+                () -> requirementClarifyService.streamRound(id, req.getMessage(), req.getSelectedOptions(),
+                        req.getAttachmentIds()));
     }
 
     /**
@@ -174,10 +130,61 @@ public class RequirementConversationController {
     @PostMapping(value = "/streamCreate", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamCreate(@Valid @RequestBody ClarifyMessageRequest req,
                                    HttpServletResponse response) {
+        return streamSse(response, "流式新建会话",
+                () -> requirementClarifyService.streamCreateWithClientToken(req.getMessage(),
+                        req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getClientToken(),
+                        req.getAttachmentIds()));
+    }
+
+    /**
+     * 助理 SSE 流式「新建会话 + 首轮」（PA-11 与需求对话对齐，2026-11-03）。
+     *
+     * <p>与同步 {@link #assistantCreate} 同参，事件协议同 {@link #streamCreate}。补齐流式的动因：
+     * 工作台此前只有同步端点，联网搜索（实测可达 20s+）与整段 LLM 输出期间用户无任何反馈，
+     * 也没有思考过程与「停止生成」；同步端点保留作兜底。</p>
+     */
+    @SaCheckPermission("conversation:add")
+    @PostMapping(value = "/assistant/streamCreate", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter assistantStreamCreate(@Valid @RequestBody ClarifyMessageRequest req,
+                                            HttpServletResponse response) {
+        return streamSse(response, "助理流式新建会话",
+                () -> assistantChatService.streamCreateConversation(req.getMessage(), req.getPlannerAgentId(),
+                        new AssistantRoundInput(req.getWebSearchEnabled(), req.getSkill(),
+                                req.getAttachmentIds(), req.getClientToken())));
+    }
+
+    /** 助理 SSE 流式追加一条消息（PA-11）：支持停止生成，事件协议与澄清链路一致。 */
+    @SaCheckPermission("conversation:send")
+    @PostMapping(value = "/assistant/streamSend/{id}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter assistantStreamSend(@PathVariable("id") Long id,
+                                          @Valid @RequestBody ClarifyMessageRequest req,
+                                          HttpServletResponse response) {
+        return streamSse(response, "助理流式对话(conversationId=" + id + ")",
+                () -> assistantChatService.streamSendMessage(id, req.getMessage(),
+                        new AssistantRoundInput(req.getWebSearchEnabled(), req.getSkill(),
+                                req.getAttachmentIds(), null)));
+    }
+
+    /**
+     * SSE 端点公共骨架（澄清 / 助理四条流式通道共用）：
+     * 建连接 → 客户端断开即 dispose 订阅（停止生成）→ 线程池内订阅 → 聚合帧发送 → 终态补 flush。
+     *
+     * <p>{@code streamFactory} 内的同步异常由 {@code Flux.defer} 转为 onError，
+     * 统一走 error 帧并正常结束连接，不会悬到超时。</p>
+     *
+     * @param scene 日志场景前缀（含会话 id 等业务标识）
+     */
+    private SseEmitter streamSse(HttpServletResponse response, String scene,
+                                 Supplier<Flux<ChatStreamEvent>> streamFactory) {
+        // 反代缓冲关闭（Nginx 需逐帧透传，X-Accel-Buffering 对 1.7.11+ 生效）：SSE 帧不被中间层攒批
         response.setHeader("X-Accel-Buffering", "no");
         response.setHeader("Cache-Control", "no-cache");
         SseEmitter emitter = new SseEmitter(STREAM_EMITTER_TIMEOUT_MS);
-        // 停止生成 + 订阅前断开竞态守卫（语义与 streamSendById 一致）
+        // ★停止生成核心：保存订阅句柄，连接断开（客户端 abort / 超时 / 异常）时 dispose 取消 LLM 流。
+        // 正常 done 完成路径 completeQuietly 后 onCompletion 也会触发 dispose——此时订阅已结束，
+        // dispose 为幂等 no-op，无副作用。
+        // cancelled 标记覆盖「连接在订阅创建前就断开」的竞态（chatStreamExecutor 异步执行）：
+        // 断开已发生则不再启动订阅，避免拉起一条注定无人接收的 LLM 流。
         AtomicBoolean cancelled = new AtomicBoolean(false);
         Disposable[] subscription = new Disposable[1];
         Runnable cancelStream = () -> {
@@ -189,24 +196,22 @@ public class RequirementConversationController {
         };
         emitter.onCompletion(cancelStream);
         emitter.onTimeout(() -> {
-            log.warn("流式新建会话连接超时");
+            log.warn("{} 连接超时", scene);
             cancelStream.run();
             completeQuietly(emitter);
         });
         emitter.onError(e -> {
-            log.warn("流式新建会话连接异常: {}", e.toString());
+            log.warn("{} 连接异常: {}", scene, e.toString());
             cancelStream.run();
         });
         StreamFrameAggregator aggregator = new StreamFrameAggregator(emitter);
         chatStreamExecutor.execute(() -> {
             if (cancelled.get()) {
-                // 连接已在订阅启动前断开：不再启动流（会话与消息未落库，前端重发即可）
                 return;
             }
-            subscription[0] = requirementClarifyService.streamCreateWithClientToken(req.getMessage(),
-                            req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getClientToken(),
-                            req.getAttachmentIds())
+            subscription[0] = Flux.defer(streamFactory)
                     .subscribe(aggregator::onEvent,
+                            // 服务层已将异常转 error 事件（onErrorResume），此处为订阅侧防御
                             error -> aggregator.onEvent(ChatStreamEvent.error(fallbackErrorMessage(error))),
                             () -> {
                                 aggregator.flush();
@@ -217,7 +222,8 @@ public class RequirementConversationController {
     }
 
     /** 订阅侧防御错误文本（正常路径不会触发）：取根因 message，缺失回落类名。 */
-    private static String fallbackErrorMessage(Throwable e) {        Throwable root = e;
+    private static String fallbackErrorMessage(Throwable e) {
+        Throwable root = e;
         while (root.getCause() != null && root.getCause() != root) {
             root = root.getCause();
         }
@@ -508,10 +514,16 @@ public class RequirementConversationController {
         return R.ok(requirementClarifyService.switchToChat(id));
     }
 
-    /** 会话列表（置顶优先，其次创建时间倒序，LIMIT 50）。 */
+    /**
+     * 会话列表（创建时间倒序，LIMIT 50）。
+     *
+     * @param kind 会话类型，缺省 {@code REQUIREMENT}；个人工作台传 {@code ASSISTANT}，
+     *             两类会话共用存储但读取侧按 kind 分流
+     */
     @GetMapping
-    public R<List<RequirementConversation>> list() {
-        return R.ok(requirementClarifyService.listConversations());
+    public R<List<RequirementConversation>> list(
+            @RequestParam(value = "kind", required = false) String kind) {
+        return R.ok(requirementClarifyService.listConversations(kind));
     }
 
     /** 会话详情（含全部消息按 seq 升序）。 */
