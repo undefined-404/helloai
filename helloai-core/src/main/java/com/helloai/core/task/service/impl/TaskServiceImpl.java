@@ -151,11 +151,16 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
 
     @Override
     public IPage<Task> pageTasks(TaskStatus status, Integer page, int pageSize) {
+        Long ownerId = CurrentUser.userId();
+        if (ownerId == null) {
+            // 无法识别调用者（如外部 Agent 通道无用户态）时不外泄任何任务
+            return new Page<>(page == null || page <= 0 ? 1 : page, Math.max(pageSize, 1));
+        }
         LambdaQueryWrapper<Task> wrapper = new LambdaQueryWrapper<Task>()
                 .eq(status != null, Task::getStatus, status)
                 // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属（老数据/异步创建）」的任务
                 .and(w -> w.isNull(Task::getOwnerId)
-                        .or().eq(Task::getOwnerId, CurrentUser.userId()))
+                        .or().eq(Task::getOwnerId, ownerId))
                 .orderByDesc(Task::getCreateTime);
         if (page == null || page <= 0) {
             List<Task> all = list(wrapper);
@@ -169,12 +174,16 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
 
     @Override
     public List<Task> listActiveTasksForOwner(int limit) {
+        Long ownerId = CurrentUser.userId();
+        if (ownerId == null) {
+            return List.of();
+        }
         int cap = limit <= 0 ? DEFAULT_RECENT_TASK_LIMIT : limit;
         return list(new LambdaQueryWrapper<Task>()
                 .in(Task::getStatus, TaskStatus.PLANNING, TaskStatus.IN_PROGRESS)
                 // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属（老数据/异步创建）」的任务
                 .and(w -> w.isNull(Task::getOwnerId)
-                        .or().eq(Task::getOwnerId, CurrentUser.userId()))
+                        .or().eq(Task::getOwnerId, ownerId))
                 .orderByDesc(Task::getUpdateTime)
                 .orderByDesc(Task::getCreateTime)
                 .last("LIMIT " + cap));

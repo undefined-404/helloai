@@ -33,6 +33,12 @@ public interface RequirementClarifyService {
     String MODE_CHAT = "CHAT";
     String MODE_CLARIFY = "CLARIFY";
 
+    /** 会话类型（V135）：需求澄清会话（默认，老数据同此值）。 */
+    String KIND_REQUIREMENT = "REQUIREMENT";
+
+    /** 会话类型（V135）：助理对话会话（跨历史检索，不产出任务草案）。 */
+    String KIND_ASSISTANT = "ASSISTANT";
+
     /** 意图词命中后的固定确认询问文案（已迁移至 {@link com.helloai.core.planner.clarify.ConfirmCardProtocol#CONFIRM_ASK_TEXT}）。 */
     @Deprecated
     String CONFIRM_ASK_MESSAGE = com.helloai.core.planner.clarify.ConfirmCardProtocol.CONFIRM_ASK_TEXT;
@@ -296,7 +302,7 @@ public interface RequirementClarifyService {
      */
     ClarifyConversationDetail switchToChat(Long conversationId);
 
-    /** 会话列表（按创建时间倒序，LIMIT 50，首期不分页）。 */
+    /** 会话列表（创建时间倒序，LIMIT 50，首期不分页）。 */
     List<RequirementConversation> listConversations();
 
     /** 会话详情：会话 + 消息按 seq 升序。 */

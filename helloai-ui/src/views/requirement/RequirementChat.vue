@@ -27,8 +27,7 @@
             >
               {{ isChatMode ? '自由对话' : '方案澄清' }}
             </el-tag>
-            <!-- 右栏开关：旧「对话新建」入口只看本会话产物；「个人工作台」入口看四段工作台。
-                 与用户上传附件（输入框上方胶囊条）严格分离。有产物时高亮 + 角标数字。 -->
+            <!-- 右栏开关：本会话产物。与用户上传附件（输入框上方胶囊条）严格分离。有产物时高亮 + 角标数字。 -->
             <button
               type="button"
               class="artifact-toggle-btn"
@@ -36,8 +35,8 @@
               :title="artifactToggleTitle"
               @click="toggleArtifactPanel"
             >
-              <el-icon><Grid v-if="isWorkbenchEntry" /><Document v-else /></el-icon>
-              <span class="artifact-toggle-label">{{ isWorkbenchEntry ? '工作台' : '产物' }}</span>
+              <el-icon><Document /></el-icon>
+              <span class="artifact-toggle-label">产物</span>
               <span
                 v-if="artifactCount"
                 class="artifact-toggle-badge"
@@ -90,7 +89,7 @@
       </template>
 
       <div class="chat-layout">
-        <!-- 左栏：会话列表（设计图：新建对话 + 搜索 + 状态 tabs + 分组） -->
+        <!-- 左栏：会话列表（设计图：新建对话 + 搜索 + 状态 tabs + 分组）。 -->
         <div class="conv-list">
           <el-button
             v-auth="'conversation:add'"
@@ -1000,6 +999,88 @@
                       </div>
                     </div>
                     <div class="input-actions-right">
+                      <!-- PA-12 上下文窗口：圆形占用环置于输入框内；点击展开五项明细 + 手动压缩 -->
+                      <el-popover
+                        placement="top-end"
+                        :width="300"
+                        trigger="click"
+                        @show="loadContextUsage"
+                      >
+                        <template #reference>
+                          <button
+                            type="button"
+                            class="ctx-ring"
+                            :class="{ 'is-warn': contextRatioPct >= 80, 'is-empty': !contextUsage }"
+                            :title="ctxRingTitle"
+                            aria-label="上下文窗口占用"
+                          >
+                            <svg
+                              class="ctx-ring-svg"
+                              viewBox="0 0 32 32"
+                              aria-hidden="true"
+                            >
+                              <circle
+                                class="ctx-ring-track"
+                                cx="16"
+                                cy="16"
+                                r="13"
+                              />
+                              <circle
+                                class="ctx-ring-fill"
+                                cx="16"
+                                cy="16"
+                                r="13"
+                                :stroke-dasharray="ctxRingCircumference"
+                                :stroke-dashoffset="ctxRingOffset"
+                              />
+                            </svg>
+                            <el-icon
+                              v-if="!contextUsage"
+                              class="ctx-ring-icon"
+                            >
+                              <Histogram />
+                            </el-icon>
+                            <span
+                              v-else
+                              class="ctx-ring-label"
+                            >{{ contextRatioPct }}%</span>
+                          </button>
+                        </template>
+                        <div class="ctx-panel">
+                          <div class="ctx-head">
+                            <span>上下文窗口</span>
+                            <span class="ctx-ratio">{{ contextUsage ? contextRatioPct : 0 }}%</span>
+                          </div>
+                          <div
+                            v-if="contextUsage"
+                            class="ctx-bar"
+                          >
+                            <div
+                              class="ctx-bar-fill"
+                              :style="{ width: contextRatioPct + '%' }"
+                            />
+                          </div>
+                          <template v-if="contextUsage">
+                            <div class="ctx-row"><span>系统提示词</span><span>{{ contextUsage.systemPromptTokens }}</span></div>
+                            <div class="ctx-row"><span>系统工具</span><span>{{ contextUsage.toolTokens }}</span></div>
+                            <div class="ctx-row"><span>Skill</span><span>{{ contextUsage.skillTokens }}</span></div>
+                            <div class="ctx-row"><span>消息</span><span>{{ contextUsage.messageTokens }}</span></div>
+                            <div class="ctx-row"><span>其他</span><span>{{ contextUsage.otherTokens }}</span></div>
+                            <div class="ctx-row ctx-total"><span>合计 / 窗口</span><span>{{ contextUsage.totalTokens }} / {{ contextUsage.contextSize }}</span></div>
+                            <div class="ctx-meta">已压缩到 seq {{ contextUsage.compactedUntilSeq }} · 摘要 v{{ contextUsage.summaryVersion }}</div>
+                          </template>
+                          <div v-else class="ctx-empty">打开会话后可查看占用</div>
+                          <el-button
+                            size="small"
+                            type="primary"
+                            plain
+                            class="ctx-compact-btn"
+                            :loading="contextCompacting"
+                            :disabled="!activeId"
+                            @click="compactContext"
+                          >压缩上下文</el-button>
+                        </div>
+                      </el-popover>
                       <!-- 输入优化：调 LLM 把当前输入改写为结构化表达（仅预览，不自动发送、不覆盖输入框） -->
                       <el-button
                         size="small"
@@ -1065,226 +1146,29 @@
             </div>
           </div>
         </div>
-        <!-- 右侧可收缩面板：旧「对话新建」入口 = 本会话产物（保持原逻辑）；
-             「个人工作台」入口 = 身份卡 / 最近任务 / 工作产物 / 项目历史四段。
-             与用户上传附件（输入框上方胶囊条）严格分离。展开 = 列表 + 内嵌预览，
-             收起 = 仅保留顶部开关按钮。 -->
+        <!-- 右侧可收缩面板：本会话的平台生成产物。与用户上传附件（输入框上方胶囊条）严格分离。
+             展开 = 列表 + 内嵌预览，收起 = 仅保留顶部开关按钮。 -->
         <transition name="artifact-panel">
           <aside
             v-show="artifactPanelOpen"
             class="artifact-sidebar"
-            :class="{ 'is-workbench': isWorkbenchEntry }"
           >
             <div class="artifact-sidebar-head">
-              <span class="artifact-sidebar-title">{{ isWorkbenchEntry ? '个人工作台' : '产物' }}</span>
+              <span class="artifact-sidebar-title">产物</span>
               <div class="artifact-sidebar-head-right">
-                <span
-                  v-if="!isWorkbenchEntry"
-                  class="artifact-sidebar-count"
-                >{{ conversationArtifacts.length }} 个</span>
+                <span class="artifact-sidebar-count">{{ conversationArtifacts.length }} 个</span>
                 <button
-                  v-else
                   type="button"
                   class="artifact-sidebar-close"
-                  title="收起工作台"
+                  title="收起产物栏"
                   @click="closeArtifactPanel"
                 >
                   <el-icon><Close /></el-icon>
                 </button>
               </div>
             </div>
-            <div
-              class="artifact-sidebar-body"
-              :class="{ 'is-workbench': isWorkbenchEntry }"
-            >
-              <div
-                v-if="isWorkbenchEntry && workbenchLoading && !workbench"
-                class="artifact-loading"
-              >
-                加载中…
-              </div>
-              <!-- ① 任务概况：双屏轮播（第一屏 2×2 计数，第二屏 2×2 活跃 Agent），圆点在块内 -->
-              <section
-                v-if="isWorkbenchEntry"
-                class="wb-section wb-overview"
-              >
-                <div class="wb-section-head">
-                  <span>任务概况</span>
-                  <span class="artifact-sidebar-count">{{ workbenchActiveAgents.length }} 个活跃 Agent</span>
-                </div>
-                <div
-                  class="wb-carousel"
-                  @mouseenter="pauseOverviewCarousel"
-                  @mouseleave="resumeOverviewCarousel"
-                >
-                  <div class="wb-carousel-viewport">
-                    <div
-                      class="wb-carousel-track"
-                      :style="{ transform: `translateX(-${overviewSlide * 100}%)` }"
-                    >
-                      <div class="wb-slide">
-                        <div class="wb-stat-grid">
-                          <div class="wb-stat">
-                            <span class="wb-stat-label">总任务</span>
-                            <span class="wb-stat-value">{{ taskOverview.inProgressTasks }}</span>
-                            <span class="wb-stat-hint">执行中</span>
-                          </div>
-                          <div class="wb-stat">
-                            <span class="wb-stat-label">待分配</span>
-                            <span class="wb-stat-value">{{ taskOverview.pendingDispatch }}</span>
-                          </div>
-                          <div class="wb-stat">
-                            <span class="wb-stat-label">待审查</span>
-                            <span class="wb-stat-value">{{ taskOverview.pendingReview }}</span>
-                          </div>
-                          <div class="wb-stat">
-                            <span class="wb-stat-label">待人工</span>
-                            <span class="wb-stat-value">{{ taskOverview.pendingManual }}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div class="wb-slide">
-                        <div class="wb-agent-grid">
-                          <div
-                            v-for="(agent, idx) in agentCells"
-                            :key="agent ? `agent-${agent.agentId}` : `idle-${idx}`"
-                            class="wb-agent"
-                            :class="{ 'is-idle': !agent }"
-                          >
-                            <template v-if="agent">
-                              <span
-                                class="wb-agent-badge"
-                                :class="agent.internal ? 'is-internal' : 'is-external'"
-                              >{{ agent.internal ? '内' : '外' }}</span>
-                              <span
-                                class="wb-agent-name"
-                                :title="agent.name"
-                              >{{ agent.name }}</span>
-                            </template>
-                            <span
-                              v-else
-                              class="wb-agent-empty"
-                            >空闲</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="wb-dots">
-                    <button
-                      v-for="n in 2"
-                      :key="n"
-                      type="button"
-                      class="wb-dot"
-                      :class="{ active: overviewSlide === n - 1 }"
-                      :aria-label="`切换到第 ${n} 屏`"
-                      @click="setOverviewSlide(n - 1)"
-                    />
-                  </div>
-                </div>
-              </section>
-              <!-- ② 最近任务：只展示仍在推进（拆解中 / 进行中）的任务 -->
-              <section
-                v-if="isWorkbenchEntry"
-                class="wb-section wb-list-section"
-              >
-                <div class="wb-section-head">
-                  <span>最近任务</span>
-                  <span class="artifact-sidebar-count">{{ workbenchRecentTasks.length }}</span>
-                </div>
-                <div
-                  v-if="workbenchRecentTasks.length"
-                  class="wb-scroll"
-                >
-                  <button
-                    v-for="t in workbenchRecentTasks"
-                    :key="t.id"
-                    type="button"
-                    class="wb-item"
-                    @click="openTaskFromWorkbench(t)"
-                  >
-                    <span class="wb-item-main">{{ t.title || '未命名任务' }}</span>
-                    <span class="wb-item-sub">
-                      <el-tag
-                        size="small"
-                        :type="taskStatusMeta(t.status).type"
-                      >{{ taskStatusMeta(t.status).label }}</el-tag>
-                      <span class="wb-item-time">{{ fmtTime(t.createTime) }}</span>
-                    </span>
-                  </button>
-                </div>
-                <div
-                  v-else
-                  class="wb-empty"
-                >
-                  暂无进行中的任务
-                </div>
-              </section>
-              <!-- ③ 最近产物：工作台 = 最近会话中的产物；旧「对话新建」入口 = 本会话产物（原逻辑不变） -->
-              <section
-                class="wb-section"
-                :class="isWorkbenchEntry ? 'wb-list-section' : 'wb-section--plain'"
-              >
-                <template v-if="isWorkbenchEntry">
-                  <div class="wb-section-head">
-                    <span>最近产物</span>
-                    <span class="artifact-sidebar-count">{{ myArtifacts.length }}</span>
-                  </div>
-                  <div
-                    v-if="workbenchLoading && !myArtifacts.length"
-                    class="artifact-loading"
-                  >
-                    加载中…
-                  </div>
-                  <div
-                    v-else-if="myArtifacts.length"
-                    class="wb-scroll"
-                  >
-                    <button
-                      v-for="item in myArtifacts"
-                      :key="`${item.source}-${item.id}`"
-                      type="button"
-                      class="artifact-item"
-                      :class="{ 'is-current': artifactPreview?.fileName === item.fileName }"
-                      @click="previewMyArtifact(item)"
-                    >
-                      <span class="artifact-item-icon"><el-icon><Document /></el-icon></span>
-                      <span class="artifact-item-meta">
-                        <span class="artifact-item-name">{{ item.fileName }}</span>
-                        <span class="artifact-item-sub">
-                          <template v-if="item.fileSize">{{ artifactSizeLabel(item.fileSize) }} · </template>{{ item.contextTitle || '会话文件' }}
-                        </span>
-                      </span>
-                      <span class="artifact-item-actions">
-                        <button
-                          type="button"
-                          class="artifact-item-btn"
-                          title="新标签页打开"
-                          @click.stop="openMyArtifactInNewTab(item)"
-                        >
-                          <el-icon><TopRight /></el-icon>
-                        </button>
-                        <button
-                          type="button"
-                          class="artifact-item-btn"
-                          title="下载"
-                          @click.stop="downloadMyArtifact(item)"
-                        >
-                          <el-icon><Download /></el-icon>
-                        </button>
-                      </span>
-                    </button>
-                  </div>
-                  <el-empty
-                    v-else
-                    description="暂无产物"
-                    :image-size="48"
-                  />
-                </template>
-                <div
-                  v-else
-                  class="wb-artifact-list"
-                >
+            <div class="artifact-sidebar-body">
+              <div class="artifact-list">
                   <template v-if="conversationArtifacts.length">
                     <button
                       v-for="item in conversationArtifacts"
@@ -1335,7 +1219,6 @@
                     :image-size="48"
                   />
                 </div>
-              </section>
             </div>
             <!-- 内嵌预览区：点击产物条目后在此渲染（图片/PDF 走 iframe blob，文本/源码走 pre） -->
             <div
@@ -1385,26 +1268,22 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled, Grid, TopRight } from '@element-plus/icons-vue'
+import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled, Grid, TopRight, Histogram } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { promptEnhanceApi } from '@/api/promptEnhance'
 import { taskApi } from '@/api/task'
 import { skillApi, type ChatSkillOption } from '@/api/skill'
 import { streamCreateConversation, streamSendConversation } from '@/api/chatStream'
-import { streamWorkbenchEvents } from '@/api/workbenchStream'
 import { fmtTime } from '@/utils/tableConfig'
 import { saveBlobResponse } from '@/utils/download'
 import StructuredQuestionCard from './StructuredQuestionCard.vue'
 import WebSearchBar from './WebSearchBar.vue'
 import MarkdownView from '@/components/MarkdownView.vue'
-import type { ArtifactItem, AssistantProfile, ChatAttachmentItem, ClarifyArtifactRef, ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, RoundProcessTrace, TaskStatus, WebSearchTrace, Workbench, WorkbenchActiveAgent, WorkbenchRecentTask } from '@/types'
-import { TASK_STATUS_MAP } from '@/types'
+import type { AssistantProfile, ChatAttachmentItem, ClarifyArtifactRef, ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, ContextUsage, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, RoundProcessTrace, WebSearchTrace } from '@/types'
 import { sameId } from '@/utils/id'
 
 const route = useRoute()
 const router = useRouter()
-// 只有「个人工作台」菜单入口展示四段工作台；旧「对话新建」入口保持产物面板原逻辑。
-const isWorkbenchEntry = computed(() => route.path === '/workbench')
 
 const conversations = ref<RequirementConversation[]>([])
 const activeId = ref<LongId | null>(null)
@@ -2227,145 +2106,65 @@ const conversationArtifacts = computed(() => {
   return list.sort((a, b) => b.msgSeq - a.msgSeq)
 })
 
-// 产物侧栏可见性：点击顶部「文件」按钮切换；会话切换时自动收起
+// 产物侧栏可见性：点击顶部「产物」按钮切换；会话切换时自动收起
 const artifactPanelOpen = ref(false)
-// PA-5：工作台「最近产物」= 最近会话中的产物（chat_attachment 单源）；旧入口仍用消息 payload 口径。
-const myArtifacts = ref<ArtifactItem[]>([])
-// PA-4：右栏三段式工作台（任务概况 / 最近任务 / 最近产物），一次聚合拉齐；
-// 每次展开都刷新，避免任务状态和产物停留在旧快照。
-const workbench = ref<Workbench | null>(null)
-const workbenchLoading = ref(false)
-const workbenchRecentTasks = computed(() => workbench.value?.recentTasks ?? [])
-const workbenchActiveAgents = computed(() => workbench.value?.activeAgents ?? [])
-const taskOverview = computed(() => workbench.value?.taskOverview ?? {
-  inProgressTasks: 0,
-  pendingDispatch: 0,
-  pendingReview: 0,
-  pendingManual: 0
-})
-// 2×2 宫格固定 4 槽：Agent 不足时空位显示「空闲」，保证概览块高度稳定
-const agentCells = computed<(WorkbenchActiveAgent | null)[]>(() => {
-  const agents = workbenchActiveAgents.value.slice(0, 4)
-  return [...agents, ...Array.from({ length: Math.max(0, 4 - agents.length) }, () => null)]
-})
-// 任务概况轮播：无左右箭头，仅 2 个圆点 + 6s 自动切换（悬停暂停）
-const overviewSlide = ref(0)
-let overviewTimer: number | null = null
 
-function setOverviewSlide(index: number) {
-  overviewSlide.value = index === 1 ? 1 : 0
-}
-
-function startOverviewCarousel() {
-  stopOverviewCarousel()
-  if (!isWorkbenchEntry.value || !artifactPanelOpen.value) return
-  overviewTimer = window.setInterval(() => {
-    overviewSlide.value = overviewSlide.value === 0 ? 1 : 0
-  }, 6000)
-}
-
-function stopOverviewCarousel() {
-  if (overviewTimer != null) {
-    window.clearInterval(overviewTimer)
-    overviewTimer = null
-  }
-}
-
-function pauseOverviewCarousel() {
-  stopOverviewCarousel()
-}
-
-function resumeOverviewCarousel() {
-  startOverviewCarousel()
-}
-
-const artifactCount = computed(() => {
-  if (!isWorkbenchEntry.value) return conversationArtifacts.value.length
-  return myArtifacts.value.length
-})
+const artifactCount = computed(() => conversationArtifacts.value.length)
 const artifactToggleTitle = computed(() => {
-  if (!isWorkbenchEntry.value) {
-    if (!conversationArtifacts.value.length) return '暂无产物（平台生成的附件会出现在这里）'
-    return artifactPanelOpen.value ? '收起产物栏' : `查看本次会话产物（${conversationArtifacts.value.length} 个）`
-  }
-  if (!artifactCount.value) return '打开个人工作台（任务概况 / 最近任务 / 最近产物）'
-  return artifactPanelOpen.value ? '收起工作台' : `查看工作台（产物 ${artifactCount.value} 个）`
+  if (!conversationArtifacts.value.length) return '暂无产物（平台生成的附件会出现在这里）'
+  return artifactPanelOpen.value ? '收起产物栏' : `查看本次会话产物（${conversationArtifacts.value.length} 个）`
 })
 
-/** 拉取工作台聚合（三段一次返回）；「最近产物」复用其中的会话产物段。 */
-async function loadWorkbench() {
-  if (workbenchLoading.value) return
-  workbenchLoading.value = true
+// ── PA-12：上下文窗口（占用查询 + 手动压缩）────────────────
+const contextUsage = ref<ContextUsage | null>(null)
+const contextCompacting = ref(false)
+// 输入框内圆形占用环：r=13 的周长，按占用比例做 stroke-dashoffset
+const ctxRingCircumference = 2 * Math.PI * 13
+const contextRatioPct = computed(() => {
+  const ratio = contextUsage.value?.ratio ?? 0
+  return Math.min(100, Math.max(0, Math.round(ratio * 100)))
+})
+const ctxRingOffset = computed(() => ctxRingCircumference * (1 - contextRatioPct.value / 100))
+const ctxRingTitle = computed(() => contextUsage.value
+  ? `上下文窗口：已用 ${contextRatioPct.value}%（点击查看明细 / 手动压缩）`
+  : '上下文窗口：打开会话后可查看')
+
+async function loadContextUsage() {
+  if (!activeId.value) {
+    contextUsage.value = null
+    return
+  }
   try {
-    workbench.value = await clarifyApi.workbench()
-    myArtifacts.value = workbench.value.artifacts || []
-  } catch {
-    // 拦截器已弹错；保留既有列表
-  } finally {
-    workbenchLoading.value = false
+    contextUsage.value = await clarifyApi.contextWindow(activeId.value)
+  } catch { /* 拦截器已弹错 */ }
+}
+
+// 会话切换 / 每轮消息落库后刷新占用（detail 只在轮次收尾时整体替换，不会随 token 抖动）
+watch(
+  () => `${detail.value?.conversation.id ?? ''}:${detail.value?.messages.length ?? 0}`,
+  () => {
+    if (activeId.value != null) void loadContextUsage()
   }
-}
+)
 
-// ── PA-6：工作台事件推送（仅工作台入口、仅右栏展开时连接）────────────────
-// 服务端只在任务状态可能变化时推一帧提示，不带业务数据；这里防抖后重拉聚合，
-// 保证「看到的是自己有权看到的内容」这条过滤只存在于读取侧。
-let workbenchStreamAbort: AbortController | null = null
-let workbenchReconnectTimer: number | null = null
-let workbenchRefreshTimer: number | null = null
-
-function scheduleWorkbenchRefresh() {
-  if (workbenchRefreshTimer != null) return
-  workbenchRefreshTimer = window.setTimeout(() => {
-    workbenchRefreshTimer = null
-    void loadWorkbench()
-  }, 400)
-}
-
-function startWorkbenchStream() {
-  if (workbenchStreamAbort) return
-  const controller = new AbortController()
-  workbenchStreamAbort = controller
-  void streamWorkbenchEvents({
-    onTaskChange: scheduleWorkbenchRefresh,
-    onClosed: () => {
-      if (workbenchStreamAbort !== controller) return
-      workbenchStreamAbort = null
-      // 面板仍开着才退避重连；关闭/切会话后不再拉起
-      if (artifactPanelOpen.value && isWorkbenchEntry.value) {
-        workbenchReconnectTimer = window.setTimeout(() => {
-          workbenchReconnectTimer = null
-          startWorkbenchStream()
-        }, 5000)
-      }
+async function compactContext() {
+  if (!activeId.value || contextCompacting.value) return
+  contextCompacting.value = true
+  try {
+    const result = await clarifyApi.compact(activeId.value)
+    if (result.compacted) {
+      ElMessage.success(`已压缩 ${result.evictedMessages} 条（${Math.round(result.beforeRatio * 100)}% → ${Math.round(result.afterRatio * 100)}%）`)
+    } else {
+      ElMessage.info(`未压缩：${result.reason}`)
     }
-  }, controller.signal)
-}
-
-function stopWorkbenchStream() {
-  if (workbenchReconnectTimer != null) {
-    window.clearTimeout(workbenchReconnectTimer)
-    workbenchReconnectTimer = null
-  }
-  if (workbenchRefreshTimer != null) {
-    window.clearTimeout(workbenchRefreshTimer)
-    workbenchRefreshTimer = null
-  }
-  if (workbenchStreamAbort) {
-    workbenchStreamAbort.abort()
-    workbenchStreamAbort = null
+    await loadContextUsage()
+  } catch {
+    // 拦截器已弹错
+  } finally {
+    contextCompacting.value = false
   }
 }
 
-/** 任务状态 → Element Plus tag 文案/类型（未知状态回退 info）。 */
-function taskStatusMeta(status: string | null) {
-  const meta = status ? TASK_STATUS_MAP[status as TaskStatus] : undefined
-  return meta ?? { label: status || '未知', type: 'info' as const }
-}
-
-/** 最近任务 → 子任务拆解页（按 taskId 过滤）。 */
-function openTaskFromWorkbench(task: WorkbenchRecentTask) {
-  router.push({ path: '/sub-tasks', query: { taskId: String(task.id) } })
-}
 // isHtml：iframe 预览的是否为 HTML。只有 HTML 才加 sandbox ——
 //   产物是模型生成的，同源 iframe 里的脚本能读父页面 sessionStorage（admin token 就在那），
 //   等价 XSS；而 PDF（Chrome 内置 viewer）加 sandbox 会白屏、图片无脚本风险，故两者不加。
@@ -2386,31 +2185,17 @@ watch(
   () => {
     artifactPanelOpen.value = false
     closeArtifactPreview()
-    stopWorkbenchStream()
-    stopOverviewCarousel()
   }
 )
 
-/** 切换右栏开关；工作台入口每次展开都重新聚合并重连事件通道。 */
+/** 切换右栏开关。 */
 function toggleArtifactPanel() {
   artifactPanelOpen.value = !artifactPanelOpen.value
-  if (!artifactPanelOpen.value) {
-    stopWorkbenchStream()
-    stopOverviewCarousel()
-    return
-  }
-  if (isWorkbenchEntry.value) {
-    void loadWorkbench()
-    startWorkbenchStream()
-    startOverviewCarousel()
-  }
 }
 
-/** 工作台头部关闭按钮：收起面板并断开推送连接。 */
+/** 关闭右栏。 */
 function closeArtifactPanel() {
   artifactPanelOpen.value = false
-  stopWorkbenchStream()
-  stopOverviewCarousel()
 }
 
 /** 关闭内嵌预览并释放 blob URL。 */
@@ -2422,12 +2207,8 @@ function closeArtifactPreview() {
   artifactPreview.value = null
 }
 
-// 产物来源：conversation=会话附件（chat_attachment 端点），execution=子任务执行产物（attachment 端点）。
-// 两种物理来源的 id 空间不同，下载/预览必须按来源选对端点，否则会拿错文件或 404。
-type ArtifactSource = 'conversation' | 'execution'
-
 /** 侧栏内嵌预览：点击产物条目后拉取内容（iframe 通道用 blob，文本类用 text）。 */
-async function loadArtifactPreview(source: ArtifactSource, id: LongId, name: string) {
+async function loadArtifactPreview(id: LongId, name: string) {
   const dot = name.lastIndexOf('.')
   const ext = dot >= 0 && dot < name.length - 1 ? name.slice(dot + 1).toLowerCase() : ''
   const textLike = ['md', 'txt', 'log', 'json', 'xml', 'yml', 'yaml', 'csv', 'html', 'htm', 'svg',
@@ -2436,14 +2217,10 @@ async function loadArtifactPreview(source: ArtifactSource, id: LongId, name: str
   artifactPreviewLoading.value = true
   try {
     if (textLike) {
-      const resp = source === 'execution'
-        ? await clarifyApi.executionArtifactPreviewText(id)
-        : await clarifyApi.attachmentPreviewText(id)
+      const resp = await clarifyApi.attachmentPreviewText(id)
       artifactPreview.value = { blobUrl: '', mode: 'text', textContent: resp.data, fileName: name, isHtml: false }
     } else {
-      const resp = source === 'execution'
-        ? await clarifyApi.executionArtifactPreviewBlob(id)
-        : await clarifyApi.attachmentPreviewBlob(id)
+      const resp = await clarifyApi.attachmentPreviewBlob(id)
       const mime = (resp.headers['content-type'] as string | undefined) || 'application/octet-stream'
       artifactBlobUrl = URL.createObjectURL(new Blob([resp.data], { type: mime }))
       artifactPreview.value = { blobUrl: artifactBlobUrl, mode: 'iframe', textContent: '', fileName: name, isHtml: mime.toLowerCase().startsWith('text/html') }
@@ -2457,13 +2234,7 @@ async function loadArtifactPreview(source: ArtifactSource, id: LongId, name: str
 }
 
 function previewArtifactInPanel(item: { artifact: ClarifyArtifactRef; msgId: string; msgSeq: number }) {
-  return loadArtifactPreview('conversation', item.artifact.attachmentId, item.artifact.fileName || '')
-}
-
-/** 「我的产物」条目预览：source 决定走 chat_attachment 还是 attachment 端点。 */
-function previewMyArtifact(item: ArtifactItem) {
-  const source: ArtifactSource = item.source === 'execution' ? 'execution' : 'conversation'
-  return loadArtifactPreview(source, item.id, item.fileName || '')
+  return loadArtifactPreview(item.artifact.attachmentId, item.artifact.fileName || '')
 }
 
 /**
@@ -2471,11 +2242,9 @@ function previewMyArtifact(item: ArtifactItem) {
  * 不带 X-Admin-Token，会被 AuthInterceptor 401 拒（已实测 11:39:07 日志）。
  * 经 request 拦截器带鉴权头拉 blob → 临时 <a download> 落盘 → revokeObjectURL。
  */
-async function downloadArtifactByRef(source: ArtifactSource, id: LongId, fileName: string) {
+async function downloadArtifactByRef(id: LongId, fileName: string) {
   try {
-    const resp = source === 'execution'
-      ? await clarifyApi.executionArtifactDownloadBlob(id)
-      : await clarifyApi.attachmentDownloadBlob(id)
+    const resp = await clarifyApi.attachmentDownloadBlob(id)
     saveBlobResponse(resp, fileName || 'attachment')
   } catch {
     // 拦截器已统一弹错
@@ -2483,12 +2252,7 @@ async function downloadArtifactByRef(source: ArtifactSource, id: LongId, fileNam
 }
 
 function downloadArtifact(item: { artifact: ClarifyArtifactRef; msgId: string; msgSeq: number }) {
-  return downloadArtifactByRef('conversation', item.artifact.attachmentId, item.artifact.fileName || '')
-}
-
-function downloadMyArtifact(item: ArtifactItem) {
-  const source: ArtifactSource = item.source === 'execution' ? 'execution' : 'conversation'
-  return downloadArtifactByRef(source, item.id, item.fileName || '')
+  return downloadArtifactByRef(item.artifact.attachmentId, item.artifact.fileName || '')
 }
 
 /**
@@ -2496,11 +2260,9 @@ function downloadMyArtifact(item: ArtifactItem) {
  * 拉 blob → createObjectURL → window.open（Content-Type 已由响应头决定，text/html 会正常渲染）
  * → 延迟 revoke（给新标签页留出加载时间）。
  */
-async function openArtifactByRef(source: ArtifactSource, id: LongId) {
+async function openArtifactByRef(id: LongId) {
   try {
-    const resp = source === 'execution'
-      ? await clarifyApi.executionArtifactPreviewBlob(id)
-      : await clarifyApi.attachmentPreviewBlob(id)
+    const resp = await clarifyApi.attachmentPreviewBlob(id)
     const mime = (resp.headers['content-type'] as string | undefined) || 'application/octet-stream'
     const contentUrl = URL.createObjectURL(new Blob([resp.data], { type: mime }))
     if (!mime.toLowerCase().startsWith('text/html')) {
@@ -2528,12 +2290,7 @@ async function openArtifactByRef(source: ArtifactSource, id: LongId) {
 }
 
 function openArtifactInNewTab(item: { artifact: ClarifyArtifactRef; msgId: string; msgSeq: number }) {
-  return openArtifactByRef('conversation', item.artifact.attachmentId)
-}
-
-function openMyArtifactInNewTab(item: ArtifactItem) {
-  const source: ArtifactSource = item.source === 'execution' ? 'execution' : 'conversation'
-  return openArtifactByRef(source, item.id)
+  return openArtifactByRef(item.artifact.attachmentId)
 }
 
 // 进度：取最近一条带 progress 的 assistant payload；FINALIZED 直接 100
@@ -2594,7 +2351,9 @@ const groupedConversations = computed(() => {
 })
 
 async function loadList() {
-  try { conversations.value = await clarifyApi.list() } catch { /* 拦截器已弹错 */ }
+  try {
+    conversations.value = await clarifyApi.list()
+  } catch { /* 拦截器已弹错 */ }
 }
 
 async function loadPlannerOptions() {
@@ -2619,6 +2378,7 @@ async function selectConversation(id: LongId) {
   closeEnhancePanel()
   const sid = String(id)
   activeId.value = sid
+  contextUsage.value = null
   // 跨会话切换：临时批次只属于「尚未建会」的那一轮，换会话即作废
   clientToken.value = null
   attachments.value = []
@@ -3442,12 +3202,20 @@ onMounted(() => {
   loadList()
   loadPlannerOptions()
   void loadAssistantProfile()
-  // PA-4：从「个人工作台」菜单进入时默认展开右栏，并立即聚合三段数据
-  if (isWorkbenchEntry.value) {
-    artifactPanelOpen.value = true
-    void loadWorkbench()
-    startWorkbenchStream()
-    startOverviewCarousel()
+  // PA-11：从助理对话创建任务后跳转时按 query.id 打开目标需求会话
+  const queryId = route.query.id
+  if (typeof queryId === 'string' && queryId) {
+    activeId.value = queryId
+    void clarifyApi.detail(queryId).then(d => {
+      detail.value = d
+      // 派生需求会话（有来源助理会话）只有种子用户消息、尚无助理回复：
+      // 自动进入澄清一轮，避免误显示「回复失败」。
+      const msgs = d.messages ?? []
+      const last = msgs[msgs.length - 1]
+      if (d.conversation.parentConversationId != null && last && last.role === 'user') {
+        void handleRetry()
+      }
+    }).catch(() => { /* 拦截器已弹错 */ })
   }
   // 附件清单：仅在已有会话时拉（新会话为空，等用户上传后才出现胶囊）
   if (activeId.value != null) void refreshAttachments()
@@ -3459,8 +3227,6 @@ onMounted(() => {
 // SKX-13：组件卸载时停掉技能轮询（定时器泄漏会让切页后还在打后端）
 onBeforeUnmount(() => {
   stopSkillPolling()
-  stopWorkbenchStream()
-  stopOverviewCarousel()
 })
 </script>
 
@@ -3763,225 +3529,105 @@ onBeforeUnmount(() => {
   color: var(--ha-ink);
   background: var(--ha-surface-hover);
 }
-/* ── PA-4 工作台四段 ─────────────────────────────────────── */
-.wb-section {
+/* PA-12：上下文窗口浮层 */
+.ctx-panel {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--ha-border-light);
-}
-.wb-section:last-child {
-  padding-bottom: 0;
-  border-bottom: 0;
-}
-/* 旧「对话新建」入口：只有本会话产物，不需要段落分隔 */
-.wb-section--plain {
-  padding-bottom: 0;
-  border-bottom: 0;
-}
-.wb-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 26px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ha-muted);
-}
-/* ── PA-4 工作台三段式（2026-11-02 晚改版：概况轮播 / 最近任务 / 最近产物） ── */
-.artifact-sidebar-body.is-workbench {
-  /* 三段各自内部滚动，任一数据量变大都不会把下面的块挤走 */
-  overflow: hidden;
-}
-.wb-overview {
-  flex: 0 0 auto;
-}
-.wb-carousel {
-  position: relative;
-}
-.wb-carousel-viewport {
-  overflow: hidden;
-}
-.wb-carousel-track {
-  display: flex;
-  transition: transform var(--ha-duration) var(--ha-ease-out);
-}
-.wb-slide {
-  flex: 0 0 100%;
-  min-width: 0;
-  /* 给圆点留出内部空间，避免覆盖第二行数字 */
-  padding-bottom: 18px;
-}
-.wb-dots {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-.wb-dot {
-  width: 8px;
-  height: 8px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: var(--ha-border);
-  cursor: pointer;
-  transition: width var(--ha-duration-fast) var(--ha-ease-out),
-              background var(--ha-duration-fast) var(--ha-ease-out);
-}
-.wb-dot.active {
-  width: 16px;
-  border-radius: 999px;
-  background: var(--ha-primary);
-}
-.wb-stat-grid,
-.wb-agent-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-}
-.wb-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 60px;
-  padding: 8px 10px;
-  border: 1px solid var(--ha-border-light);
-  border-radius: var(--ha-radius-md);
-  background: var(--ha-surface);
-}
-.wb-stat-label {
   font-size: 12px;
-  color: var(--ha-muted);
-}
-.wb-stat-value {
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.1;
   color: var(--ha-ink);
-  font-variant-numeric: tabular-nums;
 }
-.wb-stat-hint {
-  font-size: 11px;
+.ctx-head {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+.ctx-ratio { color: var(--ha-muted); }
+.ctx-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--ha-surface-hover);
+  overflow: hidden;
+}
+.ctx-bar-fill {
+  height: 100%;
+  background: var(--ha-accent, var(--ha-ink));
+  transition: width var(--ha-duration-fast) var(--ha-ease-out);
+}
+.ctx-row {
+  display: flex;
+  justify-content: space-between;
   color: var(--ha-muted);
 }
-.wb-agent {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  min-height: 60px;
-  padding: 8px 10px;
-  border: 1px solid var(--ha-border-light);
-  border-radius: var(--ha-radius-md);
-  background: var(--ha-surface);
+.ctx-total {
+  color: var(--ha-ink);
+  border-top: 1px solid var(--ha-border);
+  padding-top: 6px;
 }
-.wb-agent.is-idle {
-  justify-content: center;
+.ctx-meta {
+  color: var(--ha-muted);
+  font-size: 11px;
 }
-/* 内/外标签：沿用子任务详情「审」的圆形徽标形态，与名字同一视觉量级 */
-.wb-agent-badge {
-  flex: 0 0 18px;
-  width: 18px;
-  height: 18px;
+.ctx-empty { color: var(--ha-muted); }
+.ctx-compact-btn { width: 100%; }
+
+/* PA-12：输入框内的上下文占用环（点击展开浮层；≥80% 转警示色） */
+.ctx-ring {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
-  font-size: 10px;
+  background: transparent;
+  color: var(--ha-muted);
+  cursor: pointer;
+}
+.ctx-ring:hover { background: var(--ha-surface-hover); }
+.ctx-ring-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+.ctx-ring-track {
+  fill: none;
+  stroke: var(--ha-border-light);
+  stroke-width: 2.5;
+}
+.ctx-ring-fill {
+  fill: none;
+  stroke: var(--ha-primary);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--ha-duration-fast) var(--ha-ease-out),
+              stroke var(--ha-duration-fast) var(--ha-ease-out);
+}
+.ctx-ring.is-warn .ctx-ring-fill { stroke: var(--ha-warning); }
+.ctx-ring.is-warn .ctx-ring-label { color: var(--ha-warning-text); }
+.ctx-ring-label {
+  position: relative;
+  font-size: 9px;
   font-weight: 600;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--ha-ink-secondary);
 }
-.wb-agent-badge.is-internal {
-  background: color-mix(in srgb, var(--ha-primary) 18%, transparent);
-  color: var(--ha-primary);
-}
-.wb-agent-badge.is-external {
-  background: color-mix(in srgb, var(--ha-warning) 22%, transparent);
-  color: var(--ha-warning-text);
-}
-.wb-agent-name {
-  flex: 1;
-  min-width: 0;
+.ctx-ring-icon {
+  position: relative;
   font-size: 13px;
-  color: var(--ha-ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wb-agent-empty {
-  font-size: 12px;
   color: var(--ha-muted);
 }
-/* 最近任务 / 最近产物：块内滚动，保证整体三段布局稳定 */
-.wb-list-section {
-  flex: 1 1 0;
-  min-height: 0;
-  overflow: hidden;
-}
-.wb-list-section > .wb-section-head {
-  flex: 0 0 auto;
-}
-.wb-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
+/* ── 会话产物列表 ── */
+.artifact-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-right: 2px;
-}
-.wb-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  padding: 7px 10px;
-  border: 1px solid transparent;
-  border-radius: var(--ha-radius-md);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--ha-duration-fast) var(--ha-ease-out),
-              border-color var(--ha-duration-fast) var(--ha-ease-out);
-}
-.wb-item:hover {
-  background: var(--ha-surface-hover);
-}
-.wb-item-main {
-  font-size: 13px;
-  color: var(--ha-ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wb-item-sub {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--ha-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wb-item-time {
-  color: var(--ha-muted);
-}
-.wb-empty {
-  padding: 8px 10px;
-  font-size: 12px;
-  color: var(--ha-muted);
-}
-.wb-artifact-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  gap: 10px;
 }
 .artifact-loading {
   padding: 16px;
@@ -3989,6 +3635,7 @@ onBeforeUnmount(() => {
   color: var(--ha-muted);
   font-size: 12px;
 }
+
 .artifact-sidebar-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -5031,16 +4678,8 @@ onBeforeUnmount(() => {
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.28);
     z-index: 30;
   }
-  /* 窄屏底部抽屉：三段改为整栏滚动，避免 2×2 概况块把下面两块压成一条线 */
-  .artifact-sidebar-body.is-workbench {
+  .artifact-sidebar-body {
     overflow-y: auto;
-  }
-  .artifact-sidebar-body.is-workbench .wb-list-section {
-    flex: 0 0 auto;
-    min-height: auto;
-  }
-  .artifact-sidebar-body.is-workbench .wb-scroll {
-    overflow: visible;
   }
   /* 覆盖层不再走宽度过渡，改为自底部滑入 */
   .artifact-panel-enter-active,

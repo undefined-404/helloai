@@ -1,7 +1,7 @@
 import request from './request'
 import { paths } from './paths'
 import type { AxiosResponse } from 'axios'
-import type { ArtifactItem, AssistantProfile, ChatAttachmentItem, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, SkillRunStatus, Task, LongId, Workbench } from '@/types'
+import type { ArtifactItem, AssistantProfile, ChatAttachmentItem, ClarifyConversationDetail, ClarifySelection, CompactResult, ContextUsage, PlannerOption, RequirementConversation, SkillRunStatus, Task, LongId, Workbench } from '@/types'
 
 // V29 对话式需求澄清: 每轮走一次 LLM，耗时远超全局 30s，create/send/retry 单请求覆盖 timeout
 // v1.1 修复: 澄清会话 ID 为 Snowflake 长整型，URL/比较一律按 string 处理防 JS Number 精度丢失
@@ -26,6 +26,20 @@ const LLM_TIMEOUT_MS = 300_000
 /** 上传不涉及 LLM，维持短超时（大文件另由后端限制）。 */
 const UPLOAD_TIMEOUT_MS = 120_000
 
+/**
+ * 助理单轮的可选能力（R4）。
+ *
+ * <p>与需求澄清链路同名字段同语义：{@code webSearchEnabled} 为会话级联网搜索开关，
+ * {@code skill} 取 {@code planner}/{@code task}/{@code pkg:<技能包名>}，
+ * {@code attachmentIds} 为本轮参与的附件 id（不传 = 交给后端按提问判定）。</p>
+ */
+export interface AssistantRoundOptions {
+  webSearchEnabled?: boolean | null
+  skill?: string | null
+  attachmentIds?: string[] | null
+  clientToken?: string | null
+}
+
 export const clarifyApi = {
   // 新建会话（首条用户消息触发一轮 LLM；plannerAgentId 空=系统自动选择；新会话始终 CHAT 模式）
   create(message: string, plannerAgentId?: LongId | null, webSearchEnabled?: boolean | null,
@@ -42,6 +56,50 @@ export const clarifyApi = {
     return request.post<any, ClarifyConversationDetail>(
       paths.clarifications.send(id),
       { message, selectedOptions: selectedOptions?.length ? selectedOptions : null },
+      { timeout: LLM_TIMEOUT_MS })
+  },
+  // PA-11 助理对话：新建并跑首轮（检索增强，同步返回）
+  // R4：补齐「联网搜索 / 技能 / 附件」三项能力——此前助理链路只收 message + plannerAgentId
+  assistantCreate(message: string, plannerAgentId?: LongId | null, options?: AssistantRoundOptions) {
+    return request.post<any, ClarifyConversationDetail>(
+      paths.clarifications.assistantCreate,
+      {
+        message,
+        plannerAgentId: plannerAgentId ?? null,
+        webSearchEnabled: options?.webSearchEnabled ?? null,
+        skill: options?.skill ?? null,
+        attachmentIds: options?.attachmentIds ?? null,
+        clientToken: options?.clientToken ?? null
+      },
+      { timeout: LLM_TIMEOUT_MS })
+  },
+  // PA-11 助理对话：追加一轮（检索增强，同步返回）
+  assistantSend(id: LongId, message: string, options?: AssistantRoundOptions) {
+    return request.post<any, ClarifyConversationDetail>(
+      paths.clarifications.assistantSend(id),
+      {
+        message,
+        webSearchEnabled: options?.webSearchEnabled ?? null,
+        skill: options?.skill ?? null,
+        attachmentIds: options?.attachmentIds ?? null
+      },
+      { timeout: LLM_TIMEOUT_MS })
+  },
+  // PA-11 从助理对话显式创建需求会话（返回新会话 id 字符串，防精度丢失）
+  assistantCreateTaskFromContext(id: LongId, forkedFromMessageId?: LongId | null) {
+    const query = forkedFromMessageId != null && forkedFromMessageId !== ''
+      ? `?forkedFromMessageId=${encodeURIComponent(String(forkedFromMessageId))}`
+      : ''
+    return request.post<any, string>(
+      paths.clarifications.assistantCreateTaskFromContext(id) + query)
+  },
+  // PA-12 上下文窗口占用
+  contextWindow(id: LongId) {
+    return request.get<any, ContextUsage>(paths.clarifications.contextWindow(id))
+  },
+  // PA-12 手动压缩上下文
+  compact(id: LongId) {
+    return request.post<any, CompactResult>(paths.clarifications.compact(id), null,
       { timeout: LLM_TIMEOUT_MS })
   },
   // 重试上一轮 LLM（仅当最后一条是用户消息，即上轮 LLM 失败时可用）

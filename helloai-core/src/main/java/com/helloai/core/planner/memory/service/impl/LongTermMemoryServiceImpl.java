@@ -74,12 +74,16 @@ public class LongTermMemoryServiceImpl
         }
         String kw = keyword.trim();
         Long userId = CurrentUser.userId();
+        if (userId == null) {
+            // 无法识别调用者时不外泄任何记忆
+            return List.of();
+        }
         return memoryMapper.selectList(new LambdaQueryWrapper<LongTermMemory>()
                 .and(w -> w.like(LongTermMemory::getTag, kw)
                         .or().like(LongTermMemory::getTitle, kw)
                         .or().like(LongTermMemory::getContent, kw))
-                // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属」，未登录取全部
-                .and(userId != null, w -> w.isNull(LongTermMemory::getOwnerId)
+                // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属」
+                .and(w -> w.isNull(LongTermMemory::getOwnerId)
                         .or().eq(LongTermMemory::getOwnerId, userId))
                 .orderByDesc(LongTermMemory::getMemoryTime)
                 .last("LIMIT " + safeLimit));
@@ -88,10 +92,14 @@ public class LongTermMemoryServiceImpl
     @Override
     public IPage<LongTermMemory> page(long page, long size, LongTermMemoryType type) {
         Long userId = CurrentUser.userId();
+        if (userId == null) {
+            // 无法识别调用者时不外泄任何记忆
+            return new Page<>(page, size);
+        }
         LambdaQueryWrapper<LongTermMemory> wrapper = new LambdaQueryWrapper<LongTermMemory>()
                 .eq(type != null, LongTermMemory::getType, type)
-                // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属」，未登录取全部
-                .and(userId != null, w -> w.isNull(LongTermMemory::getOwnerId)
+                // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属」
+                .and(w -> w.isNull(LongTermMemory::getOwnerId)
                         .or().eq(LongTermMemory::getOwnerId, userId))
                 .orderByDesc(LongTermMemory::getMemoryTime);
         return baseMapper.selectPage(new Page<>(page, size), wrapper);

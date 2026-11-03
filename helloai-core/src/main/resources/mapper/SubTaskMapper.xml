@@ -380,16 +380,21 @@
     </select>
 
     <!--
-        活跃 Agent（PA-4 改版）：正在执行（IN_PROGRESS）的子任务按 Agent 分组。
-        并发条数倒序；同条数按最近活跃时间倒序。limit 由调用方给（宫格 4 格）。
+        活跃 Agent 负载（PA-4 改版，2026-11-02；2026-11-03 补复核计数）：
+        按 Agent 分组统计名下子任务的两种在途状态——
+          running_count = IN_PROGRESS（正在执行）
+          review_count = REVIEW（产出在复核流程中）
+        归属口径与 selectOwnedOverview 一致（宽松并入）：owner_id = 当前用户 OR owner_id IS NULL。
+        同条数按最近活跃时间倒序；limit 由调用方给（覆盖名册条数，保证状态判定完整）。
     -->
     <select id="selectActiveAgentLoads" resultType="com.helloai.core.task.projection.ActiveAgentLoadRow">
         SELECT st.assigned_agent_id AS agent_id,
-               COUNT(*) AS running_count
+               COUNT(*) FILTER (WHERE st.status = 'IN_PROGRESS') AS running_count,
+               COUNT(*) FILTER (WHERE st.status = 'REVIEW') AS review_count
         FROM sub_task st
         JOIN task t ON t.id = st.task_id
         WHERE st.deleted = 0
-          AND st.status = 'IN_PROGRESS'
+          AND st.status IN ('IN_PROGRESS', 'REVIEW')
           AND st.assigned_agent_id IS NOT NULL
           AND t.deleted = 0
           AND (t.owner_id = #{ownerId} OR t.owner_id IS NULL)

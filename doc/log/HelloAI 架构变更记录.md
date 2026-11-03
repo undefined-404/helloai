@@ -179,7 +179,7 @@ Event 消费面 **Timeline / Replay / Audit / Recovery 四项全落**；Fork 维
 
 ## ARCH-20261102-001 — 额度监控 provider 装配与端口反转（system 依赖不反向）
 
-> 汇总自 `G-026` / `LOG-20261102-002`；条文为汇总，决策原文与验收证据以差距表与计划 §8 为准。
+> 汇总自 `G-026` / `LOG-20261102`；条文为汇总，决策原文与验收证据以差距表与计划 §8 为准。
 
 ### Decision
 1. **装配收口**：4 个余额 provider（deepseek / moonshot / minimax / bocha）与 `BalanceProviderRegistry` 由 `core.system.quota.QuotaConfig` 显式装配（`@Bean`）；注册表用**显式有序列表**构造，锁定 overview 返回顺序 = deepseek→moonshot→minimax→bocha，不依赖容器注入顺序。

@@ -1,6 +1,7 @@
 package com.helloai.core.planner.service.impl;
 
 import com.helloai.common.base.BizException;
+import com.helloai.core.planner.assistant.service.ContextCompactor;
 import com.helloai.core.shared.util.CurrentUser;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
@@ -73,6 +74,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     private final RequirementConversationService conversationService;
     private final PlannerAgentPicker plannerAgentPicker;
     private final PlatformAgentExecutionService platformAgentExecutionService;
+    /** PA-12 v1.1：轮次开始时尝试自动压缩（失败不阻断本轮）。 */
+    private final ContextCompactor contextCompactor;
     private final ClarifyReplyParser replyParser;
     private final ConfirmCardProtocol confirmCardProtocol;
     private final ChatRoundDecisionParser decisionParser;
@@ -152,6 +155,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         conversation.setWebSearchEnabled(webSearchEnabled);
         // 新会话始终 CHAT 自由对话（auto 意图路由 + /planner 命令触发转方案）
         conversation.setMode(RequirementClarifyService.MODE_CHAT);
+        // PA-11：本入口创建的是需求澄清会话；助理对话入口后续按 kind 分流
+        conversation.setKind(RequirementClarifyService.KIND_REQUIREMENT);
         // PA-1：同步创建线程写真实登录用户；流式异步线程（chatStreamExecutor）取不到时为 NULL，
         // 查询按「owner == 当前用户 OR owner IS NULL」宽松并入，老数据不受影响。
         conversation.setOwnerId(CurrentUser.userId());
@@ -161,9 +166,9 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         if (clientToken != null && !clientToken.isBlank()) {
             chatAttachmentService.claimByClientToken(clientToken, conversation.getId());
         }
-        log.info("澄清会话创建（仅建会话，轮次由调用方执行）: id={}, title={}, plannerAgentId={}, webSearchEnabled={}, mode={}",
+        log.info("澄清会话创建（仅建会话，轮次由调用方执行）: id={}, title={}, plannerAgentId={}, webSearchEnabled={}, mode={}, kind={}",
                 conversation.getId(), conversation.getTitle(), plannerAgentId, webSearchEnabled,
-                RequirementClarifyService.MODE_CHAT);
+                RequirementClarifyService.MODE_CHAT, conversation.getKind());
         return conversation;
     }
 
@@ -242,8 +247,11 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         conversationService.lambdaUpdate()
                 .eq(RequirementConversation::getId, conversation.getId())
                 .set(RequirementConversation::getMode, conversation.getMode())
-                .set(RequirementConversation::getClarifyDeclined, conversation.getClarifyDeclined())
-                .set(RequirementConversation::getPendingClarifyConfirm, false)
+                // smallint 列：LambdaUpdateWrapper.set 不走字段 TypeHandler，
+                // Boolean 会以 boolean 发出被 PG 拒绝（smallint vs boolean），故显式传 0/1。
+                .set(RequirementConversation::getClarifyDeclined,
+                        toSmallInt(conversation.getClarifyDeclined()))
+                .set(RequirementConversation::getPendingClarifyConfirm, 0)
                 .update();
         return confirmAccepted;
     }
@@ -425,6 +433,13 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
      */
     private ClarifyConversationDetail runRoundCore(RequirementConversation conversation,
                                                    String userMessage, String userPayload) {
+        // PA-12 v1.1：超阈值时先压缩（失败不阻断本轮；压缩只改喂模型的上下文，原文不动）
+        try {
+            contextCompactor.compact(conversation.getId(), false);
+        } catch (Exception e) {
+            log.warn("自动上下文压缩失败（不阻断澄清轮）: conversationId={}, err={}",
+                    conversation.getId(), e.getMessage());
+        }
         if (commandSearch.isClarifyMode(conversation)) {
             return runClarifySearchRound(conversation, userMessage, userPayload);
         }
@@ -714,7 +729,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         // 整行 updateById 会把并发轮刚写入的 round_count 覆盖掉。
         conversationService.lambdaUpdate()
                 .eq(RequirementConversation::getId, conversationId)
-                .set(RequirementConversation::getPendingClarifyConfirm, true)
+                // smallint 列：显式传 1（Boolean 会被 PG 拒绝：smallint vs boolean）
+                .set(RequirementConversation::getPendingClarifyConfirm, 1)
                 .update();
         log.info("联合决策 intent=clarify，落库单条确认卡: conversationId={}, question(下一轮重新生成)={}",
                 conversationId, question);
@@ -894,5 +910,10 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
             }
             log.info("自由对话回复落库: conversationId={}", conversationId);
         }
+    }
+
+    /** Boolean → smallint 列值（1 / 0；null 保持 null）。 */
+    private static Integer toSmallInt(Boolean value) {
+        return value == null ? null : (value ? 1 : 0);
     }
 }

@@ -182,12 +182,16 @@ export interface WorkbenchTaskOverview {
   pendingManual: number
 }
 
-/** PA-4 工作台任务概况第二屏：正在执行任务的活跃 Agent */
+/** PA-4 工作台活跃 Agent 条目：Agent 名册 + 该 Agent 名下工作量的实时状态 */
 export interface WorkbenchActiveAgent {
   agentId: LongId
   name: string
   /** true = 内部 LLM；false = 外部 AI Agent */
   internal: boolean
+  /** Agent 角色：EXECUTOR（执行）| REVIEWER（复核） */
+  role: string
+  /** 运行状态：RUNNING（运行中）| REVIEWING（审核中）| STANDBY（待命中） */
+  status: string
   runningCount: number
 }
 
@@ -214,6 +218,32 @@ export interface ArtifactItem {
   /** 上下文 id（会话 id 或任务 id） */
   contextId?: LongId | null
   createdAt?: string | null
+}
+
+/** PA-12 上下文窗口占用（五项 token 拆分 + 比率） */
+export interface ContextUsage {
+  systemPromptTokens: number
+  toolTokens: number
+  skillTokens: number
+  messageTokens: number
+  otherTokens: number
+  totalTokens: number
+  contextSize: number
+  ratio: number
+  compactedUntilSeq: number
+  summaryVersion: number
+  lastCompactAt?: string | null
+}
+
+/** PA-12 压缩结果 */
+export interface CompactResult {
+  compacted: boolean
+  evictedMessages: number
+  compactedUntilSeq: number
+  summaryVersion: number
+  beforeRatio: number
+  afterRatio: number
+  reason: string
 }
 
 /**

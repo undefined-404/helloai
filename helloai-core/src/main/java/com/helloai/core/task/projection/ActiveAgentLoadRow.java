@@ -3,10 +3,10 @@ package com.helloai.core.task.projection;
 import lombok.Data;
 
 /**
- * 活跃 Agent 负载行（PA-4 改版，2026-11-02）。
+ * 活跃 Agent 负载行（PA-4 改版，2026-11-02；2026-11-03 补复核计数）。
  *
- * <p>按子任务 {@code IN_PROGRESS} 聚合出「正在执行任务的 Agent」及并发条数，
- * 供个人工作台「任务概况」第二屏展示内/外 Agent。</p>
+ * <p>按子任务状态分组出「该 Agent 名下正在执行（IN_PROGRESS）/ 处于复核流程（REVIEW）」
+ * 的子任务条数，供个人工作台「活跃 Agent」区块判定每人的实时状态。</p>
  */
 @Data
 public class ActiveAgentLoadRow {
@@ -14,4 +14,6 @@ public class ActiveAgentLoadRow {
     private Long agentId;
 
     private Long runningCount;
+
+    private Long reviewCount;
 }

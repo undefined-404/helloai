@@ -29,10 +29,12 @@ public record WorkbenchVO(AssistantProfileVO profile,
                                  long pendingManual) {
     }
 
-    /** 任务概况第二屏：活跃 Agent（内 = API_KEY_LLM，外 = CLI_CLIENT / WEB_BROWSER）。 */
+    /** 活跃 Agent 条目（名册 + 实时状态；内 = API_KEY_LLM，外 = CLI_CLIENT / WEB_BROWSER）。 */
     public record ActiveAgentVO(@JsonSerialize(using = ToStringSerializer.class) Long agentId,
                                 String name,
                                 boolean internal,
+                                String role,
+                                String status,
                                 long runningCount) {
     }
 
@@ -63,7 +65,8 @@ public record WorkbenchVO(AssistantProfileVO profile,
     }
 
     private static ActiveAgentVO toAgent(ActiveAgent agent) {
-        return new ActiveAgentVO(agent.agentId(), agent.name(), agent.internal(), agent.runningCount());
+        return new ActiveAgentVO(agent.agentId(), agent.name(), agent.internal(),
+                agent.role(), agent.status(), agent.runningCount());
     }
 
     private static RecentTaskVO toRecentTask(RecentTask task) {

@@ -92,7 +92,7 @@ public class SubTaskQueryServiceImpl implements SubTaskQueryService {
         }
         return subTaskMapper.selectActiveAgentLoads(ownerId, limit).stream()
                 .filter(row -> row.getAgentId() != null)
-                .map(row -> new ActiveAgentLoad(row.getAgentId(), nvl(row.getRunningCount())))
+                .map(row -> new ActiveAgentLoad(row.getAgentId(), nvl(row.getRunningCount()), nvl(row.getReviewCount())))
                 .toList();
     }
 

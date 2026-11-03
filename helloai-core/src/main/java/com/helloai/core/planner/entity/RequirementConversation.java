@@ -105,4 +105,19 @@ public class RequirementConversation extends BaseEntity {
      * 「owner == 当前用户 OR owner IS NULL」过滤（宽松并入）。</p>
      */
     private Long ownerId;
+
+    /**
+     * 会话类型（PA-11，V135）：{@code REQUIREMENT} 需求澄清 / {@code ASSISTANT} 助理对话。
+     * <p>两类会话共用本表与 {@code requirement_message}（同一真相源），按本列分流行为；
+     * 老数据默认 {@code REQUIREMENT}，行为不变。</p>
+     */
+    private String kind;
+
+    /** 建任务血缘（PA-11，V135）：从哪个助理会话创建（软引用无 FK）。 */
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long parentConversationId;
+
+    /** 建任务血缘（PA-11，V135）：从哪条消息创建（软引用无 FK）。 */
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long forkedFromMessageId;
 }

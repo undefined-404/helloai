@@ -312,13 +312,17 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 messageService.listByConversation(conversationId));
     }
 
-    /** 会话列表（按创建时间倒序，LIMIT 50，首期不分页）。 */
+    /** 会话列表（创建时间倒序，LIMIT 50，首期不分页）。 */
     @Override
     public List<RequirementConversation> listConversations() {
         Long userId = CurrentUser.userId();
+        if (userId == null) {
+            // 无法识别调用者（如外部 Agent 通道无用户态）时不外泄任何会话
+            return List.of();
+        }
         return conversationService.lambdaQuery()
-                // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属（老数据）」，未登录取全部
-                .and(userId != null, w -> w.isNull(RequirementConversation::getOwnerId)
+                // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属（老数据）」
+                .and(w -> w.isNull(RequirementConversation::getOwnerId)
                         .or().eq(RequirementConversation::getOwnerId, userId))
                 .orderByDesc(RequirementConversation::getCreateTime)
                 .last("LIMIT " + LIST_LIMIT)

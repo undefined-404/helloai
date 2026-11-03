@@ -213,6 +213,13 @@ export const paths = {
     workbench: '/requirement-conversations/workbench',
     // PA-6：工作台事件推送（SSE，任务状态变化时提示前端重拉聚合）
     workbenchStream: '/requirement-conversations/workbench/stream',
+    // PA-11：助理对话（检索增强问答；不产出任务草案）
+    assistantCreate: '/requirement-conversations/assistant/create',
+    assistantSend: (id: string | number) => `/requirement-conversations/assistant/send/${enc(id)}`,
+    assistantCreateTaskFromContext: (id: string | number) => `/requirement-conversations/assistant/createTaskFromContextById/${enc(id)}`,
+    // PA-12：上下文窗口占用 / 手动压缩
+    contextWindow: (id: string | number) => `/requirement-conversations/contextWindowById/${enc(id)}`,
+    compact: (id: string | number) => `/requirement-conversations/compactById/${enc(id)}`,
     plannerOptions: '/requirement-conversations/listPlannerOptions',
     list: '/requirement-conversations',
     detail: (id: string | number) => `/requirement-conversations/getById/${enc(id)}`,

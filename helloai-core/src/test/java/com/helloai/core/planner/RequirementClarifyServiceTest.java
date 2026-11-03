@@ -34,6 +34,8 @@ import com.helloai.core.planner.entity.ChatSkillRun;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.mapper.RequirementConversationMapper;
+import com.helloai.core.planner.assistant.service.ContextCompactor;
+import com.helloai.core.planner.assistant.service.ConversationContextStateService;
 import com.helloai.core.planner.memory.service.LongTermMemoryService;
 import com.helloai.core.planner.search.BochaRerankService;
 import com.helloai.core.planner.search.WebSearchCredentialKeyStore;
@@ -212,7 +214,7 @@ class RequirementClarifyServiceTest {
         ClarifyPromptRenderServiceImpl promptRenderService = new ClarifyPromptRenderServiceImpl(
                 messageService, conversationService, longTermMemoryService, new SystemTimeContextBuilder(),
                 taskTimelineService, platformAgentExecutionService, plannerAgentPicker, replyParser,
-                commandSearch, attachmentPromptRenderer);
+                commandSearch, mock(ConversationContextStateService.class), attachmentPromptRenderer);
         // 显式技能（2026-10-26）：解析 / 渲染都依赖技能目录；测试只需「无技能前缀」路径，
         // mock 目录即可（技能正文注入用例见 SkillDirectiveTest）
         SkillDirective skillDirective = new SkillDirective(mock(AgentSkillSpecService.class), new ObjectMapper());
@@ -224,7 +226,8 @@ class RequirementClarifyServiceTest {
         skillExecutionWorker = mock(SkillExecutionWorker.class);
         orchestrator = new ClarifyRoundOrchestratorServiceImpl(
                 commandSearch, promptRenderService, finalizeService, messageService, conversationService,
-                plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
+                plannerAgentPicker, platformAgentExecutionService, mock(ContextCompactor.class),
+                replyParser, confirmCard,
                 new ChatRoundDecisionParser(new ObjectMapper()), webSearchOrchestrator,
                 skillDirective,
                 // 对话内技能执行（SKX-13 改异步）：主链回归不触发技能轮，

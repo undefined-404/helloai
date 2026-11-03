@@ -26,6 +26,14 @@ public class ClarifyMessageRequest {
     private Boolean webSearchEnabled;
 
     /**
+     * 本轮选中的技能（仅助理对话接口生效；需求澄清链路走消息前缀 {@code [skill:name]}）。
+     *
+     * <p>取值：{@code planner}（方案整理）/ {@code task}（直接拆解）/ {@code pkg:<技能包名>}
+     * （产出型技能包，如 archify）。空 = 本轮不加技能约束。</p>
+     */
+    private String skill;
+
+    /**
      * 新会话首句前上传附件的临时归属（仅新建会话生效；前端生成 UUID）。
      *
      * <p>新会话是「先传文件、再发第一句」的顺序，此刻还没有 {@code conversationId}，

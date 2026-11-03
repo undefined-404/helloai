@@ -31,10 +31,15 @@ public class ConversationRoundLocker {
      * @throws BizException 抢占失败（同会话另一轮在跑）/ 锁不可用（Redis 异常）/ 获取被中断
      */
     public RLock lock(Long conversationId) {
+        return lock(conversationId, ConversationRoundLock.TTL_SECONDS);
+    }
+
+    /** 按指定租期抢会话轮次锁（供「整轮含同步 LLM」的长临界区复用同一把键）。 */
+    private RLock lock(Long conversationId, long leaseSeconds) {
         RLock lock = redissonClient.getLock(ConversationRoundLock.key(conversationId));
         boolean locked;
         try {
-            locked = lock.tryLock(0, ConversationRoundLock.TTL_SECONDS, TimeUnit.SECONDS);
+            locked = lock.tryLock(0, leaseSeconds, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BizException("获取会话处理锁被中断，请重试");
@@ -59,6 +64,22 @@ public class ConversationRoundLocker {
     /** 按会话持锁执行同步前置段（临界区），结束后自动释放；期间异常同样释放后上抛。 */
     public <T> T runLocked(Long conversationId, Supplier<T> section) {
         RLock lock = lock(conversationId);
+        try {
+            return section.get();
+        } finally {
+            unlock(lock);
+        }
+    }
+
+    /**
+     * 按会话持锁执行「整轮」临界区（含一次同步 LLM 调用），结束时自动释放。
+     *
+     * <p>与 {@link #runLocked(Long, Supplier)} 的区别只是<b>租期显式放大</b>：助理对话轮是
+     * 同步请求（HTTP 等待 LLM），耗时可能超过 30s 前置段租期；仍显式 leaseTime（禁看门狗），
+     * TTL 兜底崩溃残留。键与释放语义完全一致。</p>
+     */
+    public <T> T runLocked(Long conversationId, long leaseSeconds, Supplier<T> section) {
+        RLock lock = lock(conversationId, leaseSeconds);
         try {
             return section.get();
         } finally {

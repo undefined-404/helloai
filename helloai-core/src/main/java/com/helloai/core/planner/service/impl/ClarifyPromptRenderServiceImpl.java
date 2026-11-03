@@ -7,6 +7,8 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.planner.assistant.entity.ConversationContextState;
+import com.helloai.core.planner.assistant.service.ConversationContextStateService;
 import com.helloai.core.planner.attachment.ChatAttachmentPromptRenderer;
 import com.helloai.core.planner.clarify.ClarifyReplyParser;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
@@ -116,6 +118,9 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
     private final ClarifyReplyParser replyParser;
     private final ClarifyCommandSearchService commandSearch;
 
+    /** PA-12 v1.1：会话上下文压缩状态（摘要 + 已折叠 seq）。 */
+    private final ConversationContextStateService contextStateService;
+
     /** 会话附件两层注入（MANIFEST 恒注入 + CONTEXT 按 G-016 预算）。 */
     private final ChatAttachmentPromptRenderer chatAttachmentPromptRenderer;
 
@@ -219,9 +224,15 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
                 break;
             }
         }
+        // PA-12 v1.1：已压缩前缀（seq <= compacted_until_seq）不再进入窗口，改用滚动摘要
+        ConversationContextState contextState = contextStateService.getByConversation(conversationId);
+        int compactedUntil = contextState == null || contextState.getCompactedUntilSeq() == null
+                ? 0 : contextState.getCompactedUntilSeq();
+        List<RequirementMessage> live = new ArrayList<>(liveHistory(history, compactedUntil));
         // Conversation 层：窗口裁剪（最近 HISTORY_WINDOW 条 + 首条用户消息锚点）
-        List<RequirementMessage> windowed = windowHistory(history, HISTORY_WINDOW);
-        StringBuilder transcript = new StringBuilder();
+        List<RequirementMessage> windowed = windowHistory(live, HISTORY_WINDOW);
+        StringBuilder transcript = new StringBuilder(
+                summaryPrefix(contextState == null ? null : contextState.getSummary()));
         for (RequirementMessage msg : windowed) {
             transcript.append(ClarifyCommandSearchServiceImpl.ROLE_USER.equals(msg.getRole()) ? "用户：" : "助手：")
                     .append(msg.getContent()).append('\n');
@@ -259,11 +270,16 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
         } catch (Exception e) {
             throw new BizException("读取 Prompt 模板失败: " + e.getMessage());
         }
-        List<RequirementMessage> history = messageService.listByConversation(conversation.getId());
+        ConversationContextState contextState = contextStateService.getByConversation(conversation.getId());
+        int compactedUntil = contextState == null || contextState.getCompactedUntilSeq() == null
+                ? 0 : contextState.getCompactedUntilSeq();
+        List<RequirementMessage> history = liveHistory(
+                messageService.listByConversation(conversation.getId()), compactedUntil);
         // 最后一条是刚处理的本轮 user 消息（{{USER_MESSAGE}} 已单独给出），从历史中剔除
         int from = Math.max(0, history.size() - DECISION_HISTORY_LIMIT - 1);
         int to = Math.max(0, history.size() - 1);
-        StringBuilder transcript = new StringBuilder();
+        StringBuilder transcript = new StringBuilder(
+                summaryPrefix(contextState == null ? null : contextState.getSummary()));
         for (int i = from; i < to; i++) {
             RequirementMessage msg = history.get(i);
             transcript.append(ClarifyCommandSearchServiceImpl.ROLE_USER.equals(msg.getRole()) ? "用户：" : "助手：")
@@ -412,6 +428,21 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
             return s;
         }
         return s.substring(0, max) + "...";
+    }
+
+    /** PA-12 v1.1：过滤掉已折叠进摘要的消息（seq <= compactedUntilSeq），纯函数。 */
+    static List<RequirementMessage> liveHistory(List<RequirementMessage> history, int compactedUntilSeq) {
+        if (history == null || history.isEmpty() || compactedUntilSeq <= 0) {
+            return history;
+        }
+        return history.stream()
+                .filter(m -> m.getSeq() != null && m.getSeq() > compactedUntilSeq)
+                .toList();
+    }
+
+    /** PA-12 v1.1：此前对话摘要前缀（空摘要返回空串）。 */
+    static String summaryPrefix(String summary) {
+        return (summary == null || summary.isBlank()) ? "" : "【此前对话摘要】\n" + summary + "\n\n";
     }
 
     /**

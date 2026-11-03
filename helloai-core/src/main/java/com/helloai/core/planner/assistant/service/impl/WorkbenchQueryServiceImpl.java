@@ -1,6 +1,7 @@
 package com.helloai.core.planner.assistant.service.impl;
 
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.planner.assistant.service.AssistantProfileService;
@@ -16,9 +17,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -29,7 +30,9 @@ import java.util.stream.Collectors;
  * 任务概况与活跃 Agent 走 task 域 {@link SubTaskQueryService}；最近任务走
  * {@link TaskService#listActiveTasksForOwner}（owner 宽松并入）；最近产物走
  * {@link MyArtifactsQueryService#conversationArtifacts}（会话单源）。
- * Agent 名称与接入类型由 {@link AgentService} 回填（内 = API_KEY_LLM，外 = CLI_CLIENT / WEB_BROWSER）。</p>
+ * Agent 名册取自 {@link AgentService}（ACTIVE 的执行 / 复核角色），
+ * 接入类型由同源回填（内 = API_KEY_LLM，外 = CLI_CLIENT / WEB_BROWSER），
+ * 每人的运行状态由 task 域负载（owner 宽松口径）推导。</p>
  */
 @Slf4j
 @Service
@@ -67,26 +70,48 @@ public class WorkbenchQueryServiceImpl implements WorkbenchQueryService {
                 overview.pendingManual());
     }
 
-    /** 正在执行任务的活跃 Agent：task 域只出 id + 并发数，名称/内外由本层回填。 */
+    /**
+     * 活跃 Agent：<b>名册 + 每人实时状态</b>，而不是只列「此刻正在跑任务」的那几个人。
+     *
+     * <p>名册取平台 ACTIVE 的执行 / 复核角色 Agent（{@code EXECUTOR} / {@code REVIEWER}），
+     * 负载按 owner 宽松口径取自 task 域：名下 IN_PROGRESS 子任务数 = 执行中，
+     * 名下处于 REVIEW 的子任务数 = 审核中（产出在复核流程里），其余为待命。
+     * 这样右栏在「没有正在跑的任务」时也仍然展示可用 Agent 名单，而不是整块消失。</p>
+     */
     private List<ActiveAgent> activeAgents(Long userId) {
-        List<ActiveAgentLoad> loads = subTaskQueryService.activeAgentLoadsForOwner(userId, ACTIVE_AGENT_LIMIT);
-        if (loads.isEmpty()) {
+        List<AgentProfileSnapshot> roster = agentService.listActiveProfiles().stream()
+                .filter(a -> a.role() == AgentRole.EXECUTOR || a.role() == AgentRole.REVIEWER)
+                .toList();
+        if (roster.isEmpty()) {
             return List.of();
         }
-        List<Long> agentIds = loads.stream().map(ActiveAgentLoad::agentId).toList();
-        Map<Long, AgentProfileSnapshot> agentById = agentService.listProfilesByIds(agentIds).stream()
-                .collect(Collectors.toMap(AgentProfileSnapshot::id, Function.identity(), (a, b) -> a));
-        return loads.stream()
-                .map(load -> {
-                    AgentProfileSnapshot agent = agentById.get(load.agentId());
-                    if (agent == null) {
-                        return null;
-                    }
+        Map<Long, ActiveAgentLoad> loadByAgent = subTaskQueryService
+                .activeAgentLoadsForOwner(userId, ACTIVE_AGENT_WORKLOAD_LIMIT).stream()
+                .collect(Collectors.toMap(ActiveAgentLoad::agentId, Function.identity(), (a, b) -> a));
+        return roster.stream()
+                .map(agent -> {
+                    ActiveAgentLoad load = loadByAgent.get(agent.id());
+                    long running = load == null ? 0L : load.runningCount();
+                    long reviewing = load == null ? 0L : load.reviewCount();
+                    String status = running > 0 ? STATUS_RUNNING
+                            : reviewing > 0 ? STATUS_REVIEWING : STATUS_STANDBY;
                     boolean internal = agent.accessType() == AgentAccessType.API_KEY_LLM;
-                    return new ActiveAgent(agent.id(), agent.name(), internal, load.runningCount());
+                    String role = agent.role() == null ? null : agent.role().name();
+                    return new ActiveAgent(agent.id(), agent.name(), internal, role, status, running);
                 })
-                .filter(Objects::nonNull)
+                .sorted(Comparator.comparingInt((ActiveAgent a) -> statusRank(a.status()))
+                        .thenComparing(Comparator.comparingLong(ActiveAgent::runningCount).reversed())
+                        .thenComparing(ActiveAgent::name, Comparator.nullsLast(Comparator.naturalOrder())))
+                .limit(ACTIVE_AGENT_LIMIT)
                 .toList();
+    }
+
+    /** 状态排序权重：运行中 → 审核中 → 待命。 */
+    private static int statusRank(String status) {
+        if (STATUS_RUNNING.equals(status)) {
+            return 0;
+        }
+        return STATUS_REVIEWING.equals(status) ? 1 : 2;
     }
 
     /** 最近任务：只展示仍在推进（PLANNING / IN_PROGRESS）的任务。 */

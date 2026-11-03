@@ -23,8 +23,8 @@ public interface SubTaskQueryService {
         public static final TaskOverview EMPTY = new TaskOverview(0, 0, 0, 0);
     }
 
-    /** 活跃 Agent 负载（正在执行的子任务条数）。 */
-    record ActiveAgentLoad(Long agentId, long runningCount) {
+    /** 活跃 Agent 负载（正在执行的子任务条数 + 处于复核流程的子任务条数）。 */
+    record ActiveAgentLoad(Long agentId, long runningCount, long reviewCount) {
     }
 
     TaskOverview overviewForOwner(Long ownerId);

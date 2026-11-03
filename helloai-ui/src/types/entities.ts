@@ -488,6 +488,11 @@ export interface RequirementConversation {
   webSearchEnabled?: boolean | null
   // 对话模式（V39）：CHAT=自由对话 / CLARIFY=方案澄清；null=老数据按 CLARIFY 语义
   mode?: 'CHAT' | 'CLARIFY' | null
+  // 会话类型（V135）：REQUIREMENT=需求澄清 / ASSISTANT=助理对话；null=老数据按 REQUIREMENT
+  kind?: 'REQUIREMENT' | 'ASSISTANT' | null
+  // 建任务血缘（PA-11，V135）：来源助理会话 / 来源消息（软引用）
+  parentConversationId?: LongId | null
+  forkedFromMessageId?: LongId | null
   createTime: string
   updateTime: string
 }

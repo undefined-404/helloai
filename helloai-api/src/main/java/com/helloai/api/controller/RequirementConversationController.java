@@ -1,7 +1,6 @@
 package com.helloai.api.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
-import cn.dev33.satoken.stp.StpUtil;
 import com.helloai.api.dto.requirement.ArtifactItemVO;
 import com.helloai.api.dto.requirement.AssistantProfileVO;
 import com.helloai.api.dto.requirement.ClarifyMessageRequest;
@@ -9,13 +8,18 @@ import com.helloai.api.dto.requirement.SkillRunStatusVO;
 import com.helloai.api.dto.requirement.WorkbenchVO;
 import com.helloai.api.support.WorkbenchEventHub;
 import com.helloai.common.base.R;
+import com.helloai.core.planner.assistant.service.AssistantChatService;
 import com.helloai.core.planner.assistant.service.AssistantProfileService;
+import com.helloai.core.planner.assistant.service.AssistantRoundInput;
+import com.helloai.core.planner.assistant.service.ContextCompactor;
+import com.helloai.core.planner.assistant.service.ContextUsageService;
 import com.helloai.core.planner.assistant.service.MyArtifactsQueryService;
 import com.helloai.core.planner.assistant.service.WorkbenchQueryService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.ChatSkillRunService;
 import com.helloai.core.planner.service.RequirementClarifyService;
 import com.helloai.core.planner.service.RequirementClarifyService.ChatStreamEvent;
+import com.helloai.core.shared.util.CurrentUser;
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifyConversationDetail;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.task.port.TaskView;
@@ -43,6 +47,9 @@ public class RequirementConversationController {
     private final RequirementClarifyService requirementClarifyService;
     private final Executor chatStreamExecutor;
     private final ChatSkillRunService chatSkillRunService;
+    private final AssistantChatService assistantChatService;
+    private final ContextCompactor contextCompactor;
+    private final ContextUsageService contextUsageService;
     private final AssistantProfileService assistantProfileService;
     private final MyArtifactsQueryService myArtifactsQueryService;
     private final WorkbenchQueryService workbenchQueryService;
@@ -63,6 +70,9 @@ public class RequirementConversationController {
             RequirementClarifyService requirementClarifyService,
             @Qualifier("chatStreamExecutor") Executor chatStreamExecutor,
             ChatSkillRunService chatSkillRunService,
+            AssistantChatService assistantChatService,
+            ContextCompactor contextCompactor,
+            ContextUsageService contextUsageService,
             AssistantProfileService assistantProfileService,
             MyArtifactsQueryService myArtifactsQueryService,
             WorkbenchQueryService workbenchQueryService,
@@ -70,6 +80,9 @@ public class RequirementConversationController {
         this.requirementClarifyService = requirementClarifyService;
         this.chatStreamExecutor = chatStreamExecutor;
         this.chatSkillRunService = chatSkillRunService;
+        this.assistantChatService = assistantChatService;
+        this.contextCompactor = contextCompactor;
+        this.contextUsageService = contextUsageService;
         this.assistantProfileService = assistantProfileService;
         this.myArtifactsQueryService = myArtifactsQueryService;
         this.workbenchQueryService = workbenchQueryService;
@@ -325,13 +338,55 @@ public class RequirementConversationController {
      */
     @GetMapping("/assistantProfile")
     public R<AssistantProfileVO> assistantProfile() {
-        Long userId = null;
-        try {
-            userId = Long.valueOf(StpUtil.getLoginId().toString());
-        } catch (Exception ignore) {
-            // 未登录：仅取平台预置/默认
-        }
-        return R.ok(AssistantProfileVO.from(assistantProfileService.getActiveByUser(userId)));
+        // 未登录（含外部 Agent 通道）userId 为 null，服务侧回落平台预置/默认身份
+        return R.ok(AssistantProfileVO.from(assistantProfileService.getActiveByUser(CurrentUser.userId())));
+    }
+
+    /** 新建助理会话并跑首轮（PA-11）：检索增强的通用问答，不产出任务草案。 */
+    @SaCheckPermission("conversation:add")
+    @PostMapping("/assistant/create")
+    public R<ClarifyConversationDetail> assistantCreate(@Valid @RequestBody ClarifyMessageRequest req) {
+        return R.ok(assistantChatService.createConversation(req.getMessage(), req.getPlannerAgentId(),
+                new AssistantRoundInput(req.getWebSearchEnabled(), req.getSkill(), req.getAttachmentIds(),
+                        req.getClientToken())));
+    }
+
+    /** 助理会话追加一条消息并跑一轮（PA-11）。 */
+    @SaCheckPermission("conversation:send")
+    @PostMapping("/assistant/send/{id}")
+    public R<ClarifyConversationDetail> assistantSend(@PathVariable("id") Long id,
+                                                      @Valid @RequestBody ClarifyMessageRequest req) {
+        return R.ok(assistantChatService.sendMessage(id, req.getMessage(),
+                new AssistantRoundInput(req.getWebSearchEnabled(), req.getSkill(), req.getAttachmentIds(), null)));
+    }
+
+    /**
+     * 从助理会话显式创建需求会话（PA-11）：返回新会话 id（字符串，防雪花精度丢失）。
+     * <p>血缘写入 {@code parent_conversation_id} / {@code forked_from_message_id}，
+     * 新会话由既有需求澄清流程接管。</p>
+     */
+    @SaCheckPermission("conversation:add")
+    @PostMapping("/assistant/createTaskFromContextById/{id}")
+    public R<String> createTaskFromContext(
+            @PathVariable("id") Long id,
+            @RequestParam(value = "forkedFromMessageId", required = false) Long forkedFromMessageId) {
+        return R.ok(String.valueOf(assistantChatService.createTaskFromContext(id, forkedFromMessageId)));
+    }
+
+    /**
+     * 上下文窗口占用（PA-12）：五项 token 拆分 + 比率 + 已压缩到的 seq。
+     * <p>登录即可读（按 owner 过滤）。</p>
+     */
+    @GetMapping("/contextWindowById/{id}")
+    public R<ContextUsageService.ContextUsage> contextWindow(@PathVariable("id") Long id) {
+        return R.ok(contextUsageService.usage(id));
+    }
+
+    /** 手动压缩上下文（PA-12）：立即把中段折叠为摘要，返回压缩前后比率。 */
+    @SaCheckPermission("conversation:send")
+    @PostMapping("/compactById/{id}")
+    public R<ContextCompactor.CompactResult> compact(@PathVariable("id") Long id) {
+        return R.ok(contextCompactor.compact(id, true));
     }
 
     /**
@@ -365,11 +420,10 @@ public class RequirementConversationController {
      */
     @GetMapping(value = "/workbench/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter workbenchStream() {
-        return workbenchEventHub.connect();
+        return workbenchEventHub.connect(CurrentUser.userId());
     }
 
-    /** 追加一条用户消息并走一轮 LLM 澄清（可附结构化选项回答快照）。 */
-    @SaCheckPermission("conversation:send")
+    /** 追加一条用户消息并走一轮 LLM 澄清（可附结构化选项回答快照）。 */    @SaCheckPermission("conversation:send")
     @PostMapping("/sendMessageById/{id}")
     public R<ClarifyConversationDetail> sendMessageById(@PathVariable("id") Long id,
                                                     @Valid @RequestBody ClarifyMessageRequest req) {
@@ -454,7 +508,7 @@ public class RequirementConversationController {
         return R.ok(requirementClarifyService.switchToChat(id));
     }
 
-    /** 会话列表（按创建时间倒序，LIMIT 50）。 */
+    /** 会话列表（置顶优先，其次创建时间倒序，LIMIT 50）。 */
     @GetMapping
     public R<List<RequirementConversation>> list() {
         return R.ok(requirementClarifyService.listConversations());
