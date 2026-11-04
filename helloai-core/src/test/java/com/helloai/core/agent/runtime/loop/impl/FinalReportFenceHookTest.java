@@ -1,7 +1,13 @@
 package com.helloai.core.agent.runtime.loop.impl;
 
+import com.helloai.common.config.OpenSandboxProperties;
+import com.helloai.common.config.ReviewProperties;
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.common.constant.TimelineEventCode;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.runtime.cancel.LoopCancellation;
+import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
+import com.helloai.core.agent.runtime.sandbox.SandboxCallLedger;
 import com.helloai.core.agent.runtime.loop.AgentLoop;
 import com.helloai.core.agent.runtime.loop.AgentLoopInput;
 import com.helloai.core.agent.runtime.loop.AgentLoopResult;
@@ -19,12 +25,20 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.DefaultToolCallingChatOptions;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.DefaultToolDefinition;
+import org.springframework.ai.tool.definition.ToolDefinition;
 
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Queue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -46,7 +60,28 @@ class FinalReportFenceHookTest {
     private ToolExecutor toolExecutor;
 
     private final AgentLoop loop =
-            new ChatModelToolLoop(ContextCompactor.noop(), List.of(new FinalReportFenceHook()));
+            new ChatModelToolLoop(ContextCompactor.noop(), List.of(hook(new OpenSandboxProperties())));
+
+    /** 构造被测钩子：默认沙箱关闭（既有用例零行为变更）+ 静默 timeline 端口。 */
+    private static FinalReportFenceHook hook(OpenSandboxProperties properties) {
+        TaskTimelinePort silentPort = (taskId, subTaskId, eventType, role, agentId, payload) -> { };
+        return new FinalReportFenceHook(new SandboxCallLedger(), silentPort, properties,
+                new ReviewProperties());
+    }
+
+    /** 构造被测钩子：指定台账 / 端口 / 沙箱与自审配置。 */
+    private static FinalReportFenceHook hook(SandboxCallLedger ledger, TaskTimelinePort port,
+                                             OpenSandboxProperties sandbox, ReviewProperties review) {
+        return new FinalReportFenceHook(ledger, port, sandbox, review);
+    }
+
+    /** 自审配置：闸门开关 + 重跑上限 K。 */
+    private static ReviewProperties selfReview(boolean enabled, int maxRetry) {
+        ReviewProperties properties = new ReviewProperties();
+        properties.setSelfReviewEnabled(enabled);
+        properties.setSelfReviewMaxRetry(maxRetry);
+        return properties;
+    }
 
     @Test
     @DisplayName("内部 LLM 缺围栏 ⇒ 恰好一次无工具收尾轮，结果含围栏，iterations+1")
@@ -505,6 +540,544 @@ class FinalReportFenceHookTest {
         assertThat(FinalReportFenceHook.researchDigest(List.of())).isEmpty();
     }
 
+    // ==============================================================
+    // `SR-1`：收尾轮放开受限沙箱工具（仅 internal_run_in_sandbox，N=3 按轮内基线差值）
+    // ==============================================================
+
+    @Test
+    @DisplayName("SR-1 沙箱启用 ⇒ 收尾轮只注入 internal_run_in_sandbox，且内部执行开启")
+    void sr1_sandboxEnabled_injectsOnlySandboxTool() {
+        AtomicInteger sandboxCalls = new AtomicInteger();
+        AgentLoop loopWithSandbox = loopWith(sandboxEnabled());
+
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withFence("done")));
+
+        loopWithSandbox.run(input(model, AgentAccessType.API_KEY_LLM,
+                List.of(sandboxTool(sandboxCalls), namedTool("internal_get_sub_task_detail"))));
+
+        DefaultToolCallingChatOptions options = model.lastOptions();
+        assertThat(options).isNotNull();
+        assertThat(options.getToolCallbacks()).hasSize(1);
+        assertThat(options.getToolCallbacks().get(0).getToolDefinition().name())
+                .isEqualTo(FinalReportFenceHook.SANDBOX_TOOL_NAME);
+        assertThat(options.getInternalToolExecutionEnabled()).isTrue();
+        // 注入 != 自动调用：收尾轮自己不触发工具
+        assertThat(sandboxCalls.get()).isZero();
+    }
+
+    @Test
+    @DisplayName("SR-1 沙箱启用但本轮未暴露沙箱工具 ⇒ 收尾轮不注入任何工具")
+    void sr1_sandboxEnabledWithoutSandboxTool_noInjection() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withFence("done")));
+
+        loopWith(sandboxEnabled()).run(input(model, AgentAccessType.API_KEY_LLM,
+                List.of(namedTool("internal_get_sub_task_detail"))));
+
+        DefaultToolCallingChatOptions options = model.lastOptions();
+        assertThat(options.getToolCallbacks()).isEmpty();
+        assertThat(options.getInternalToolExecutionEnabled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("SR-1 沙箱关闭 ⇒ 即便清单含沙箱工具也不注入（启用事实源兜底）")
+    void sr1_sandboxDisabled_noInjection() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withFence("done")));
+
+        // 默认 loop：沙箱关闭；调用方仍把沙箱工具塞进清单 ⇒ 必须被过滤掉
+        loop.run(input(model, AgentAccessType.API_KEY_LLM,
+                List.of(sandboxTool(new AtomicInteger()))));
+
+        DefaultToolCallingChatOptions options = model.lastOptions();
+        assertThat(options.getToolCallbacks()).isEmpty();
+        assertThat(options.getInternalToolExecutionEnabled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("SR-1 收尾轮沙箱预算 N=3：前 3 次透传，第 4 次回错误不触达真实工具")
+    void sr1_finalizeSandboxBudget_rejectsFourthCall() {
+        AtomicInteger sandboxCalls = new AtomicInteger();
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withFence("done")));
+
+        loopWith(sandboxEnabled()).run(input(model, AgentAccessType.API_KEY_LLM,
+                List.of(sandboxTool(sandboxCalls))));
+
+        ToolCallback budgeted = model.lastOptions().getToolCallbacks().get(0);
+        assertThat(budgeted.call("{\"command\":\"true\"}")).isEqualTo("ok");
+        assertThat(budgeted.call("{\"command\":\"true\"}")).isEqualTo("ok");
+        assertThat(budgeted.call("{\"command\":\"true\"}")).isEqualTo("ok");
+        assertThat(sandboxCalls.get()).isEqualTo(3);
+
+        String rejected = budgeted.call("{\"command\":\"true\"}");
+        assertThat(rejected).contains(FinalReportFenceHook.BudgetedSandboxCallback.REJECTION_CODE);
+        assertThat(sandboxCalls.get()).isEqualTo(3);      // 第 4 次未触达真实工具
+    }
+
+    @Test
+    @DisplayName("SR-1 历史 turn 已调用沙箱 5 次 ⇒ 收尾轮仍有完整 3 次预算（基线差值）")
+    void sr1_historySandboxCalls_doNotConsumeFinalizeBudget() {
+        AtomicInteger sandboxCalls = new AtomicInteger();
+        StubChatModel model = new StubChatModel()
+                .enqueue(sandboxToolCall("c1"))
+                .enqueue(sandboxToolCall("c2"))
+                .enqueue(sandboxToolCall("c3"))
+                .enqueue(sandboxToolCall("c4"))
+                .enqueue(sandboxToolCall("c5"))
+                .enqueue(text(withFence("## 正文\n\n完整交付")));   // 收尾成文
+        when(toolExecutor.execute(anyString(), anyString()))
+                .thenReturn(ToolExecutionResult.success("t", "{}"));
+
+        // maxIterations=5：5 轮全用于沙箱工具（耗尽）⇒ 触发收尾成文
+        AgentLoopResult result = loopWith(sandboxEnabled()).run(
+                input(model, AgentAccessType.API_KEY_LLM, 5, List.of(sandboxTool(sandboxCalls))));
+
+        assertThat(result.success()).isTrue();
+        assertThat(model.callCount()).isEqualTo(6);       // 5 轮 + 收尾 1
+        assertThat(result.toolCallCount()).isEqualTo(5);  // 历史确实已调用沙箱 5 次
+
+        ToolCallback budgeted = model.lastOptions().getToolCallbacks().get(0);
+        // 预算只在收尾轮内计数：历史 5 次不消耗 ⇒ 仍有完整 3 次
+        assertThat(budgeted.call("{}")).isEqualTo("ok");
+        assertThat(budgeted.call("{}")).isEqualTo("ok");
+        assertThat(budgeted.call("{}")).isEqualTo("ok");
+        assertThat(budgeted.call("{}"))
+                .contains(FinalReportFenceHook.BudgetedSandboxCallback.REJECTION_CODE);
+        assertThat(sandboxCalls.get()).isEqualTo(3);
+    }
+
+    // ==============================================================
+    // `SR-2`：自审证据围栏与平台台账对账（纯观测事件）
+    // ==============================================================
+
+    @Test
+    @DisplayName("SR-2 自报 exitCode=0 而台账为 1 ⇒ 事件 selfReview=mismatch")
+    void sr2_recordsMismatchAgainstLedger() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        ledger.record(10L, "python check.py", new ExecuteResponse("boom", 1, false));
+        AtomicReference<String> eventCode = new AtomicReference<>();
+        AtomicReference<Map<String, Object>> payloadRef = new AtomicReference<>();
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, capturingPort(eventCode, payloadRef), sandboxEnabled(),
+                        selfReview(false, 1))));
+
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withFence("done") + "\nEVIDENCE: [{\"kind\":\"sandbox_exec\","
+                        + "\"command\":\"python check.py\",\"exitCode\":0,\"truncated\":false,"
+                        + "\"digest\":\"\"}]"));
+
+        loopWithLedger.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(eventCode.get()).isEqualTo(TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code());
+        assertThat(payloadRef.get()).containsEntry("selfReview", "mismatch");
+        assertThat(payloadRef.get()).containsEntry("claimedCount", 1);
+        assertThat(payloadRef.get()).containsEntry("ledgerCount", 1);
+        assertThat(payloadRef.get()).containsEntry("gateTier", "SKIPPED_DISABLED");
+        assertThat((List<?>) payloadRef.get().get("mismatches")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("SR-2 自报证据与台账一致 ⇒ 事件 selfReview=verified")
+    void sr2_recordsVerifiedAgainstLedger() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        ledger.record(10L, "pwd", new ExecuteResponse("ok", 0, false));
+        AtomicReference<String> eventCode = new AtomicReference<>();
+        AtomicReference<Map<String, Object>> payloadRef = new AtomicReference<>();
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, capturingPort(eventCode, payloadRef), sandboxEnabled(),
+                        selfReview(true, 1))));
+
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withFence("done") + "\nEVIDENCE: [{\"kind\":\"sandbox_exec\","
+                        + "\"command\":\"pwd\",\"exitCode\":0,\"truncated\":false,\"digest\":\"\"}]"));
+
+        loopWithLedger.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(eventCode.get()).isEqualTo(TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code());
+        assertThat(payloadRef.get()).containsEntry("selfReview", "verified");
+        assertThat(payloadRef.get()).doesNotContainKey("mismatches");
+        // `SR-3`：自报了证据 ⇒ 档 1；台账有成功记录且对账一致 ⇒ 闸门通过、不重跑
+        assertThat(payloadRef.get()).containsEntry("gateTier", "SANDBOX_REQUIRED");
+        assertThat(payloadRef.get()).containsEntry("gatePassed", true);
+        assertThat(model.callCount()).isEqualTo(2);
+    }
+
+    private static TaskTimelinePort capturingPort(AtomicReference<String> eventCode,
+                                                  AtomicReference<Map<String, Object>> payloadRef) {
+        return (taskId, subTaskId, eventType, role, agentId, payload) -> {
+            eventCode.set(eventType);
+            payloadRef.set(payload);
+        };
+    }
+
+    // ==============================================================
+    // `SR-3`：自审闸门 + 有界内容重跑（K）；`SR-4`：沙箱未启用的降级留痕
+    // ==============================================================
+
+    @Test
+    @DisplayName("SR-3 首轮自报证据与台账不一致 ⇒ 恰好一次重跑，二轮补对后通过（无失败事件）")
+    void sr3_rerunsOnceAndPasses() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        ledger.record(10L, "pwd", new ExecuteResponse("/workspace", 0, false));
+        List<String> codes = new java.util.ArrayList<>();
+        List<Map<String, Object>> payloads = new java.util.ArrayList<>();
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, collectingPort(codes, payloads), sandboxEnabled(),
+                        selfReview(true, 1))));
+
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withEvidence("python check.py", 0)))   // 台账里没有这条 ⇒ mismatch
+                .enqueue(text(withEvidence("pwd", 0)));               // 补上真实执行过的命令
+
+        AgentLoopResult result = loopWithLedger.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(model.callCount()).isEqualTo(3);                   // 草稿 + 首轮收尾 + 重跑
+        assertThat(codes).containsExactly(
+                TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code());
+        assertThat(payloads.get(0)).containsEntry("selfReview", "mismatch")
+                .containsEntry("gateTier", "SANDBOX_REQUIRED")
+                .containsEntry("gatePassed", false);
+        assertThat(payloads.get(1)).containsEntry("selfReview", "verified")
+                .containsEntry("gatePassed", true);
+        // 重跑指令必须带上「上一轮已采纳正文」与「自审未通过」——否则模型无从知道要补什么证据
+        assertThat(model.lastPrompt()).anyMatch(message ->
+                message instanceof org.springframework.ai.chat.messages.UserMessage
+                        && message.getText().contains("自审未通过"));
+        assertThat(model.lastPrompt()).anyMatch(message ->
+                message instanceof AssistantMessage && message.getText().contains("python check.py"));
+        assertThat(result.text()).contains("pwd");
+        assertThat(result.success()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SR-3 重跑仍不合格 ⇒ 记 self_review_failed（retryCount=1）且不丢已采纳产出")
+    void sr3_rerunExhausted_recordsFailureWithoutLosingDeliverable() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        ledger.record(10L, "pwd", new ExecuteResponse("/workspace", 0, false));
+        List<String> codes = new java.util.ArrayList<>();
+        List<Map<String, Object>> payloads = new java.util.ArrayList<>();
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, collectingPort(codes, payloads), sandboxEnabled(),
+                        selfReview(true, 1))));
+
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withEvidence("python check.py", 0)))
+                .enqueue(text(withEvidence("python another.py", 0)));   // 重跑仍自报未执行的命令
+
+        AgentLoopResult result = loopWithLedger.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(model.callCount()).isEqualTo(3);                   // 有界：K=1 ⇒ 不第三次
+        assertThat(codes).containsExactly(
+                TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                TimelineEventCode.SELF_REVIEW_FAILED.code());
+        Map<String, Object> failure = payloads.get(2);
+        assertThat(failure).containsEntry("gateTier", "SANDBOX_REQUIRED").containsEntry("retryCount", 1);
+        assertThat((List<?>) failure.get("failures")).hasSize(1);
+        // 只留痕、不改出口：重跑轮的产出照常交付（不退回草稿）
+        assertThat(result.text()).contains("python another.py");
+        assertThat(result.success()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SR-3 K=0 ⇒ 闸门失败也不重跑，失败事件 retryCount=0")
+    void sr3_zeroRetry_neverReruns() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        ledger.record(10L, "pwd", new ExecuteResponse("/workspace", 0, false));
+        List<String> codes = new java.util.ArrayList<>();
+        List<Map<String, Object>> payloads = new java.util.ArrayList<>();
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, collectingPort(codes, payloads), sandboxEnabled(),
+                        selfReview(true, 0))));
+
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withEvidence("python check.py", 0)));
+
+        loopWithLedger.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(model.callCount()).isEqualTo(2);                   // 无重跑
+        assertThat(codes).containsExactly(
+                TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                TimelineEventCode.SELF_REVIEW_FAILED.code());
+        assertThat(payloads.get(1)).containsEntry("retryCount", 0);
+    }
+
+    @Test
+    @DisplayName("SR-3 内层重试 × 外层重跑相乘：最坏 1 + 2×(1+K) = 5 次模型调用")
+    void sr3_worstCaseMultipliesInnerRetriesByOuterReruns() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        ledger.record(10L, "pwd", new ExecuteResponse("/workspace", 0, false));
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, silentRecordingPort(), sandboxEnabled(), selfReview(true, 1))));
+
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withEvidence("python check.py", 0)))
+                .enqueue(text(withEvidence("pwd", 0)));
+        // 每个收尾轮的「成文调用」先失败一次（网络/429），由内层 FINALIZE_MAX_ATTEMPTS=2 兜住
+        model.throwOnCall(2, new IllegalStateException("timeout"));
+        model.throwOnCall(4, new IllegalStateException("429"));
+
+        AgentLoopResult result = loopWithLedger.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(model.callCount()).isEqualTo(5);   // 草稿 1 + (内层 2 次 × 收尾 2 轮)
+        assertThat(result.text()).contains("pwd");
+    }
+
+    @Test
+    @DisplayName("SR-3 文档类交付物 + 空证据数组 ⇒ EVIDENCE_FORM_ONLY，不拦截、不重跑")
+    void sr3_documentDeliverableIsNotIntercepted() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        List<String> codes = new java.util.ArrayList<>();
+        List<Map<String, Object>> payloads = new java.util.ArrayList<>();
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, collectingPort(codes, payloads), sandboxEnabled(),
+                        selfReview(true, 1))));
+
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withFence("done") + "\nEVIDENCE: []"));
+
+        loopWithLedger.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(model.callCount()).isEqualTo(2);
+        assertThat(codes).containsExactly(TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code());
+        assertThat(payloads.get(0)).containsEntry("gateTier", "EVIDENCE_FORM_ONLY")
+                .containsEntry("gatePassed", true)
+                .containsEntry("selfReview", "missing");
+    }
+
+    @Test
+    @DisplayName("SR-4 沙箱未启用 ⇒ 事件必发且 selfReview=degraded_no_sandbox，闸门不判也不重跑")
+    void sr4_sandboxDisabled_degradesAndNeverClaimsSelfReview() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        List<String> codes = new java.util.ArrayList<>();
+        List<Map<String, Object>> payloads = new java.util.ArrayList<>();
+        OpenSandboxProperties disabledSandbox = new OpenSandboxProperties();
+        disabledSandbox.setEnabled(false);
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, collectingPort(codes, payloads), disabledSandbox,
+                        selfReview(true, 1))));
+
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                // 自报了「执行过」的证据：沙箱关着 ⇒ 既不能算 verified，也不能判成模型自审造假
+                .enqueue(text(withEvidence("python check.py", 0)));
+
+        loopWithLedger.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        assertThat(codes).containsExactly(TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code());
+        Map<String, Object> payload = payloads.get(0);
+        assertThat(payload).containsEntry("selfReview", FinalReportFenceHook.DEGRADED_NO_SANDBOX)
+                .containsEntry("sandboxEnabled", false)
+                .containsEntry("gateTier", "SKIPPED_NO_SANDBOX")
+                .containsEntry("gatePassed", true);
+        // 关键口径：降级标签不得被算进「已自审」——即绝不能是 verified / mismatch
+        assertThat(payload.get("selfReview")).isNotIn("verified", "mismatch", "malformed");
+        assertThat(model.callCount()).isEqualTo(2);                  // 降级档不重跑
+    }
+
+    /** 围栏 + 一条自报沙箱证据（`SR-2` 契约）。 */
+    private static String withEvidence(String command, int exitCode) {
+        return withFence("done") + "\nEVIDENCE: [{\"kind\":\"sandbox_exec\",\"command\":\"" + command
+                + "\",\"exitCode\":" + exitCode + ",\"truncated\":false,\"digest\":\"\"}]";
+    }
+
+    @Test
+    @DisplayName("SR-3 接线：围栏合格 + 文档类交付物 ⇒ 零额外调用，但必须产生证据核对事件")
+    void sr3_adequateFenceStillRecordsEvidenceObservation() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        ledger.record(10L, "pwd", new ExecuteResponse("/workspace", 0, false));
+        List<String> codes = new java.util.ArrayList<>();
+        List<Map<String, Object>> payloads = new java.util.ArrayList<>();
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, collectingPort(codes, payloads), sandboxEnabled(), selfReview(true, 1))));
+
+        StubChatModel model = new StubChatModel().enqueue(text(withFence("正文")));
+
+        AgentLoopResult result = loopWithLedger.run(input(model, AgentAccessType.API_KEY_LLM));
+
+        // 围栏合格 ⇒ 仍不追加成文调用（闸门评估零 token）
+        assertThat(model.callCount()).isEqualTo(1);
+        // 但证据核对事件必须发：原实现在此直接 return，导致最正常路径完全不产生观测
+        assertThat(codes).containsExactly(TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code());
+        assertThat(payloads.get(0)).containsEntry("gateTier", "EVIDENCE_FORM_ONLY")
+                .containsEntry("gatePassed", true);
+        assertThat(result.text()).isEqualTo(withFence("正文"));
+    }
+
+    @Test
+    @DisplayName("SR-3 接线：围栏合格但脚本类交付物无证据 ⇒ 追加一次补证据重跑，二轮合格")
+    void sr3_adequateFenceButScriptDeliverableRerunsForEvidence() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        ledger.record(10L, "pwd", new ExecuteResponse("/workspace", 0, false));
+        List<String> codes = new java.util.ArrayList<>();
+        List<Map<String, Object>> payloads = new java.util.ArrayList<>();
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, collectingPort(codes, payloads), sandboxEnabled(), selfReview(true, 1))));
+
+        StubChatModel model = new StubChatModel()
+                .enqueue(text(withFence("脚本已写好")))
+                .enqueue(text(withEvidence("pwd", 0)));
+
+        AgentLoopResult result = loopWithLedger.run(scriptTaskInput(model));
+
+        assertThat(model.callCount()).isEqualTo(2);                    // 草稿 + 一次收尾
+        assertThat(codes).containsExactly(
+                TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code());   // 草稿侧 + 收尾侧各一次，无失败事件
+        assertThat(payloads.get(0)).containsEntry("gateTier", "SANDBOX_REQUIRED")
+                .containsEntry("gatePassed", false);
+        assertThat(payloads.get(1)).containsEntry("gatePassed", true);
+        assertThat(result.text()).contains("pwd");
+    }
+
+    @Test
+    @DisplayName("SR-3 接线：脚本类重跑后仍无证据 ⇒ self_review_failed（retryCount=1），产出不丢")
+    void sr3_adequateFenceScriptDeliverableExhaustsRetry() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        ledger.record(10L, "pwd", new ExecuteResponse("/workspace", 0, false));
+        List<String> codes = new java.util.ArrayList<>();
+        List<Map<String, Object>> payloads = new java.util.ArrayList<>();
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, collectingPort(codes, payloads), sandboxEnabled(), selfReview(true, 1))));
+
+        StubChatModel model = new StubChatModel()
+                .enqueue(text(withFence("脚本已写好")))
+                .enqueue(text(withFence("补了说明但仍无证据")))
+                .enqueue(text(withFence("还是没证据")));
+
+        AgentLoopResult result = loopWithLedger.run(scriptTaskInput(model));
+
+        assertThat(model.callCount()).isEqualTo(3);                    // K=1：不第四次
+        assertThat(codes).containsExactly(
+                TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                TimelineEventCode.SELF_REVIEW_FAILED.code());
+        assertThat(payloads.get(3)).containsEntry("gateTier", "SANDBOX_REQUIRED")
+                .containsEntry("retryCount", 1);
+        // 不丢交付物：重跑轮未保留草稿正文 ⇒ 回退「草稿 + 围栏段」，原草稿正文仍在
+        assertThat(result.text()).contains("脚本已写好");
+        assertThat(result.success()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SR-3 接线：只按「交付物要求」行判形态——提示词正文含「脚本」不把文档类误判成档 1")
+    void sr3_tierIsDecidedByDeliverableLineOnly() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        List<String> codes = new java.util.ArrayList<>();
+        List<Map<String, Object>> payloads = new java.util.ArrayList<>();
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, collectingPort(codes, payloads), sandboxEnabled(), selfReview(true, 1))));
+
+        StubChatModel model = new StubChatModel().enqueue(text(withFence("正文")));
+
+        loopWithLedger.run(documentTaskInput(model));
+
+        assertThat(model.callCount()).isEqualTo(1);                    // 档 2 通过 ⇒ 不追加收尾轮
+        assertThat(codes).containsExactly(TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code());
+        assertThat(payloads.get(0)).containsEntry("gateTier", "EVIDENCE_FORM_ONLY")
+                .containsEntry("gatePassed", true);
+    }
+
+    /** 任务要求含「交付物要求: 可执行校验脚本」⇒ `SR-3` 判 {@code SANDBOX_REQUIRED}（档 1）。 */
+    private AgentLoopInput scriptTaskInput(StubChatModel model) {
+        return new AgentLoopInput(model, SENTINEL_SYSTEM,
+                "交付物要求: 可执行校验脚本\n另：平台提示正文里也会出现「脚本」字样，但不构成交付物形态",
+                toolExecutor, List.of(),
+                AgentLoopInput.DEFAULT_MAX_ITERATIONS, "run-1-1", 1L, 10L, 1, 3L, null, null,
+                AgentAccessType.API_KEY_LLM);
+    }
+
+    /** 文档类交付物，但提示词正文（非声明行）含「脚本」字样 ⇒ 仍应判档 2。 */
+    private AgentLoopInput documentTaskInput(StubChatModel model) {
+        return new AgentLoopInput(model, SENTINEL_SYSTEM,
+                "平台提示：如需验证可运行脚本、写沙箱文件\n交付物要求: 最终说明正文（≤120 汉字）\nSTATUS 按契约填写",
+                toolExecutor, List.of(),
+                AgentLoopInput.DEFAULT_MAX_ITERATIONS, "run-1-1", 1L, 10L, 1, 3L, null, null,
+                AgentAccessType.API_KEY_LLM);
+    }
+
+    /** 累计所有事件（SR-3 一轮收尾会发多条事件，单值捕获端口不够用）。 */
+    private static TaskTimelinePort collectingPort(List<String> codes, List<Map<String, Object>> payloads) {
+        return (taskId, subTaskId, eventType, role, agentId, payload) -> {
+            codes.add(eventType);
+            payloads.add(payload);
+        };
+    }
+
+    private static TaskTimelinePort silentRecordingPort() {
+        return (taskId, subTaskId, eventType, role, agentId, payload) -> { };
+    }
+
+    private static AgentLoop loopWith(OpenSandboxProperties properties) {
+        return new ChatModelToolLoop(ContextCompactor.noop(), List.of(hook(properties)));
+    }
+
+    private static OpenSandboxProperties sandboxEnabled() {
+        OpenSandboxProperties properties = new OpenSandboxProperties();
+        properties.setEnabled(true);
+        return properties;
+    }
+
+    /** 名为 {@code internal_run_in_sandbox} 的工具回调（委托计数用）。 */
+    private static ToolCallback sandboxTool(AtomicInteger delegateCalls) {
+        return new ToolCallback() {
+            private final ToolDefinition definition = new DefaultToolDefinition(
+                    FinalReportFenceHook.SANDBOX_TOOL_NAME, "run a command in the sandbox", "{}");
+
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String toolInput) {
+                delegateCalls.incrementAndGet();
+                return "ok";
+            }
+        };
+    }
+
+    /** 其它工具（白名单过滤的反例）。 */
+    private static ToolCallback namedTool(String name) {
+        return new ToolCallback() {
+            private final ToolDefinition definition = new DefaultToolDefinition(name, "test tool", "{}");
+
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String toolInput) {
+                return "ok";
+            }
+        };
+    }
+
+    /** 名为 {@code internal_run_in_sandbox} 的工具调用（无正文，耗尽场景用）。 */
+    private static ChatResponse sandboxToolCall(String id) {
+        return new ChatResponse(List.of(new Generation(AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        id, "function", FinalReportFenceHook.SANDBOX_TOOL_NAME, "{}")))
+                .build())), null);
+    }
+
     /** 只有工具调用、无正文（MiniMax 耗尽轮的实测形态）。 */
     private static ChatResponse toolCall(String id) {
         return new ChatResponse(List.of(new Generation(AssistantMessage.builder()
@@ -534,6 +1107,19 @@ class FinalReportFenceHookTest {
                 maxIterations, "run-1-1", 1L, 10L, 1, 3L, null, null, accessType);
     }
 
+    /** 携带模型可见工具清单的输入（`SR-1` 白名单注入用例）。 */
+    private AgentLoopInput input(StubChatModel model, AgentAccessType accessType,
+                                 List<ToolCallback> callbacks) {
+        return input(model, accessType, AgentLoopInput.DEFAULT_MAX_ITERATIONS, callbacks);
+    }
+
+    private AgentLoopInput input(StubChatModel model, AgentAccessType accessType, int maxIterations,
+                                 List<ToolCallback> callbacks) {
+        return new AgentLoopInput(model, SENTINEL_SYSTEM, SENTINEL_TASK, toolExecutor, callbacks,
+                maxIterations, "run-1-1", 1L, 10L, 1, 3L, null, null, accessType,
+                LoopCancellation.none(), null);
+    }
+
     /** 携带业务面 scene 的输入（TD-9 事故修复回归用；走全量 16 参构造）。 */
     private AgentLoopInput inputWithScene(StubChatModel model, AgentAccessType accessType, String scene) {
         return new AgentLoopInput(model, "", SENTINEL_TASK, toolExecutor, List.of(),
@@ -560,6 +1146,7 @@ class FinalReportFenceHookTest {
         private final java.util.Map<Integer, RuntimeException> throwPlan = new java.util.HashMap<>();
         private int calls = 0;
         private List<Message> lastPrompt = java.util.Collections.emptyList();
+        private Prompt lastPromptObject;
 
         StubChatModel enqueue(ChatResponse response) {
             responses.offer(response);
@@ -575,6 +1162,7 @@ class FinalReportFenceHookTest {
         @Override
         public ChatResponse call(Prompt prompt) {
             calls++;
+            lastPromptObject = prompt;
             lastPrompt = prompt.getInstructions();
             RuntimeException ex = throwPlan.remove(calls);
             if (ex != null) {
@@ -590,6 +1178,12 @@ class FinalReportFenceHookTest {
         /** 最近一次调用的 prompt 指令（收尾 prompt 自审依据断言用）。 */
         List<Message> lastPrompt() {
             return lastPrompt;
+        }
+
+        /** 最近一次调用的工具选项（`SR-1` 注入 / 预算断言用）；非工具选项返回 null。 */
+        DefaultToolCallingChatOptions lastOptions() {
+            ChatOptions options = lastPromptObject == null ? null : lastPromptObject.getOptions();
+            return options instanceof DefaultToolCallingChatOptions toolOptions ? toolOptions : null;
         }
     }
 }

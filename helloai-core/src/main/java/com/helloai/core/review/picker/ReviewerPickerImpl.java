@@ -20,6 +20,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * 核验 Reviewer 选型器实现（反馈回路）。
@@ -43,8 +44,9 @@ public class ReviewerPickerImpl implements ReviewerPicker {
     private final AgentQualityProfileService agentQualityProfileService;
 
     @Override
-    public AgentProfileSnapshot pickSingle(SubTaskView subTask) {
-        // 任务级指定 reviewerAgentId 优先
+    public AgentProfileSnapshot pickSingle(SubTaskView subTask, Set<Long> excludeAgentIds) {
+        Set<Long> excluded = excludeAgentIds != null ? excludeAgentIds : Set.of();
+        // 任务级指定 reviewerAgentId 优先（`RV-4`：落在排除集内则让位，不因「指定」破例）
         if (subTask != null && subTask.taskId() != null) {
             try {
                 TaskView task = taskService.getView(subTask.taskId());
@@ -52,11 +54,17 @@ public class ReviewerPickerImpl implements ReviewerPicker {
                         task != null ? task.agentPolicy() : null);
                 if (policyReviewerId != null) {
                     AgentProfileSnapshot pinned = agentService.getProfileById(policyReviewerId);
-                    if (isUsableReviewer(pinned)) {
+                    boolean usable = isUsableReviewer(pinned);
+                    if (usable && !excluded.contains(pinned.id())) {
                         return pinned;
                     }
-                    log.warn("指定的核验 Agent 不可用，回退自动选择: agentId={}, subTaskId={}",
-                            policyReviewerId, subTask.id());
+                    if (usable) {
+                        log.info("指定的核验 Agent 在排除集内（抽检独立性），回退自动选择: agentId={}, subTaskId={}",
+                                policyReviewerId, subTask.id());
+                    } else {
+                        log.warn("指定的核验 Agent 不可用，回退自动选择: agentId={}, subTaskId={}",
+                                policyReviewerId, subTask.id());
+                    }
                 }
             } catch (Exception e) {
                 log.debug("读取任务核验指定失败（按未指定处理）: taskId={}, err={}",
@@ -64,14 +72,15 @@ public class ReviewerPickerImpl implements ReviewerPicker {
             }
         }
         AgentProfileSnapshot preferred = agentSelector.pickPreferredProfile(AgentRole.REVIEWER);
-        if (preferred != null && preferred.accessType() == AgentAccessType.API_KEY_LLM) {
+        if (preferred != null && preferred.accessType() == AgentAccessType.API_KEY_LLM
+                && !excluded.contains(preferred.id())) {
             return preferred;
         }
-        AgentProfileSnapshot reviewer = firstApiKeyLlm(AgentRole.REVIEWER);
+        AgentProfileSnapshot reviewer = firstApiKeyLlm(AgentRole.REVIEWER, excluded);
         if (reviewer != null) {
             return reviewer;
         }
-        return firstApiKeyLlm(AgentRole.PLANNER);
+        return firstApiKeyLlm(AgentRole.PLANNER, excluded);
     }
 
     @Override
@@ -170,14 +179,16 @@ public class ReviewerPickerImpl implements ReviewerPicker {
                 && agent.accessType() == AgentAccessType.API_KEY_LLM;
     }
 
-    /** 指定角色第一个 API_KEY_LLM Agent（原 firstApiKeyLlm 语义）。 */
-    private AgentProfileSnapshot firstApiKeyLlm(AgentRole role) {
+    /** 指定角色第一个不在排除集内的 API_KEY_LLM Agent（原 firstApiKeyLlm 语义 + `RV-4` 排除）。 */
+    private AgentProfileSnapshot firstApiKeyLlm(AgentRole role, Set<Long> excludeAgentIds) {
         List<AgentProfileSnapshot> candidates = agentService.listProfilesByRole(role);
         if (candidates == null) {
             return null;
         }
         return candidates.stream()
                 .filter(a -> a.accessType() == AgentAccessType.API_KEY_LLM)
+                // 无 id 的候选视为不可排除（Set.of().contains(null) 会抛 NPE）
+                .filter(a -> a.id() == null || !excludeAgentIds.contains(a.id()))
                 .findFirst()
                 .orElse(null);
     }

@@ -25,6 +25,10 @@
             label="驳回"
             value="REJECTED"
           />
+          <el-option
+            label="不可判定"
+            value="INCONCLUSIVE"
+          />
         </el-select>
         <el-input
           v-model="keyword"
@@ -153,6 +157,47 @@
         style="width:100%"
       >
         <el-table-column
+          type="expand"
+          width="36"
+        >
+          <template #default="{ row }">
+            <div class="coverage-panel">
+              <div class="coverage-panel-title">
+                验收点覆盖（RV-3）
+              </div>
+              <div
+                v-for="(item, idx) in (row.coverage || [])"
+                :key="idx"
+                class="coverage-item"
+              >
+                <el-tag
+                  size="small"
+                  :type="coverageStatusType(item.status)"
+                  effect="light"
+                >
+                  {{ coverageStatusLabel(item.status) }}
+                </el-tag>
+                <span class="coverage-ref">{{ item.criterionRef || '（未填验收点引用）' }}</span>
+                <span class="coverage-meta">
+                  证据：{{ coverageMethodLabel(item.method) }}<template v-if="item.evidenceRef">
+                    · {{ item.evidenceRef }}
+                  </template>
+                </span>
+                <span
+                  v-if="item.note"
+                  class="coverage-note"
+                >{{ item.note }}</span>
+              </div>
+              <div
+                v-if="!(row.coverage && row.coverage.length)"
+                class="coverage-empty"
+              >
+                本记录无验收点覆盖清单：RV-3 之前的历史记录，或核验模型未输出 coverage
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column
           label="子任务"
           min-width="140"
         >
@@ -173,11 +218,11 @@
         >
           <template #default="{ row }">
             <el-tag
-              :type="row.result==='APPROVED' ? 'success' : 'danger'"
+              :type="resultTagType(row.result)"
               size="small"
               effect="light"
             >
-              {{ row.result === 'APPROVED' ? 'APPROVE' : 'REJECTED' }}
+              {{ resultLabel(row.result) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -285,7 +330,7 @@ import type { ReviewRecord } from '@/types'
 const router = useRouter()
 const list = ref<ReviewRecord[]>([])
 const loading = ref(false)
-const resultFilter = ref<'' | 'APPROVED' | 'REJECTED'>('')
+const resultFilter = ref<'' | 'APPROVED' | 'REJECTED' | 'INCONCLUSIVE'>('')
 const keyword = ref('')
 // 客户端分页：后端 /api/reviews 未返 PageResult，全量拉取后在前端切片
 // 这样避免后端契约改动，亦不破坏 SKILL.md 中外部 Agent 的全量契约
@@ -293,13 +338,52 @@ const pageSize = ref(20)
 const currentPage = ref(1)
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 
+// 三态结论展示（RV-2）：INCONCLUSIVE = 判定不可采信，必须独立配色，不得复用驳回样式
+function resultTagType(result: string): 'success' | 'danger' | 'warning' {
+  if (result === 'APPROVED') return 'success'
+  if (result === 'INCONCLUSIVE') return 'warning'
+  return 'danger'
+}
+
+function resultLabel(result: string): string {
+  if (result === 'APPROVED') return 'APPROVE'
+  if (result === 'INCONCLUSIVE') return 'INCONCLUSIVE'
+  return 'REJECTED'
+}
+
+// 验收点覆盖渲染（RV-3）：status/method 取值与后端 ReviewCoverageParser 同一口径
+function coverageStatusType(status: string): 'success' | 'danger' | 'warning' | 'info' {
+  if (status === 'covered') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'not_verifiable') return 'warning'
+  return 'info'
+}
+
+function coverageStatusLabel(status: string): string {
+  if (status === 'covered') return '已覆盖'
+  if (status === 'failed') return '未通过'
+  if (status === 'not_verifiable') return '无法核验'
+  return status || '未声明'
+}
+
+// 非 attachment/sandbox 一律标「自述」：后端不将其计入覆盖，前端不得显示成合格证据
+function coverageMethodLabel(method: string): string {
+  if (method === 'attachment') return '物化附件'
+  if (method === 'sandbox') return '沙箱执行'
+  return '自述（不计入覆盖）'
+}
+
 // 顶部统计：根据过滤后列表实时计算，避免与表格数据脱节
 const stats = computed(() => {
   const source = list.value
   const total = source.length
   const approved = source.filter(r => r.result === 'APPROVED').length
   const rejected = source.filter(r => r.result === 'REJECTED').length
-  const scoresArr = source.map(r => r.score).filter(s => typeof s === 'number')
+  // 平均分排除 INCONCLUSIVE（与后端 ReviewRecordMapper 统计口径一致）
+  const scoresArr = source
+    .filter(r => r.result !== 'INCONCLUSIVE')
+    .map(r => r.score)
+    .filter(s => typeof s === 'number')
   const avgScore = scoresArr.length
     ? scoresArr.reduce((a, b) => a + b, 0) / scoresArr.length
     : 0
@@ -426,6 +510,38 @@ onMounted(() => load())
 }
 .score-num.good { color: var(--ha-success); }
 .score-num.bad { color: var(--ha-danger); }
+/* 验收点覆盖展开区（RV-3）：每条验收点一行，引用为主、证据为辅 */
+.coverage-panel {
+  padding: 12px 16px 14px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.coverage-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ha-muted);
+  letter-spacing: 0.02em;
+}
+.coverage-item {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.coverage-ref {
+  color: var(--ha-ink-secondary);
+  line-height: 1.5;
+}
+.coverage-meta,
+.coverage-note {
+  font-size: 12px;
+  color: var(--ha-muted);
+}
+.coverage-empty {
+  font-size: 12px;
+  color: var(--ha-muted);
+}
 @media (max-width: 1200px) {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
 }

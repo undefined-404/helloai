@@ -47,24 +47,44 @@ public class VerdictParser {
     }
 
     /**
+     * 解析结果 + 解析路径元信息（`RV-1`：静态校验器需要知道「判定是否来自宽松兜底」）。
+     *
+     * @param verdict   结构化判定；不可解析时为 null
+     * @param looseParse 判定是否由宽松兜底产出（{@code verdict != null && 严格解析失败}）
+     */
+    public record ParseResult(SubTaskReviewService.ReviewVerdict verdict, boolean looseParse) {
+    }
+
+    /**
      * 解析核验判定 JSON；严格解析不可用时走 {@link #looseVerdict} 宽松兜底；取不到 {@code pass}
      * 才返回 null（调用方据此停留 REVIEW / 记录不可解析）。
      */
     public SubTaskReviewService.ReviewVerdict parseVerdict(String rawOutput) {
+        return parseWithMeta(rawOutput).verdict();
+    }
+
+    /**
+     * 同 {@link #parseVerdict(String)}，额外带回「是否宽松兜底命中」标记。
+     *
+     * <p>{@code looseParse=true} 表示严格 JSON 解析失败、判定字段是从原文按正则提取的——
+     * 字段可能不完整（如缺 {@code analysis}），供静态校验器标注，<b>不改变解析结果本身</b>。</p>
+     */
+    public ParseResult parseWithMeta(String rawOutput) {
         if (rawOutput == null || rawOutput.isBlank()) {
-            return null;
+            return new ParseResult(null, false);
         }
         String cleaned = LlmJsonSanitizer.fixInvalidEscapes(stripToJsonObject(rawOutput));
         try {
             SubTaskReviewService.ReviewVerdict verdict =
                     objectMapper.readValue(cleaned, SubTaskReviewService.ReviewVerdict.class);
             if (verdict != null && verdict.getPass() != null) {
-                return verdict;
+                return new ParseResult(verdict, false);
             }
         } catch (Exception e) {
             // 落到下面的宽松兜底（非静默丢弃：兜底仍取不到 pass 才判不可解析）
         }
-        return looseVerdict(rawOutput);
+        SubTaskReviewService.ReviewVerdict loose = looseVerdict(rawOutput);
+        return new ParseResult(loose, loose != null);
     }
 
     /**

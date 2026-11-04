@@ -1,24 +1,38 @@
 package com.helloai.core.agent.runtime.loop.impl;
 
+import com.helloai.common.config.OpenSandboxProperties;
+import com.helloai.common.config.ReviewProperties;
+import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.chat.ChatResponseContentExtractor;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.runtime.loop.AgentLoopResult;
+import com.helloai.core.agent.runtime.sandbox.SandboxCallLedger;
+import com.helloai.core.agent.runtime.sandbox.SandboxExecutionToolContributor;
 import com.helloai.core.shared.util.DeliverableDraft;
 import com.helloai.core.shared.util.VerificationFence;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.DefaultToolCallingChatOptions;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 内部 LLM 提交前自我审计的收尾轮（REF-8.4 ②，{@link LoopHook} 的 {@code beforeTerminate} 首条实现）。
@@ -64,16 +78,57 @@ import java.util.Set;
 public class FinalReportFenceHook implements LoopHook {
 
     /**
-     * 收尾指令（追加式）：让模型对照任务要求核验草稿，但<b>原样保留草稿正文</b>、仅在末尾追加围栏三行——
+     * 收尾轮唯一放开的工具（`SR-1`）：沙箱命令执行。
+     *
+     * <p>与 {@link SandboxExecutionToolContributor#TOOL_INTERNAL_RUN_IN_SANDBOX} 同一常量，
+     * 不写字面量：工具改名/迁移时两处一起改，防白名单静默失效。沙箱未启用时该工具本就不在
+     * {@code enabledToolCallbacks} 里（可用性声明在贡献者侧），故此处不需要第二份开关判断。</p>
+     */
+    static final String SANDBOX_TOOL_NAME = SandboxExecutionToolContributor.TOOL_INTERNAL_RUN_IN_SANDBOX;
+
+    /**
+     * 收尾轮沙箱调用上限（`SR-1`，N=3）。
+     *
+     * <p><b>按基线差值计</b>：计数器在进入收尾轮时从 0 起，只统计<b>本轮</b>调用——
+     * 历史 turn 已调用 5 次也不消耗本预算（`sandboxToolCallCount(messages)` 是整轮累计，
+     * 直接拿它比会「一进收尾轮即超限」）。</p>
+     *
+     * <p><b>为什么上限做在回调里</b>：收尾轮是 {@code chatModel.call(...)} 直呼，不走
+     * {@code ChatModelToolLoop}，没有「每次工具调用」的钩子时机 ⇒ 只能由计数装饰器
+     * （{@link BudgetedSandboxCallback}）在第 N+1 次直接回错误 ToolResponse。</p>
+     */
+    static final int FINALIZE_SANDBOX_MAX_CALLS = 3;
+
+    /** 围栏第四条：可机读证据（`SR-2`，两条收尾指令共用同一文案，防漂移）。 */
+    static final String EVIDENCE_LINE_TEMPLATE =
+            "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"command\":\"<实际执行的命令>\","
+                    + "\"exitCode\":<整数>,\"truncated\":<true|false>,"
+                    + "\"digest\":\"sha256:<输出摘要，无法计算时留空>\"}]";
+
+    /**
+     * 沙箱未启用时的自审标签（`SR-4`）。
+     *
+     * <p><b>为什么必须是独立标签而不是 {@code missing}</b>：{@code missing} 的含义是
+     * 「模型该给证据却没给」，属自审不合格；{@code degraded_no_sandbox} 的含义是
+     * 「平台没给模型一手证据的机会」，属环境降级。两者混在一个标签里，统计上就会把
+     * 「沙箱关着的自述」算进「已自审」——正是本项要禁止的口径污染。</p>
+     */
+    static final String DEGRADED_NO_SANDBOX = "degraded_no_sandbox";
+
+    /**
+     * 收尾指令（追加式）：让模型对照任务要求核验草稿，但<b>原样保留草稿正文</b>、仅在末尾追加围栏四行——
      * 不重写草稿（防丢细节，而 ④ 只查 containsMarker 会上当），收敛输出面、稳上下文。
      */
     private static final String FINALIZE_HEADER_INSTRUCTION =
             "请对照上面的【本轮任务要求】对《报告草稿》做一次自我审计。"
                     + "要求：原样保留草稿正文，不得改写、删减或扩写草稿内容；"
-                    + "仅在草稿末尾追加如下围栏三行（不要省略、不要调用任何工具）：\n"
+                    + "如需一手证据，可在本轮调用 " + SANDBOX_TOOL_NAME
+                    + " 做验证（最多 " + FINALIZE_SANDBOX_MAX_CALLS + " 次，超出会被平台拒绝）；"
+                    + "仅在草稿末尾追加如下围栏四行（不要省略；EVIDENCE 按实际执行结果填写，未执行则填 []）：\n"
                     + "VERIFICATION:\n- <针对交付物是否满足本轮需求要点的核实说明>\n"
                     + "STATUS: <DONE 或 BLOCKED>\n"
-                    + "NEXT_STEPS: <如已全部完成则填 无，否则列出下一步>";
+                    + "NEXT_STEPS: <如已全部完成则填 无，否则列出下一步>\n"
+                    + EVIDENCE_LINE_TEMPLATE;
 
     /** 收尾轮模型调用有界重试次数（覆盖瞬时故障，如网络 / 429 抖动）。 */
     private static final int FINALIZE_MAX_ATTEMPTS = 2;
@@ -88,12 +143,28 @@ public class FinalReportFenceHook implements LoopHook {
      */
     private static final String FINALIZE_WRITE_INSTRUCTION =
             "《报告草稿》当前为空——你此前的轮次已用于工具调研，但**正文从未写出**。"
-                    + "现在请**不要调用任何工具**，直接依据上面的【本轮任务要求】与下方的调研结果，"
+                    + "现在请直接依据上面的【本轮任务要求】与下方的调研结果，"
                     + "写出**完整交付物正文**（Markdown，覆盖全部验收要点；不要写开场白、不要只给自述）。"
-                    + "正文末尾附围栏三行：\n"
+                    + "如需一手证据，可调用 " + SANDBOX_TOOL_NAME
+                    + " 做验证（最多 " + FINALIZE_SANDBOX_MAX_CALLS + " 次，超出会被平台拒绝）。"
+                    + "正文末尾附围栏四行（EVIDENCE 按实际执行结果填写，未执行则填 []）：\n"
                     + "VERIFICATION:\n- <针对交付物是否满足本轮需求要点的核实说明>\n"
                     + "STATUS: <DONE 或 BLOCKED>\n"
-                    + "NEXT_STEPS: <如已全部完成则填 无，否则列出下一步>";
+                    + "NEXT_STEPS: <如已全部完成则填 无，否则列出下一步>\n"
+                    + EVIDENCE_LINE_TEMPLATE;
+
+    /**
+     * 自审不合格重跑指令（`SR-3`）。
+     *
+     * <p>两个占位符：{@code %s} = 闸门失败摘要，{@code %d} = 本轮沙箱调用上限。
+     * 指令只要求<b>补证据</b>、明确要求保持正文不变 —— 重跑的目的是让一手证据到位，
+     * 不是再要一篇新正文（2026-10-16 的「收尾轮顶替正文」回归不得借道重跑复活）。</p>
+     */
+    private static final String SELF_REVIEW_RETRY_INSTRUCTION =
+            "自审未通过：%s\n"
+                    + "请只补齐上述一手证据（可调用 " + SANDBOX_TOOL_NAME
+                    + " 实际执行验证，本轮最多 %d 次），并保持上面已提交的正文与围栏结构不变后重新提交；"
+                    + "确实无法验证时，把 STATUS 改为 BLOCKED 并写明原因，不要伪造 EVIDENCE。";
 
     /** 空草稿收尾轮注入的调研摘要：单条工具输出截断上限（字符）。 */
     static final int RESEARCH_DIGEST_PER_TOOL_CHARS = 4000;
@@ -168,6 +239,32 @@ public class FinalReportFenceHook implements LoopHook {
             "task_final_report",
             "task_final_report_review");
 
+    /** `SR-2` 自审证据的事实源（平台侧沙箱调用台账）。 */
+    private final SandboxCallLedger sandboxCallLedger;
+
+    /** `SR-2` 证据核对事件的写入端口（agent → task 端口反转，避免反向依赖）。 */
+    private final TaskTimelinePort taskTimelinePort;
+
+    /** 沙箱启用事实源（`SR-1`：未启用时不向收尾轮注入任何工具）。 */
+    private final OpenSandboxProperties sandboxProperties;
+
+    /**
+     * 自审闸门配置（`SR-3`：开关 + 重跑上限 {@code K}）。
+     *
+     * <p>落点在 {@code helloai-common} 的 {@code ReviewProperties} 而非 review 域：
+     * 本钩子在 agent 域，按域依赖链 {@code review > … > agent} 不得反向 import
+     * {@code core.review.*}，而 common 的配置类是各域共享的（同 {@link OpenSandboxProperties}）。</p>
+     */
+    private final ReviewProperties reviewProperties;
+
+    public FinalReportFenceHook(SandboxCallLedger sandboxCallLedger, TaskTimelinePort taskTimelinePort,
+                                OpenSandboxProperties sandboxProperties, ReviewProperties reviewProperties) {
+        this.sandboxCallLedger = sandboxCallLedger;
+        this.taskTimelinePort = taskTimelinePort;
+        this.sandboxProperties = sandboxProperties;
+        this.reviewProperties = reviewProperties;
+    }
+
     @Override
     public AgentLoopResult beforeTerminate(AgentLoopTermination termination) {
         AgentLoopResult draft = termination.draft();
@@ -194,11 +291,23 @@ public class FinalReportFenceHook implements LoopHook {
         if (!naturalStop && !suspiciousStop && !exhaustedRescue) {
             return null;
         }
-        // 围栏已合格 ⇒ 零额外 LLM 调用（自审已完成）。
+        // 围栏已合格 ⇒ 不再追加成文调用（自审已完成）。
         // ★但「可疑 STOP」不认围栏：实测 MiniMax 的假成功恰好是「604 字节写作过程叙述 + 围栏
         // 声称 DONE」——围栏本身是它自证完成的方式，拿围栏当放行依据正好被它绕过。
+        //
+        // `SR-3` 接线修复（2026-11-04 真机实测）：原实现在这里直接 return，导致「模型自然写出三行
+        // 合格围栏」这条最正常的路径**从不产生** {@code self_review_evidence_checked}，也从不核对
+        // EVIDENCE 与台账——本地真实任务的 3 条子任务全部命中该缺口（0 条证据核对事件、6 条沙箱
+        // 台账事件）。闸门评估本身零 token：通过 ⇒ 零额外调用；不通过 ⇒ 才追加一次补证据重跑。
         if (!suspiciousStop && VerificationFence.parse(draft.text()).adequate()) {
-            return null;
+            SelfReviewGate.Result gate = observeAndGate(termination, draft.text(),
+                    SelfReviewGate.deliverableDeclaration(firstUserText(termination.messages())));
+            if (gate.passed()) {
+                return null;
+            }
+            log.info("FinalReportFenceHook: 围栏合格但自审闸门不通过，追加补证据重跑: subTaskId={}, tier={}, failures={}",
+                    termination.subTaskId(), gate.tier(), gate.summary());
+            return tryFinalizeRound(termination, draft, false);
         }
         // 两条救援路径的草稿都「不是可交付正文」（耗尽判据与可疑 STOP 判据都蕴含这一点）⇒
         // 一律走「从头写正文」而非「审计这份草稿」：对过程叙述做审计只会换来更工整的自我表扬。
@@ -307,14 +416,67 @@ public class FinalReportFenceHook implements LoopHook {
     }
 
     /**
-     * 有界一次无工具重跑：喂「system + 原user(任务要求) + 追加式草稿」，返回修订结果；重跑失败沿用草稿。
+     * 收尾轮编排：一次成文 + `SR-3` 闸门 + 有界内容重跑（{@code K}）。
+     *
+     * <p><b>两层重试是不同性质的东西，不要混为一谈</b>：{@link #FINALIZE_MAX_ATTEMPTS} 是
+     * <b>单次成文调用内部</b>的网络 / 429 重试（不改变内容，只重试同一条指令）；本方法的
+     * {@code K} 是<b>内容不合格</b>后的重跑（追加「自审未通过 + 上一轮产出」再要一次）。
+     * 最坏模型调用数 = {@code 2 × (1 + K)}（默认 K=1 ⇒ 4 次），该乘数已由单测锁定。</p>
+     *
+     * <p><b>重跑失败不丢交付物</b>：重跑那一轮如果调用失败 / 空产出 / 只回围栏，一律<b>沿用上一轮
+     * 已采纳的产出</b>（而不是退回草稿）——上一轮内容已被判定合格可交付，重跑只是补证据，
+     * 补不上不能把已有的弄丢。</p>
+     */
+    private AgentLoopResult tryFinalizeRound(AgentLoopTermination termination, AgentLoopResult draft,
+                                             boolean forceWriteFromScratch) {
+        FinalizeRound round = finalizeOnce(termination, draft, forceWriteFromScratch, null);
+        if (round == null) {
+            return draft;
+        }
+        int maxRetry = Math.max(0, reviewProperties.getSelfReviewMaxRetry());
+        int retried = 0;
+        while (!round.gate().passed() && retried < maxRetry) {
+            retried++;
+            log.info("FinalReportFenceHook: 自审闸门不通过，重跑第 {} 轮: subTaskId={}, tier={}, failures={}",
+                    retried, termination.subTaskId(), round.gate().tier(), round.gate().summary());
+            FinalizeRound again = finalizeOnce(termination, draft, forceWriteFromScratch, round);
+            if (again == null) {
+                break;
+            }
+            round = again;
+        }
+        if (!round.gate().passed()) {
+            recordSelfReviewFailure(termination, round, retried);
+        }
+        return AgentLoopResult.stop(round.effectiveText(), round.thinking(),
+                Math.min(draft.iterations() + 1 + retried, termination.maxIterations()),
+                draft.toolCallCount(), round.tokenUsage());
+    }
+
+    /**
+     * 单轮收尾产出（{@code null} 表示该轮<b>不采信</b>：调用失败 / 空产出 / 只回围栏）。
+     *
+     * @param effectiveText 平台采纳的正文（可能已按 ③ 回退为「草稿 + 围栏段」）
+     * @param thinking      思考过程（收尾轮无思考时沿用草稿）
+     * @param tokenUsage    截至本轮的累计 token（含此前所有收尾轮）
+     * @param gate          本轮自审闸门结论
+     */
+    private record FinalizeRound(String effectiveText, String thinking, Integer tokenUsage,
+                                 SelfReviewGate.Result gate) {
+    }
+
+    /**
+     * 有界一次无工具重跑：喂「system + 原user(任务要求) + 追加式草稿」，返回本轮采纳结果；
+     * 调用失败 / 空产出 / 只回围栏返回 null（由 {@link #tryFinalizeRound} 决定退回草稿还是沿用上一轮）。
      *
      * @param forceWriteFromScratch 草稿「不是可交付正文」（进度叙述 / 开场白 / 空）时置 true：
      *                              改用「从头写正文 + 调研摘要」指令，而不是「审计这份草稿」——
      *                              对过程叙述做审计只会换来更工整的自我表扬（`LOG-20261025-009`）
+     * @param previous              上一轮采纳结果（非 null 即 {@code SR-3} 的内容重跑，
+     *                              追加「自审未通过 + 上一轮产出」两段消息）
      */
-    private AgentLoopResult tryFinalizeRound(AgentLoopTermination termination, AgentLoopResult draft,
-                                             boolean forceWriteFromScratch) {
+    private FinalizeRound finalizeOnce(AgentLoopTermination termination, AgentLoopResult draft,
+                                       boolean forceWriteFromScratch, FinalizeRound previous) {
         String draftText = draft.text() != null ? draft.text() : "";
         List<Message> messages = termination.messages();
         // 精简、有界、且保留自审依据：system(身份/输出契约) + 首个 UserMessage(原任务要求) + 草稿；
@@ -349,28 +511,45 @@ public class FinalReportFenceHook implements LoopHook {
         } else {
             body.append(FINALIZE_HEADER_INSTRUCTION).append("\n\n《报告草稿》\n").append(draftText);
         }
-        List<Message> lean = new ArrayList<>(2);
+        List<Message> lean = new ArrayList<>(4);
         if (StringUtils.hasText(systemText)) {
             lean.add(new SystemMessage(systemText));
         }
         lean.add(new UserMessage(body.toString()));
+        if (previous != null) {
+            // `SR-3` 内容重跑：把上一轮<b>已采纳</b>的产出作为助手消息回灌，再追加「自审未通过」指令。
+            // 回灌采纳文本而不是模型原始输出：③ 回退后采纳文本才是平台真正要交付的东西，
+            // 让模型在它之上补证据，才不会又写一份新的正文顶替掉。
+            lean.add(new AssistantMessage(previous.effectiveText()));
+            lean.add(new UserMessage(String.format(SELF_REVIEW_RETRY_INSTRUCTION,
+                    previous.gate().summary(), FINALIZE_SANDBOX_MAX_CALLS)));
+        }
         ChatModel chatModel = termination.chatModel();
         ChatResponse response = null;
         RuntimeException lastEx = null;
+        List<ToolCallback> finalizeTools = finalizeToolCallbacks(termination);
         for (int attempt = 0; attempt < FINALIZE_MAX_ATTEMPTS && response == null; attempt++) {
             try {
-                // 不设 toolCallbacks ⇒ 收尾轮只产文本，不重入任何工具（有界、无副作用）
                 DefaultToolCallingChatOptions options = new DefaultToolCallingChatOptions();
-                options.setInternalToolExecutionEnabled(false);
+                if (finalizeTools.isEmpty()) {
+                    // 无白名单工具（沙箱未启用 / 本轮未暴露）⇒ 收尾轮只产文本（原行为）
+                    options.setInternalToolExecutionEnabled(false);
+                } else {
+                    // `SR-1`：只放开 internal_run_in_sandbox，且每次尝试使用独立的计数装饰器
+                    //（重试是一次新的模型调用，不应消耗上一次尝试的预算）
+                    options.setToolCallbacks(budgetedSandboxCallbacks(finalizeTools));
+                    options.setInternalToolExecutionEnabled(true);
+                }
                 response = chatModel.call(new Prompt(lean, options));
             } catch (RuntimeException e) {
                 lastEx = e;
             }
         }
         if (response == null) {
-            log.warn("FinalReportFenceHook: 收尾轮失败，沿用原草稿（交出口分类按口径 A 宽判 / reviewer 大环兜底）: err={}",
+            log.warn("FinalReportFenceHook: 收尾轮失败，本轮不采信（首轮⇒沿用原草稿；重跑⇒沿用上一轮产出，"
+                    + "交出口分类按口径 A 宽判 / reviewer 大环兜底）: err={}",
                     lastEx == null ? "unknown" : lastEx.getMessage());
-            return draft;
+            return null;
         }
         ChatResponseContentExtractor.ExtractedContent extracted =
                 ChatResponseContentExtractor.extract(response);
@@ -379,8 +558,8 @@ public class FinalReportFenceHook implements LoopHook {
         // extract 返回 "" 而非 null）⇒ 沿用原草稿，不把既有报告抹掉。贴合口径 A：草稿即便只在
         // 围栏不完整（如已含 VERIFICATION 缺 STATUS）也本应放行交 reviewer，绝不能被收尾清成空。
         if (text == null || text.isBlank()) {
-            log.warn("FinalReportFenceHook: 收尾轮空产出，沿用原草稿（防交付物被清空）");
-            return draft;
+            log.warn("FinalReportFenceHook: 收尾轮空产出，本轮不采信（防交付物被清空）");
+            return null;
         }
         // ③ 防「收尾轮改写丢正文」（2026-10-16 实测事故）：指令虽写明「原样保留草稿正文、
         // 仅在末尾追加围栏三行」，但模型可能只回围栏三行 —— 此时若直接采用收尾轮正文，
@@ -396,8 +575,8 @@ public class FinalReportFenceHook implements LoopHook {
         // 阈值会把它误判成自述（2026-10-16 / LOG-050 两个反例依赖被采信）。
         if (writeFromScratch && !StringUtils.hasText(stripFence(text))) {
             log.warn("FinalReportFenceHook: 要求「从头写正文」但收尾轮只回了围栏（{} 字符，正文近空白），"
-                    + "不采信为成功，沿用原草稿", text.length());
-            return draft;
+                    + "本轮不采信", text.length());
+            return null;
         }
         if (writeFromScratch) {
             // ③b' 从头写正文场景（2026-10-25，空草稿 / STOP 假成功）：成功标准只有一个 ——
@@ -426,11 +605,189 @@ public class FinalReportFenceHook implements LoopHook {
         String thinking = extracted.thinking() != null && !extracted.thinking().isBlank()
                 ? extracted.thinking()
                 : draft.thinking();
-        // ③a：收尾那一轮的 token 计入累计（复用 delta 累加逻辑）
-        Integer tokens = ChatModelToolLoop.accumulateUsage(response, draft.tokenUsage());
-        // ③c：收尾轮计为额外一次模型轮，与 maxIterations 取 min，不超配置上限
-        int iterations = Math.min(draft.iterations() + 1, termination.maxIterations());
-        return AgentLoopResult.stop(effectiveText, thinking, iterations, draft.toolCallCount(), tokens);
+        // ③a：收尾那一轮的 token 计入累计（复用 delta 累加逻辑；重跑轮在上一轮累计上继续累加）
+        Integer tokens = ChatModelToolLoop.accumulateUsage(response,
+                previous == null ? draft.tokenUsage() : previous.tokenUsage());
+        // `SR-2` / `SR-3`：解析证据 → 与台账对账 → 判闸门 → 记观测事件（纯观测失败不阻断）
+        SelfReviewGate.Result gate = observeAndGate(termination, text, taskText);
+        return new FinalizeRound(effectiveText, thinking, tokens, gate);
+    }
+
+    /**
+     * `SR-2` 观测 + `SR-3` 判定 + `SR-4` 降级留痕（一轮收尾产出的三件事合成一次读取）。
+     *
+     * <p><b>事实源</b>：证据真伪以 {@link SandboxCallLedger} 的平台侧记录为准，模型自填仅作对照。
+     * 事件写入失败只降级告警，闸门结论仍返回（观测不得影响判定，判定也不得依赖观测写入成功）。</p>
+     *
+     * <p><b>{@code SR-4} 降级口径</b>：沙箱未启用时 {@code selfReview=degraded_no_sandbox}
+     * （无沙箱降级），<b>不写</b> verified / mismatch —— 该档位的自审<b>不得统计为「已自审」</b>。
+     * 此时闸门也不判（没有一手证据可对账，强行判只会把「沙箱没开」伪装成「模型自审造假」）。</p>
+     */
+    private SelfReviewGate.Result observeAndGate(AgentLoopTermination termination, String text,
+                                                 String taskText) {
+        Long subTaskId = termination.subTaskId();
+        boolean sandboxEnabled = sandboxProperties.isEnabled();
+        boolean gateEnabled = reviewProperties.isSelfReviewEnabled();
+        List<SandboxCallLedger.Entry> ledger = subTaskId == null
+                ? List.of() : sandboxCallLedger.recent(subTaskId);
+        SelfReviewEvidenceParser.Parsed parsed = SelfReviewEvidenceParser.parse(text);
+        SelfReviewEvidenceVerifier.Result verified = SelfReviewEvidenceVerifier.verify(parsed, ledger);
+        SelfReviewGate.Result gate = gateEnabled
+                ? SelfReviewGate.evaluate(sandboxEnabled, subTaskId != null, parsed, verified, ledger, taskText)
+                : SelfReviewGate.disabled();
+        recordEvidenceObservation(termination, sandboxEnabled, verified, gate);
+        return gate;
+    }
+
+    /**
+     * 写一条自审证据核对事件（{@code self_review_evidence_checked}）。
+     *
+     * <p>payload 同时带闸门结论（{@code gateTier} / {@code gatePassed}），使「这一轮自审跑没跑、
+     * 判成什么档、拦没拦」在时间线一条事件里可读全。</p>
+     */
+    private void recordEvidenceObservation(AgentLoopTermination termination, boolean sandboxEnabled,
+                                           SelfReviewEvidenceVerifier.Result verified,
+                                           SelfReviewGate.Result gate) {
+        Long subTaskId = termination.subTaskId();
+        if (subTaskId == null) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            // `SR-4`：沙箱未启用 ⇒ 显式降级标签，不产出 verified / mismatch（不得统计为「已自审」）
+            payload.put("selfReview", sandboxEnabled
+                    ? verified.outcome().name().toLowerCase(java.util.Locale.ROOT)
+                    : DEGRADED_NO_SANDBOX);
+            payload.put("claimedCount", verified.claimedCount());
+            payload.put("ledgerCount", verified.ledgerCount());
+            payload.put("sandboxEnabled", sandboxEnabled);
+            payload.put("gateTier", gate.tier().name());
+            payload.put("gatePassed", gate.passed());
+            if (!verified.mismatches().isEmpty()) {
+                payload.put("mismatches", verified.mismatches());
+            }
+            if (verified.outcome() == SelfReviewEvidenceVerifier.Outcome.MISMATCH && sandboxEnabled) {
+                log.warn("FinalReportFenceHook: 自审证据与台账不一致（self_reported_mismatch）: subTaskId={}, "
+                        + "claimed={}, ledger={}, detail={}", subTaskId, verified.claimedCount(),
+                        verified.ledgerCount(), verified.mismatches());
+            }
+            taskTimelinePort.recordEvent(termination.taskId(), subTaskId,
+                    TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(), AgentRole.SYSTEM, null, payload);
+        } catch (Exception e) {
+            log.warn("FinalReportFenceHook: 自审证据核对失败（观测降级，不阻断）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+        }
+    }
+
+    /**
+     * `SR-3` 闸门重跑耗尽后的失败留痕（{@code self_review_failed}）。
+     *
+     * <p><b>只留痕、不改出口</b>：重跑耗尽后仍按既有出口分类收尾（BLOCKED / 交 reviewer 大环），
+     * 本钩子无权改 {@code SubTaskStatus}（红线：只改 {@link AgentLoopResult}）。</p>
+     */
+    private void recordSelfReviewFailure(AgentLoopTermination termination, FinalizeRound round, int retried) {
+        Long subTaskId = termination.subTaskId();
+        if (subTaskId == null) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("gateTier", round.gate().tier().name());
+            payload.put("failures", round.gate().failures());
+            payload.put("retryCount", retried);
+            payload.put("sandboxEnabled", sandboxProperties.isEnabled());
+            taskTimelinePort.recordEvent(termination.taskId(), subTaskId,
+                    TimelineEventCode.SELF_REVIEW_FAILED.code(), AgentRole.SYSTEM, null, payload);
+        } catch (Exception e) {
+            log.warn("FinalReportFenceHook: 自审失败事件写入失败（观测降级，不阻断）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+        }
+        log.warn("FinalReportFenceHook: 自审闸门重跑耗尽仍不合格: subTaskId={}, tier={}, retried={}, failures={}",
+                subTaskId, round.gate().tier(), retried, round.gate().summary());
+    }
+
+    /**
+     * `SR-1`：从本轮可见工具里**白名单过滤**出唯一可注入收尾轮的工具。
+     *
+     * <p>沙箱未启用 ⇒ 空清单（不注入）；即便调用方把工具塞进清单，也再按启用事实源兜一层
+     * fail-closed（双保险不是重复逻辑：前者是「模型可见性」，后者是「本钩子要不要放开」）。</p>
+     */
+    private List<ToolCallback> finalizeToolCallbacks(AgentLoopTermination termination) {
+        // `SR-3` 回滚面①：闸门关闭 ⇒ 收尾轮回到「只产文本」（不放开任何工具）
+        if (!reviewProperties.isSelfReviewEnabled()) {
+            return List.of();
+        }
+        if (!sandboxProperties.isEnabled() || termination.availableToolCallbacks().isEmpty()) {
+            return List.of();
+        }
+        List<ToolCallback> tools = new ArrayList<>(1);
+        for (ToolCallback callback : termination.availableToolCallbacks()) {
+            if (callback == null || callback.getToolDefinition() == null) {
+                continue;
+            }
+            if (SANDBOX_TOOL_NAME.equals(callback.getToolDefinition().name())) {
+                tools.add(callback);
+            }
+        }
+        return tools;
+    }
+
+    /** 给每次收尾尝试包一层独立计数装饰器（重试 = 新预算，不与上一次尝试共享）。 */
+    private static List<ToolCallback> budgetedSandboxCallbacks(List<ToolCallback> tools) {
+        List<ToolCallback> wrapped = new ArrayList<>(tools.size());
+        for (ToolCallback tool : tools) {
+            wrapped.add(new BudgetedSandboxCallback(tool, FINALIZE_SANDBOX_MAX_CALLS));
+        }
+        return wrapped;
+    }
+
+    /**
+     * 收尾轮沙箱工具的计数装饰器（`SR-1`，上限 {@link #FINALIZE_SANDBOX_MAX_CALLS}）。
+     *
+     * <p>第 N+1 次调用不再触达真实工具，直接返回结构化错误 ToolResponse（模型可见，
+     * 可自行收敛为「不再验证、直接成文」）；计数按<b>本实例</b>累计，故天然只覆盖收尾轮，
+     * 历史 turn 的调用不消耗本预算（基线差值口径）。</p>
+     */
+    static final class BudgetedSandboxCallback implements ToolCallback {
+
+        /** 超预算时回给模型的错误载荷（与真实工具返回同为字符串 ToolResponse）。 */
+        static final String REJECTION_CODE = "sandbox_call_budget_exceeded";
+
+        private final ToolCallback delegate;
+        private final int maxCalls;
+        private final AtomicInteger calls = new AtomicInteger();
+
+        BudgetedSandboxCallback(ToolCallback delegate, int maxCalls) {
+            this.delegate = delegate;
+            this.maxCalls = maxCalls;
+        }
+
+        @Override
+        public ToolDefinition getToolDefinition() {
+            return delegate.getToolDefinition();
+        }
+
+        @Override
+        public String call(String toolInput) {
+            String rejection = acquire();
+            return rejection != null ? rejection : delegate.call(toolInput);
+        }
+
+        @Override
+        public String call(String toolInput, ToolContext toolContext) {
+            String rejection = acquire();
+            return rejection != null ? rejection : delegate.call(toolInput, toolContext);
+        }
+
+        /** 占用一次预算；返回非 null 即超限（值为回给模型的错误载荷）。 */
+        String acquire() {
+            int used = calls.incrementAndGet();
+            if (used <= maxCalls) {
+                return null;
+            }
+            return "{\"error\":\"" + REJECTION_CODE + "\",\"limit\":" + maxCalls
+                    + ",\"attempt\":" + used + ",\"message\":\"收尾轮沙箱调用已达上限，请停止验证并直接完成交付物\"}";
+        }
     }
 
     /**

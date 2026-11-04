@@ -19,10 +19,12 @@ import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.ReviewLockTtlResolver;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.support.ReviewChannel;
+import com.helloai.core.review.support.ReviewCoverageParser;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
 import com.helloai.core.review.support.ReviewExecutionEngine;
 import com.helloai.core.agent.quality.gate.GateDecision;
 import com.helloai.core.review.support.VerdictParser;
+import com.helloai.core.review.support.ReviewVerdictValidator;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.shared.util.VerificationFence;
 import com.helloai.core.task.port.SubTaskView;
@@ -400,10 +402,16 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             return;
         }
 
-        ReviewVerdict verdict = reviewExecutionEngine.execute(subTask, reviewer);
-        if (verdict != null) {
-            applyVerdict(subTask, executorAgentId, reviewer, verdict);
+        ReviewExecutionEngine.ExecutionOutcome outcome = reviewExecutionEngine.execute(subTask, reviewer);
+        if (outcome.verdict() == null) {
+            return;
         }
+        // `RV-2`：BLOCK 级 finding（驳回却给满分）⇒ INCONCLUSIVE，停 REVIEW 转人工，不返工
+        if (outcome.inconclusive()) {
+            markInconclusive(subTask, reviewer.id(), ReviewChannel.SINGLE, outcome);
+            return;
+        }
+        applyVerdict(subTask, executorAgentId, reviewer, outcome.verdict());
     }
 
     /** 判定落地：对话流结果文本 + 按判定走既有通过/驳回链（单审默认链路）。 */
@@ -457,7 +465,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
 
         if (Boolean.TRUE.equals(verdict.getPass())) {
             subTaskService.complete(subTaskId);
-            recordAutoReviewQuietly(subTaskId, reviewer.id(), ReviewResult.APPROVED, verdict);
+            recordAutoReviewQuietly(subTask, reviewer.id(), ReviewResult.APPROVED, verdict);
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
                     TimelineEventCode.SUB_TASK_AUTO_REVIEW_PASSED.code(), AgentRole.REVIEWER, reviewer.id(),
                     // TD-5 验收③（2026-10-24）：payload 补 acceptanceKind（REVIEWED kind 子任务
@@ -473,6 +481,47 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             rejectAndRework(subTask, executorAgentId, reviewer.id(), verdict);
             recordReviewEventSafely(subTask, reviewer.id(), AgentEventType.REVIEW_REJECTED, verdict, channel);
         }
+    }
+
+    /**
+     * `RV-2` 不可判定处置：落 {@code INCONCLUSIVE} + 停 REVIEW 转人工，**不调用 {@code rework()}**
+     * （因此不消耗返工预算）。
+     *
+     * <p>触发条件由 {@link ReviewExecutionEngine} 的静态校验给出（当前唯一 BLOCK：
+     * 驳回却给满分）。与既有 {@code reviewer_score_inconsistent}（pass=true 且 score&lt;3）互补：
+     * 那条不改状态只转人工，缺少一条可统计的结论；本项把「判定不可采信」本身落成三态之一。</p>
+     */
+    private void markInconclusive(SubTaskView subTask, Long reviewerAgentId, ReviewChannel channel,
+                                  ReviewExecutionEngine.ExecutionOutcome outcome) {
+        Long subTaskId = subTask.id();
+        ReviewVerdict verdict = outcome.verdict();
+        List<Map<String, Object>> items = outcome.blockFindings().stream()
+                .map(f -> {
+                    Map<String, Object> item = new HashMap<>();
+                    item.put("code", f.code());
+                    item.put("detail", f.detail());
+                    return item;
+                })
+                .toList();
+        Map<String, Object> extra = new HashMap<>();
+        extra.put("channel", channel != null ? channel.name() : "");
+        extra.put("reviewerAgentId", reviewerAgentId);
+        extra.put("score", verdict.getScore());
+        extra.put("findings", items);
+        subTaskService.markManualIntervention(subTaskId, "review_verdict_invalid", extra);
+        recordAutoReviewQuietly(subTask, reviewerAgentId, ReviewResult.INCONCLUSIVE, verdict);
+        taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
+                TimelineEventCode.SUB_TASK_AUTO_REVIEW_INCONCLUSIVE.code(), AgentRole.REVIEWER, reviewerAgentId,
+                VerdictParser.safeMap("channel", channel != null ? channel.name() : null,
+                        "score", verdict.getScore(), "findings", items,
+                        "reason", "review_verdict_invalid"));
+        recordReviewSkipConversation(subTaskId, reviewerAgentId,
+                "核验判定不可采信（reason=review_verdict_invalid）：静态校验命中 "
+                        + items.size() + " 条阻断项；已落 INCONCLUSIVE，子任务停留 REVIEW 等待人工裁决。"
+                        + "未触发返工，不消耗返工预算。",
+                TimelineEventCode.SUBTASK_REVIEW_INCONCLUSIVE.code());
+        log.warn("核验判定不可采信，落 INCONCLUSIVE 转人工: subTaskId={}, reviewerAgentId={}, blocks={}",
+                subTaskId, reviewerAgentId, items.size());
     }
 
     /**
@@ -516,12 +565,14 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         Long subTaskId = subTask.id();
         long timeoutMs = reviewProperties.getDualReviewTimeoutSeconds() * 1000L;
         long deadline = System.currentTimeMillis() + timeoutMs;
-        CompletableFuture<ReviewVerdict> future1 = CompletableFuture.supplyAsync(
+        CompletableFuture<ReviewExecutionEngine.ExecutionOutcome> future1 = CompletableFuture.supplyAsync(
                 () -> reviewExecutionEngine.execute(subTask, reviewer1, ReviewChannel.DUAL), reviewDualExecutor);
-        CompletableFuture<ReviewVerdict> future2 = CompletableFuture.supplyAsync(
+        CompletableFuture<ReviewExecutionEngine.ExecutionOutcome> future2 = CompletableFuture.supplyAsync(
                 () -> reviewExecutionEngine.execute(subTask, reviewer2, ReviewChannel.DUAL), reviewDualExecutor);
-        ReviewVerdict v1 = awaitVerdict(future1, deadline);
-        ReviewVerdict v2 = awaitVerdict(future2, deadline);
+        ReviewExecutionEngine.ExecutionOutcome o1 = awaitOutcome(future1, deadline);
+        ReviewExecutionEngine.ExecutionOutcome o2 = awaitOutcome(future2, deadline);
+        ReviewVerdict v1 = o1 != null ? o1.verdict() : null;
+        ReviewVerdict v2 = o2 != null ? o2.verdict() : null;
         if (v1 == null || v2 == null) {
             log.warn("双审核验不完整，停留 REVIEW 等人工: subTaskId={}, verdict1Ready={}, verdict2Ready={}",
                     subTaskId, v1 != null, v2 != null);
@@ -529,6 +580,11 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                     TimelineEventCode.SUB_TASK_DUAL_REVIEW_INCOMPLETE.code(), AgentRole.REVIEWER, null,
                     Map.of("reviewer1AgentId", reviewer1.id(), "reviewer2AgentId", reviewer2.id(),
                             "verdict1Ready", v1 != null, "verdict2Ready", v2 != null));
+            return;
+        }
+        // `RV-2`：任一侧 BLOCK（判定不可采信）⇒ 共识本身不成立，落 INCONCLUSIVE 转人工
+        if (o1.inconclusive() || o2.inconclusive()) {
+            markInconclusive(subTask, reviewer1.id(), ReviewChannel.DUAL, mergeInconclusive(o1, o2));
             return;
         }
         boolean pass1 = Boolean.TRUE.equals(v1.getPass());
@@ -599,7 +655,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      * {@code sub_task_dual_review_incomplete} 路径；future 不取消：核验 LLM 调用
      * 已在途，取消无收益且会中断共享连接池，残留线程自然跑完由线程池回收。</p>
      */
-    private ReviewVerdict awaitVerdict(CompletableFuture<ReviewVerdict> future, long deadline) {
+    private ReviewExecutionEngine.ExecutionOutcome awaitOutcome(
+            CompletableFuture<ReviewExecutionEngine.ExecutionOutcome> future, long deadline) {
         long remain = deadline - System.currentTimeMillis();
         if (remain <= 0) {
             return null;
@@ -610,6 +667,15 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             log.warn("双审单侧核验等待异常（按不可判定处理）: err={}", e.getMessage());
             return null;
         }
+    }
+
+    /** 合并两侧 BLOCK finding（任一侧不可采信时，取不可采信一侧的判定作落库依据）。 */
+    private static ReviewExecutionEngine.ExecutionOutcome mergeInconclusive(
+            ReviewExecutionEngine.ExecutionOutcome o1, ReviewExecutionEngine.ExecutionOutcome o2) {
+        List<ReviewVerdictValidator.Finding> blocks = new ArrayList<>(o1.blockFindings());
+        blocks.addAll(o2.blockFindings());
+        ReviewExecutionEngine.ExecutionOutcome base = o1.inconclusive() ? o1 : o2;
+        return new ReviewExecutionEngine.ExecutionOutcome(base.verdict(), blocks);
     }
 
     /** Reviewer 维度画像计数增量（best-effort，失败不阻断双审主链路）。 */
@@ -714,7 +780,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         // 判据：**「评审驳回」是一个与后续处置无关的既成事实**，处置（返工/死信）可以有分支，
         // 事实记录不能有分支。重复失败短路路径（`shortCircuitRepeatedFailure`）本就遵守这条，
         // 只有本方法漏了。
-        recordAutoReviewQuietly(subTaskId, reviewerAgentId, ReviewResult.REJECTED, verdict);
+        recordAutoReviewQuietly(subTask, reviewerAgentId, ReviewResult.REJECTED, verdict);
         taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
                 TimelineEventCode.SUB_TASK_AUTO_REVIEW_REJECTED.code(), AgentRole.REVIEWER, reviewerAgentId,
                 // TD-5 验收③（2026-10-24）：payload 补 acceptanceKind + analysis（逐条核验可见），
@@ -844,7 +910,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                 TimelineEventCode.SUB_TASK_REVIEW_DEAD_LETTER.code(), AgentRole.SYSTEM, null,
                 deadLetterPayload);
         // 判决照常落 review_record（REJECTED），保留完整留痕供人工复核
-        recordAutoReviewQuietly(subTaskId, reviewerAgentId, ReviewResult.REJECTED, verdict);
+        recordAutoReviewQuietly(subTask, reviewerAgentId, ReviewResult.REJECTED, verdict);
         subTaskService.changeStatus(subTaskId, SubTaskStatus.DEAD_LETTER, null);
         Map<String, Object> interventionPayload = new LinkedHashMap<>();
         interventionPayload.put("basis", basis);
@@ -929,14 +995,20 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     }
 
     /** 自动核验落 review_record（仅记录；失败不阻断主链路）。score 缺失时按判定结果兜底并限幅 1~5。 */
-    private void recordAutoReviewQuietly(Long subTaskId, Long reviewerAgentId,
+    private void recordAutoReviewQuietly(SubTaskView subTask, Long reviewerAgentId,
                                           ReviewResult result, ReviewVerdict verdict) {
+        Long subTaskId = subTask.id();
         try {
             int fallback = result == ReviewResult.APPROVED ? 3 : 1;
             int score = verdict.getScore() != null ? verdict.getScore() : fallback;
             score = Math.max(1, Math.min(5, score));
+            // `RV-3`：落库的是归一后的覆盖清单（畸形条目已在解析阶段丢弃），不是模型原文
+            List<Map<String, String>> coverage = ReviewCoverageParser.toMaps(
+                    ReviewCoverageParser.parse(verdict.getCoverage()));
+            // `RV-5`：判定快照与 review_record 同事务落库——复判时据此判断「对象是否还是原判对象」
+            Map<String, Object> snapshot = reviewEvidenceAssembler.buildReviewSnapshot(subTask);
             reviewService.recordAutoReview(subTaskId, reviewerAgentId, result, score,
-                    verdict.getIssues(), verdict.getComment());
+                    verdict.getIssues(), verdict.getComment(), coverage, snapshot);
         } catch (Exception e) {
             log.warn("自动核验落 review_record 失败（不阻断主链路）: subTaskId={}, err={}",
                     subTaskId, e.getMessage());

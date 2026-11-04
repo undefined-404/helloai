@@ -28,6 +28,9 @@ public interface ReviewRecordMapper extends BaseMapper<ReviewRecord> {
      *
      * <p>create_time 为审计列（BaseEntity），窗口语义 {@code create_time >= now() - days}。
      * 投影 record（非 Map）：强类型投影最佳实践（2026-10-27 起全局 Map→JacksonTypeHandler 注册已移除）。</p>
+     *
+     * <p>`RV-2`：分母排除 {@code INCONCLUSIVE}——判定不可采信不是一次质量评价，
+     * 留在分母会稀释通过率与平均分。</p>
      */
     @Select("""
             SELECT to_char(date_trunc('day', create_time), 'YYYY-MM-DD') AS period,
@@ -35,26 +38,29 @@ public interface ReviewRecordMapper extends BaseMapper<ReviewRecord> {
                    COUNT(*) FILTER (WHERE result = 'APPROVED') AS approvedCount,
                    COALESCE(AVG(score), 0) AS avgScore
             FROM review_record
-            WHERE deleted = 0 AND create_time >= now() - #{days} * interval '1 day'
+            WHERE deleted = 0 AND result <> 'INCONCLUSIVE'
+              AND create_time >= now() - #{days} * interval '1 day'
             GROUP BY date_trunc('day', create_time)
             ORDER BY date_trunc('day', create_time) ASC
             """)
     List<QualityTrendPoint> selectTrendSource(@Param("days") int days);
 
-    /** 窗口内非空 issues 列表（Java 层 DefectLabelParser 聚合，口径与画像一致）。 */
+    /** 窗口内非空 issues 列表（Java 层 DefectLabelParser 聚合，口径与画像一致；`RV-2` 排除 INCONCLUSIVE）。 */
     @Select("""
             SELECT issues
             FROM review_record
-            WHERE deleted = 0 AND create_time >= now() - #{days} * interval '1 day'
+            WHERE deleted = 0 AND result <> 'INCONCLUSIVE'
+              AND create_time >= now() - #{days} * interval '1 day'
               AND issues IS NOT NULL AND issues <> ''
             """)
     List<String> selectIssuesForStats(@Param("days") int days);
 
-    /** 窗口内按审查轮次分组计数（round 升序）。 */
+    /** 窗口内按审查轮次分组计数（round 升序；`RV-2` 排除 INCONCLUSIVE）。 */
     @Select("""
             SELECT round AS round, COUNT(*) AS subTaskCount
             FROM review_record
-            WHERE deleted = 0 AND create_time >= now() - #{days} * interval '1 day'
+            WHERE deleted = 0 AND result <> 'INCONCLUSIVE'
+              AND create_time >= now() - #{days} * interval '1 day'
               AND round IS NOT NULL
             GROUP BY round
             ORDER BY round ASC
@@ -65,7 +71,8 @@ public interface ReviewRecordMapper extends BaseMapper<ReviewRecord> {
      * 窗口内审查者维度通过率（看板 reviewer 放水率）。
      *
      * <p>approveRate 在 SQL 层算好（0-100 整数百分比）；reviewer_name 由
-     * Service 层经 agent 域服务批量补名后重建 record（本查询先置空串占位）。</p>
+     * Service 层经 agent 域服务批量补名后重建 record（本查询先置空串占位）。
+     * `RV-2`：分母排除 {@code INCONCLUSIVE}，否则放水率被「判不出」的记录稀释。</p>
      */
     @Select("""
             SELECT reviewer_agent_id AS reviewerAgentId,
@@ -75,7 +82,8 @@ public interface ReviewRecordMapper extends BaseMapper<ReviewRecord> {
                             / NULLIF(COUNT(*), 0), 0) AS approveRate,
                    COALESCE(AVG(score), 0) AS avgScore
             FROM review_record
-            WHERE deleted = 0 AND create_time >= now() - #{days} * interval '1 day'
+            WHERE deleted = 0 AND result <> 'INCONCLUSIVE'
+              AND create_time >= now() - #{days} * interval '1 day'
               AND reviewer_agent_id IS NOT NULL
             GROUP BY reviewer_agent_id
             ORDER BY reviewedCount DESC

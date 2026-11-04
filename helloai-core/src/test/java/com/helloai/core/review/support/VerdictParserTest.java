@@ -100,4 +100,54 @@ class VerdictParserTest {
         assertThat(text).contains("结果: 通过");
         assertThat(text).doesNotContain("逐条核验");
     }
+
+    // ===== RV-1：parseWithMeta 的宽松解析标记（2026-11-04） =====
+
+    @Test
+    @DisplayName("parseWithMeta：严格 JSON 成功 → looseParse=false")
+    void parseWithMetaStrict() {
+        VerdictParser.ParseResult parsed = parser.parseWithMeta(
+                "{\"pass\": true, \"score\": 5, \"issues\": \"无\"}");
+
+        assertThat(parsed.verdict()).isNotNull();
+        assertThat(parsed.verdict().getPass()).isTrue();
+        assertThat(parsed.looseParse()).isFalse();
+    }
+
+    @Test
+    @DisplayName("parseWithMeta：严格解析失败、宽松兜底命中 → looseParse=true 且字段正确")
+    void parseWithMetaLoose() {
+        VerdictParser.ParseResult parsed = parser.parseWithMeta(
+                "结论（非 JSON）：\n\"pass\": false, \"score\": 2, \"issues\": \"报告正文缺失\"");
+
+        assertThat(parsed.verdict()).isNotNull();
+        assertThat(parsed.verdict().getPass()).isFalse();
+        assertThat(parsed.verdict().getScore()).isEqualTo(2);
+        assertThat(parsed.looseParse()).isTrue();
+    }
+
+    @Test
+    @DisplayName("parseWithMeta：null / 空白 / 不可解析 → (null, false)，不标记宽松")
+    void parseWithMetaUnparseable() {
+        VerdictParser.ParseResult blank = parser.parseWithMeta("   ");
+        assertThat(blank.verdict()).isNull();
+        assertThat(blank.looseParse()).isFalse();
+
+        VerdictParser.ParseResult garbage = parser.parseWithMeta("完全读不懂的一段文字");
+        assertThat(garbage.verdict()).isNull();
+        assertThat(garbage.looseParse()).isFalse();
+    }
+
+    @Test
+    @DisplayName("parseVerdict 与 parseWithMeta().verdict() 等价（兼容委托）")
+    void parseVerdictDelegatesToParseWithMeta() {
+        String raw = "{\"pass\": false, \"score\": 1, \"issues\": \"[defect] 缺正文\"}";
+
+        SubTaskReviewService.ReviewVerdict direct = parser.parseVerdict(raw);
+        VerdictParser.ParseResult meta = parser.parseWithMeta(raw);
+
+        assertThat(direct).isNotNull();
+        assertThat(meta.verdict()).isEqualTo(direct);
+        assertThat(meta.looseParse()).isFalse();
+    }
 }

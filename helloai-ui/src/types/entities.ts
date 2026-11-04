@@ -276,6 +276,21 @@ export interface AgentOnboardingResponse {
 }
 
 // --- 审查 / 积分 / 活动 ---
+
+/** 验收点覆盖声明（RV-3）：reviewer 逐条说明「这条验收标准靠什么证据算过」。 */
+export interface ReviewCoverageItem {
+  /** 被覆盖的验收标准原文子串 */
+  criterionRef: string
+  /** covered=已覆盖；failed=未通过；not_verifiable=无法核验 */
+  status: string
+  /** 证据方式：attachment=物化附件；sandbox=沙箱一手执行；其余为自述（不计入覆盖） */
+  method: string
+  /** 证据指向：附件名或沙箱台账条目 */
+  evidenceRef: string
+  /** 补充说明 */
+  note: string
+}
+
 export interface ReviewRecord {
   id: LongId
   subTaskId: LongId
@@ -284,6 +299,8 @@ export interface ReviewRecord {
   score: number
   issues: string | null
   comment: string | null
+  /** 验收点覆盖清单；历史记录与模型未输出时为空 */
+  coverage: ReviewCoverageItem[] | null
   round: number
   createTime: string
 }

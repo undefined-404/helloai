@@ -29,6 +29,7 @@ FILES=(
   "HelloAI 任务拆解领域无关化实施计划（2026-10-24）.md"
   "HelloAI 技能执行面接入实施计划（2026-10-26）.md"
   "HelloAI 个人助理工作台实施计划（2026-11-02）.md"
+  "HelloAI 核验双域改造实施计划（2026-11-04）.md"
 )
 
 PY=""
@@ -50,8 +51,8 @@ for f in "${FILES[@]}"; do
 import io, re, sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 S = ["待开始","设计中","实现中","验证中","已完成","部分完成","阻塞","暂缓","明确不做"]
-ID = re.compile(r"^\| \*{0,2}((?:SKX|PA|PC|S|W|ATT|TD|REF|M|Q)-\d+)[^|]*\|")
-SEC = re.compile(r"^#{2,4} \*{0,2}((?:SKX|PA|PC|S|W|ATT|TD|Q)-\d+)")
+ID = re.compile(r"^\| \*{0,2}((?:SKX|RV|SR|PA|PC|S|W|ATT|TD|REF|M|Q)-\d+)[^|]*\|")
+SEC = re.compile(r"^#{2,4} \*{0,2}((?:SKX|RV|SR|PA|PC|S|W|ATT|TD|Q)-\d+)")
 ls = io.open(sys.argv[1], encoding="utf-8").read().split("\n")
 bad, checked = [], 0
 for i, l in enumerate(ls):
@@ -93,6 +94,14 @@ for i, l in enumerate(ls):
 print("%d|%s" % (checked, " ".join(bad[:10])))
 PY
 )
+  pyrc=$?
+  # 解析器零输出 / 非零退出时必须报红：python3 被 Microsoft Store 存根接管（退出码 49、
+  # 无 stdout）时，原逻辑会因 out="" 而误判为「状态齐备」——守卫 fail-open，比不跑更危险。
+  if [ "$pyrc" -ne 0 ] || [ -z "$out" ]; then
+    printf '  [FAIL] %s：解析器未产出结论（python 退出码 %s；检查 python3 是否可用）\n' "${f:0:34}" "$pyrc"
+    FAILED=1
+    continue
+  fi
   n=${out%%|*}
   msg=${out#*|}
   if [ -z "$msg" ]; then

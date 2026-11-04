@@ -1,7 +1,10 @@
 package com.helloai.core.review.adapter;
 
+import com.helloai.common.constant.ReviewResult;
+import com.helloai.core.review.entity.ReviewRecord;
 import com.helloai.core.review.mapper.ReviewRecordMapper;
 import com.helloai.core.review.mapper.ReviewRecheckLogMapper;
+import com.helloai.core.task.port.ReviewFact;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -10,7 +13,10 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -67,5 +73,33 @@ class ReviewPortAdapterTest {
     void shouldShortCircuitOnNull() {
         assertThat(adapter.physicalDeleteByTaskId(null)).isZero();
         verifyNoInteractions(reviewRecordMapper, reviewRecheckLogMapper);
+    }
+
+    @Test
+    @DisplayName("RV-2: listReviewFactsBySubTaskId 排除 INCONCLUSIVE（不进隐式评分样本）")
+    void shouldExcludeInconclusiveFromReviewFacts() {
+        when(reviewRecordMapper.selectList(any())).thenReturn(List.of(
+                record(ReviewResult.APPROVED, 5),
+                record(ReviewResult.INCONCLUSIVE, 5),
+                record(ReviewResult.REJECTED, 2)));
+
+        List<ReviewFact> facts = adapter.listReviewFactsBySubTaskId(1L);
+
+        assertThat(facts).containsExactly(new ReviewFact(5, true), new ReviewFact(2, false));
+    }
+
+    @Test
+    @DisplayName("RV-2: 仅 INCONCLUSIVE → 空事实清单（不产生 0 分/未通过样本）")
+    void shouldReturnEmptyFactsWhenOnlyInconclusive() {
+        when(reviewRecordMapper.selectList(any())).thenReturn(List.of(record(ReviewResult.INCONCLUSIVE, 4)));
+
+        assertThat(adapter.listReviewFactsBySubTaskId(1L)).isEmpty();
+    }
+
+    private static ReviewRecord record(ReviewResult result, int score) {
+        ReviewRecord record = new ReviewRecord();
+        record.setResult(result);
+        record.setScore(score);
+        return record;
     }
 }

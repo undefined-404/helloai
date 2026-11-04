@@ -3,6 +3,7 @@ package com.helloai.core.agent.runtime.loop.impl;
 import com.helloai.core.agent.runtime.loop.AgentLoopResult;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.tool.ToolCallback;
 
 import java.util.List;
 
@@ -21,8 +22,24 @@ import java.util.List;
  * @param scene       业务面场景标识（{@code AgentLoopInput.scene} 透传；null = 子任务执行链）。
  *                    `TD-9` 事故修复：业务面循环（planner_decompose 等）不得触发 VERIFICATION 收尾轮，
  *                    由 {@code FinalReportFenceHook} 据此门控。
+ * @param availableToolCallbacks 本轮模型可见的工具回调（`AgentLoopInput.enabledToolCallbacks` 透传）。
+ *                    `SR-1`：收尾轮绕开主循环且默认无工具；挂点只能从本清单白名单过滤出
+ *                    {@code internal_run_in_sandbox} 注入收尾轮（沙箱未启用时清单本就不含该工具）。
+ * @param taskId      主任务 ID（`SR-2` 自审证据事件定位；可空）
+ * @param subTaskId   子任务 ID（`SR-2` 按子任务读沙箱台账；可空）
  */
 public record AgentLoopTermination(ChatModel chatModel, List<Message> messages,
                                    boolean internalLlm, AgentLoopResult draft, int maxIterations,
-                                   String scene) {
+                                   String scene, List<ToolCallback> availableToolCallbacks,
+                                   Long taskId, Long subTaskId) {
+
+    /** 兼容构造器：`SR-1` / `SR-2` 新增上下文缺省（无可用工具、无任务定位）。 */
+    public AgentLoopTermination(ChatModel chatModel, List<Message> messages, boolean internalLlm,
+                                AgentLoopResult draft, int maxIterations, String scene) {
+        this(chatModel, messages, internalLlm, draft, maxIterations, scene, List.of(), null, null);
+    }
+
+    public AgentLoopTermination {
+        availableToolCallbacks = availableToolCallbacks == null ? List.of() : List.copyOf(availableToolCallbacks);
+    }
 }

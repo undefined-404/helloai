@@ -21,7 +21,8 @@ export type AgentRole = 'PLANNER' | 'EXECUTOR' | 'REVIEWER'
 export type AgentStatus = 'ACTIVE' | 'DISABLED'
 
 // --- 审查 / 附件 ---
-export type ReviewResult = 'APPROVED' | 'REJECTED'
+// INCONCLUSIVE = 判定不可采信（如驳回却给满分）：不计入统计分母、不触发返工、停 REVIEW 等人工裁决
+export type ReviewResult = 'APPROVED' | 'REJECTED' | 'INCONCLUSIVE'
 
 export type AttachmentStatus = 'ACTIVE' | 'INACTIVE' | 'DELETED'
 

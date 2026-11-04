@@ -75,6 +75,12 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
                                      ReviewResult result, int score,
                                      String issues, String comment, Long reworkAgentId) {
 
+        if (result == null
+                || (result != ReviewResult.APPROVED && result != ReviewResult.REJECTED)) {
+            // `RV-2`：INCONCLUSIVE 只能由自动核验产生；人工入口只允许通过/驳回，
+            // 否则会落入下方 else 支路被当成「驳回」并触发返工（与 INCONCLUSIVE 语义冲突）
+            throw new BizException("人工审查结论仅支持 APPROVED / REJECTED");
+        }
         if (result == ReviewResult.REJECTED && (issues == null || issues.isBlank())) {
             throw new BizException("驳回时必须填写问题描述（issues）");
         }
@@ -252,7 +258,9 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
     @Transactional(rollbackFor = Exception.class)
     public ReviewRecord recordAutoReview(Long subTaskId, Long reviewerAgentId,
                                          ReviewResult result, int score,
-                                         String issues, String comment) {
+                                         String issues, String comment,
+                                         List<Map<String, String>> coverage,
+                                         Map<String, Object> snapshot) {
         long round = count(new LambdaQueryWrapper<ReviewRecord>()
                 .eq(ReviewRecord::getSubTaskId, subTaskId)) + 1;
 
@@ -264,6 +272,10 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         record.setIssues(issues);
         record.setComment(comment);
         record.setRound((int) round);
+        // `RV-3`：覆盖清单与判定同事务落库（空清单写 NULL，与「该轮没有覆盖清单」同一语义）
+        record.setCoverage(coverage == null || coverage.isEmpty() ? null : coverage);
+        // `RV-5`：判定快照与判定同事务落库（空快照写 NULL = 无快照）
+        record.setSnapshot(snapshot == null || snapshot.isEmpty() ? null : snapshot);
         record.setRemark("AUTO_REVIEW");
         save(record);
 

@@ -67,8 +67,53 @@ public class ReviewProperties {
      */
     private long dualReviewTimeoutSeconds = 90;
 
+    /**
+     * 是否启用核验判定静态校验器（`RV-1`，<b>Warn 档</b>）。默认 true。
+     *
+     * <p>开启后只把校验器的 finding 写进 timeline 事件（{@code sub_task_auto_review_verdict_warn}），
+     * <b>不改变判定结果与状态流转</b>；关闭即回到未启用时的行为（零观测事件）。
+     * 强制档（`Block` 落地为 {@code INCONCLUSIVE}）属 `RV-2`，不在本开关内。</p>
+     */
+    private boolean verdictValidatorEnabled = true;
+
+    /**
+     * 是否启用静态覆盖批评器（`RV-3`）。默认 true。
+     *
+     * <p>与 {@link #verdictValidatorEnabled} 分开配：后者管「判定形态自不自洽」（`RV-1` 全项
+     * {@code Warn} + 一条逻辑矛盾 {@code Block}），本开关管「通过是否有逐条覆盖声明」——
+     * 后者会新增 {@code Block} 来源（{@code coverage_absent} / {@code acceptance_not_covered} /
+     * {@code unconfirmed_silently_dropped}）并直接产出 {@code INCONCLUSIVE}（转人工），
+     * 影响面与前者不同量级，需要能单独回滚。</p>
+     *
+     * <p>关闭后行为回到 `RV-3` 之前：{@code coverage} 仍会被解析与落库（纯观测），但不参与判定。
+     * 真机上若发现模型大面积不填 {@code coverage} 导致通过全转人工，先关本开关再改提示词，
+     * 不要放宽覆盖判据（判据一放宽，本项就没有拦截面了）。</p>
+     */
+    private boolean coverageCriticEnabled = true;
+
     /** 是否启用 Reviewer 抽检任务。默认 true。 */
     private boolean recheckEnabled = true;
+
+    /**
+     * 是否启用收尾轮自审闸门（`SR-3`）。默认 true。
+     *
+     * <p>关闭后的回滚面是<b>三项行为</b>：① 收尾轮不注入 {@code internal_run_in_sandbox}
+     * （回到「收尾轮只产文本」）；② 不判闸门；③ 不因证据不合格重跑。围栏文案里的
+     * {@code EVIDENCE} 段<b>保留</b>（模型未执行时按指令填 {@code []}，无副作用），
+     * 证据核对事件 {@code self_review_evidence_checked} 也<b>保留</b>——纯观测不参与判定，
+     * 关掉它会让「自审到底跑没跑」重新变成不可度量。</p>
+     */
+    private boolean selfReviewEnabled = true;
+
+    /**
+     * 自审闸门不合格时的<b>内容重跑</b>轮数上限（{@code K}，`SR-3`）。默认 1。
+     *
+     * <p><b>与网络重试的乘数关系（改前必读，否则会把成本调爆）</b>：本值是「证据不合格重跑」的
+     * 外层轮数；收尾轮自身还有 {@code FinalReportFenceHook.FINALIZE_MAX_ATTEMPTS = 2} 的
+     * <b>网络 / 429 内层重试</b>。单次执行最坏模型调用数 = {@code 内层 2 × (1 + K)}，
+     * 默认 K=1 ⇒ <b>最坏 4 次</b>。该乘数已在 {@code FinalReportFenceHookTest} 以断言锁定。</p>
+     */
+    private int selfReviewMaxRetry = 1;
 
     /** 抽检扫描周期（毫秒）。默认 1 小时。 */
     private long recheckIntervalMs = 3_600_000;

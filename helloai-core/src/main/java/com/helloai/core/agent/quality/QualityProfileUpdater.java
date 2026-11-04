@@ -64,6 +64,13 @@ public class QualityProfileUpdater {
             log.debug("画像增量跳过：executorAgentId 或 reviewRecordId 缺失, executorAgentId={}", executorAgentId);
             return;
         }
+        // `RV-2`：INCONCLUSIVE 是「判定不可采信」，不是对执行者的质量评价——
+        // 计入会把缺陷标签 / 评分 / 通过率一起污染，故整条增量跳过（review_record 仍保留作审计）
+        if (result == ReviewResult.INCONCLUSIVE) {
+            log.debug("画像增量跳过：INCONCLUSIVE 不构成执行者质量证据, agentId={}, reviewRecordId={}",
+                    executorAgentId, reviewRecordId);
+            return;
+        }
         try {
             applyIncrement(executorAgentId, reviewRecordId, round, result, score, issues);
         } catch (Exception e) {

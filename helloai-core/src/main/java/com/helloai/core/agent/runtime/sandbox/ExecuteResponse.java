@@ -1,5 +1,8 @@
 package com.helloai.core.agent.runtime.sandbox;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+
 /**
  * 沙箱命令统一执行结果（S-7，沙箱执行链设计方案 §3.3）。
  *
@@ -22,5 +25,27 @@ public record ExecuteResponse(String output, int exitCode, boolean truncated) {
     /** 命令执行成功且输出未被截断（可作证据的充分条件；判定仍由消费方负责）。 */
     public boolean succeeded() {
         return exitCode == 0 && !truncated;
+    }
+
+    /**
+     * 输出正文的摘要（{@code sha256:<hex>}），供调用台账留痕与「模型自填证据 ↔ 平台记录」对账。
+     *
+     * <p><b>语义边界</b>：算的是<b>可能已截断</b>的 {@link #output()}（{@code truncated=true} 时
+     * 正文不完整），因此只能证明「两份证据指向同一段输出」，<b>不是</b>完整输出的完整性证明；
+     * 台账必须同时记 {@link #truncated()}。</p>
+     */
+    public String digest() {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256")
+                    .digest((output != null ? output : "").getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+                sb.append(Character.forDigit(b & 0xF, 16));
+            }
+            return "sha256:" + sb.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("SHA-256 不可用: " + e.getMessage(), e);
+        }
     }
 }

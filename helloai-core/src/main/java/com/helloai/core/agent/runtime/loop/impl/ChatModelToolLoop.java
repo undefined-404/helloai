@@ -361,7 +361,8 @@ public class ChatModelToolLoop implements AgentLoop {
             try {
                 AgentLoopResult revised = hook.beforeTerminate(
                         new AgentLoopTermination(input.chatModel(), messages, internalLlm, current,
-                                input.maxIterations(), input.scene()));
+                                input.maxIterations(), input.scene(),
+                                input.enabledToolCallbacks(), input.taskId(), input.subTaskId()));
                 if (revised != null) {
                     current = revised;
                 }

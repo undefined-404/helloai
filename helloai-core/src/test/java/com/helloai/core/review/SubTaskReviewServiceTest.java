@@ -5,6 +5,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.ReviewProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.ReviewResult;
@@ -145,6 +146,8 @@ class SubTaskReviewServiceTest {
         lenient().when(reviewerPicker.pickSingle(any())).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         // §6.142 双审默认关闭：既有用例保持单审语义（双审用例单独 stub true）
         lenient().when(reviewProperties.isDualReviewEnabled()).thenReturn(false);
+        // RV-1/RV-2 静态校验默认开启（与生产默认一致）；回滚口径用例单独 stub false
+        lenient().when(reviewProperties.isVerdictValidatorEnabled()).thenReturn(true);
         lenient().when(dispatchProperties.getAutoReviewMaxRework()).thenReturn(3);
         lenient().when(dispatchProperties.getReviewEvidenceCheckWaitMs()).thenReturn(0);
         // P-1 A2-2 重复失败短路：显式阈值 0.85（mock 默认 0.0 会把任意相似度都判为重复失败）
@@ -168,7 +171,7 @@ class SubTaskReviewServiceTest {
                 new ReviewExecutionEngine(platformAgentExecutionService, conversationService,
                         taskTimelineService, new VerdictParser(new ObjectMapper()),
                         new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
-                        subTaskService),
+                        subTaskService, reviewProperties),
                 taskTimelineService, executionCommandService, dispatchProperties,
                 conversationService, recordReviewService, redissonClient,
                 reviewLockTtlResolver,
@@ -397,8 +400,66 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("MED-2 边界: pass=false 且 score=5 → 不触发矛盾判定（只管 pass=true 侧）")
-    void shouldNotTriggerConsistencyGuardOnRejectPath() {
+    @DisplayName("RV-2: pass=false 且 score=5（BLOCK）→ 落 INCONCLUSIVE、转人工、不返工、不 complete")
+    void shouldMarkInconclusiveWhenRejectWithFullScore() {
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 5, \"issues\": \"[defect] 缺证据\", \"comment\": \"\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService, never()).rework(anyLong(), any());
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService).markManualIntervention(eq(SUB_TASK_ID), eq("review_verdict_invalid"), anyMap());
+        verify(recordReviewService).recordAutoReview(
+                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.INCONCLUSIVE), eq(5), any(), any(), any(), any());
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_inconclusive"),
+                eq(AgentRole.REVIEWER), eq(9L), anyMap());
+        // MED-2 的矛盾判定（pass=true 侧）不得被误用
+        verify(subTaskService, never())
+                .markManualIntervention(anyLong(), eq("reviewer_score_inconsistent"), anyMap());
+    }
+
+    @Test
+    @DisplayName("RV-3: 通过判定漏一条验收点的覆盖声明 → 落 INCONCLUSIVE 并把 coverage 原样落库")
+    void shouldMarkInconclusiveWhenCoverageMissesAcceptanceItem() {
+        // 本类用 mock 的 ReviewProperties（未打桩的开关默认 false），批评器开关须显式打开
+        when(reviewProperties.isCoverageCriticEnabled()).thenReturn(true);
+        // 两条验收点，coverage 只声明第一条：静态覆盖批评器判 BLOCK（漏判可发现）
+        // context 带 lastExecution.output：无证据会被「跳过核验」分支提前截走，到不了批评器
+        Map<String, Object> ctx = new HashMap<>();
+        ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(new SubTaskView(SUB_TASK_ID, TASK_ID,
+                SubTaskStatus.REVIEW, null, 0, "写接口文档", "整理 REST 接口清单", "接口文档",
+                "① 覆盖全部端点；② 标注请求参数", null, ctx, List.of()));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("""
+                        {"pass": true, "score": 4, "issues": "", "comment": "达标",
+                         "analysis": "①覆盖全部端点 pass",
+                         "coverage": [{"criterionRef": "覆盖全部端点", "status": "covered",
+                                       "method": "attachment", "evidenceRef": "api.md"}]}
+                        """, "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService, never()).rework(anyLong(), any());
+        verify(subTaskService).markManualIntervention(eq(SUB_TASK_ID), eq("review_verdict_invalid"),
+                argThat((Map<String, Object> payload) ->
+                        String.valueOf(payload.get("findings")).contains("acceptance_not_covered")));
+        // coverage 随判定一并落 review_record：人工兜底要看得见 reviewer 到底声明了什么
+        verify(recordReviewService).recordAutoReview(eq(SUB_TASK_ID), eq(9L),
+                eq(ReviewResult.INCONCLUSIVE), eq(4), any(), any(),
+                argThat((List<Map<String, String>> coverage) -> coverage != null && coverage.size() == 1
+                        && "覆盖全部端点".equals(coverage.get(0).get("criterionRef"))
+                        && "attachment".equals(coverage.get(0).get("method"))), any());
+    }
+
+    @Test
+    @DisplayName("RV-2 回滚口径: 校验器关闭时 pass=false 且 score=5 仍走普通返工（零行为变更）")
+    void shouldReworkWhenRejectWithFullScoreAndValidatorDisabled() {
+        lenient().when(reviewProperties.isVerdictValidatorEnabled()).thenReturn(false);
         when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 5, \"issues\": \"缺证据\", \"comment\": \"\"}", "stop", "llm", 100));
@@ -408,7 +469,7 @@ class SubTaskReviewServiceTest {
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
         verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
-        verify(subTaskService, never()).markManualIntervention(eq(SUB_TASK_ID), eq("reviewer_score_inconsistent"), anyMap());
+        verify(subTaskService, never()).markManualIntervention(anyLong(), any(), anyMap());
     }
 
     @Test
@@ -498,7 +559,7 @@ class SubTaskReviewServiceTest {
                 eq(SUB_TASK_ID), eq("repeated_failure_signature"), anyMap());
         // 判决仍落 review_record 留痕
         verify(recordReviewService).recordAutoReview(
-                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.REJECTED), eq(2), anyString(), anyString());
+                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.REJECTED), eq(2), anyString(), anyString(), any(), any());
         verify(conversationService).addMessage(eq(SUB_TASK_ID), eq(9L), eq("assistant"), eq("agent"),
                 anyString(), eq("subtask_review_skip_repeated_failure"));
     }
@@ -644,7 +705,7 @@ class SubTaskReviewServiceTest {
         // B1a（`LOG-20261025-014`）：预算耗尽分支此前把评审结论整体吞掉，
         // 导致「进了死信但查不到为什么」。断言两条留痕都必须发生。
         verify(recordReviewService).recordAutoReview(
-                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.REJECTED), eq(2), anyString(), anyString());
+                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.REJECTED), eq(2), anyString(), anyString(), any(), any());
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_rejected"),
                 eq(AgentRole.REVIEWER), eq(9L), anyMap());
@@ -662,7 +723,7 @@ class SubTaskReviewServiceTest {
 
         InOrder inOrder = inOrder(recordReviewService, subTaskService, taskTimelineService);
         inOrder.verify(recordReviewService).recordAutoReview(
-                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.REJECTED), eq(2), anyString(), anyString());
+                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.REJECTED), eq(2), anyString(), anyString(), any(), any());
         inOrder.verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_rejected"),
                 eq(AgentRole.REVIEWER), eq(9L), anyMap());
@@ -849,8 +910,10 @@ class SubTaskReviewServiceTest {
 
         verify(subTaskService, never()).complete(anyLong());
         verify(subTaskService, never()).rework(anyLong(), any());
-        verify(taskTimelineService, never()).recordEvent(
-                anyLong(), anyLong(), anyString(), any(), any(), anyMap());
+        // RV-4：失败不再静默——时间线必须留下「这一轮根本没判」的可观测事件
+        verify(taskTimelineService).recordEvent(eq(TASK_ID), eq(SUB_TASK_ID),
+                eq(TimelineEventCode.SUB_TASK_AUTO_REVIEW_EXECUTION_FAILED.code()),
+                eq(AgentRole.REVIEWER), anyLong(), anyMap());
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -1529,7 +1592,7 @@ class SubTaskReviewServiceTest {
         verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
         // 双审只落一条共识 record（reviewer1 归属，防执行者画像重复计数）
         verify(recordReviewService).recordAutoReview(
-                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.APPROVED), anyInt(), any(), any());
+                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.APPROVED), anyInt(), any(), any(), any(), any());
         // Reviewer 维度画像：两个 reviewer 各 +1 reviewed、0 disagreement
         verify(agentQualityProfileService).incrementReviewerStats(9L, 1, 0);
         verify(agentQualityProfileService).incrementReviewerStats(10L, 1, 0);
@@ -1569,7 +1632,7 @@ class SubTaskReviewServiceTest {
         verify(agentQualityProfileService).incrementReviewerStats(9L, 1, 1);
         verify(agentQualityProfileService).incrementReviewerStats(10L, 1, 1);
         // 分歧不落 review_record（未产生共识判定，防画像重复计数）
-        verify(recordReviewService, never()).recordAutoReview(anyLong(), any(), any(), anyInt(), any(), any());
+        verify(recordReviewService, never()).recordAutoReview(anyLong(), any(), any(), anyInt(), any(), any(), any(), any());
         verify(conversationService).addMessage(eq(SUB_TASK_ID), eq(9L), eq("assistant"), eq("agent"),
                 anyString(), eq("subtask_review_skip_disagreement"));
     }
@@ -1660,7 +1723,7 @@ class SubTaskReviewServiceTest {
         verify(subTaskService, never()).complete(anyLong());
         verify(subTaskService, never()).rework(anyLong(), any());
         verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
-        verify(recordReviewService, never()).recordAutoReview(anyLong(), any(), any(), anyInt(), any(), any());
+        verify(recordReviewService, never()).recordAutoReview(anyLong(), any(), any(), anyInt(), any(), any(), any(), any());
         verify(agentQualityProfileService, never()).incrementReviewerStats(anyLong(), anyInt(), anyInt());
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_dual_review_incomplete"),

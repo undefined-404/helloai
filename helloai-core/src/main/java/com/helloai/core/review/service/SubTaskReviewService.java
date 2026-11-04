@@ -76,5 +76,13 @@ public interface SubTaskReviewService {
          * 消费前经 {@code VerdictParser.normalizeMissingEvidence} 归一。仅作返工指引，不参与 pass 判定。
          */
         private JsonNode missingEvidence;
+        /**
+         * 验收点覆盖清单（`RV-3`，防御承接）：数组元素形如
+         * {criterionRef: 验收标准原文子串, status: covered|failed|not_verifiable,
+         *  method: attachment|sandbox, evidenceRef: 证据指向, note: 说明}。
+         * 与 {@code missingEvidence} 同一承接策略（JsonNode，非法形态降级空清单），
+         * 消费前经 {@code ReviewCoverageParser.parse} 归一。
+         */
+        private JsonNode coverage;
     }
 }

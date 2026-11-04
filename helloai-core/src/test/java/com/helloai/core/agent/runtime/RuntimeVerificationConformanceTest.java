@@ -1,7 +1,10 @@
 package com.helloai.core.agent.runtime;
 
+import com.helloai.common.config.OpenSandboxProperties;
+import com.helloai.common.config.ReviewProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ExecutionStatus;
+import com.helloai.core.agent.runtime.sandbox.SandboxCallLedger;
 import com.helloai.core.agent.runtime.loop.impl.ChatModelToolLoop;
 import com.helloai.core.agent.runtime.loop.impl.ContextCompactor;
 import com.helloai.core.agent.runtime.loop.impl.FinalReportFenceHook;
@@ -102,7 +105,10 @@ class RuntimeVerificationConformanceTest {
 
         // 循环挂收尾轮：草稿缺围栏 → 收尾轮自纠出围栏 → 出口分类 ④ 不再 fail-close
         RuntimeTurnExecutor executor = new RuntimeTurnExecutor(
-                new ChatModelToolLoop(ContextCompactor.noop(), List.of(new FinalReportFenceHook())),
+                new ChatModelToolLoop(ContextCompactor.noop(), List.of(new FinalReportFenceHook(
+                        new SandboxCallLedger(),
+                        (taskId, subTaskId, eventType, role, agentId, payload) -> { },
+                        new OpenSandboxProperties(), new ReviewProperties()))),
                 toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider);
         Queue<ChatResponse> queue = new LinkedList<>();
         queue.offer(responseWithText("done, no evidence"));

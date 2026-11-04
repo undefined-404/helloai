@@ -1,13 +1,25 @@
 package com.helloai.core.agent.runtime.sandbox.impl;
 
 import com.helloai.common.config.OpenSandboxProperties;
+import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
+import com.helloai.core.agent.runtime.sandbox.SandboxCallLedger;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.agent.runtime.sandbox.SkillInstallResult;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * S-7 OpenSandboxExecutionService 单元测试（沙箱执行链设计方案 §3.3）。
@@ -30,10 +42,18 @@ class OpenSandboxExecutionServiceTest {
         return props;
     }
 
+    /** 构造被测服务；台账与时间线端口用真实 / 空实现（守卫层用例不触发二者）。 */
+    private OpenSandboxExecutionService newService(OpenSandboxProperties props) {
+        TaskTimelinePort noopTimeline = (taskId, subTaskId, eventType, role, agentId, payload) -> {
+        };
+        return new OpenSandboxExecutionService(props, new SkillPackageLoader(),
+                new SandboxCallLedger(), noopTimeline);
+    }
+
     @Test
     @DisplayName("未启用 → 结构化失败（exitCode=-1，不抛异常）")
     void shouldReturnErrorWhenDisabled() {
-        SandboxExecutionService service = new OpenSandboxExecutionService(props(false), new SkillPackageLoader());
+        SandboxExecutionService service = newService(props(false));
 
         ExecuteResponse response = service.execute(10L, "echo hello", null);
 
@@ -46,7 +66,7 @@ class OpenSandboxExecutionServiceTest {
     @Test
     @DisplayName("空白命令 → 结构化失败（exitCode=-1，不抛异常）")
     void shouldReturnErrorWhenCommandBlank() {
-        SandboxExecutionService service = new OpenSandboxExecutionService(props(true), new SkillPackageLoader());
+        SandboxExecutionService service = newService(props(true));
 
         ExecuteResponse response = service.execute(10L, "  ", 30);
 
@@ -58,7 +78,7 @@ class OpenSandboxExecutionServiceTest {
     @Test
     @DisplayName("null 命令 → 结构化失败（exitCode=-1，不抛异常）")
     void shouldReturnErrorWhenCommandNull() {
-        SandboxExecutionService service = new OpenSandboxExecutionService(props(true), new SkillPackageLoader());
+        SandboxExecutionService service = newService(props(true));
 
         ExecuteResponse response = service.execute(10L, null, 30);
 
@@ -83,7 +103,7 @@ class OpenSandboxExecutionServiceTest {
     @Test
     @DisplayName("release：null / 未登记子任务 ⇒ 静默返回（幂等，不抛异常）")
     void releaseShouldBeIdempotent() {
-        OpenSandboxExecutionService service = new OpenSandboxExecutionService(props(true), new SkillPackageLoader());
+        OpenSandboxExecutionService service = newService(props(true));
 
         service.release(null);
         service.release(999L);
@@ -106,11 +126,11 @@ class OpenSandboxExecutionServiceTest {
     @Test
     @DisplayName("未启用 / 命令空白时不得登记任何沙箱（守卫先于建沙箱）")
     void guardShouldNotRegisterSandbox() {
-        OpenSandboxExecutionService disabled = new OpenSandboxExecutionService(props(false), new SkillPackageLoader());
+        OpenSandboxExecutionService disabled = newService(props(false));
         disabled.execute(10L, "echo hi", 30);
         disabled.release(10L);
 
-        OpenSandboxExecutionService enabled = new OpenSandboxExecutionService(props(true), new SkillPackageLoader());
+        OpenSandboxExecutionService enabled = newService(props(true));
         enabled.execute(10L, "   ", 30);
         enabled.release(10L);
 
@@ -123,7 +143,7 @@ class OpenSandboxExecutionServiceTest {
     @Test
     @DisplayName("注入：未启用 ⇒ 结构化失败（不抛异常、不建沙箱）")
     void installShouldFailWhenDisabled() {
-        OpenSandboxExecutionService service = new OpenSandboxExecutionService(props(false), new SkillPackageLoader());
+        OpenSandboxExecutionService service = newService(props(false));
 
         SkillInstallResult result = service.installSkillPackage(10L, "archify", "3.1.0");
 
@@ -138,7 +158,7 @@ class OpenSandboxExecutionServiceTest {
     void installShouldFailWhenReuseDisabled() {
         OpenSandboxProperties props = props(true);
         props.setReuseEnabled(false);
-        OpenSandboxExecutionService service = new OpenSandboxExecutionService(props, new SkillPackageLoader());
+        OpenSandboxExecutionService service = newService(props);
 
         SkillInstallResult result = service.installSkillPackage(10L, "archify", "3.1.0");
 
@@ -149,7 +169,7 @@ class OpenSandboxExecutionServiceTest {
     @Test
     @DisplayName("注入：subTaskId 为 null ⇒ 结构化失败（无槽键可用）")
     void installShouldFailWhenSubTaskIdNull() {
-        OpenSandboxExecutionService service = new OpenSandboxExecutionService(props(true), new SkillPackageLoader());
+        OpenSandboxExecutionService service = newService(props(true));
 
         SkillInstallResult result = service.installSkillPackage(null, "archify", "3.1.0");
 
@@ -161,7 +181,7 @@ class OpenSandboxExecutionServiceTest {
     @Test
     @DisplayName("注入：包不存在 / 包名越界 ⇒ 加载阶段就失败（先于建沙箱，不浪费容器）")
     void installShouldFailOnBadPackageBeforeCreatingSandbox() {
-        OpenSandboxExecutionService service = new OpenSandboxExecutionService(props(true), new SkillPackageLoader());
+        OpenSandboxExecutionService service = newService(props(true));
 
         SkillInstallResult missing = service.installSkillPackage(10L, "not-exist-package", "9.9.9");
         SkillInstallResult traversal = service.installSkillPackage(10L, "../../etc", "3.1.0");
@@ -178,9 +198,9 @@ class OpenSandboxExecutionServiceTest {
     @DisplayName("回读：未启用 / 无子任务 / 非法路径 ⇒ null（不建沙箱、不抛异常）")
     void readArtifactShouldReturnNullOnGuards() {
         OpenSandboxExecutionService disabled =
-                new OpenSandboxExecutionService(props(false), new SkillPackageLoader());
+                newService(props(false));
         OpenSandboxExecutionService enabled =
-                new OpenSandboxExecutionService(props(true), new SkillPackageLoader());
+                newService(props(true));
 
         assertThat(disabled.readArtifact(10L, "/workspace/out/x.html", 0)).isNull();
         assertThat(enabled.readArtifact(null, "/workspace/out/x.html", 0)).isNull();
@@ -197,7 +217,7 @@ class OpenSandboxExecutionServiceTest {
     @DisplayName("建沙箱失败消息：带出 SDK 原始 cause + 连接配置摘要（不再是 opener returned null）")
     void createFailureMessageShouldCarryRealCause() {
         OpenSandboxExecutionService service =
-                new OpenSandboxExecutionService(props(true), new SkillPackageLoader());
+                newService(props(true));
 
         String message = service.describeCreateFailure(
                 new IllegalStateException("Server error : 500 DOCKER::SANDBOX_START_FAILED"));
@@ -217,7 +237,7 @@ class OpenSandboxExecutionServiceTest {
         OpenSandboxProperties props = props(true);
         props.setUrl(null);
         props.setApiKey("super-secret-key-value");
-        OpenSandboxExecutionService service = new OpenSandboxExecutionService(props, new SkillPackageLoader());
+        OpenSandboxExecutionService service = newService(props);
 
         String message = service.describeCreateFailure(new IllegalStateException("boom"));
 
@@ -235,5 +255,86 @@ class OpenSandboxExecutionServiceTest {
                 .isEqualTo("sandbox create failed (opener returned null)");
         assertThat(OpenSandboxExecutionService.createFailedMessage("sandbox create failed: X: y"))
                 .isEqualTo("sandbox create failed: X: y");
+    }
+
+    // ===== SR-5：沙箱调用台账 + timeline 观测 =====
+
+    @Test
+    @DisplayName("SR-5 台账：一次调用 ⇒ 台账条目字段齐全 + timeline 事件（digest 与输出一致）")
+    void recordCallShouldLedgerAndEmitTimeline() {
+        TaskTimelinePort timeline = mock(TaskTimelinePort.class);
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        OpenSandboxExecutionService service = new OpenSandboxExecutionService(
+                props(true), new SkillPackageLoader(), ledger, timeline);
+        ExecuteResponse response = new ExecuteResponse("hello\n", 0, false);
+        AtomicReference<String> eventType = new AtomicReference<>();
+        AtomicReference<Map<String, Object>> payload = new AtomicReference<>();
+        doAnswer(invocation -> {
+            eventType.set(invocation.getArgument(2));
+            payload.set(invocation.getArgument(5));
+            return null;
+        }).when(timeline).recordEvent(any(), any(), any(), any(), any(), any());
+
+        service.recordCall(10L, "echo hello", response);
+
+        List<SandboxCallLedger.Entry> entries = ledger.recent(10L);
+        assertThat(entries).hasSize(1);
+        SandboxCallLedger.Entry entry = entries.get(0);
+        assertThat(entry.command()).isEqualTo("echo hello");
+        assertThat(entry.exitCode()).isZero();
+        assertThat(entry.truncated()).isFalse();
+        assertThat(entry.digest()).isEqualTo(response.digest());
+        assertThat(entry.at()).isNotNull();
+
+        assertThat(eventType.get()).isEqualTo(TimelineEventCode.SANDBOX_COMMAND_EXECUTED.code());
+        assertThat(payload.get())
+                .containsEntry("command", "echo hello")
+                .containsEntry("commandChars", 10)
+                .containsEntry("exitCode", 0)
+                .containsEntry("truncated", false)
+                .containsEntry("digest", response.digest());
+    }
+
+    @Test
+    @DisplayName("SR-5 台账：超时(124) / SDK 异常(-1) 同样入账")
+    void ledgerShouldRecordFailedAndTimedOutCalls() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        OpenSandboxExecutionService service = new OpenSandboxExecutionService(
+                props(true), new SkillPackageLoader(), ledger,
+                (taskId, subTaskId, eventType, role, agentId, payload) -> {
+                });
+
+        service.recordCall(11L, "sleep 999", new ExecuteResponse("timeout", ExecuteResponse.EXIT_CODE_TIMEOUT, false));
+        service.recordCall(11L, "boom", new ExecuteResponse("sandbox execution failed",
+                ExecuteResponse.EXIT_CODE_ERROR, false));
+
+        assertThat(ledger.recent(11L))
+                .extracting(SandboxCallLedger.Entry::exitCode)
+                .containsExactly(ExecuteResponse.EXIT_CODE_TIMEOUT, ExecuteResponse.EXIT_CODE_ERROR);
+    }
+
+    @Test
+    @DisplayName("SR-5 台账：无子任务上下文 ⇒ 不入账、不发事件（Reviewer / 终报告判定路径）")
+    void ledgerShouldSkipWhenSubTaskIdMissing() {
+        TaskTimelinePort timeline = mock(TaskTimelinePort.class);
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        OpenSandboxExecutionService service = new OpenSandboxExecutionService(
+                props(true), new SkillPackageLoader(), ledger, timeline);
+
+        service.recordCall(null, "echo hi", new ExecuteResponse("hi", 0, false));
+
+        assertThat(ledger.recent(10L)).isEmpty();
+        verifyNoInteractions(timeline);
+    }
+
+    @Test
+    @DisplayName("ExecuteResponse.digest()：sha256 前缀 + 与输出字节一致 + null 输出按空串")
+    void digestShouldFollowOutputBytes() {
+        assertThat(new ExecuteResponse("abc", 0, false).digest())
+                .isEqualTo("sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assertThat(new ExecuteResponse(null, 0, false).digest())
+                .isEqualTo(new ExecuteResponse("", 0, false).digest());
+        assertThat(new ExecuteResponse("abc", 0, false).digest())
+                .isNotEqualTo(new ExecuteResponse("abd", 0, false).digest());
     }
 }

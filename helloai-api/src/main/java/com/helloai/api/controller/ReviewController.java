@@ -30,7 +30,19 @@ public class ReviewController {
     public R<ReviewResponse> create(@Valid @RequestBody CreateReviewRequest request,
                                    @RequestHeader(value = "X-Agent-Id", required = false) Long agentId,
                                    HttpServletRequest httpRequest) {
-        ReviewResult result = ReviewResult.valueOf(request.getResult().toUpperCase());
+        // `RV-2`：请求串直转枚举会在枚举扩值后自动接受新值（如 INCONCLUSIVE），
+        // 进而落进人工审查的驳回支路。这里先做可解析性兜底，人工入口只允许通过/驳回
+        // （白名单在 ReviewService#createReview 内强制，不依赖前端不传）。
+        ReviewResult result;
+        try {
+            result = ReviewResult.valueOf(request.getResult() == null
+                    ? "" : request.getResult().trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new BizException("不支持的人工审查结论: " + request.getResult());
+        }
+        if (result != ReviewResult.APPROVED && result != ReviewResult.REJECTED) {
+            throw new BizException("人工审查结论仅支持 APPROVED / REJECTED");
+        }
 
         // 修复：优先从 Header 取 reviewerAgentId；若 Header 缺失，从 AuthInterceptor 上下文取
         Long reviewerAgentId = agentId;
@@ -80,6 +92,7 @@ public class ReviewController {
         response.setIssues(record.getIssues());
         response.setComment(record.getComment());
         response.setRound(record.getRound());
+        response.setCoverage(record.getCoverage());
         response.setCreateTime(record.getCreateTime());
         response.setUpdateTime(record.getUpdateTime());
         response.setRemark(record.getRemark());

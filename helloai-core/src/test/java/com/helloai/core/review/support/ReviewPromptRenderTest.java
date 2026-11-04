@@ -1,5 +1,6 @@
 package com.helloai.core.review.support;
 
+import com.helloai.common.config.ReviewProperties;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
@@ -45,7 +46,8 @@ class ReviewPromptRenderTest {
                 mock(TaskTimelineService.class),
                 mock(VerdictParser.class),
                 assembler,
-                mock(SubTaskService.class));
+                mock(SubTaskService.class),
+                new ReviewProperties());
     }
 
     /** 25 位全量构造：只有 requiredSkills 是本次被测字段，其余取最小可用值。 */

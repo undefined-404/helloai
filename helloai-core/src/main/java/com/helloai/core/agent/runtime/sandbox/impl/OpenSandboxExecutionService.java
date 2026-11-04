@@ -12,8 +12,12 @@ import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.NetworkRule;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.OpenSandboxProperties;
+import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
 import com.helloai.core.agent.runtime.sandbox.SandboxArtifact;
+import com.helloai.core.agent.runtime.sandbox.SandboxCallLedger;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.agent.runtime.sandbox.SandboxSpec;
 import com.helloai.core.agent.runtime.sandbox.SkillInstallResult;
@@ -153,6 +157,18 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
     /** 技能包加载器（classpath 枚举 + 完整性校验，`SKX-6`）。 */
     private final SkillPackageLoader skillPackageLoader;
 
+    /** 调用台账（`SR-5`）：按子任务留痕命令 / exitCode / truncated / digest，供自审证据对照。 */
+    private final SandboxCallLedger sandboxCallLedger;
+
+    /**
+     * 时间线写入端口（`SR-5` 观测事件）。
+     *
+     * <p>用 {@code agent.port} 的端口而非 {@code task.service.TaskTimelineService}：
+     * 后者会让 agent 域直接依赖提供方 task 域的实现（CODE_STYLE §6.1 禁止新增反向依赖），
+     * 端口由消费方 agent 定义、实现在 task 侧，方向合法。</p>
+     */
+    private final TaskTimelinePort taskTimelinePort;
+
     /**
      * 复用槽池（`ADR-005`，2026-10-25）：key = {@code (subTaskId, 规格指纹)}，槽内命令串行执行。
      *
@@ -176,9 +192,13 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
     private final ObjectMapper markerMapper = new ObjectMapper();
 
     public OpenSandboxExecutionService(OpenSandboxProperties properties,
-                                       SkillPackageLoader skillPackageLoader) {
+                                       SkillPackageLoader skillPackageLoader,
+                                       SandboxCallLedger sandboxCallLedger,
+                                       TaskTimelinePort taskTimelinePort) {
         this.properties = properties;
         this.skillPackageLoader = skillPackageLoader;
+        this.sandboxCallLedger = sandboxCallLedger;
+        this.taskTimelinePort = taskTimelinePort;
     }
 
     @Override
@@ -202,7 +222,7 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
         long start = System.currentTimeMillis();
         // 退路：关闭复用 / 无子任务上下文（Reviewer、S-9 判定）⇒ 原「即建即毁」一次性语义
         if (!properties.isReuseEnabled() || subTaskId == null) {
-            return executeOneShot(subTaskId, effective, command, timeoutSec, start);
+            return recordCall(subTaskId, command, executeOneShot(subTaskId, effective, command, timeoutSec, start));
         }
         SlotKey key = new SlotKey(subTaskId, SandboxSpecMapper.fingerprint(effective));
         // opener 返回 null 只表达「创建失败」，真实原因经 errorSink 带出（2026-10-27）
@@ -211,15 +231,47 @@ public class OpenSandboxExecutionService implements SandboxExecutionService {
                 pool.acquire(key, idleTtlMillis(), () -> openSandbox(subTaskId, effective, createFailure),
                         this::destroy);
         if (slot == null) {
-            return new ExecuteResponse(createFailedMessage(createFailure.get()),
-                    ExecuteResponse.EXIT_CODE_ERROR, false);
+            return recordCall(subTaskId, command, new ExecuteResponse(createFailedMessage(createFailure.get()),
+                    ExecuteResponse.EXIT_CODE_ERROR, false));
         }
         slot.lock().lock();
         try {
-            return runInSlot(key, subTaskId, slot, command, timeoutSec, start);
+            return recordCall(subTaskId, command, runInSlot(key, subTaskId, slot, command, timeoutSec, start));
         } finally {
             slot.lock().unlock();
         }
+    }
+
+    /**
+     * 落调用台账 + timeline 观测事件（`SR-5`，<b>纯观测</b>）。
+     *
+     * <p>台账与事件都以「实际尝试执行」为准：未启用 / 空命令两道入口守卫在此之前返回，
+     * 不登记（那不是一次执行）。超时（124）与 SDK 异常（-1）同样是真实执行结果，照样入账。</p>
+     *
+     * <p>任何写入失败都只降级告警：台账是证据旁路，不得让观测故障改变执行结果。</p>
+     */
+    ExecuteResponse recordCall(Long subTaskId, String command, ExecuteResponse response) {
+        try {
+            sandboxCallLedger.record(subTaskId, command, response);
+        } catch (Exception e) {
+            log.warn("沙箱调用台账写入失败（观测降级，不阻断执行）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+        }
+        if (subTaskId != null) {
+            try {
+                taskTimelinePort.recordEvent(null, subTaskId,
+                        TimelineEventCode.SANDBOX_COMMAND_EXECUTED.code(), AgentRole.SYSTEM, null,
+                        Map.of("command", SandboxCallLedger.commandPreview(command),
+                                "commandChars", command != null ? command.length() : 0,
+                                "exitCode", response.exitCode(),
+                                "truncated", response.truncated(),
+                                "digest", response.digest()));
+            } catch (Exception e) {
+                log.warn("沙箱调用事件写入失败（观测降级，不阻断执行）: subTaskId={}, err={}",
+                        subTaskId, e.getMessage());
+            }
+        }
+        return response;
     }
 
     @Override

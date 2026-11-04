@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
 import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Map;
 
 @Data
 public class ReviewResponse {
@@ -20,6 +22,8 @@ public class ReviewResponse {
     private String issues;
     private String comment;
     private Integer round;
+    /** 验收点覆盖清单（`RV-3`）：[{criterionRef,status,method,evidenceRef,note}]；null = 该轮无覆盖清单。 */
+    private List<Map<String, String>> coverage;
     private OffsetDateTime createTime;
     private OffsetDateTime updateTime;
     private String remark;

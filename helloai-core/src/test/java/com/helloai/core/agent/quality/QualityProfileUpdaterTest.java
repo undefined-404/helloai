@@ -78,6 +78,18 @@ class QualityProfileUpdaterTest {
         verify(profileMapper, never()).selectOne(any());
     }
 
+    @Test
+    @DisplayName("RV-2: INCONCLUSIVE → 整条增量跳过（不进画像分母、不合并缺陷标签）")
+    void skipWhenInconclusive() {
+        updater.onReviewRecordPersisted(AGENT_ID, 10L, 1, ReviewResult.INCONCLUSIVE, 5,
+                "[defect] 缺单测 [location] x [impact] y [evidence] z");
+
+        verify(profileMapper, never()).selectOne(any());
+        verify(profileMapper, never()).insert(any(AgentQualityProfile.class));
+        verify(profileMapper, never()).incrementCore(anyLong(), anyInt(), anyInt(), anyInt(),
+                anyInt(), anyInt(), anyInt(), anyLong(), anyString());
+    }
+
     // ════════════════════════════════════════════════════════════
     //  首次建画像
     // ════════════════════════════════════════════════════════════

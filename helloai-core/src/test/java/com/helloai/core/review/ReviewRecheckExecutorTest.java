@@ -2,10 +2,12 @@ package com.helloai.core.review;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.common.config.ReviewProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
@@ -16,8 +18,10 @@ import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
 import com.helloai.core.review.support.ReviewExecutionEngine;
 import com.helloai.core.review.support.ReviewRecheckExecutor;
+import com.helloai.core.review.support.ReviewSnapshotBuilder;
 import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.review.entity.ReviewRecord;
+import com.helloai.core.task.port.AttachmentView;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.review.service.ReviewService;
@@ -27,19 +31,25 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -83,15 +93,17 @@ class ReviewRecheckExecutorTest {
     @BeforeEach
     void setUp() {
         // 判定复用真实执行引擎（与单审/双审同一执行口径），底层仅 mock LLM 与持久化
+        ReviewEvidenceAssembler evidenceAssembler =
+                new ReviewEvidenceAssembler(attachmentService, dispatchProperties);
         ReviewExecutionEngine engine = new ReviewExecutionEngine(
                 platformAgentExecutionService, conversationService, taskTimelineService,
                 new VerdictParser(new ObjectMapper()),
-                new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
-                subTaskService);
+                evidenceAssembler,
+                subTaskService, new ReviewProperties());
         executor = new ReviewRecheckExecutor(recordReviewService, subTaskService,
                 reviewerPicker, taskTimelineService, agentQualityProfileService, engine,
-                conversationService);
-        lenient().when(reviewerPicker.pickSingle(any())).thenReturn(reviewer(9L));
+                conversationService, evidenceAssembler);
+        lenient().when(reviewerPicker.pickSingle(any(), any())).thenReturn(reviewer(9L));
     }
 
     private ReviewRecord approvedRecord(Long id) {
@@ -126,7 +138,13 @@ class ReviewRecheckExecutorTest {
         when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
-                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+                        // coverage 必填（RV-3）：通过判定不声明覆盖清单即判不可采信；
+                        // 本例度量的是「复审一致落 log」，故给出合格覆盖声明
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\", "
+                                + "\"analysis\": \"覆盖全部端点：见附件 api.md\", "
+                                + "\"coverage\": [{\"criterionRef\": \"覆盖全部端点\", "
+                                + "\"status\": \"covered\", \"method\": \"attachment\"}]}",
+                        "stop", "llm", 100));
 
         executor.recheckReviewRecord(RECORD_ID);
 
@@ -143,7 +161,7 @@ class ReviewRecheckExecutorTest {
         // 抽检不改状态、不落 review_record
         verify(subTaskService, never()).complete(anyLong());
         verify(subTaskService, never()).rework(anyLong(), any());
-        verify(recordReviewService, never()).recordAutoReview(anyLong(), any(), any(), anyInt(), any(), any());
+        verify(recordReviewService, never()).recordAutoReview(anyLong(), any(), any(), anyInt(), any(), any(), any(), any());
     }
 
     @Test
@@ -188,8 +206,122 @@ class ReviewRecheckExecutorTest {
         // 无可用 reviewer → 跳过
         when(recordReviewService.getById(RECORD_ID)).thenReturn(approvedRecord(RECORD_ID));
         when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(reviewerPicker.pickSingle(any())).thenReturn(null);
+        when(reviewerPicker.pickSingle(any(), any())).thenReturn(null);
         executor.recheckReviewRecord(RECORD_ID);
         verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
+    }
+
+    @Test
+    @DisplayName("§RV-4 抽检独立性：选人排除原判定人（review_record.reviewer_agent_id）")
+    @SuppressWarnings("unchecked")
+    void shouldExcludeOriginalReviewerWhenPicking() {
+        ReviewRecord record = approvedRecord(RECORD_ID);
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(record);
+        when(recordReviewService.getBySubTaskId(SUB_TASK_ID)).thenReturn(List.of(record));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        executor.recheckReviewRecord(RECORD_ID);
+
+        ArgumentCaptor<Set<Long>> captor = ArgumentCaptor.forClass(Set.class);
+        verify(reviewerPicker).pickSingle(any(), captor.capture());
+        assertThat(captor.getValue()).contains(record.getReviewerAgentId());
+    }
+
+    @Test
+    @DisplayName("§RV-4 无可选独立 Reviewer → 跳过 + 抽检跳过事件（不抛异常、不调 LLM）")
+    void shouldRecordSkipEventWhenNoIndependentReviewer() {
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(approvedRecord(RECORD_ID));
+        when(recordReviewService.getBySubTaskId(SUB_TASK_ID)).thenReturn(List.of(approvedRecord(RECORD_ID)));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(reviewerPicker.pickSingle(any(), any())).thenReturn(null);
+
+        executor.recheckReviewRecord(RECORD_ID);
+
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
+        verify(taskTimelineService).recordEvent(eq(TASK_ID), eq(SUB_TASK_ID),
+                eq(TimelineEventCode.SUB_TASK_RECHECK_SKIPPED.code()), eq(AgentRole.REVIEWER), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("§RV-2 复审命中 BLOCK（驳回却满分）→ 跳过事件 reason=inconclusive，不落 recheck log")
+    void shouldRecordSkipEventWhenVerdictInconclusive() {
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(approvedRecord(RECORD_ID));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": false, \"score\": 5, \"issues\": \"[defect] 缺证据\", \"comment\": \"\"}",
+                        "stop", "llm", 100));
+
+        executor.recheckReviewRecord(RECORD_ID);
+
+        verify(recordReviewService, never()).recordRecheck(anyLong(), anyLong(), any(), any(),
+                anyBoolean(), anyLong(), any(), any(), any());
+        verify(taskTimelineService).recordEvent(eq(TASK_ID), eq(SUB_TASK_ID),
+                eq(TimelineEventCode.SUB_TASK_RECHECK_SKIPPED.code()), eq(AgentRole.REVIEWER), isNull(),
+                argThat((Map<String, Object> payload) -> "inconclusive".equals(payload.get("reason"))));
+    }
+
+    @Test
+    @DisplayName("§RV-4 复审不可判定 → 抽检跳过事件 reason=unjudgeable（不再静默）")
+    void shouldRecordSkipEventWhenVerdictUnjudgeable() {
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(approvedRecord(RECORD_ID));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("这不是 JSON 判定", "stop", "llm", 100));
+
+        executor.recheckReviewRecord(RECORD_ID);
+
+        verify(taskTimelineService).recordEvent(eq(TASK_ID), eq(SUB_TASK_ID),
+                eq(TimelineEventCode.SUB_TASK_RECHECK_SKIPPED.code()), eq(AgentRole.REVIEWER), isNull(),
+                argThat((Map<String, Object> payload) -> "unjudgeable".equals(payload.get("reason"))));
+    }
+
+    @Test
+    @DisplayName("RV-5 当前证据与原判定快照不一致 ⇒ 跳过（reason=snapshot_drift）且不调复判 LLM")
+    void rv5_skipsWhenSnapshotDrift() {
+        ReviewRecord record = approvedRecord(RECORD_ID);
+        // 原判定时有一份附件；当前附件已被返工替换（mock 返回空）
+        record.setSnapshot(ReviewSnapshotBuilder.build(
+                List.of(new AttachmentView(1L, "api.md", "MD", "text/markdown", 100L, true)),
+                "接口清单已整理完毕，覆盖全部端点。"));
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(record);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of());
+
+        executor.recheckReviewRecord(RECORD_ID);
+
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
+        verify(recordReviewService, never()).recordRecheck(anyLong(), anyLong(), any(), any(),
+                anyBoolean(), anyLong(), any(), any(), any());
+        verify(taskTimelineService).recordEvent(eq(TASK_ID), eq(SUB_TASK_ID),
+                eq(TimelineEventCode.SUB_TASK_RECHECK_SKIPPED.code()), eq(AgentRole.REVIEWER), isNull(),
+                argThat((Map<String, Object> payload) -> "snapshot_drift".equals(payload.get("reason"))
+                        && "attachments_changed".equals(payload.get("drift"))));
+    }
+
+    @Test
+    @DisplayName("RV-5 快照与当前证据一致 ⇒ 照常复判（快照存在不改变正常抽检）")
+    void rv5_proceedsWhenSnapshotMatches() {
+        ReviewRecord record = approvedRecord(RECORD_ID);
+        record.setSnapshot(ReviewSnapshotBuilder.build(List.of(), "接口清单已整理完毕，覆盖全部端点。"));
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(record);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\", "
+                                + "\"analysis\": \"覆盖全部端点：见产出正文\", "
+                                + "\"coverage\": [{\"criterionRef\": \"覆盖全部端点\", "
+                                + "\"status\": \"covered\", \"method\": \"attachment\"}]}",
+                        "stop", "llm", 100));
+
+        executor.recheckReviewRecord(RECORD_ID);
+
+        verify(recordReviewService).recordRecheck(
+                eq(RECORD_ID), eq(SUB_TASK_ID), eq(ReviewResult.APPROVED), eq(ReviewResult.APPROVED),
+                anyBoolean(), anyLong(), any(), any(), any());
     }
 }

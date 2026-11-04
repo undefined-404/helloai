@@ -4,6 +4,7 @@ import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.task.port.SubTaskView;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * 核验 Reviewer 选型器（反馈回路双审前置拆分）。
@@ -18,15 +19,30 @@ import java.util.List;
 public interface ReviewerPicker {
 
     /**
+     * 单审选取（不含排除集）：等价 {@code pickSingle(subTask, Set.of())}。
+     *
+     * @param subTask 待核验子任务（可空；taskId 为空时直接走回退链）
+     * @return 可用核验 Agent；无可用时返回 null
+     */
+    default AgentProfileSnapshot pickSingle(SubTaskView subTask) {
+        return pickSingle(subTask, Set.of());
+    }
+
+    /**
      * 单审选取（原 SubTaskReviewServiceImpl.pickReviewerAgent 语义）：
      * 任务级指定 reviewerAgentId 优先 → 指定失效或未指定时回退链
      * AgentSelector 优选 REVIEWER（API_KEY_LLM）→ 同角色 API_KEY_LLM
      * → PLANNER 角色 API_KEY_LLM。
      *
-     * @param subTask 待核验子任务（可空；taskId 为空时直接走回退链）
-     * @return 可用核验 Agent；无可用时返回 null
+     * <p><b>排除集（`RV-4` 抽检独立性）</b>：{@code excludeAgentIds} 中的 Agent 一律跳过——
+     * 抽检复审必须换人判，不能由原判定人复判自己（否则「放水」与「一致」无法区分）。
+     * 任务级指定的人若在排除集内，同样跳过并回退自动选择（不因「指定」而破例）。</p>
+     *
+     * @param subTask         待核验子任务（可空；taskId 为空时直接走回退链）
+     * @param excludeAgentIds 需排除的 Agent ID（可空/空集表示不排除）
+     * @return 可用核验 Agent；排除后无可用时返回 null（调用方据此跳过）
      */
-    AgentProfileSnapshot pickSingle(SubTaskView subTask);
+    AgentProfileSnapshot pickSingle(SubTaskView subTask, Set<Long> excludeAgentIds);
 
     /**
      * 双审选取：返回两个 {@code modelType}（provider:model 整体比对）不同的

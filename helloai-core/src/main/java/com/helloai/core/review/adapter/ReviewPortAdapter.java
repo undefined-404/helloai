@@ -48,6 +48,11 @@ public class ReviewPortAdapter implements ReviewPort {
         }
         List<ReviewFact> facts = new ArrayList<>(reviews.size());
         for (ReviewRecord r : reviews) {
+            // `RV-2`：INCONCLUSIVE 不是质量评价（判定本身不可采信）⇒ 不进入隐式评分样本，
+            // 否则平均分会把「判不出」当成一次低分/通过
+            if (r.getResult() == ReviewResult.INCONCLUSIVE) {
+                continue;
+            }
             facts.add(new ReviewFact(r.getScore() != null ? r.getScore() : 0,
                     r.getResult() == ReviewResult.APPROVED));
         }

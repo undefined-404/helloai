@@ -114,7 +114,19 @@
   "issues": "",
   "comment": "一句话核验结论",
   "missingEvidence": [],
+  "coverage": [],
   "analysis": "逐条对照验收标准与纪律条款的核验分析过程"
 }
 
 pass 为布尔值；score 为 1~5 整数；不通过时 issues 必填（四元组格式，具体问题描述），通过时 issues 可为空字符串；analysis 必填（分条文本，可用 \n 分隔，覆盖轨道 A 逐条标准与激活的轨道 B 条款）；missingEvidence 为数组（可为空）：不通过且缺陷与验收标准相关时逐条给出 {"acceptanceRef": "被驳回验收标准的原文子串", "missing": "缺什么证据", "howTo": "怎样补齐"}，通过或缺陷与验收标准无关时输出空数组。
+
+coverage 为数组，**无论通过与否都必须逐条填写**（`RV-3` 机读覆盖清单，平台据此核对「每条验收标准是否真被核验」）：每条验收标准一个对象，形如
+
+{"criterionRef": "该条验收标准的原文子串", "status": "covered|failed|not_verifiable", "method": "attachment|sandbox", "evidenceRef": "证据指向", "note": "说明"}
+
+- `criterionRef` **必须是「验收标准」段落里真实存在的原文子串**（与 missingEvidence 的 acceptanceRef 同一口径，平台做机械核对，编造引用会被标出）；一条标准拆不动时按整段填写，多条时逐条填写、不要合并。
+- `status`：`covered`=已核验且满足；`failed`=已核验但不满足；`not_verifiable`=可见范围内无法核验（此时 `note` 必填，写明看不到什么、为什么）。
+- `method` **只能取 `attachment` 或 `sandbox`**：`attachment` 表示依据是**物化附件正文**，`evidenceRef` 填附件文件名；`sandbox` 表示依据是**沙箱一手执行结果**，`evidenceRef` 填执行过的命令（如 `python -m pytest -q`）。你**看不到源码仓库**，不要发明第三种方式。
+- **`status=covered` 必须配 `attachment` / `sandbox` 之一**：仅凭「执行产出文本自述」判覆盖不成立（见第 12 条，自报值不是证据）；无法取得一手依据时按 `not_verifiable` 处理。
+- `pass=true` 时**每条验收标准都必须有 `status=covered` 的覆盖项**；有任一条 `failed` / `not_verifiable` 却判通过，会被平台判为「结论自相矛盾」并转人工。
+

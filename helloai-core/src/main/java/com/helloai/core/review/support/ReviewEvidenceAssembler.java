@@ -116,6 +116,30 @@ public class ReviewEvidenceAssembler {
     }
 
     /**
+     * 构建判定快照（`RV-5`）：与核验证据同一来源（可读物化附件 + 执行产出），
+     * 落库时与 `review_record` 同事务（见 `ReviewService#recordAutoReview`）。
+     *
+     * <p>体积超阈值只告警不阻断——快照是观测/复判依据，不得因为它自身的大小改变判定。</p>
+     */
+    public Map<String, Object> buildReviewSnapshot(SubTaskView subTask) {
+        Map<String, Object> snapshot = ReviewSnapshotBuilder.build(
+                readableAttachments(subTask.id()),
+                SubTaskOutputExtractor.extractExecutionOutput(subTask.context()));
+        int bytes = ReviewSnapshotBuilder.estimatedBytes(snapshot);
+        if (bytes > ReviewSnapshotBuilder.WARN_BYTES) {
+            log.warn("核验快照体积超阈值（存储增长观测）: subTaskId={}, bytes={}, threshold={}",
+                    subTask.id(), bytes, ReviewSnapshotBuilder.WARN_BYTES);
+        }
+        return snapshot;
+    }
+
+    /** 抽检前对账：当前证据是否仍是原判定对象（`RV-5`，见 {@link ReviewSnapshotMatcher}）。 */
+    public ReviewSnapshotMatcher.Drift checkSnapshotDrift(Map<String, Object> snapshot, SubTaskView current) {
+        return ReviewSnapshotMatcher.check(snapshot, readableAttachments(current.id()),
+                SubTaskOutputExtractor.extractExecutionOutput(current.context()));
+    }
+
+    /**
      *  附件清单：核验 Prompt 注入子任务全部附件（可读 local:// 产物标注平台直读，
      * 外部存储标注不可直读），供核验 LLM 核对"声称交付物 ↔ 真实附件"的对应关系——
      * 声称"文件 203 行 errors=0"但附件清单无对应文件时判不达标。

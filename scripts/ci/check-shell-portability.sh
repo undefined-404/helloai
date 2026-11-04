@@ -71,13 +71,29 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 # 解析 python 解释器（三平台标准件；缺失即响亮失败，不静默跳过）
-PY="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+#   不能只查 `command -v`：Windows Git Bash 里 `python3` 常解析到微软商店的桩程序
+#   （存在、可执行，但什么都不输出且 exit≠0）。取到它会让 P1~P3 得到空输出，被下面的
+#   自证判成「断言未生效」——排查方向被指到正则，实际是解释器。故逐个候选实测一条 print，
+#   取首个真能回吐结果的；全不可用仍按 exit 69 响亮失败。
+probe_python() {
+  printf 'print("shellport-probe")\n' | "$1" - 2>/dev/null | tr -d '\r'
+}
+PY=""
+for CANDIDATE in "$(command -v python3 2>/dev/null)" "$(command -v python 2>/dev/null)"; do
+  if [ -n "$CANDIDATE" ] && [ "$(probe_python "$CANDIDATE")" = "shellport-probe" ]; then
+    PY="$CANDIDATE"
+    break
+  fi
+done
 if [ -z "$PY" ]; then
-  printf '[FAIL] 未找到 python3 / python —— 无法执行正则类断言（P1~P3）\n' >&2
+  printf '[FAIL] 未找到可用的 python3 / python（命中桩程序或全部无输出）—— 无法执行正则类断言（P1~P3）\n' >&2
   exit 69
 fi
 
 # ---------- 反证开关（只读源码；注入物落仓内 tmp/，已被根 .gitignore 忽略）----------
+# 【路径必须相对仓根】本文件已 cd 到 $ROOT，bash 侧相对/绝对等价；但 Windows 上被选中的
+#   python 是原生解释器，认不得 MSYS 的 /e/... 绝对路径 ⇒ isfile 判 false、注入物被静默跳过、
+#   三项反证恒通过（假绿）。相对路径两侧同源，反证才真能反证。
 INJECT_MODE="${1:-}"
 INJECT_FILE=""
 cleanup() { [ -n "$INJECT_FILE" ] && rm -f "$INJECT_FILE"; return 0; }
@@ -88,14 +104,14 @@ case "$INJECT_MODE" in
     : ;;
   --inject-bash4)
     # 拼装而非字面量：避免本文件源码命中自己的 P1 判据
-    INJECT_FILE="$ROOT/tmp/.shellport-bash4.sh"
+    INJECT_FILE="tmp/.shellport-bash4.sh"
     printf '#!/usr/bin/env bash\nset -uo pipefail\n%s %s M=( [a]=1 )\n' \
       'declare' '-A' > "$INJECT_FILE" ;;
   --inject-mb)
-    INJECT_FILE="$ROOT/tmp/.shellport-mb.sh"
+    INJECT_FILE="tmp/.shellport-mb.sh"
     printf '#!/usr/bin/env bash\n%s=x\necho "$%s（尾"\n' 'V' 'V' > "$INJECT_FILE" ;;
   --inject-pipefail)
-    INJECT_FILE="$ROOT/tmp/.shellport-pipefail.sh"
+    INJECT_FILE="tmp/.shellport-pipefail.sh"
     printf '#!/usr/bin/env bash\nset -uo pipefail\nif ! printf "%%s\\n" a | %s -qx a; then :; fi\n' \
       'grep' > "$INJECT_FILE" ;;
   *)
@@ -203,6 +219,13 @@ n3 = report("P3", "管道右端 `grep -q…`（早退 + pipefail ⇒ 假 FAIL）
 if n_bash < MIN_BASH_FILES:
     print(f"  [FAIL] 反空转：仅识别出 {n_bash} 个 bash 实现（下限 {MIN_BASH_FILES}）"
           f" ⇒ 断言可能恒真，请核查枚举逻辑（git ls-files / shebang 判定）")
+
+# 反空转（与上一条同族）：扫描清单里的每一项都必须真被读到。少一项即说明
+# bash 侧与 python 侧的路径口径不一致（典型：Windows 原生 python 打不开 MSYS 的 /e/... 路径），
+# 此时「注入物不存在 ⇒ 断言恒真」会伪装成「全部通过」。
+if len(entries) != n_files:
+    print(f"  [FAIL] 反空转：扫描清单 {len(entries)} 项，python 实际读到 {n_files} 项"
+          f"（缺 {len(entries) - n_files} 项）⇒ 路径口径不一致，断言可能恒真")
 
 print(f"  扫描：在册 .sh {n_files} 个，其中 bash 实现 {n_bash} 个")
 PY

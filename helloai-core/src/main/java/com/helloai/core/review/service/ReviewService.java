@@ -11,6 +11,7 @@ import com.helloai.core.review.entity.ReviewRecord;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 审查服务接口：人工审查、自动核验落库与审查记录查询。
@@ -54,11 +55,15 @@ public interface ReviewService extends IService<ReviewRecord> {
      * @param score           评分 1-5
      * @param issues          问题描述，可空
      * @param comment         审查意见，可空
+     * @param coverage        验收点覆盖清单（`RV-3`，已归一）；可空 ⇒ 列留 NULL
+     * @param snapshot        判定快照（`RV-5`，附件集合 + 产出摘要）；可空 ⇒ 列留 NULL
      * @return 已持久化的 ReviewRecord
      */
     ReviewRecord recordAutoReview(Long subTaskId, Long reviewerAgentId,
                                   ReviewResult result, int score,
-                                  String issues, String comment);
+                                  String issues, String comment,
+                                  List<Map<String, String>> coverage,
+                                  Map<String, Object> snapshot);
 
     /**
      * 抽检候选计数：窗口内 APPROVED 且未被抽检覆盖的 review_record 数

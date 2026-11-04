@@ -242,6 +242,25 @@ class ReviewServiceTest {
     }
 
     @Test
+    @DisplayName("RV-2: 人工审查入口拒绝 INCONCLUSIVE（该结论仅由自动核验链路产生）")
+    void shouldRejectInconclusiveFromManualReview() {
+        assertThatThrownBy(() -> reviewService.createReview(SUB_TASK_ID, REVIEWER_ID,
+                ReviewResult.INCONCLUSIVE, 5, null, "人工选择不可判定", null))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("APPROVED / REJECTED");
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService, never()).reworkFresh(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("RV-2: 人工审查结论为 null 同样被拒（防御性白名单）")
+    void shouldRejectNullResultFromManualReview() {
+        assertThatThrownBy(() -> reviewService.createReview(SUB_TASK_ID, REVIEWER_ID,
+                null, 5, null, "空结论", null))
+                .isInstanceOf(BizException.class);
+    }
+
+    @Test
     @DisplayName("§6.147: 质量趋势源透传 Mapper，days<=0 归一 30 天")
     void shouldPassthroughTrendSourceWithNormalizedDays() {
         List<QualityTrendPoint> points = List.of(
