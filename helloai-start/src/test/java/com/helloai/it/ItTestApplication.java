@@ -20,6 +20,11 @@ import org.springframework.scheduling.annotation.EnableAsync;
  *
  * <p>其余注解（scanBasePackages / MapperScan 9 包 / EnableAsync）与生产主类逐字对齐，
  * 确保被测装配 == 生产装配（CODE_STYLE §47.2 集成测试：真实 Spring Bean / 事务 / Mapper）。
+ *
+ * <p><b>@EnableConfigurationProperties 必须与生产主类同集合</b>：无 {@code @Component} 的
+ * {@code @ConfigurationProperties} 类只靠显式注册成 Bean，漏一处即全量 IT 上下文加载失败
+ * （2026-11-04 实测：新增 {@code ContextWindowProperties} 只注册到 HelloAIApplication，
+ * 本类漏改 ⇒ 40 个 *IT 全 ERROR，CI 门禁 5 红）。新增此类时必须同时改两处。</p>
  * 唯一例外：通过 {@code excludeFilters} 排除 {@link HelloAIApplication} 本身——
  * 本类 {@code scanBasePackages=com.helloai} 会把它当普通组件扫入并连带激活其上的
  * {@code @EnableScheduling}（2026-09-29 本机 Docker 实跑暴露：OutboxRelayTask 1s /
@@ -29,7 +34,8 @@ import org.springframework.scheduling.annotation.EnableAsync;
 @SpringBootApplication
 @ComponentScan(basePackages = "com.helloai",
         excludeFilters = @ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = HelloAIApplication.class))
-@EnableConfigurationProperties({AgentProviderProperties.class, com.helloai.common.config.KbProperties.class})
+@EnableConfigurationProperties({AgentProviderProperties.class, com.helloai.common.config.KbProperties.class,
+        com.helloai.common.config.ContextWindowProperties.class})
 @MapperScan({
         "com.helloai.core.agent.mapper",
         "com.helloai.core.agent.session.mapper",

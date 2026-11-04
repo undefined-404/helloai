@@ -16,7 +16,8 @@ import cn.dev33.satoken.stp.StpUtil;
  * 也能取到真实登录用户。UserContext 优先保证这条被装饰的异步链路拿到正确用户。</p>
  *
  * <p><b>宽松语义</b>：两条路径都取不到时返回 null。调用方按「写 owner 时 null = 不归属，
- * 读过滤时 null = 取全部」宽放即可。</p>
+ * 读过滤时 null = <b>不返回任何数据（fail-close）</b>」处理，避免把他人记忆外泄给
+ * 识别不出身份的调用方（长期记忆 recall 即按此口径实现）。</p>
  */
 public final class CurrentUser {
 

@@ -155,7 +155,7 @@
 | G-002 | Executor 迁移 | `RuntimeTurnExecutor` 为唯一 `AgentRuntime`；旧链入口全删；无配置级回退开关 | Runtime 成为唯一执行契约 | PR0 | 已完成 | — |
 | G-003 | AgentRuntime | 八件套契约齐备；工具侧两个语义位（按条件可用 / 按上下文动态描述）生效；`CRITICAL_TOOLS` 三件套不可关闭 | Context + Session + Skill + Tool + Loop + Event + Environment + SandboxProvider 全落地 | PR0 | 已完成 | — |
 | G-004 | Skill Capability | 元数据源 = classpath frontmatter + 目录扫描（9 字段）；技能包安装入口含摄入闸门、受控存储与审计 | Metadata / Version / Tools / Schema / Dependencies 全量 + requiredTools→tools 联动 + 受控存储安装 | PR1 | 已完成 | — |
-| G-005 | Sandbox Provider | 需隔离执行对象的契约仍缺；但技能执行链已在容器内真机跑通（`internal_run_skill` 模型自主触发，SKX-9 已验真） | 真正的 Provider 化执行环境与隔离策略 | PR1 | 暂缓（条件②已命中，重排期待议） | **2026-11-01：触发条件②「技能包被执行」已命中**（SKX-9 真机模型触发沙箱内执行）⇒ 依口径重排期；条件①「平台增加碰宿主工具」③「平台自持浏览器」仍不命中；SKX-9 判据③外链口径经用户裁定保留署名、技能按通过。详见 `plan/HelloAI 技能执行面接入实施计划（2026-10-26）.md` §SKX-9 |
+| G-005 | Sandbox Provider | 需隔离执行对象的契约仍缺；但技能执行链已在容器内真机跑通（`internal_run_skill` 模型自主触发，SKX-9 已验真） | 真正的 Provider 化执行环境与隔离策略 | PR1 | 暂缓 | 条件②已命中，重排期待议。**2026-11-01：触发条件②「技能包被执行」已命中**（SKX-9 真机模型触发沙箱内执行）⇒ 依口径重排期；条件①「平台增加碰宿主工具」③「平台自持浏览器」仍不命中；SKX-9 判据③外链口径经用户裁定保留署名、技能按通过。详见 `plan/HelloAI 技能执行面接入实施计划（2026-10-26）.md` §SKX-9 |
 | G-006 | Replay / Audit | 写侧 + 对账闭环；Timeline / Replay / Audit 三读侧经 REST + UI 工作台；外部执行轨迹与事件同址 | 基于统一 Event 查询回放；外部 Agent 全周期轨迹可对齐 | PR1 | 已完成 | — |
 | G-007 | Quality Gate | Reviewer 闭环（执行 → Review → PASS / REJECT → REWORK） | Rule + Test + LLM 统一决策 | PR2 | 待开始 | 统一决策未启动，当前仅有链上增强 |
 | G-008 | Agent Fleet Routing | 选人四维（Capability / Health / Load / Policy）+ 成本维度已入比较链；外部 tokens 回报协议就绪 | 五维选人完整生效，成本可参与候选间比较 | PR2 | 部分完成 | 成本候选间比较待第 2 个 LLM agent 样本；成本闸门接线决策 |

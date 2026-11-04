@@ -9,6 +9,8 @@ import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.memory.entity.LongTermMemory;
 import com.helloai.core.planner.memory.mapper.LongTermMemoryMapper;
 import com.helloai.core.planner.memory.service.impl.LongTermMemoryServiceImpl;
+import com.helloai.core.shared.util.UserContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -34,6 +36,9 @@ class LongTermMemoryServiceImplTest {
 
     private static final Long CONV_ID = 1L;
 
+    /** 模拟「已登录用户」；recall/page 均按调用者收敛可见范围（PA-1）。 */
+    private static final Long USER_ID = 42L;
+
     @BeforeAll
     static void initTableInfo() {
         org.apache.ibatis.builder.MapperBuilderAssistant assistant =
@@ -46,9 +51,17 @@ class LongTermMemoryServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        // 绑定登录用户：rectify 前的用例在「无登录上下文」下会走 null 早退，
+        // 掩盖真实查询分支（CI 红即由此暴露，见 LOG-20261104）。
+        UserContext.set(USER_ID);
         memoryMapper = mock(LongTermMemoryMapper.class);
         service = spy(new LongTermMemoryServiceImpl(memoryMapper));
         ReflectionTestUtils.setField(service, "baseMapper", memoryMapper);
+    }
+
+    @AfterEach
+    void tearDown() {
+        UserContext.clear();
     }
 
     private RequirementConversation conversation() {
@@ -106,9 +119,24 @@ class LongTermMemoryServiceImplTest {
     @Test
     @DisplayName("recall：关键词空返回空列表；limit 超界封顶 20")
     void searchRecallGuard() {
+        // 已登录 + 无命中：保证走真实查询分支（而非 null 早退）后仍返回空
+        when(memoryMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         assertThat(service.searchForRecall(null, 5)).isEmpty();
         assertThat(service.searchForRecall("  ", 5)).isEmpty();
         assertThat(service.searchForRecall("kw", 999)).isEmpty(); // 无结果，不抛
+    }
+
+    @Test
+    @DisplayName("recall：识别不到调用者时返回空（不外泄任何记忆）")
+    void searchRecallWithoutLogin() {
+        // 安全语义：无登录上下文时即便库里有命中，也不得返回给调用方
+        UserContext.clear();
+        LongTermMemory m = new LongTermMemory();
+        m.setTitle("日报模块");
+        when(memoryMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(m));
+
+        assertThat(service.searchForRecall("日报", 5)).isEmpty();
+        verify(memoryMapper, never()).selectList(any(LambdaQueryWrapper.class));
     }
 
     @Test

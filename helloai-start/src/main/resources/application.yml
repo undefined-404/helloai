@@ -258,6 +258,10 @@ helloai:
     # REF-5.4 出站守卫：网页直取默认**只放 https**；确需明文 http 时显式打开。
     # 注意：回环 / 私网 / 链路本地 / 保留段**无条件拒绝**，本开关放行不了它们。
     url-fetch-allow-insecure-http: false
+  assistant:
+    # 助理对话整轮锁 TTL 下限（秒）：有效值 = max(本值, provider 读超时最大值 + 1s)。
+    # 锁在同步 LLM 调用期间持有，不得短于读超时，否则锁先过期会被另一轮抢占（N-1）。
+    round-lock-ttl-seconds: 240
   execution:
     enabled: true
     mock-mode: false

@@ -1,10 +1,13 @@
 package com.helloai.core.task.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import com.helloai.core.task.entity.TaskRunningSpecEntity;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Result;
+import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
@@ -16,8 +19,23 @@ import java.util.Map;
 @Mapper
 public interface TaskRunningSpecMapper extends BaseMapper<TaskRunningSpecEntity> {
 
-    /** 按 taskId 查当前任务的 Running Spec 行（taskId 唯一，最多 1 行）。 */
+    /**
+     * 按 taskId 查当前任务的 Running Spec 行（taskId 唯一，最多 1 行）。
+     *
+     * <p><b>JSONB 列必须显式配 typeHandler</b>：MyBatis 自定义注解 SQL 走普通自动映射，
+     * <b>不套用</b> {@code @TableField(typeHandler)}；不配则 {@code baseline} / {@code contract}
+     * 读成 null（2026-11-04 实测：TaskRunningSpecPhaseBIT 断言「Prompt 段应含总体目标」失败，
+     * 根因 baseline 丢失 → {@code TaskRunningSpec.isEmpty()} → 渲染空串）。</p>
+     *
+     * <p><b>不能用 {@code selectOne(LambdaQueryWrapper)} 代替</b>：那会按实体全字段生成
+     * {@code SELECT}，把继承自 {@code BaseEntity} 而本表不存在的 {@code remark} 列也带上
+     * ⇒ {@code column "remark" does not exist}。故保留 {@code SELECT *} + 显式 {@code @Results}。</p>
+     */
     @Select("SELECT * FROM task_running_spec WHERE task_id = #{taskId} AND deleted = 0 LIMIT 1")
+    @Results(id = "taskRunningSpecResult", value = {
+            @Result(column = "baseline", property = "baseline", typeHandler = PgJsonbTypeHandler.class),
+            @Result(column = "contract", property = "contract", typeHandler = PgJsonbTypeHandler.class)
+    })
     TaskRunningSpecEntity selectByTaskId(@Param("taskId") Long taskId);
 
     /** 重写 ContextSummary（不改变 baseline / version）。 */
