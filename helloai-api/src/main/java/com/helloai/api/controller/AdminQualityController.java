@@ -7,7 +7,9 @@ import com.helloai.core.agent.quality.dto.AgentQualityRank;
 import com.helloai.core.agent.quality.dto.QualityOverview;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.review.dto.QualityDashboardResponse;
+import com.helloai.core.review.dto.RecheckStats;
 import com.helloai.core.review.service.QualityDashboardService;
+import com.helloai.core.review.service.ReviewService;
 import com.helloai.core.system.service.SysConfigService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -20,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
@@ -69,6 +72,8 @@ public class AdminQualityController {
     private final SysConfigService sysConfigService;
     /** 看板聚合（review 域，Controller 零编排只透传）。 */
     private final QualityDashboardService qualityDashboardService;
+    /** `RV-6` 抽检偏差统计（review 域，只读）。 */
+    private final ReviewService reviewService;
 
     /**
      * 重算指定 Agent 的质量画像（rebuild 兜底）。
@@ -154,6 +159,23 @@ public class AdminQualityController {
             return gateDenied();
         }
         return R.ok(qualityDashboardService.assemble(days != null ? days : 0));
+    }
+
+    /**
+     * 抽检偏差统计（`RV-6`）：窗口内按原判结果分组的有效复判数与分歧数。
+     *
+     * <p>`approved.divergent` = 放水（原通过、复判驳回）；
+     * `rejected.divergent` = 误伤（原驳回、复判通过）。跳过不写日志，不进分母。</p>
+     *
+     * @param days 统计窗口（天）；缺省/&lt;=0 按 30 兜底
+     */
+    @GetMapping("/recheck-stats")
+    public R<RecheckStats> recheckStats(@RequestParam(value = "days", required = false) Integer days) {
+        if (!isEnabled()) {
+            return gateDenied();
+        }
+        int windowDays = days != null && days > 0 ? days : 30;
+        return R.ok(reviewService.recheckStats(OffsetDateTime.now().minusDays(windowDays)));
     }
 
     /**

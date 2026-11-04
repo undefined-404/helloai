@@ -16,6 +16,7 @@ import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.review.dto.DefectDistribution;
 import com.helloai.core.review.dto.QualityTrendPoint;
+import com.helloai.core.review.dto.RecheckStats;
 import com.helloai.core.review.dto.ReviewerLeniency;
 import com.helloai.core.review.dto.ReworkRoundPoint;
 import com.helloai.core.review.mapper.ReviewRecordMapper;
@@ -29,6 +30,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -329,5 +331,36 @@ class ReviewServiceTest {
         // 缺失（9L 不在 agent 表）回退 ID 字符串，其余字段保持 SQL 投影值
         assertThat(result.get(1).reviewerName()).isEqualTo("9");
         assertThat(result.get(1).approveRate()).isEqualTo(33);
+    }
+
+    @Test
+    @DisplayName("RV-6: 抽检偏差统计按原判结果分桶，未知结果不入桶")
+    void shouldGroupRecheckStatsByOriginalResult() {
+        when(reviewRecheckLogMapper.selectRecheckStats(any(OffsetDateTime.class))).thenReturn(List.of(
+                new RecheckStats.Row("APPROVED", 10, 2),
+                new RecheckStats.Row("REJECTED", 5, 1),
+                new RecheckStats.Row("INCONCLUSIVE", 3, 3)));
+
+        RecheckStats stats = reviewService.recheckStats(OffsetDateTime.now().minusDays(7));
+
+        assertThat(stats.approved().sampled()).isEqualTo(10);
+        assertThat(stats.approved().divergent()).isEqualTo(2);
+        assertThat(stats.approved().rate()).isEqualTo(20.0);
+        assertThat(stats.rejected().sampled()).isEqualTo(5);
+        assertThat(stats.rejected().divergent()).isEqualTo(1);
+        assertThat(stats.rejected().rate()).isEqualTo(20.0);
+    }
+
+    @Test
+    @DisplayName("RV-6: 窗口内无有效复判 ⇒ 两桶为 0 且比率为 0（不出现除零）")
+    void shouldReturnZeroRecheckStatsWhenNoSamples() {
+        when(reviewRecheckLogMapper.selectRecheckStats(any(OffsetDateTime.class))).thenReturn(List.of());
+
+        RecheckStats stats = reviewService.recheckStats(null);
+
+        assertThat(stats.approved().sampled()).isZero();
+        assertThat(stats.approved().rate()).isZero();
+        assertThat(stats.rejected().sampled()).isZero();
+        assertThat(stats.rejected().rate()).isZero();
     }
 }

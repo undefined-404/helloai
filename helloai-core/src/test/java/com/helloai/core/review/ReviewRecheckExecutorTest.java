@@ -116,6 +116,13 @@ class ReviewRecheckExecutorTest {
         return record;
     }
 
+    private ReviewRecord rejectedRecord(Long id) {
+        ReviewRecord record = approvedRecord(id);
+        record.setResult(ReviewResult.REJECTED);
+        record.setScore(1);
+        return record;
+    }
+
     private SubTaskView reviewSubTask() {
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
@@ -189,17 +196,17 @@ class ReviewRecheckExecutorTest {
     }
 
     @Test
-    @DisplayName("§6.142 抽检跳过：记录不存在 / 非 APPROVED / 无可用 reviewer 均不调 LLM")
+    @DisplayName("§6.142 抽检跳过：记录不存在 / INCONCLUSIVE 无原判 / 无可用 reviewer 均不调 LLM")
     void shouldSkipRecheckWhenNotEligible() {
         // 记录不存在
         when(recordReviewService.getById(RECORD_ID)).thenReturn(null);
         executor.recheckReviewRecord(RECORD_ID);
         verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
 
-        // 非 APPROVED（人工驳回记录不属于抽检目标）
-        ReviewRecord rejected = approvedRecord(RECORD_ID);
-        rejected.setResult(ReviewResult.REJECTED);
-        when(recordReviewService.getById(RECORD_ID)).thenReturn(rejected);
+        // INCONCLUSIVE：没有可复判的「原判」（RV-6 不入样）
+        ReviewRecord inconclusive = approvedRecord(RECORD_ID);
+        inconclusive.setResult(ReviewResult.INCONCLUSIVE);
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(inconclusive);
         executor.recheckReviewRecord(RECORD_ID);
         verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
 
@@ -209,6 +216,83 @@ class ReviewRecheckExecutorTest {
         when(reviewerPicker.pickSingle(any(), any())).thenReturn(null);
         executor.recheckReviewRecord(RECORD_ID);
         verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
+    }
+
+    @Test
+    @DisplayName("RV-6 驳回侧：原 REJECTED 复判 APPROVED ⇒ discrepancy=true + direction=overturned_rejection（误伤）")
+    void rv6_rejectedToApprovedRecordedAsOverturnedRejection() {
+        ReviewRecord record = rejectedRecord(RECORD_ID);
+        record.setSnapshot(ReviewSnapshotBuilder.build(
+                List.of(), "接口清单已整理完毕，覆盖全部端点。"));
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(record);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\", "
+                                + "\"analysis\": \"覆盖全部端点：见产出正文\", "
+                                + "\"coverage\": [{\"criterionRef\": \"覆盖全部端点\", "
+                                + "\"status\": \"covered\", \"method\": \"attachment\"}]}",
+                        "stop", "llm", 100));
+
+        executor.recheckReviewRecord(RECORD_ID);
+
+        verify(recordReviewService).recordRecheck(
+                eq(RECORD_ID), eq(SUB_TASK_ID), eq(ReviewResult.REJECTED), eq(ReviewResult.APPROVED),
+                eq(true), eq(9L), any(), any(), any());
+        verify(conversationService).addMessage(
+                eq(SUB_TASK_ID), eq(9L), eq("assistant"), eq("agent"),
+                argThat((String text) -> text.contains("误伤")), eq("subtask_recheck_result"));
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_recheck_discrepancy"),
+                eq(AgentRole.REVIEWER), eq(9L),
+                argThat((Map<String, Object> payload) ->
+                        "REJECTED".equals(payload.get("originalResult"))
+                                && "APPROVED".equals(payload.get("recheckResult"))
+                                && "overturned_rejection".equals(payload.get("direction"))));
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService, never()).rework(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("RV-6 驳回侧：原 REJECTED 复判 REJECTED ⇒ 一致（discrepancy=false）+ direction=consistent")
+    void rv6_rejectedStaysRejected() {
+        ReviewRecord record = rejectedRecord(RECORD_ID);
+        record.setSnapshot(ReviewSnapshotBuilder.build(
+                List.of(), "接口清单已整理完毕，覆盖全部端点。"));
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(record);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": false, \"score\": 1, \"issues\": \"[defect] 产出为编造\", \"comment\": \"\"}",
+                        "stop", "llm", 100));
+
+        executor.recheckReviewRecord(RECORD_ID);
+
+        verify(recordReviewService).recordRecheck(
+                eq(RECORD_ID), eq(SUB_TASK_ID), eq(ReviewResult.REJECTED), eq(ReviewResult.REJECTED),
+                eq(false), eq(9L), any(), any(), any());
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_recheck_consistent"),
+                eq(AgentRole.REVIEWER), eq(9L),
+                argThat((Map<String, Object> payload) -> "consistent".equals(payload.get("direction"))));
+    }
+
+    @Test
+    @DisplayName("RV-6 驳回侧：无判定快照 ⇒ 跳过 reason=snapshot_missing（不调 LLM、不落日志）")
+    void rv6_rejectedWithoutSnapshotSkipped() {
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(rejectedRecord(RECORD_ID));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+
+        executor.recheckReviewRecord(RECORD_ID);
+
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
+        verify(recordReviewService, never()).recordRecheck(anyLong(), anyLong(), any(), any(),
+                anyBoolean(), anyLong(), any(), any(), any());
+        verify(taskTimelineService).recordEvent(eq(TASK_ID), eq(SUB_TASK_ID),
+                eq(TimelineEventCode.SUB_TASK_RECHECK_SKIPPED.code()), eq(AgentRole.REVIEWER), isNull(),
+                argThat((Map<String, Object> payload) -> "snapshot_missing".equals(payload.get("reason"))));
     }
 
     @Test

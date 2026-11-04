@@ -331,7 +331,10 @@ public class ExecutionResultHandler {
             outputText = parsedOutput.displayText();
         }
         last.put("output", outputText);
-        last.put("error", report.getError());
+        // 外部失败回执可能只给 finishReason（如 blocked）而不带 error：
+        // 对话流与 context 统一用兜底文本，避免前端只剩 unknown_error 占位
+        String failureReason = failureReason(report);
+        last.put("error", report.isSuccess() ? report.getError() : failureReason);
         ctx.put("lastExecution", last);
 
         // Task Running Spec 回填：从 executor 输出解析 EXECUTION_RECORD 块。
@@ -368,7 +371,7 @@ public class ExecutionResultHandler {
             } else {
                 conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
                         "assistant", "agent",
-                        report.getError() != null ? report.getError() : "unknown_error",
+                        failureReason,
                         TimelineEventCode.SUB_TASK_EXECUTE_FAILED.code());
             }
         } catch (Exception e) {
@@ -606,6 +609,23 @@ public class ExecutionResultHandler {
             failureTracker.recordFailure(agentId,
                     emptyReply ? FailureCategory.CONTINUATION : FailureCategory.RECOVERY);
         }
+    }
+
+    /**
+     * 失败回执的可读原因：优先原始 error，缺失时用 finishReason 兜底。
+     *
+     * <p>外部 CLI 上报 blocked 时可能只给 {@code success=false + finishReason=blocked}
+     * 而不带 error；此前对话流会写入 {@code unknown_error}，运维看不到任何线索。</p>
+     */
+    private static String failureReason(ExecutionResultReport report) {
+        String error = report.getError();
+        if (error != null && !error.isBlank()) {
+            return error;
+        }
+        String finish = report.getFinishReason();
+        return finish == null || finish.isBlank()
+                ? "未提交执行结果（原因未知）"
+                : "未提交执行结果（" + finish + "）";
     }
 
     private static Map<String, Object> safeMap(Object... keyValues) {

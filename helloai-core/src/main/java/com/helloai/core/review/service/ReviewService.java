@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.core.review.dto.DefectDistribution;
 import com.helloai.core.review.dto.QualityTrendPoint;
+import com.helloai.core.review.dto.RecheckStats;
 import com.helloai.core.review.dto.ReviewerLeniency;
 import com.helloai.core.review.dto.ReworkRoundPoint;
 import com.helloai.core.review.entity.ReviewRecheckLog;
@@ -66,15 +67,17 @@ public interface ReviewService extends IService<ReviewRecord> {
                                   Map<String, Object> snapshot);
 
     /**
-     * 抽检候选计数：窗口内 APPROVED 且未被抽检覆盖的 review_record 数
+     * 抽检候选计数：窗口内可复判的 review_record 数
      * （反馈回路，供 ReviewerRecheckTask 按抽样比例折算批量）。
+     *
+     * <p>`RV-6`：候选含 APPROVED 与「有快照的 REJECTED」两类。</p>
      *
      * @param since 窗口起点（含）；null 时按全量统计
      */
     long countRecheckCandidates(OffsetDateTime since);
 
     /**
-     * 抽检候选 ID 列表：按落库时间升序（先审先抽）。
+     * 抽检候选 ID 列表：`RV-6` 驳回优先，同结果类型内按落库时间升序（先审先抽）。
      *
      * @param since 窗口起点（含）；null 时按全量统计
      * @param limit 批量上限
@@ -102,6 +105,16 @@ public interface ReviewService extends IService<ReviewRecord> {
                                    ReviewResult originalResult, ReviewResult recheckResult,
                                    boolean discrepancy, Long reviewerAgentId,
                                    Integer score, String issues, String comment);
+
+    /**
+     * 抽检偏差统计（`RV-6`）：窗口内按原判结果分组的有效复判数与分歧数。
+     *
+     * <p>`approved.divergent` = 放水（原通过、复判驳回）；
+     * `rejected.divergent` = 误伤（原驳回、复判通过）。跳过不写日志，不进分母。</p>
+     *
+     * @param since 窗口起点（含）；null 时按全量统计
+     */
+    RecheckStats recheckStats(OffsetDateTime since);
 
     /**
      * 质量趋势源（看板）：窗口内按天分组的审查统计。

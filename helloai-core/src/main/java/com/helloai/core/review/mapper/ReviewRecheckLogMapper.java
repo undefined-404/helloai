@@ -1,6 +1,7 @@
 package com.helloai.core.review.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.helloai.core.review.dto.RecheckStats;
 import com.helloai.core.review.entity.ReviewRecheckLog;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
@@ -33,35 +34,58 @@ public interface ReviewRecheckLogMapper extends BaseMapper<ReviewRecheckLog> {
     int physicalDeleteByTaskId(@Param("taskId") Long taskId);
 
     /**
-     * 抽检候选计数：窗口内 APPROVED 且未被任何抽检记录覆盖的 review_record 数。
+     * 抽检候选计数：窗口内可复判的 review_record 数。
      *
-     * <p>NOT EXISTS 排除已抽检记录（同一 record 单窗口内至多抽一次；
+     * <p>`RV-6`：候选从「仅 APPROVED」扩为 APPROVED / REJECTED 双向抽检。
+     * 驳回侧加**快照硬前置**（`snapshot IS NOT NULL`）——返工已覆盖产出，
+     * V141 之前的历史驳回没有原判对象，不能构成有效度量。</p>
+     *
+     * <p>`NOT EXISTS` 排除已抽检记录（同一 record 单窗口内至多抽一次；
      * 时间窗口推进后旧记录可再次入选）。</p>
      */
     @Select("""
             SELECT COUNT(*)
             FROM review_record r
-            WHERE r.result = 'APPROVED' AND r.deleted = 0
+            WHERE r.result IN ('APPROVED', 'REJECTED') AND r.deleted = 0
               AND r.create_time >= #{since}
+              AND (r.result = 'APPROVED' OR r.snapshot IS NOT NULL)
               AND NOT EXISTS (SELECT 1 FROM review_recheck_log l
                               WHERE l.review_record_id = r.id AND l.deleted = 0)
             """)
     long countRecheckCandidates(@Param("since") OffsetDateTime since);
 
     /**
-     * 抽检候选 ID 列表：按落库时间升序（先审先抽，避免窗口边缘抖动），
-     * LIMIT 由调用方按抽样比例折算后的批量大小传入。
+     * 抽检候选 ID 列表：`RV-6` 驳回优先入样（驳回是少数侧，先审先抽会让
+     * 误伤率迟迟没有样本），同结果类型内按落库时间升序；LIMIT 由调用方按
+     * 抽样比例折算后的批量大小传入。
      */
     @Select("""
             SELECT r.id
             FROM review_record r
-            WHERE r.result = 'APPROVED' AND r.deleted = 0
+            WHERE r.result IN ('APPROVED', 'REJECTED') AND r.deleted = 0
               AND r.create_time >= #{since}
+              AND (r.result = 'APPROVED' OR r.snapshot IS NOT NULL)
               AND NOT EXISTS (SELECT 1 FROM review_recheck_log l
                               WHERE l.review_record_id = r.id AND l.deleted = 0)
-            ORDER BY r.create_time ASC
+            ORDER BY (r.result = 'REJECTED') DESC, r.create_time ASC
             LIMIT #{limit}
             """)
     List<Long> selectRecheckCandidateIds(@Param("since") OffsetDateTime since,
                                          @Param("limit") int limit);
+
+    /**
+     * 抽检偏差统计（`RV-6`）：窗口内按原判结果分组，统计有效复判数与分歧数。
+     *
+     * <p>分母只含已落 {@code review_recheck_log} 的有效复判；跳过（无 reviewer /
+     * 不可判定 / 快照漂移 / 无快照）不写日志，天然不进分母。</p>
+     */
+    @Select("""
+            SELECT original_result,
+                   COUNT(*) AS sampled,
+                   COUNT(*) FILTER (WHERE discrepancy = 1) AS divergent
+            FROM review_recheck_log
+            WHERE deleted = 0 AND create_time >= #{since}
+            GROUP BY original_result
+            """)
+    List<RecheckStats.Row> selectRecheckStats(@Param("since") OffsetDateTime since);
 }

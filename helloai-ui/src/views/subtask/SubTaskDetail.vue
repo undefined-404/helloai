@@ -463,8 +463,18 @@
                       />
                       <MarkdownView
                         v-else
-                        :content="msg.content"
+                        :content="convContent(msg)"
                       />
+                      <el-button
+                        v-if="isUnsubmittedFailure(msg)"
+                        link
+                        type="primary"
+                        size="small"
+                        class="conv-timeline-link"
+                        @click.stop="jumpToTimeline"
+                      >
+                        查看时间线（含 blocked 事件）
+                      </el-button>
                     </template>
                     <!-- 收起态预览 + 设计图展开全文按钮 -->
                     <template v-else>
@@ -1412,9 +1422,30 @@ function toggleMsg(msg: ConversationMessageItem) {
 
 // 收起态预览：首个非空行，剖掉 Markdown 符号，截断 120 字
 function msgPreview(msg: ConversationMessageItem): string {
-  const line = (msg.content || '').split('\n').map(l => l.trim()).find(l => l) || ''
+  const line = (convContent(msg) || '').split('\n').map(l => l.trim()).find(l => l) || ''
   const plain = line.replace(/[#*`>_|-]/g, ' ').replace(/\s+/g, ' ').trim()
   return plain.length > 120 ? plain.slice(0, 120) + '…' : (plain || '（无内容）')
+}
+
+/**
+ * 外部执行回执缺少 error 文本时，旧实现会落 `unknown_error`；
+ * 这里统一改为可读提示，并给时间线入口（blocked 原因在 timeline payload）。
+ */
+function isUnsubmittedFailure(msg: ConversationMessageItem): boolean {
+  const content = (msg.content || '').trim()
+  return msg.toolName === 'sub_task_execute_failed'
+    && (content === '' || content === 'unknown_error')
+}
+
+function convContent(msg: ConversationMessageItem): string {
+  return isUnsubmittedFailure(msg) ? '执行未提交结果，详情见时间线' : (msg.content || '')
+}
+
+function jumpToTimeline() {
+  timelineFull.value = true
+  setTimeout(() => {
+    document.getElementById('sec-tl')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, 0)
 }
 
 // ── 轮次头部元信息（设计图：#N · type 徽标 + Agent 标签 + 状态标签 + 时间右对齐）──
@@ -2128,6 +2159,7 @@ onActivated(() => {
 }
 
 .conv-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.conv-timeline-link { align-self: flex-start; padding-left: 0; }
 .conv-item-head {
   display: flex;
   align-items: center;

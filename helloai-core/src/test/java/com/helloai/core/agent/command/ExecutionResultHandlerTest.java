@@ -421,6 +421,32 @@ class ExecutionResultHandlerTest {
         verify(subTaskCommandPort, org.mockito.Mockito.times(1)).submit(22L);
     }
 
+    @Test
+    @DisplayName("外部失败回执无 error 文本 ⇒ 用 finishReason 兜底写对话流与 context（不再 unknown_error）")
+    void externalFailureWithoutErrorUsesFinishReason() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+        com.helloai.core.agent.command.ExecutionResultReport report =
+                new com.helloai.core.agent.command.ExecutionResultReport();
+        report.setSubTaskId(22L);
+        report.setAgentId(11L);
+        report.setSource("EXTERNAL");
+        report.setSuccess(false);
+        report.setFinishReason("blocked");
+
+        executionResultHandler.handleReport(report);
+
+        verify(conversationService).addMessage(eq(22L), eq(11L), eq("assistant"), eq("agent"),
+                eq("未提交执行结果（blocked）"), eq("sub_task_execute_failed"));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskCommandPort).updateContext(eq(22L), ctxCaptor.capture());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> lastExecution =
+                (Map<String, Object>) ctxCaptor.getValue().get("lastExecution");
+        assertThat(lastExecution).containsEntry("error", "未提交执行结果（blocked）");
+    }
+
     private static com.helloai.core.agent.command.ExecutionResultReport reportOf(
             Long subTaskId, Long agentId, String idempotencyKey) {
         com.helloai.core.agent.command.ExecutionResultReport report =

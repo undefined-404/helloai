@@ -118,12 +118,12 @@ public class ReviewProperties {
     /** 抽检扫描周期（毫秒）。默认 1 小时。 */
     private long recheckIntervalMs = 3_600_000;
 
-    /** 单轮抽检抽样比例（对窗口内 APPROVED 存量）。默认 0.05（5%）。 */
+    /** 单轮抽检抽样比例（对窗口内 APPROVED + 有快照的 REJECTED 合池存量）。默认 0.05（5%）。 */
     private double recheckSampleRatio = 0.05;
 
     /** 单轮抽检批量上限（防单轮 LLM 调用过多阻塞调度）。默认 20。 */
     private int recheckMaxBatch = 20;
 
-    /** 抽检时间窗口（天）：只抽近 N 天内落库的 APPROVED 记录。默认 7。 */
+    /** 抽检时间窗口（天）：只抽近 N 天内落库的 APPROVED / 有快照 REJECTED 记录。默认 7。 */
     private int recheckWindowDays = 7;
 }

@@ -18,6 +18,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.review.dto.DefectDistribution;
 import com.helloai.core.review.dto.QualityTrendPoint;
+import com.helloai.core.review.dto.RecheckStats;
 import com.helloai.core.review.dto.ReviewerLeniency;
 import com.helloai.core.review.dto.ReworkRoundPoint;
 import com.helloai.core.review.entity.ReviewRecheckLog;
@@ -333,6 +334,38 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         log.info("抽检复审落库: reviewRecordId={}, subTaskId={}, original={}, recheck={}, discrepancy={}",
                 reviewRecordId, subTaskId, originalResult, recheckResult, discrepancy);
         return recheckLog;
+    }
+
+    /**
+     * 抽检偏差统计（`RV-6`）：按原判结果分桶，分歧方向由 {@code original_result} 区分。
+     *
+     * <p>分母只含已落日志的有效复判；跳过路径不写日志，因此不会被算进任何一侧。</p>
+     */
+    @Override
+    public RecheckStats recheckStats(OffsetDateTime since) {
+        OffsetDateTime effectiveSince = since != null ? since : OffsetDateTime.now().minusYears(100);
+        List<RecheckStats.Row> rows = reviewRecheckLogMapper.selectRecheckStats(effectiveSince);
+        long approvedSampled = 0;
+        long approvedDivergent = 0;
+        long rejectedSampled = 0;
+        long rejectedDivergent = 0;
+        if (rows != null) {
+            for (RecheckStats.Row row : rows) {
+                if (row == null || row.originalResult() == null) {
+                    continue;
+                }
+                if (ReviewResult.APPROVED.name().equals(row.originalResult())) {
+                    approvedSampled += row.sampled();
+                    approvedDivergent += row.divergent();
+                } else if (ReviewResult.REJECTED.name().equals(row.originalResult())) {
+                    rejectedSampled += row.sampled();
+                    rejectedDivergent += row.divergent();
+                }
+            }
+        }
+        return new RecheckStats(
+                RecheckStats.Bucket.of(approvedSampled, approvedDivergent),
+                RecheckStats.Bucket.of(rejectedSampled, rejectedDivergent));
     }
 
     @Override

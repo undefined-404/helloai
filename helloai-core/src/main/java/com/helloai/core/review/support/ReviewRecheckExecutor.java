@@ -27,9 +27,9 @@ import java.util.Set;
 /**
  * 抽检复审执行器（反馈回路，§7.8 拆分：抽检与核验编排分离）。
  *
- * <p>对已 APPROVED 的审查记录换 Reviewer 复判一次：<b>只度量不改状态</b>——
- * 子任务已按原判 DONE/REWORK 推进，复审结果仅写 review_recheck_log
- * （discrepancy=原 APPROVED 复审 REJECTED 的放水标记）+ timeline 观测，
+ * <p>对已 APPROVED / REJECTED 的审查记录换 Reviewer 复判一次（`RV-6` 双向抽检）：
+ * <b>只度量不改状态</b>——子任务已按原判 DONE/REWORK 推进，复审结果仅写 review_recheck_log
+ * （原 APPROVED→REJECTED 记放水，原 REJECTED→APPROVED 记误伤）+ timeline 观测，
  * 不落 review_record、不改子任务状态；Reviewer 维度 reviewed 计数单独走
  * {@link AgentQualityProfileService#incrementReviewerStats}（best-effort），
  * 执行者画像不受抽检影响。</p>
@@ -55,10 +55,10 @@ public class ReviewRecheckExecutor {
     private final ReviewEvidenceAssembler reviewEvidenceAssembler;
 
     /**
-     * 对已 APPROVED 的审查记录换 Reviewer 复判一次（入口：ReviewerRecheckTask 抽样调度）。
+     * 对已 APPROVED / REJECTED 的审查记录换 Reviewer 复判一次（入口：ReviewerRecheckTask 抽样调度）。
      *
-     * @param reviewRecordId 被抽检的审查记录 ID；null / 记录不存在 / 非 APPROVED /
-     *                       无可用 Reviewer / 复审不可判定时静默跳过
+     * @param reviewRecordId 被抽检的审查记录 ID；null / 记录不存在 / 无明确判定（含 INCONCLUSIVE）/
+     *                       驳回记录缺快照 / 快照漂移 / 无可用 Reviewer / 复审不可判定时跳过
      */
     public void recheckReviewRecord(Long reviewRecordId) {
         if (reviewRecordId == null) {
@@ -69,8 +69,8 @@ public class ReviewRecheckExecutor {
             log.warn("抽检复审跳过：审查记录不存在, reviewRecordId={}", reviewRecordId);
             return;
         }
-        if (record.getResult() != ReviewResult.APPROVED) {
-            log.debug("抽检复审跳过：仅抽检 APPROVED 记录, reviewRecordId={}, result={}",
+        if (record.getResult() != ReviewResult.APPROVED && record.getResult() != ReviewResult.REJECTED) {
+            log.debug("抽检复审跳过：仅抽检有明确判定的记录, reviewRecordId={}, result={}",
                     reviewRecordId, record.getResult());
             return;
         }
@@ -81,9 +81,18 @@ public class ReviewRecheckExecutor {
             return;
         }
         // `RV-5` 判定快照对账：复判读的是「当前视图」，对 REJECTED 记录返工后产出已被覆盖。
-        // 快照存在但与当前证据不一致 ⇒ 复判对象已不是原判对象，本轮抽检不构成有效度量
-        // （历史行无快照 ⇒ 按一致处理，不把老数据排除出抽检）。
-        if (record.getSnapshot() != null && !record.getSnapshot().isEmpty()) {
+        // `RV-6`：驳回侧必须有快照才构成有效度量——历史驳回（V141 前）没有原判对象，
+        // 直接判「一致」会得到假数据，故显式跳过并与漂移分开留痕。
+        ReviewResult originalResult = record.getResult();
+        if (record.getSnapshot() == null || record.getSnapshot().isEmpty()) {
+            if (originalResult == ReviewResult.REJECTED) {
+                log.warn("抽检复审跳过：驳回记录缺少判定快照，无法确认原判对象: "
+                                + "reviewRecordId={}, subTaskId={}",
+                        reviewRecordId, record.getSubTaskId());
+                recordSkipQuietly(subTask, reviewRecordId, "snapshot_missing", 0);
+                return;
+            }
+        } else {
             ReviewSnapshotMatcher.Drift drift = reviewEvidenceAssembler.checkSnapshotDrift(
                     record.getSnapshot(), subTask);
             if (drift != null && !drift.matched()) {
@@ -122,16 +131,25 @@ public class ReviewRecheckExecutor {
         }
         boolean pass = Boolean.TRUE.equals(verdict.getPass());
         ReviewResult recheckResult = pass ? ReviewResult.APPROVED : ReviewResult.REJECTED;
+        // `RV-6`：分歧方向由原判结果区分——原通过→驳回记放水，原驳回→通过记误伤
+        boolean consistent = recheckResult == originalResult;
+        String direction = consistent ? "consistent"
+                : (originalResult == ReviewResult.APPROVED ? "leak_approved" : "overturned_rejection");
         int fallback = pass ? 3 : 1;
         int score = verdict.getScore() != null ? verdict.getScore() : fallback;
         score = Math.max(1, Math.min(5, score));
         // 对话流：补一条抽检结论消息（与正常核验的类型前缀区分开），
         // 声明"只度量不改状态"，避免执行对话流误读为新一轮正式核验
         try {
+            String outcomeText = consistent
+                    ? "与原判一致（" + originalResult + "）"
+                    : (originalResult == ReviewResult.APPROVED
+                            ? "与原判分歧：原判通过，复判驳回（放水）"
+                            : "与原判分歧：原判驳回，复判通过（误伤）");
             String resultText = "## 抽检复审结论（只度量，不改变子任务状态）\n\n"
-                    + "- 结果: " + (pass ? "通过（与原判一致）" : "不通过（与原判分歧）") + "\n"
+                    + "- 结果: " + outcomeText + "\n"
                     + "- 评分: " + score + " / 5\n"
-                    + "- 原判定: APPROVED（reviewRecordId=" + reviewRecordId + "）";
+                    + "- 原判定: " + originalResult + "（reviewRecordId=" + reviewRecordId + "）";
             if (verdict.getIssues() != null && !verdict.getIssues().isBlank()) {
                 resultText += "\n- 问题: " + verdict.getIssues();
             }
@@ -144,10 +162,10 @@ public class ReviewRecheckExecutor {
             log.warn("抽检结论对话流写入失败（不阻断抽检）: reviewRecordId={}, err={}",
                     reviewRecordId, e.getMessage());
         }
-        // 抽检日志落库（best-effort）：放水率度量与人工复核追溯的唯一事实源
+        // 抽检日志落库（best-effort）：放水率/误伤率度量与人工复核追溯的唯一事实源
         try {
-            reviewService.recordRecheck(reviewRecordId, subTask.id(), ReviewResult.APPROVED,
-                    recheckResult, !pass, reviewer.id(), score,
+            reviewService.recordRecheck(reviewRecordId, subTask.id(), originalResult,
+                    recheckResult, !consistent, reviewer.id(), score,
                     verdict.getIssues(), verdict.getComment());
         } catch (Exception e) {
             log.warn("抽检复审落 review_recheck_log 失败: reviewRecordId={}, err={}",
@@ -161,13 +179,14 @@ public class ReviewRecheckExecutor {
                     reviewRecordId, e.getMessage());
         }
         taskTimelineService.recordEvent(subTask.taskId(), subTask.id(),
-                pass ? TimelineEventCode.SUB_TASK_RECHECK_CONSISTENT.code() : TimelineEventCode.SUB_TASK_RECHECK_DISCREPANCY.code(),
+                consistent ? TimelineEventCode.SUB_TASK_RECHECK_CONSISTENT.code()
+                        : TimelineEventCode.SUB_TASK_RECHECK_DISCREPANCY.code(),
                 AgentRole.REVIEWER, reviewer.id(),
-                Map.of("reviewRecordId", reviewRecordId, "originalResult", "APPROVED",
-                        "recheckResult", recheckResult.name(), "discrepancy", !pass,
-                        "score", score));
-        log.info("抽检复审完成: reviewRecordId={}, subTaskId={}, recheckResult={}, reviewerAgentId={}",
-                reviewRecordId, subTask.id(), recheckResult, reviewer.id());
+                Map.of("reviewRecordId", reviewRecordId, "originalResult", originalResult.name(),
+                        "recheckResult", recheckResult.name(), "discrepancy", !consistent,
+                        "direction", direction, "score", score));
+        log.info("抽检复审完成: reviewRecordId={}, subTaskId={}, original={}, recheckResult={}, direction={}, reviewerAgentId={}",
+                reviewRecordId, subTask.id(), originalResult, recheckResult, direction, reviewer.id());
     }
 
     /**
