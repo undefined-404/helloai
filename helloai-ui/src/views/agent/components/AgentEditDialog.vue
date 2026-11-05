@@ -41,6 +41,34 @@
           />
         </el-select>
       </el-form-item>
+      <el-form-item label="接入类型">
+        <el-select
+          v-model="form.accessType"
+          style="width:100%"
+        >
+          <!-- 浏览器 AI（WEB_BROWSER）当前环境不可用，仅保留枚举通道 -->
+          <el-option
+            label="浏览器 AI（暂未启用）"
+            value="WEB_BROWSER"
+            disabled
+          />
+          <el-option
+            label="内部 LLM（API Key）"
+            value="API_KEY_LLM"
+            :disabled="!form.modelType"
+          />
+          <el-option
+            label="外部 AI Agent（CLI 接入）"
+            value="CLI_CLIENT"
+          />
+        </el-select>
+        <div
+          v-if="!form.modelType && form.accessType === 'API_KEY_LLM'"
+          class="field-hint"
+        >
+          当前 Agent 未绑定模型，无法切换为内部 LLM。
+        </div>
+      </el-form-item>
       <el-form-item
         v-if="isInternalLlm"
         label="模型"
@@ -157,11 +185,11 @@ const formRef = ref()
 // V47/A2: skills 为能力声明列表（多选下拉 + 自定义，回显后整体替换提交；删光 = 清空）
 // §6.74: 模型类型/专业化已移除——外部 AI Agent 用自身模型、内部 LLM 统一走系统配置默认模型
 // V52: 内部 LLM Agent 编辑时可切换模型（modelType 回显），技能区按模型能力三段式渲染
-const form = reactive({ name: '', role: 'EXECUTOR', remark: '', apiKey: '', modelType: '', skills: [] as string[] })
+const form = reactive({ name: '', role: 'EXECUTOR', remark: '', apiKey: '', modelType: '', accessType: '', skills: [] as string[] })
 const rules = { name: [{ required: true, message: '请输入名称', trigger: 'blur' }] }
 
 /** 内部 LLM Agent 才展示模型字段（外部 CLI / 浏览器 Agent 无法管理，不展示）。 */
-const isInternalLlm = computed(() => props.agent?.accessType === 'API_KEY_LLM' || !!form.modelType)
+const isInternalLlm = computed(() => form.accessType === 'API_KEY_LLM' || !!form.modelType)
 
 watch(() => props.agent, (a) => {
   if (a) {
@@ -170,6 +198,7 @@ watch(() => props.agent, (a) => {
     form.remark = a.description || ''
     form.apiKey = a.apiKey || ''
     form.modelType = a.modelType || ''
+    form.accessType = a.accessType || 'CLI_CLIENT'
     form.skills = Array.isArray(a.skills) ? [...a.skills] : []
   }
 }, { immediate: true })
@@ -242,6 +271,8 @@ async function handleSave() {
       name: form.name,
       remark: form.remark,
       skills: form.skills,
+      // 接入类型可编辑：仅在与原值不同时提交，未变更则后端保留原值
+      accessType: form.accessType && form.accessType !== props.agent.accessType ? form.accessType : undefined,
       // V52: 切换模型时显式提交（重新校验），未变更则后端保留原值
       modelType: form.modelType || undefined
     })

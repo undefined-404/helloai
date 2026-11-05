@@ -11,6 +11,8 @@ public class AgentUpdateRequest {
     private String modelType;
     private Map<String, Object> modelConfig;
     private String remark;
+    /** 接入类型：CLI_CLIENT / API_KEY_LLM / WEB_BROWSER；null 保持现状 */
+    private String accessType;
     /** 能力声明列表：显式传入整体替换；null 保持现状 */
     private List<String> skills;
 }

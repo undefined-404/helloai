@@ -2,6 +2,7 @@ package com.helloai.core.agent.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
@@ -146,7 +147,8 @@ public interface AgentService extends IService<Agent> {
      * <p>按 §6.3 分层红线从 AdminAgentController 收口；仅非 null 字段生效。</p>
      */
     boolean updateAgentDetail(Long agentId, String name, String modelType, Map<String, Object> modelConfig,
-                              String remark, List<String> skills);
+                              String remark, List<String> skills,
+                                     AgentAccessType accessType);
 
     /**
      * 持久化注册后置的可选字段变更（AgentController.applyRegistrationExtras 收口）。

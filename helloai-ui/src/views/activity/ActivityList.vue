@@ -153,7 +153,7 @@ function levelTag(level: string): TagType {
 const ACCESS_TYPE_LABELS: Record<string, string> = {
   API_KEY_LLM: '内部 LLM',
   CLI_CLIENT: '外部 CLI',
-  WEB_BROWSER: '外部网页',
+  WEB_BROWSER: '浏览器 AI',
 }
 function accessTypeLabel(t?: string): string {
   if (!t) return ''

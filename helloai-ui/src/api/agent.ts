@@ -94,7 +94,7 @@ export const agentApi = {
   // ── 更新 Agent 信息 ──
   // V47/A2: skills 显式传入整体替换；不传（undefined）则后端保持现状
   // V52: modelType 显式传入则重新校验并切换模型绑定；不传则后端保留原值
-  updateProfile(id: string, data: { name?: string; remark?: string; skills?: string[]; modelType?: string }) {
+  updateProfile(id: string, data: { name?: string; remark?: string; skills?: string[]; modelType?: string; accessType?: string }) {
     return request.put<any, void>(paths.agents.updateProfile(id), data)
   },
 

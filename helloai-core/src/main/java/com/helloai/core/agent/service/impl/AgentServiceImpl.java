@@ -8,6 +8,8 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.core.agent.AgentAccessTypeSwitch;
+import com.helloai.core.agent.AgentCapability;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
 import com.helloai.core.agent.mapper.AgentEventMapper;
@@ -386,7 +388,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean updateAgentDetail(Long agentId, String name, String modelType, Map<String, Object> modelConfig,
-                                     String remark, List<String> skills) {
+                                     String remark, List<String> skills, AgentAccessType accessType) {
         Agent agent = getById(agentId);
         if (agent == null) return false;
         // 编辑 modelType 时校验（排除当前 Agent 自身）
@@ -403,9 +405,35 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
             skillPolicyService.validateAgentSkills(agent.getModelType(), skills);
             agent.setSkills(skillPolicyService.deriveSkillsForRegistration(agent, skills));
         }
+        // 接入类型切换（编辑放开）：放在 modelType 处理之后，保证切换判定读到的是本次最新模型
+        if (accessType != null && accessType != agent.getAccessType()) {
+            switchAccessType(agent, accessType);
+        }
         updateById(agent);
         log.info("Agent 信息更新: id={}", agentId);
         return true;
+    }
+
+    /**
+     * 切换接入类型（编辑入口）。
+     *
+     * <p><b>为什么允许改</b>：注册时选错类型（如给外部 CLI Agent 选了不可用的浏览器接入）只能重建
+     * Agent 并丢历史；放开编辑让「类型选错」可纠正。三条约束：</p>
+     * <ul>
+     *     <li>切到 {@code API_KEY_LLM} 必须已有模型，且满足「同角色同模型唯一」（与注册同口径）；</li>
+     *     <li>能力声明按新类型默认值补齐、<b>保留既有显式覆盖</b>（不整体重置，避免丢用户配置）；</li>
+     *     <li>切到 {@code CLI_CLIENT} 先判离线：该类型靠运行时心跳驱动在线态，沿用旧类型的新鲜度会让
+     *         未打卡的 Agent 被调度选中。</li>
+     * </ul>
+     */
+    private void switchAccessType(Agent agent, AgentAccessType target) {
+        if (target == AgentAccessType.API_KEY_LLM) {
+            // 模型唯一性需要查库，放在纯函数之外；模型缺失由纯函数统一抛错
+            skillPolicyService.validateModelType(agent.getModelType(), agent.getRole(), agent.getId());
+        }
+        AgentAccessType previous = agent.getAccessType();
+        AgentAccessTypeSwitch.apply(agent, target);
+        log.info("Agent 接入类型切换: id={}, {} -> {}", agent.getId(), previous, target);
     }
 
     /**

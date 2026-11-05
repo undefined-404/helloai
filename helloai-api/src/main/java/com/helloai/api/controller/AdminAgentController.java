@@ -191,8 +191,16 @@ public class AdminAgentController {
     @PutMapping("/updateById/{id}")
     public R<Void> update(@PathVariable("id") Long id, @RequestBody AgentUpdateRequest req) {
         log.info("更新 Agent 请求: id={}, body={}", id, req);
+        AgentAccessType accessType = null;
+        if (req.getAccessType() != null && !req.getAccessType().isBlank()) {
+            try {
+                accessType = AgentAccessType.valueOf(req.getAccessType().trim().toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new BizException("不支持的接入类型: " + req.getAccessType());
+            }
+        }
         boolean updated = agentService.updateAgentDetail(id, req.getName(), req.getModelType(),
-                req.getModelConfig(), req.getRemark(), req.getSkills());
+                req.getModelConfig(), req.getRemark(), req.getSkills(), accessType);
         if (!updated) return R.fail("Agent 不存在");
         return R.ok();
     }

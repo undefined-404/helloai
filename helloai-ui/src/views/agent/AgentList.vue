@@ -149,19 +149,20 @@
             style="width:100%"
             @change="onAccessTypeChange"
           >
+            <!-- 网页版：网页版接入违反相关规定，现在已禁用 -->
             <el-option
-              label="外部 AI Agent（GUI 接入）"
+              label="外部 AI Agent（BROWSER 接入）"
               value="WEB_BROWSER"
+              disabled
             />
             <el-option
               label="内部 LLM（API Key）"
               value="API_KEY_LLM"
             />
-            <!-- CLI 接入暂未上线：未做过端到端联调，仅保留枚举通道，不开放新注册入口 -->
+
             <el-option
               label="外部 AI Agent"
               value="CLI_CLIENT"
-              disabled
             />
           </el-select>
         </el-form-item>
@@ -430,8 +431,8 @@ function onRoleChange() {
 }
 
 function onAccessTypeChange(v: string) {
-  if (v === 'CLI_CLIENT') {
-    ElMessage.warning('外部 AI Agent（CLI 接入）暂未上线，请选择 GUI 接入或内部 LLM')
+  if (v === 'WEB_BROWSER') {
+    ElMessage.warning('网页版 Agent接入已禁用，请选择 外部 AI Agent或内部 LLM')
   }
 }
 
@@ -499,8 +500,8 @@ const skillSelectOptions = computed(() => {
 })
 
 async function handleRegister() {
-  if (form.accessType === 'CLI_CLIENT') {
-    ElMessage.warning('外部 AI Agent（CLI 接入）暂未上线，请选择 GUI 接入或内部 LLM')
+  if (form.accessType === 'WEB_BROWSER') {
+    ElMessage.warning('网页版 Agent接入已禁用，请选择 外部 AI Agent或内部 LLM')
     return
   }
   const valid = await formRef.value?.validate().catch(() => false)
