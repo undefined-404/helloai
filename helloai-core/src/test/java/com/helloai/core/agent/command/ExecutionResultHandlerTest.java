@@ -167,7 +167,7 @@ class ExecutionResultHandlerTest {
                 .containsEntry("error", "boom");
 
         // W10：block(subTaskId, null, null) 逐字等价于 SubTaskService#block(Long)
-        verify(subTaskCommandPort).block(22L, null, null);
+        verify(subTaskCommandPort).block(22L, "boom", 11L);
         // 执行会话终态 FAILED（error 摘要；turn=1）
         verify(agentSessionService).fail(22L, 11L, 1, "boom");
         verify(taskTimelinePort).recordEvent(
@@ -193,8 +193,9 @@ class ExecutionResultHandlerTest {
         // 失败原因照常落 sub_task_execute_failed
         verify(conversationService).addMessage(eq(22L), eq(11L), eq("assistant"), eq("agent"),
                 any(), eq("sub_task_execute_failed"));
-        // B 不改变失败语义：仍 block、不 submit
-        verify(subTaskCommandPort).block(22L, null, null);
+        // B 不改变失败语义：仍 block、不 submit；blocked 原因用兜底文本（不再空串）
+        verify(subTaskCommandPort).block(eq(22L),
+                org.mockito.ArgumentMatchers.contains("agent_runtime_empty_output"), eq(11L));
         verify(subTaskCommandPort, never()).submit(any());
     }
 
@@ -281,7 +282,7 @@ class ExecutionResultHandlerTest {
 
         executionResultHandler.handleFailure(22L, 11L, 44L, new RuntimeException("boom"));
 
-        verify(subTaskCommandPort).block(22L, null, null);
+        verify(subTaskCommandPort).block(22L, "boom", 11L);
     }
 
     // ================================================================
@@ -445,6 +446,12 @@ class ExecutionResultHandlerTest {
         Map<String, Object> lastExecution =
                 (Map<String, Object>) ctxCaptor.getValue().get("lastExecution");
         assertThat(lastExecution).containsEntry("error", "未提交执行结果（blocked）");
+        // 同一条兜底文本进时间线事件：blocked 原因与 execute_failed.error 不再写空值
+        verify(subTaskCommandPort).block(22L, "未提交执行结果（blocked）", 11L);
+        verify(taskTimelinePort).recordEvent(
+                eq(33L), eq(22L), eq("sub_task_execute_failed"), eq(AgentRole.EXECUTOR), eq(11L),
+                argThat((Map<String, Object> payload) ->
+                        "未提交执行结果（blocked）".equals(payload.get("error"))));
     }
 
     private static com.helloai.core.agent.command.ExecutionResultReport reportOf(

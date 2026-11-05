@@ -99,7 +99,10 @@ public final class AcceptanceKindValidator {
      */
     private static final Pattern COUNTABLE = Pattern.compile(
             "(\\d+\\s*[条页个次份项章节秒分钟天月年%行列]|不少于|至少|至多|上限|下限|\\d+\\s*字|字数下限"
-                    + "|[一二两三四五六七八九十百千万]+\\s*[条页个次份项章节张篇部分处卷段])");
+                    + "|[一二两三四五六七八九十百千万]+\\s*[条页个次份项章节张篇部分处卷段]"
+                    // 比较符 + 数字同样构成可数量词：真机样本「字符数 ≤80」「出现次数 ≥1」不含单位，
+                    // 只认「数字+单位」会把这类正当的 STRUCTURAL 验收判成「无可数量词」而 fail-close
+                    + "|[≤≥<>＜＞]\\s*\\d+|(不超过|不低于|不多于)\\s*\\d+)");
 
     /** 审查项分隔：数字序号列表（1) / ① / 1. / 一、/ 审查项）。 */
     private static final Pattern REVIEW_ITEMS = Pattern.compile(

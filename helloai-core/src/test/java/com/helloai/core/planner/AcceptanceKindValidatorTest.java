@@ -42,6 +42,16 @@ class AcceptanceKindValidatorTest {
     }
 
     @Test
+    @DisplayName("STRUCTURAL 正例（真机 2026-11-05）：「字符数 ≤80」「次数 ≥1」无单位也算可数量词")
+    void structuralPassWithComparisonOperators() {
+        Result r = AcceptanceKindValidator.validate(AcceptanceKind.STRUCTURAL,
+                "判定动作 1：正文（不含回执行）字符数 ≤80，须给出实际计数结果；"
+                        + "判定动作 2：正文中出现「自检」子串，出现次数 ≥1；"
+                        + "判定动作 3：正文中不出现「回执：」前缀与 Markdown 标记。");
+        assertThat(r).isInstanceOf(Result.Pass.class);
+    }
+
+    @Test
     @DisplayName("STRUCTURAL 反例：写命令而非结构断言")
     void structuralFailCommand() {
         Result r = AcceptanceKindValidator.validate(AcceptanceKind.STRUCTURAL,

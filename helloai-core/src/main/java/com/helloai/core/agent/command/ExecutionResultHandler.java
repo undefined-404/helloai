@@ -474,9 +474,10 @@ public class ExecutionResultHandler {
                 log.warn("失败回写跳过 BLOCKED（记录非本轮持有, 判为双消费输家）: subTaskId={}, recordId={}, err={}",
                         report.getSubTaskId(), report.getRecordId(), report.getError());
             } else {
-                // block(subTaskId, null, null) 逐字等价于 SubTaskService#block(Long)：
-                // 仅写 blockedAt + 落 sub_task_report_blocked 时间线（reason 记空串）
-                subTaskCommandPort.block(report.getSubTaskId(), null, null);
+                // LOG-20261104-015 补全：失败原因此前只进了对话流与 context，timeline 的
+                // sub_task_report_blocked（reason）与 sub_task_execute_failed（error）仍写空值，
+                // 外部 agent 上报 blocked 且未带 error 时时间线照旧无线索。统一用同一兜底文本。
+                subTaskCommandPort.block(report.getSubTaskId(), failureReason, report.getAgentId());
             }
             // 执行会话终态 FAILED（error 摘要；best-effort 不阻断回写）
             agentSessionService.fail(report.getSubTaskId(), report.getAgentId(),
@@ -490,7 +491,7 @@ public class ExecutionResultHandler {
                     safeMap(
                             "success", false,
                             "source", report.getSource(),
-                            "error", report.getError(),
+                            "error", failureReason,
                             "idempotencyKey", report.getIdempotencyKey()));
         }
 
