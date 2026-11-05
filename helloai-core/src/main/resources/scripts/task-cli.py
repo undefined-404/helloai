@@ -229,7 +229,7 @@ def cmd_status(api_key: str, args: list):
 
 def cmd_skill(api_key: str, args: list):
     """获取 SKILL.md"""
-    data = _get(api_key, "/agents/me/skill")
+    data = _get(api_key, "/agents/getMySkill")
     content = data.get("content", "")
     print(content)
 
@@ -274,7 +274,7 @@ def cmd_update(api_key: str, args: list):
     # 下载 SKILL.md
     print("📥 下载最新 SKILL.md...")
     try:
-        data = _get(api_key, "/agents/me/skill")
+        data = _get(api_key, "/agents/getMySkill")
         content = data.get("content", "")
         if content:
             with open("SKILL.md", "w", encoding="utf-8") as f:

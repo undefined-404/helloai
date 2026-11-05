@@ -29,6 +29,15 @@ import java.util.zip.ZipOutputStream;
 @RequiredArgsConstructor
 public class PromptTemplateServiceImpl extends ServiceImpl<PromptTemplateMapper, PromptTemplate> implements PromptTemplateService {
 
+    /**
+     * 随技能包下发的平台写作规范（外部 Agent 自行运行模型，平台无法替它注入 Prompt，
+     * 只能把规范正文随 ZIP 交付；包内路径 {@code <role>-skill/skill-pack/}）。
+     */
+    private static final List<String> SKILL_SPEC_FILES = List.of(
+            "eng-code-review", "eng-doc-standard", "eng-verification", "eng-web-research");
+
+    private static final String SKILL_SPEC_DIR = "skills/plugins/";
+
     private final RuleService ruleService;
 
     /**
@@ -182,8 +191,8 @@ public class PromptTemplateServiceImpl extends ServiceImpl<PromptTemplateMapper,
     }
 
     /**
-     * 构建技能包 ZIP：SKILL.md（角色接入手册渲染后，交付名固定为 SKILL.md）+ scripts/ 全量脚本 + config.example.json（baseUrl 预填，apiKey 保留占位）。
-     * zip 内以 <role>-skill/ 为顶层目录，整体复制到 IDE 的 skills 目录即可，防止只拿单个 md 导致脚本缺失。
+     * 构建技能包 ZIP：SKILL.md（角色接入手册渲染后，交付名固定为 SKILL.md）+ scripts/ 全量脚本 + config.example.json（baseUrl 预填，apiKey 保留占位）+ skill-pack/ 写作规范。
+     * zip 内以 <role>-skill/ 为顶层目录，整体复制到 IDE 的 skills 目录即可，防止只拿单个 md 导致脚本/规范缺失。
      */
     @Override
     public byte[] buildSkillPackageZip(String role, String apiKey, String baseUrl, String agentName, Long agentId) {
@@ -238,6 +247,19 @@ public class PromptTemplateServiceImpl extends ServiceImpl<PromptTemplateMapper,
                     zos.putNextEntry(new ZipEntry(topDir + "/" + rel));
                     zos.write(content);
                     zos.closeEntry();
+                }
+                // 写作规范正文随包交付：pack 内路径与 guide §附录 C 一致
+                for (String specName : SKILL_SPEC_FILES) {
+                    ClassPathResource spec = new ClassPathResource(SKILL_SPEC_DIR + specName + ".md");
+                    if (!spec.exists()) {
+                        log.warn("技能规范缺失，跳过打包: {}", spec.getPath());
+                        continue;
+                    }
+                    try (InputStream in = spec.getInputStream()) {
+                        zos.putNextEntry(new ZipEntry(topDir + "/skill-pack/" + specName + ".md"));
+                        zos.write(in.readAllBytes());
+                        zos.closeEntry();
+                    }
                 }
             }
             return bos.toByteArray();

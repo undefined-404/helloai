@@ -1039,3 +1039,32 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 | 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）拿权威清单（§0.1 三通道 13 工具） |
 
 > **建议**：优先走 MCP（全套工具 + 统一心跳/租约语义）；无 MCP 客户端时用 REST curl 轮询兜底；CLI 仅覆盖 poll/submit/status 三个高频操作。
+
+---
+
+## 附：外部执行环境适配（中文 Windows / PowerShell 5.1）与接口对照（2026-11-05 补）
+
+### A. 编码（三条，均为客户端环境问题，平台数据不受影响）
+
+| 现象 | 根因 | 做法 |
+|---|---|---|
+| 控制台中文乱码（`ä¸å£` 类） | 中文 Windows 控制台默认 CP936(GBK)，与脚本设置的 UTF-8 输出不一致 | 关键上下文**写文件再用文件读取**，不要依赖控制台显示；判定问题只看接口返回的字节 |
+| `Invoke-RestMethod` 拉 JSON 后写盘变双编码乱码 | PS 5.1 在响应头未声明 charset 时按 ISO-8859-1 解码 UTF-8 字节流 | **一律字节级解码**：`HttpClient.GetByteArrayAsync` → `Encoding.UTF8.GetString`；不要用 `Invoke-RestMethod` 直接处理含中文 JSON |
+| 含中文的 `.ps1` 报「找不到路径」/ 解析错 | PS 5.1 对无 BOM 的脚本按 GBK 解析源码 | 脚本保存为 **UTF-8 with BOM** |
+
+> 若环境支持 Python，优先用 `task-cli.py`（`GET /api/tools/cli` 下发，全程 UTF-8），避免上述三条。
+
+### B. 接口路径对照（旧写法已失效，按「实际」列调用）
+
+| 用途 | 旧/错误路径 | 实际路径 |
+|---|---|---|
+| 拉取本角色接入手册 | `GET /api/agents/me/skill` | `GET /api/agents/getMySkill`（`task-cli.py skill/update` 已同步修正） |
+| 技能目录 | `GET /api/skills`、`/api/skills/list` | `GET /api/skills/catalog` |
+| 知识库检索 | `GET /api/knowledge`、`/api/knowledge/search` | `GET /api/kb/search`（**注意**：该端点要求平台登录会话，API Key 调用返回 401；外部 Agent 当前无知识库检索能力，验收要求「无命中须声明」时如实声明即可，不要编造来源） |
+| 同任务子任务链 | `GET /api/sub-tasks/listByTaskId` | `GET /api/sub-tasks/list?taskId={id}` |
+
+### C. 外部 Agent 的「技能规范」从哪里来
+
+- **不存在服务端 Prompt 注入**：`## 平台技能规范` 注入只发生在平台内 LLM 执行链；外部 CLI Agent 自行运行模型，平台不会替它拼 Prompt。
+- 规范来源两条：① 下载技能包 ZIP（`getMySkillZipByAgentId`）时随包的 `skill-pack/*.md`——含 `eng-code-review` / `eng-doc-standard` / `eng-verification` / `eng-web-research` 四份规范正文（**仅 `getMySkill` 拿到的接入手册不含规范正文**）；② 打卡时上报 `skills`（`checkIn` 的 `skills` 参数，逗号分隔，与既有技能取并集）。
+- 若任务 `requiredSkills` 含某个 `eng-*` 而你的包里没有，请**在注册或 checkIn 时显式上报该标签**，否则平台无法按该规范派单。

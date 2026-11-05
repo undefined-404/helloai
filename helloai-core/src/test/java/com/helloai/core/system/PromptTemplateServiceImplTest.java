@@ -51,7 +51,8 @@ class PromptTemplateServiceImplTest {
         Map<String, byte[]> entries = readZipEntries(zip);
 
         // 完整结构：顶层 <role>-skill/ 目录下 SKILL.md + scripts/ 全量（Trae 要求的整体复制形态）
-        assertEquals(8, entries.size());
+        // + skill-pack/ 四份写作规范正文（外部 Agent 无服务端 Prompt 注入，规范只能随包交付）
+        assertEquals(12, entries.size());
         String top = "executor-skill/";
         assertNotNull(entries.get(top + "SKILL.md"));
         assertNotNull(entries.get(top + "scripts/clock.ps1"));
@@ -61,6 +62,12 @@ class PromptTemplateServiceImplTest {
         assertNotNull(entries.get(top + "scripts/process_one.ps1"));
         assertNotNull(entries.get(top + "scripts/process_one.sh"));
         assertNotNull(entries.get(top + "scripts/config.example.json"));
+        assertNotNull(entries.get(top + "skill-pack/eng-code-review.md"));
+        assertNotNull(entries.get(top + "skill-pack/eng-doc-standard.md"));
+        assertNotNull(entries.get(top + "skill-pack/eng-verification.md"));
+        String webResearch = new String(entries.get(top + "skill-pack/eng-web-research.md"),
+                StandardCharsets.UTF_8);
+        assertTrue(webResearch.contains("name: eng-web-research"), "规范正文应保留 frontmatter");
 
         // SKILL.md 占位符已渲染：apiKey / baseUrl / agentId
         String skill = new String(entries.get(top + "SKILL.md"), StandardCharsets.UTF_8);
