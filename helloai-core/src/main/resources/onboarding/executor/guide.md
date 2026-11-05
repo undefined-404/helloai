@@ -846,6 +846,11 @@ if ($errs.Count -eq 0) { 'PARSE-OK' } else { $errs | ForEach-Object { $_.Message
 
 > 验收标准若显式声明编码要求，以声明为准且文件**实际字节**必须与声明一致——口头声明 UTF-8、实际按 GBK 保存同样会被驳回。
 
+**提交前乱码自检（平台会做确定性检测，先告警不拦）**：平台对「执行产出 + 物化附件正文」检查三类信号——
+① 替换字符 `U+FFFD`；② 私用区字符（`U+E000~U+F8FF`）；③ 双重解码串（UTF-8 字节被按 GBK / CP1252 解码后再以 UTF-8 存储，如 `瀹炴祴`、`ä¸æ–‡`）。
+命中会记入核验告警（`sub_task_auto_review_verdict_warn` 的 `output_encoding_corrupted`），**当前不直接驳回**；
+但编码损坏说明写入链路已出错，含中文的交付仍应在提交前修正——把文本按字节写出、再用 UTF-8 读取回显，确认无上述三类字符。
+
 ### 4.6 依赖链执行检查清单
 
 在 `submitResult` 之前，自检：
@@ -857,6 +862,7 @@ if ($errs.Count -eq 0) { 'PARSE-OK' } else { $errs | ForEach-Object { $_.Message
 - [ ] `SUMMARY` 是否非空？（否则下游 Agent 看不到我的产出摘要）
 - [ ] `VERIFICATION` 段是否已填写真实命令与输出？（验证失败/未验证必须如实标注，禁止声明完成）
 - [ ] 交付物编码是否按 §4.5 约定？（UTF-8 / `.ps1` 带 BOM / 语法自检 0 error）
+- [ ] 中文正文是否做过乱码自检？（无 `U+FFFD`、无私用区字符、无 `瀹炴祴` / `ä¸æ–‡` 类双重解码串）
 
 ---
 

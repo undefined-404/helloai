@@ -1,6 +1,7 @@
 package com.helloai.core.review.support;
 
 import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.common.constant.ReviewResult;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
@@ -14,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -38,6 +40,12 @@ public class ReviewEvidenceAssembler {
 
     private final AttachmentService attachmentService;
     private final AgentDispatchProperties dispatchProperties;
+
+    /**
+     * 驳回快照冻结证据总字符上限：超过则不冻结（复判退回漂移跳过）。
+     * 证据五段本身已按核验口径截断（附件总限额 200000 字符），本上限只防异常数据把 JSONB 撑大。
+     */
+    static final int FROZEN_EVIDENCE_MAX_CHARS = 300_000;
 
     /** 显式全参构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在 IDE 增量编译里漏抓新增
      * final 字段的坑：显式列为 Spring DI 唯一依据）。 */
@@ -122,15 +130,82 @@ public class ReviewEvidenceAssembler {
      * <p>体积超阈值只告警不阻断——快照是观测/复判依据，不得因为它自身的大小改变判定。</p>
      */
     public Map<String, Object> buildReviewSnapshot(SubTaskView subTask) {
+        return buildReviewSnapshot(subTask, null, null);
+    }
+
+    /**
+     * 构建判定快照，并在**驳回时可冻结原判证据**（`RV-6`）。
+     *
+     * <p>驳回记录返工后附件失效、产出被覆盖，只存引用/摘要无法复判；这里把核验 Prompt 实际
+     * 消费的五段证据文本（见 {@link ReviewEvidenceView}）原样冻结进 JSONB，复判直接复用。
+     * 仅在 {@code result == REJECTED} 且证据非空时冻结——通过记录原对象不会失效，不需要额外存储。</p>
+     *
+     * <p>冻结体积超过 {@link #FROZEN_EVIDENCE_MAX_CHARS} 时不冻结（快照仍落，复判按
+     * {@code snapshot_drift} 跳过）——不拿不完整的原判对象做误伤率度量。</p>
+     *
+     * @param result   本次核验结论；null / 非 REJECTED 不冻结
+     * @param evidence 判定当时实际渲染的证据；null 不冻结
+     */
+    public Map<String, Object> buildReviewSnapshot(SubTaskView subTask, ReviewResult result,
+                                                   ReviewEvidenceView evidence) {
+        Map<String, Object> frozen = result == ReviewResult.REJECTED ? freezeEvidence(subTask, evidence) : null;
         Map<String, Object> snapshot = ReviewSnapshotBuilder.build(
                 readableAttachments(subTask.id()),
-                SubTaskOutputExtractor.extractExecutionOutput(subTask.context()));
+                SubTaskOutputExtractor.extractExecutionOutput(subTask.context()),
+                frozen);
         int bytes = ReviewSnapshotBuilder.estimatedBytes(snapshot);
         if (bytes > ReviewSnapshotBuilder.WARN_BYTES) {
             log.warn("核验快照体积超阈值（存储增长观测）: subTaskId={}, bytes={}, threshold={}",
                     subTask.id(), bytes, ReviewSnapshotBuilder.WARN_BYTES);
         }
         return snapshot;
+    }
+
+    /**
+     * 读取驳回快照里冻结的原判证据；没有冻结（历史记录 / 通过记录 / 超限）时返回 null，
+     * 调用方应退回「快照漂移对账」路径。
+     */
+    public ReviewEvidenceView frozenEvidenceView(Map<String, Object> snapshot) {
+        if (snapshot == null) {
+            return null;
+        }
+        Object node = snapshot.get("frozenEvidence");
+        if (!(node instanceof Map<?, ?> frozen)) {
+            return null;
+        }
+        Object executionOutput = frozen.get("executionOutput");
+        Object attachmentList = frozen.get("attachmentList");
+        Object attachmentContent = frozen.get("attachmentContent");
+        if (executionOutput == null && attachmentList == null && attachmentContent == null) {
+            return null;
+        }
+        return new ReviewEvidenceView(text(executionOutput), text(attachmentList), text(attachmentContent),
+                text(frozen.get("verificationSignal")), text(frozen.get("selfReviewSignal")));
+    }
+
+    private Map<String, Object> freezeEvidence(SubTaskView subTask, ReviewEvidenceView evidence) {
+        if (evidence == null) {
+            return null;
+        }
+        int chars = evidence.totalChars();
+        if (chars > FROZEN_EVIDENCE_MAX_CHARS) {
+            log.warn("驳回快照冻结证据超限，退回漂移跳过（不拿不完整对象度量误伤率）: "
+                            + "subTaskId={}, chars={}, limit={}",
+                    subTask.id(), chars, FROZEN_EVIDENCE_MAX_CHARS);
+            return null;
+        }
+        Map<String, Object> frozen = new LinkedHashMap<>();
+        frozen.put("executionOutput", evidence.executionOutput());
+        frozen.put("attachmentList", evidence.attachmentList());
+        frozen.put("attachmentContent", evidence.attachmentContent());
+        frozen.put("verificationSignal", evidence.verificationSignal());
+        frozen.put("selfReviewSignal", evidence.selfReviewSignal());
+        frozen.put("chars", chars);
+        return frozen;
+    }
+
+    private static String text(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     /** 抽检前对账：当前证据是否仍是原判定对象（`RV-5`，见 {@link ReviewSnapshotMatcher}）。 */

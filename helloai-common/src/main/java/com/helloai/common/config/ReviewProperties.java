@@ -91,6 +91,16 @@ public class ReviewProperties {
      */
     private boolean coverageCriticEnabled = true;
 
+    /**
+     * 是否启用交付正文编码损坏检测（`RV-7`，<b>Warn 档</b>）。默认 true。
+     *
+     * <p>开启后对「执行产出 + 物化附件正文」做确定性检测（U+FFFD / 私用区字符 /
+     * GBK·Windows-1252 双重解码回推），命中只并入 {@code sub_task_auto_review_verdict_warn}
+     * 事件，<b>不改变判定</b>。与 {@link #verdictValidatorEnabled} 独立：关闭判定校验器
+     * 不影响编码观测，反之亦然。</p>
+     */
+    private boolean encodingDetectionEnabled = true;
+
     /** 是否启用 Reviewer 抽检任务。默认 true。 */
     private boolean recheckEnabled = true;
 

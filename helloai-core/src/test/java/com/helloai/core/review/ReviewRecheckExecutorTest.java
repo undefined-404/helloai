@@ -280,6 +280,45 @@ class ReviewRecheckExecutorTest {
     }
 
     @Test
+    @DisplayName("RV-6 驳回侧：快照含冻结证据 ⇒ 当前视图已漂移仍用原判对象复判")
+    void rv6_rejectedUsesFrozenEvidenceDespiteCurrentDrift() {
+        ReviewRecord record = rejectedRecord(RECORD_ID);
+        Map<String, Object> frozen = new HashMap<>();
+        frozen.put("executionOutput", "冻结产出-ORIGINAL");
+        frozen.put("attachmentList", "- original.md（MD, 100 bytes, 平台可直读）");
+        frozen.put("attachmentContent", "### original.md\nORIGINAL-CONTENT");
+        frozen.put("verificationSignal", "该提交携带验证证据（FROZEN）");
+        frozen.put("selfReviewSignal", "（本轮自审已通过：FROZEN）");
+        record.setSnapshot(ReviewSnapshotBuilder.build(List.of(), "原始产出", frozen));
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(record);
+        // 当前视图已返工：产出不同（无冻结时会判 snapshot_drift）；冻结路径不读当前附件
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\", "
+                                + "\"analysis\": \"覆盖全部端点：见原判附件\", "
+                                + "\"coverage\": [{\"criterionRef\": \"覆盖全部端点\", "
+                                + "\"status\": \"covered\", \"method\": \"attachment\"}]}",
+                        "stop", "llm", 100));
+
+        executor.recheckReviewRecord(RECORD_ID);
+
+        ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
+        assertThat(captor.getValue().getUserPrompt())
+                .contains("冻结产出-ORIGINAL")
+                .contains("ORIGINAL-CONTENT")
+                .contains("自审已通过：FROZEN")
+                .doesNotContain("接口清单已整理完毕，覆盖全部端点。");
+        verify(recordReviewService).recordRecheck(
+                eq(RECORD_ID), eq(SUB_TASK_ID), eq(ReviewResult.REJECTED), eq(ReviewResult.APPROVED),
+                eq(true), eq(9L), any(), any(), any());
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq(TimelineEventCode.SUB_TASK_RECHECK_SKIPPED.code()),
+                eq(AgentRole.REVIEWER), isNull(), anyMap());
+    }
+
+    @Test
     @DisplayName("RV-6 驳回侧：无判定快照 ⇒ 跳过 reason=snapshot_missing（不调 LLM、不落日志）")
     void rv6_rejectedWithoutSnapshotSkipped() {
         when(recordReviewService.getById(RECORD_ID)).thenReturn(rejectedRecord(RECORD_ID));

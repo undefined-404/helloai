@@ -8,10 +8,12 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.AgentResult;
+import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.review.service.SubTaskReviewService;
+import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -78,6 +80,7 @@ class ReviewExecutionEngineTest {
         lenient().when(reviewEvidenceAssembler.extractRawOutput(any())).thenReturn("（原始输出）");
         lenient().when(reviewEvidenceAssembler.verificationSignal(anyString())).thenReturn("（证据信号）");
         lenient().when(subTaskService.mergeSkills(anyLong())).thenReturn(List.of());
+        lenient().when(taskTimelineService.listBySubTaskId(any())).thenReturn(List.of());
     }
 
     private ReviewExecutionEngine newEngine(ReviewProperties properties) {
@@ -278,6 +281,192 @@ class ReviewExecutionEngineTest {
         verify(taskTimelineService, never()).recordEvent(any(), any(),
                 eq(TimelineEventCode.SUB_TASK_AUTO_REVIEW_VERDICT_WARN.code()),
                 any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("RV-7：交付正文含 GBK 双重解码乱码 → 记 output_encoding_corrupted（WARN，不改判定）")
+    void shouldRecordEncodingFindingWithoutChangingVerdict() {
+        ReviewProperties properties = new ReviewProperties();
+        properties.setCoverageCriticEnabled(false);
+        when(reviewEvidenceAssembler.extractExecutionOutput(any())).thenReturn("EXECUTION_RECORD：瀹炴祴");
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        ReviewExecutionEngine.ExecutionOutcome outcome = newEngine(properties)
+                .execute(subTask(), reviewer());
+
+        assertThat(outcome.inconclusive()).isFalse();
+        assertThat(outcome.verdict()).isNotNull();
+        assertThat(outcome.verdict().getPass()).isTrue();
+        assertThat(outcome.findings())
+                .extracting(ReviewVerdictValidator.Finding::code)
+                .contains(ReviewEncodingDetector.OUTPUT_ENCODING_CORRUPTED);
+        Map<String, Object> payload = captureSingleEvent(
+                TimelineEventCode.SUB_TASK_AUTO_REVIEW_VERDICT_WARN.code());
+        assertThat(payload.get("enforced")).isEqualTo(false);
+        assertThat(payload.get("pass")).isEqualTo(true);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> findings = (List<Map<String, Object>>) payload.get("findings");
+        assertThat(findings).extracting(f -> f.get("code"))
+                .contains(ReviewEncodingDetector.OUTPUT_ENCODING_CORRUPTED);
+        assertThat(findings).extracting(f -> f.get("severity")).containsOnly("WARN");
+    }
+
+    @Test
+    @DisplayName("RV-7：编码检测开关关闭 → 乱码不再产 finding（独立回滚面）")
+    void shouldNotRecordEncodingFindingWhenDisabled() {
+        ReviewProperties properties = new ReviewProperties();
+        properties.setCoverageCriticEnabled(false);
+        properties.setEncodingDetectionEnabled(false);
+        when(reviewEvidenceAssembler.extractExecutionOutput(any())).thenReturn("EXECUTION_RECORD：瀹炴祴");
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        ReviewExecutionEngine.ExecutionOutcome outcome = newEngine(properties)
+                .execute(subTask(), reviewer());
+
+        assertThat(outcome.findings()).isEmpty();
+        verify(taskTimelineService, never()).recordEvent(any(), any(),
+                eq(TimelineEventCode.SUB_TASK_AUTO_REVIEW_VERDICT_WARN.code()),
+                any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("SR-3 信号：自审未通过 → 核验 Prompt 注入平台事实与从严要求")
+    void shouldInjectSelfReviewFailureSignal() {
+        when(taskTimelineService.listBySubTaskId(any())).thenReturn(List.of(
+                timeline(1L, TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                        Map.of("gateTier", "SANDBOX_REQUIRED", "gatePassed", false,
+                                "selfReview", "self_reported_mismatch",
+                                "claimedCount", 1, "ledgerCount", 2,
+                                "mismatches", List.of("自报 command=... 在台账中无匹配记录"))),
+                timeline(2L, TimelineEventCode.SELF_REVIEW_FAILED.code(),
+                        Map.of("gateTier", "SANDBOX_REQUIRED", "retryCount", 1,
+                                "failures", List.of("自报证据与平台台账不一致（self_reported_mismatch）")))));
+        ReviewProperties properties = new ReviewProperties();
+        properties.setCoverageCriticEnabled(false);
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        newEngine(properties).execute(subTask(), reviewer());
+
+        String prompt = capturedPrompt();
+        assertThat(prompt)
+                .contains("平台自审闸门未通过")
+                .contains("self_reported_mismatch")
+                .contains("自报 1 条 / 台账 2 条")
+                .contains("重跑：1 次")
+                .contains("不得仅凭执行方 VERIFICATION 自报证据判 pass=true")
+                .doesNotContain("{{SELF_REVIEW_SIGNAL}}");
+    }
+
+    @Test
+    @DisplayName("SR-3 信号：自审通过 → 明确标注已通过，不注入从严要求")
+    void shouldInjectSelfReviewPassedSignal() {
+        when(taskTimelineService.listBySubTaskId(any())).thenReturn(List.of(
+                timeline(1L, TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                        Map.of("gateTier", "EVIDENCE_FORM_ONLY", "gatePassed", true,
+                                "selfReview", "verified"))));
+        ReviewProperties properties = new ReviewProperties();
+        properties.setCoverageCriticEnabled(false);
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        newEngine(properties).execute(subTask(), reviewer());
+
+        assertThat(capturedPrompt())
+                .contains("本轮自审已通过")
+                .doesNotContain("平台自审闸门未通过");
+    }
+
+    @Test
+    @DisplayName("SR-3 信号：自审开关关闭 → 只标注未启用，不注入失败语义")
+    void shouldNotInjectFailureSignalWhenSelfReviewDisabled() {
+        when(taskTimelineService.listBySubTaskId(any())).thenReturn(List.of(
+                timeline(1L, TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                        Map.of("gateTier", "SANDBOX_REQUIRED", "gatePassed", false,
+                                "selfReview", "self_reported_mismatch")),
+                timeline(2L, TimelineEventCode.SELF_REVIEW_FAILED.code(), Map.of("retryCount", 1))));
+        ReviewProperties properties = new ReviewProperties();
+        properties.setCoverageCriticEnabled(false);
+        properties.setSelfReviewEnabled(false);
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        newEngine(properties).execute(subTask(), reviewer());
+
+        assertThat(capturedPrompt())
+                .contains("自审未启用")
+                .doesNotContain("平台自审闸门未通过");
+    }
+
+    @Test
+    @DisplayName("SR-3 信号：返工后只看本轮——上一轮自审失败不得污染新交付")
+    void shouldIgnorePreviousAttemptSelfReviewFailure() {
+        when(taskTimelineService.listBySubTaskId(any())).thenReturn(List.of(
+                timeline(1L, TimelineEventCode.SUB_TASK_EXECUTE_START.code(), Map.of()),
+                timeline(2L, TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                        Map.of("gateTier", "SANDBOX_REQUIRED", "gatePassed", false,
+                                "selfReview", "self_reported_mismatch")),
+                timeline(3L, TimelineEventCode.SELF_REVIEW_FAILED.code(), Map.of("retryCount", 1)),
+                timeline(4L, TimelineEventCode.SUB_TASK_EXECUTE_START.code(), Map.of())));
+        ReviewProperties properties = new ReviewProperties();
+        properties.setCoverageCriticEnabled(false);
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        newEngine(properties).execute(subTask(), reviewer());
+
+        assertThat(capturedPrompt())
+                .contains("本轮无自审记录")
+                .doesNotContain("平台自审闸门未通过");
+    }
+
+    @Test
+    @DisplayName("SR-3 信号：沙箱降级 → 标注「不得视为已自审」，不冒充通过")
+    void shouldInjectSelfReviewDegradedSignal() {
+        when(taskTimelineService.listBySubTaskId(any())).thenReturn(List.of(
+                timeline(1L, TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code(),
+                        Map.of("gateTier", "SKIPPED_NO_SANDBOX", "gatePassed", true,
+                                "selfReview", "degraded_no_sandbox"))));
+        ReviewProperties properties = new ReviewProperties();
+        properties.setCoverageCriticEnabled(false);
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        newEngine(properties).execute(subTask(), reviewer());
+
+        assertThat(capturedPrompt())
+                .contains("自审降级")
+                .doesNotContain("本轮自审已通过");
+    }
+
+    private String capturedPrompt() {
+        ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
+        return captor.getValue().getUserPrompt();
+    }
+
+    private static TaskTimeline timeline(long id, String eventType, Map<String, Object> payload) {
+        TaskTimeline event = new TaskTimeline();
+        event.setId(id);
+        event.setEventType(eventType);
+        event.setPayload(payload);
+        return event;
     }
 
     private Map<String, Object> captureSingleEvent(String eventCode) {

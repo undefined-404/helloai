@@ -42,6 +42,11 @@ public class ReviewRecord extends BaseEntity {
      * {@code {schemaVersion, attachmentCount, attachmentsTruncated, attachments:[{id,fileName,fileSize}],
      * output:{chars,sha256}}}。
      *
+     * <p>{@code schemaVersion=2}（`RV-6`）：驳回记录另含可选 {@code frozenEvidence}
+     * （`executionOutput / attachmentList / attachmentContent / verificationSignal / selfReviewSignal`
+     * 五段原判证据文本），复判直接复用——返工后当前附件/产出失效，读当前视图必然漂移。
+     * 通过记录不冻结（原对象不会失效，无需额外存储）。</p>
+     *
      * <p>{@code NULL} = 历史行（本列上线前落库）⇒ 抽检复判按当前视图处理
      * （{@code ReviewSnapshotMatcher} 对无快照记录不拦，避免把老数据排除出抽检）。</p>
      */

@@ -27,8 +27,13 @@ import java.util.Map;
  */
 public final class ReviewSnapshotBuilder {
 
-    /** 快照结构版本（新增字段时递增，消费方据此兼容）。 */
-    public static final int SCHEMA_VERSION = 1;
+    /**
+     * 快照结构版本（新增字段时递增，消费方据此兼容）。
+     *
+     * <p>v2（2026-11-05，`RV-6`）：驳回记录增可选 {@code frozenEvidence}（原判证据五段文本），
+     * 复判直接复用；v1 快照无该字段，消费方按「无冻结证据」处理。</p>
+     */
+    public static final int SCHEMA_VERSION = 2;
 
     /** 附件条目上限（防异常子任务把 JSONB 撑大）。 */
     public static final int MAX_ATTACHMENTS = 50;
@@ -47,6 +52,17 @@ public final class ReviewSnapshotBuilder {
      * @return JSONB 可落库的有序 Map（键序固定，便于测试与人工比对）
      */
     public static Map<String, Object> build(List<AttachmentView> attachments, String output) {
+        return build(attachments, output, null);
+    }
+
+    /**
+     * 构建快照（可附冻结证据）。
+     *
+     * @param frozenEvidence 驳回记录的原判证据（`RV-6`，见 {@link ReviewEvidenceView}）；
+     *                       null / 空 ⇒ 不写入该字段（通过记录与历史记录保持原结构）
+     */
+    public static Map<String, Object> build(List<AttachmentView> attachments, String output,
+                                            Map<String, Object> frozenEvidence) {
         List<Map<String, Object>> items = new ArrayList<>();
         int total = attachments == null ? 0 : attachments.size();
         if (attachments != null) {
@@ -68,6 +84,9 @@ public final class ReviewSnapshotBuilder {
         snapshot.put("attachments", items);
         snapshot.put("output", output == null ? null
                 : Map.of("chars", output.length(), "sha256", sha256(output)));
+        if (frozenEvidence != null && !frozenEvidence.isEmpty()) {
+            snapshot.put("frozenEvidence", frozenEvidence);
+        }
         return snapshot;
     }
 

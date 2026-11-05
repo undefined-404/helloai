@@ -9,6 +9,7 @@ import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.review.service.SubTaskReviewService;
+import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.port.UncertaintyView;
 import com.helloai.core.task.service.SubTaskService;
@@ -42,6 +43,9 @@ import java.util.stream.Collectors;
 public class ReviewExecutionEngine {
 
     private static final String PROMPT_TEMPLATE_PATH = "prompts/subtask-review.md";
+
+    /** 自审信号注入上限（防止失败原因列表撑大核验 Prompt）。 */
+    private static final int SELF_REVIEW_SIGNAL_MAX_CHARS = 800;
 
     /**
      * 单次核验结果（`RV-2`）：结构化判定 + 静态校验 findings。
@@ -107,8 +111,37 @@ public class ReviewExecutionEngine {
      * @return 结构化判定 + 静态校验 findings；LLM 调用失败/超时/输出不可解析时 verdict 为 null
      */
     public ExecutionOutcome execute(SubTaskView subTask, AgentProfileSnapshot reviewer, ReviewChannel channel) {
+        return execute(subTask, reviewer, channel, buildEvidenceView(subTask));
+    }
+
+    /**
+     * 用冻结证据复判（`RV-6`）：证据五段由调用方提供（通常来自 `review_record.snapshot.frozenEvidence`），
+     * 不再读当前附件/产出——驳回记录返工后原件已失效，读当前视图必然漂移。
+     *
+     * @param evidence 冻结证据；null ⇒ 回退到当前证据装配（与 {@link #execute} 等价）
+     */
+    public ExecutionOutcome executeWithEvidence(SubTaskView subTask, AgentProfileSnapshot reviewer,
+                                                ReviewChannel channel, ReviewEvidenceView evidence) {
+        return execute(subTask, reviewer, channel, evidence != null ? evidence : buildEvidenceView(subTask));
+    }
+
+    /**
+     * 装配本次核验的证据视图（五段文本）：Prompt 渲染、编码检测（`RV-7`）与
+     * 驳回侧冻结（`RV-6`）共用同一来源，避免三处各读一遍附件正文。
+     */
+    public ReviewEvidenceView buildEvidenceView(SubTaskView subTask) {
+        return new ReviewEvidenceView(
+                reviewEvidenceAssembler.extractExecutionOutput(subTask),
+                reviewEvidenceAssembler.buildAttachmentList(subTask),
+                reviewEvidenceAssembler.buildAttachmentContent(subTask),
+                reviewEvidenceAssembler.verificationSignal(reviewEvidenceAssembler.extractRawOutput(subTask)),
+                renderSelfReviewSignal(subTask));
+    }
+
+    private ExecutionOutcome execute(SubTaskView subTask, AgentProfileSnapshot reviewer,
+                                     ReviewChannel channel, ReviewEvidenceView evidence) {
         Long subTaskId = subTask.id();
-        String prompt = renderPrompt(subTask);
+        String prompt = renderPrompt(subTask, evidence);
         AgentResult result;
         try {
             AgentTask agentTask = AgentTask.builder()
@@ -169,30 +202,54 @@ public class ReviewExecutionEngine {
                     Map.of("rawOutput", VerdictParser.summarize(result.getOutput(), 300)));
             return ExecutionOutcome.empty();
         }
-        List<ReviewVerdictValidator.Finding> findings = collectFindings(subTask, verdict, parsed.looseParse());
+        List<ReviewVerdictValidator.Finding> findings = collectFindings(
+                subTask, verdict, parsed.looseParse(), evidence.executionOutput(), evidence.attachmentContent());
         recordVerdictFindings(subTask, reviewer.id(), channel, verdict, parsed.looseParse(), findings);
         return new ExecutionOutcome(verdict, findings);
     }
 
     /**
-     * 静态判定校验（`RV-1` / `RV-2`）+ 覆盖批评（`RV-3`）：两段各由独立开关控制。
+     * 静态判定校验（`RV-1` / `RV-2`）+ 覆盖批评（`RV-3`）+ 编码损坏检测（`RV-7`）：
+     * 三段各由独立开关控制。
      *
-     * <p>{@code verdictValidatorEnabled} 关闭 ⇒ 两段都不跑（返回空清单，行为回到改造前，
-     * 含不触发 {@code INCONCLUSIVE}）；{@code coverageCriticEnabled} 只关覆盖批评段，
-     * 判定形态校验照常。</p>
+     * <p>{@code verdictValidatorEnabled} 关闭 ⇒ 判定校验与覆盖批评都不跑（行为回到改造前，
+     * 含不触发 {@code INCONCLUSIVE}）；{@code coverageCriticEnabled} 只关覆盖批评段；
+     * {@code encodingDetectionEnabled} 独立于前两者——它只产 {@code WARN}，不影响判定，
+     * 即使判定校验器关闭也应继续观测。</p>
      */
     private List<ReviewVerdictValidator.Finding> collectFindings(
-            SubTaskView subTask, SubTaskReviewService.ReviewVerdict verdict, boolean looseParse) {
-        if (!reviewProperties.isVerdictValidatorEnabled()) {
-            return List.of();
+            SubTaskView subTask, SubTaskReviewService.ReviewVerdict verdict, boolean looseParse,
+            String executionOutput, String attachmentContent) {
+        List<ReviewVerdictValidator.Finding> findings = new ArrayList<>();
+        if (reviewProperties.isVerdictValidatorEnabled()) {
+            findings.addAll(ReviewVerdictValidator.validate(verdict, subTask.acceptance(), looseParse));
+            if (reviewProperties.isCoverageCriticEnabled()) {
+                findings.addAll(ReviewCoverageCritic.critique(verdict, subTask.acceptance(),
+                        subTask.uncertainties()));
+            }
         }
-        List<ReviewVerdictValidator.Finding> findings = new ArrayList<>(
-                ReviewVerdictValidator.validate(verdict, subTask.acceptance(), looseParse));
-        if (reviewProperties.isCoverageCriticEnabled()) {
-            findings.addAll(ReviewCoverageCritic.critique(verdict, subTask.acceptance(),
-                    subTask.uncertainties()));
+        if (reviewProperties.isEncodingDetectionEnabled()) {
+            ReviewEncodingDetector.Result encoding = ReviewEncodingDetector.detect(
+                    concatEvidence(executionOutput, attachmentContent));
+            if (encoding.corrupted()) {
+                findings.add(new ReviewVerdictValidator.Finding(
+                        ReviewVerdictValidator.Severity.WARN,
+                        ReviewEncodingDetector.OUTPUT_ENCODING_CORRUPTED,
+                        encoding.detail()));
+            }
         }
         return findings;
+    }
+
+    /** 编码检测的输入：执行产出 + 物化附件正文（两段都可能承载交付正文）。 */
+    private static String concatEvidence(String executionOutput, String attachmentContent) {
+        if (executionOutput == null || executionOutput.isEmpty()) {
+            return attachmentContent == null ? "" : attachmentContent;
+        }
+        if (attachmentContent == null || attachmentContent.isEmpty()) {
+            return executionOutput;
+        }
+        return executionOutput + "\n" + attachmentContent;
     }
 
     /**
@@ -290,6 +347,11 @@ public class ReviewExecutionEngine {
      * （模板新增占位符而实现未替换时，残留的 {@code {{…}}} 会被被测出）。</p>
      */
     String renderPrompt(SubTaskView subTask) {
+        return renderPrompt(subTask, buildEvidenceView(subTask));
+    }
+
+    /** 证据面已装配版本：执行链路与冻结复判共用同一渲染（五段全部来自 {@link ReviewEvidenceView}）。 */
+    private String renderPrompt(SubTaskView subTask, ReviewEvidenceView evidence) {
         ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
         String template;
         try (InputStream in = resource.getInputStream()) {
@@ -305,11 +367,11 @@ public class ReviewExecutionEngine {
                 .replace("{{CONSTRAINTS}}", renderConstraints(subTask))
                 .replace("{{REQUIRED_SKILLS}}", renderRequiredSkills(subTask))
                 .replace("{{UNCERTAINTIES}}", renderUncertainties(subTask))
-                .replace("{{EXECUTION_OUTPUT}}", reviewEvidenceAssembler.extractExecutionOutput(subTask))
-                .replace("{{ATTACHMENT_LIST}}", reviewEvidenceAssembler.buildAttachmentList(subTask))
-                .replace("{{ATTACHMENT_CONTENT}}", reviewEvidenceAssembler.buildAttachmentContent(subTask))
-                .replace("{{VERIFICATION_SIGNAL}}",
-                        reviewEvidenceAssembler.verificationSignal(reviewEvidenceAssembler.extractRawOutput(subTask)));
+                .replace("{{SELF_REVIEW_SIGNAL}}", evidence.selfReviewSignal())
+                .replace("{{EXECUTION_OUTPUT}}", evidence.executionOutput())
+                .replace("{{ATTACHMENT_LIST}}", evidence.attachmentList())
+                .replace("{{ATTACHMENT_CONTENT}}", evidence.attachmentContent())
+                .replace("{{VERIFICATION_SIGNAL}}", evidence.verificationSignal());
     }
 
     /** D7：执行约束渲染——非空注入「执行约束：…」，空时「（无）」（G-010 缺口③清偿）。 */
@@ -332,6 +394,121 @@ public class ReviewExecutionEngine {
                 .filter(s -> s != null && !s.isBlank())
                 .collect(Collectors.joining("、"));
         return joined.isEmpty() ? "（无）" : joined;
+    }
+
+    /**
+     * 平台自审闸门信号（`SR-3` 观测回流）：把时间线上最近一次 `self_review_evidence_checked` /
+     * `self_review_failed` 的结论注入核验 Prompt。
+     *
+     * <p><b>为什么需要</b>：自审闸门重跑耗尽后按既有口径「只留痕、不改出口」，`self_review_failed`
+     * 只落在时间线；reviewer 看不到这条平台事实，就无法在「执行方自报证据与台账不一致」时从严
+     * （真机样本：自报 digest 与台账两条记录均不符，reviewer 仍按附件正文判 `APPROVED`）。</p>
+     *
+     * <p><b>口径</b>：只注入事实与从严要求，<b>不直接改判定</b>——是否 pass 仍由 reviewer 按自己的
+     * 独立证据决定；沙箱降级 / 闸门关闭 / 无自审记录均显式标注「不得视为已自审」。</p>
+     *
+     * <p>读取失败只降级为「状态不可读」，不影响核验主链路（时间线是旁路事实源）。
+     * 同日多次执行（返工）取时间线中**最后一条**对应事件，避免用旧一轮的失败误伤新交付。</p>
+     */
+    String renderSelfReviewSignal(SubTaskView subTask) {
+        if (subTask == null || subTask.id() == null) {
+            return "（无子任务上下文，自审状态未知）";
+        }
+        if (!reviewProperties.isSelfReviewEnabled()) {
+            // 回滚面：自审功能关闭时不注入失败语义，避免把「功能关闭」误读成「交付有问题」
+            return "（自审未启用）";
+        }
+        List<TaskTimeline> events;
+        try {
+            events = taskTimelineService.listBySubTaskId(subTask.id());
+        } catch (Exception e) {
+            log.warn("自审信号读取失败（核验继续，按未知处理）: subTaskId={}, err={}",
+                    subTask.id(), e.getMessage());
+            return "（自审状态不可读：时间线查询失败，不得据此视为自审通过）";
+        }
+        int checkedIndex = -1;
+        int failedIndex = -1;
+        int size = events == null ? 0 : events.size();
+        for (int i = 0; i < size; i++) {
+            TaskTimeline event = events.get(i);
+            if (event == null || event.getEventType() == null) {
+                continue;
+            }
+            if (TimelineEventCode.SUB_TASK_EXECUTE_START.code().equals(event.getEventType())) {
+                // 返工后只看**本轮**执行：上一轮的自审失败不得污染新交付的核验
+                checkedIndex = -1;
+                failedIndex = -1;
+            } else if (TimelineEventCode.SELF_REVIEW_EVIDENCE_CHECKED.code().equals(event.getEventType())) {
+                checkedIndex = i;
+            } else if (TimelineEventCode.SELF_REVIEW_FAILED.code().equals(event.getEventType())) {
+                failedIndex = i;
+            }
+        }
+        if (checkedIndex < 0 && failedIndex < 0) {
+            return "（本轮无自审记录：执行器未走收尾自审轮，不得据此视为自审通过）";
+        }
+        TaskTimeline checked = checkedIndex >= 0 ? events.get(checkedIndex) : null;
+        TaskTimeline failed = failedIndex >= 0 ? events.get(failedIndex) : null;
+        Map<String, Object> checkedPayload = checked != null && checked.getPayload() != null
+                ? checked.getPayload() : Map.of();
+        Map<String, Object> failedPayload = failed != null && failed.getPayload() != null
+                ? failed.getPayload() : Map.of();
+        String tier = text(checkedPayload.get("gateTier"));
+        String selfReview = text(checkedPayload.get("selfReview"));
+        if ("degraded_no_sandbox".equals(selfReview) || "SKIPPED_NO_SANDBOX".equals(tier)) {
+            return "（自审降级：沙箱未启用，未产生一手证据，不得视为已自审）";
+        }
+        if ("SKIPPED_DISABLED".equals(tier) || "SKIPPED_NO_SUB_TASK".equals(tier)) {
+            return "（自审未执行：" + tier + "，不得据此视为自审通过）";
+        }
+        boolean failedLatest = failedIndex > checkedIndex;
+        boolean passed = checked != null && Boolean.TRUE.equals(checkedPayload.get("gatePassed"));
+        if (!failedLatest && passed) {
+            return "（本轮自审已通过：gateTier=" + orUnknown(tier) + "，gatePassed=true）";
+        }
+        StringBuilder sb = new StringBuilder("⚠ 平台自审闸门未通过（平台时间线事实，不是执行方自述）：");
+        sb.append("\n- 档位：").append(orUnknown(tier))
+                .append("；证据对账=").append(orUnknown(selfReview));
+        if (checkedPayload.get("claimedCount") != null || checkedPayload.get("ledgerCount") != null) {
+            sb.append("（自报 ").append(orUnknown(checkedPayload.get("claimedCount")))
+                    .append(" 条 / 台账 ").append(orUnknown(checkedPayload.get("ledgerCount")))
+                    .append(" 条）");
+        }
+        if (failed != null) {
+            sb.append("\n- 重跑：").append(orUnknown(failedPayload.get("retryCount")))
+                    .append(" 次后仍不合格（self_review_failed 已落）");
+        }
+        List<String> reasons = asTextList(failed != null
+                ? failedPayload.get("failures") : checkedPayload.get("mismatches"));
+        if (!reasons.isEmpty()) {
+            sb.append("\n- 失败原因：").append(String.join("；", reasons));
+        }
+        sb.append("\n核验要求：不得仅凭执行方 VERIFICATION 自报证据判 pass=true；")
+                .append("必须用附件正文 / 沙箱 / 接口等你能独立看到的证据确认，")
+                .append("无法确认时 pass=false 并在 issues 中写明。");
+        return VerdictParser.summarize(sb.toString(), SELF_REVIEW_SIGNAL_MAX_CHARS);
+    }
+
+    private static String text(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private static String orUnknown(Object value) {
+        String text = text(value);
+        return text.isBlank() ? "?" : text;
+    }
+
+    private static List<String> asTextList(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<String> texts = new ArrayList<>();
+        for (Object item : list) {
+            if (item != null) {
+                texts.add(String.valueOf(item));
+            }
+        }
+        return texts;
     }
 
     /** D7：不确定性申报渲染——逐条「[kind] note」，空时「（无）」（空白 note 条目跳过）。 */

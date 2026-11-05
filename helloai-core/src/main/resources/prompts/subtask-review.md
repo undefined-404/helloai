@@ -3,7 +3,7 @@
   由 SubTaskReviewService 加载渲染（classpath:prompts/subtask-review.md）。
   占位符：{SUB_TASK_TITLE} / {SUB_TASK_CONTENT} / {DELIVERABLE} /
          {ACCEPTANCE} / {CONSTRAINTS} / {REQUIRED_SKILLS} / {UNCERTAINTIES} / {EXECUTION_OUTPUT} / {ATTACHMENT_LIST} /
-         {ATTACHMENT_CONTENT} / {VERIFICATION_SIGNAL} 由服务端替换。
+         {ATTACHMENT_CONTENT} / {VERIFICATION_SIGNAL} / {SELF_REVIEW_SIGNAL} 由服务端替换。
   核验模型为双轨纪律制：轨道 A（验收标准）+ 轨道 B（工程纪律，按交付物类型条件激活）。
   工程纪律维度提炼自 DeepSeek Harness dsh-code-review / dsh-prose-standard / dsh-trim-cot-leakage，
   已按 HelloAI 语义适配（详见 doc/archive/implemented/HelloAI_DeepSeek_Harness_Skills借鉴方案.md）。
@@ -43,6 +43,15 @@
 
 {{VERIFICATION_SIGNAL}}
 
+## 平台自审闸门信号（确定性事实，非执行方自述）
+
+{{SELF_REVIEW_SIGNAL}}
+
+> 该信号来自平台时间线，是执行侧收尾自审轮与沙箱台账的对账结论。
+> 显示「自审未通过」时：**不得仅凭执行方的 VERIFICATION 自报证据判 pass=true**，必须用你能独立看到的证据
+> （物化附件正文 / 沙箱 / 接口）重新确认；无法独立确认时判 pass=false，并在 issues 中写明
+> 「平台自审未通过且无法独立复核」。显示「自审降级 / 未执行 / 无记录」时按「无自审证据」处理，不得据此推断已自审。
+
 ## 核验要求
 
 ### 轨道 A：验收标准核验（必做）
@@ -53,7 +62,7 @@
 4. **脚本可执行性实测（S-8，沙箱执行链）**：交付物声明为脚本 / 可执行文件（.ps1/.sh/.py/.jar 等）时，若你怀疑脚本是否真能通过验收标准、或仅凭静态文本无法确认其行为，可调 **`internal_run_in_sandbox`** 在沙箱内执行验证命令，把返回的 `output` / `exitCode` 作为核验证据写入 `analysis` / `issues`。
    - **沙箱执行证据是参考而非自动判定**：`exitCode=0` 仅说明命令跑通，不自动判通过（可能测的是无关属性）；`exitCode!=0` / 超时（124）/ 沙箱不可用也**不自动驳回**（可能命令本身写错）。判定仍按本提示词的验收标准逐条进行。
    - 工具可能因沙箱未启用而不在可用列表——此时不可臆断「脚本已验证」，按不可见/无证据从严处理（见第 11 条）。
-5. 提交未携带 VERIFICATION 证据时，从严核验、评分保守；仅凭产出文本无法确认满足验收标准的，不得判 pass=true。
+5. 提交未携带 VERIFICATION 证据时，从严核验、评分保守；仅凭产出文本无法确认满足验收标准的，不得判 pass=true。**平台自审闸门信号为「未通过」时，本条同样适用**：自报证据与平台台账不一致，不能作为达标依据。
 6. 无法确定验收标准是否满足时（证据不足、无法核实），不得判 pass=true——宁可停留返工，不可放行存疑交付。
 7. 声称的交付物必须与**物化附件清单**对应：交付物声明为文件（如 .ps1/.sh/.jar/.py 等脚本或程序）但附件清单无对应文件时，即使产出文本声称"已创建/已运行/203 行 errors=0"，也判 pass=false 并在 issues 中指出缺失；附件清单仅含产出文本物化（.md）而交付物声明为可执行文件时同样不通过；附件标注"外部存储（平台不可直读）"的不可作为平台可验证的证据。
 8. 必须基于**物化附件内容**核对交付物："声称交付物 ↔ 文件正文 ↔ 验收标准"三者一致性是判定依据——附件正文与声称结论矛盾（如声称"main.py 含错误处理"但正文无对应代码）、正文明显残缺或与验收标准不符的，判 pass=false 并在 issues 中指出差异；附件标注"内容不可读/为空"或"无平台可直读附件"时，不得臆断文件内容，仅凭文件名与产出文本从严判定。

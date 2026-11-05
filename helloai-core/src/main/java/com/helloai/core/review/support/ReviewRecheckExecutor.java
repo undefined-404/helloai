@@ -84,6 +84,9 @@ public class ReviewRecheckExecutor {
         // `RV-6`：驳回侧必须有快照才构成有效度量——历史驳回（V141 前）没有原判对象，
         // 直接判「一致」会得到假数据，故显式跳过并与漂移分开留痕。
         ReviewResult originalResult = record.getResult();
+        // `RV-6`：驳回记录优先用快照里冻结的原判证据复判——返工后当前视图必然漂移，冻结对象才是原判对象
+        ReviewEvidenceView frozenEvidence = originalResult == ReviewResult.REJECTED
+                ? reviewEvidenceAssembler.frozenEvidenceView(record.getSnapshot()) : null;
         if (record.getSnapshot() == null || record.getSnapshot().isEmpty()) {
             if (originalResult == ReviewResult.REJECTED) {
                 log.warn("抽检复审跳过：驳回记录缺少判定快照，无法确认原判对象: "
@@ -92,7 +95,8 @@ public class ReviewRecheckExecutor {
                 recordSkipQuietly(subTask, reviewRecordId, "snapshot_missing", 0);
                 return;
             }
-        } else {
+        } else if (frozenEvidence == null) {
+            // 无冻结证据（历史驳回 / 通过记录 / 冻结超限）⇒ 仍按现有链路对账当前视图
             ReviewSnapshotMatcher.Drift drift = reviewEvidenceAssembler.checkSnapshotDrift(
                     record.getSnapshot(), subTask);
             if (drift != null && !drift.matched()) {
@@ -114,8 +118,9 @@ public class ReviewRecheckExecutor {
             recordSkipQuietly(subTask, reviewRecordId, "no_available_reviewer", excluded.size());
             return;
         }
-        ReviewExecutionEngine.ExecutionOutcome outcome =
-                reviewExecutionEngine.execute(subTask, reviewer, ReviewChannel.RECHECK);
+        ReviewExecutionEngine.ExecutionOutcome outcome = frozenEvidence != null
+                ? reviewExecutionEngine.executeWithEvidence(subTask, reviewer, ReviewChannel.RECHECK, frozenEvidence)
+                : reviewExecutionEngine.execute(subTask, reviewer, ReviewChannel.RECHECK);
         SubTaskReviewService.ReviewVerdict verdict = outcome.verdict();
         if (verdict == null) {
             log.warn("抽检复审不可判定，跳过等下一轮: reviewRecordId={}", reviewRecordId);

@@ -41,6 +41,21 @@ class ReviewSnapshotBuilderTest {
     }
 
     @Test
+    @DisplayName("RV-6 冻结证据：可选字段；有则原样写入，无则快照结构与 v1 一致")
+    void includesFrozenEvidenceWhenPresent() {
+        Map<String, Object> frozen = Map.of(
+                "executionOutput", "冻结产出",
+                "attachmentContent", "冻结附件正文",
+                "selfReviewSignal", "（本轮自审已通过）");
+
+        Map<String, Object> withFrozen = ReviewSnapshotBuilder.build(List.of(), "正文", frozen);
+        Map<String, Object> withoutFrozen = ReviewSnapshotBuilder.build(List.of(), "正文", null);
+
+        assertThat(withFrozen).containsEntry("frozenEvidence", frozen);
+        assertThat(withoutFrozen).doesNotContainKey("frozenEvidence");
+    }
+
+    @Test
     @DisplayName("无产出 / 无附件：output=null、count=0、清单为空")
     void handlesNulls() {
         Map<String, Object> snapshot = ReviewSnapshotBuilder.build(List.of(), null);

@@ -21,6 +21,7 @@ import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.support.ReviewChannel;
 import com.helloai.core.review.support.ReviewCoverageParser;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
+import com.helloai.core.review.support.ReviewEvidenceView;
 import com.helloai.core.review.support.ReviewExecutionEngine;
 import com.helloai.core.agent.quality.gate.GateDecision;
 import com.helloai.core.review.support.VerdictParser;
@@ -1005,8 +1006,12 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             // `RV-3`：落库的是归一后的覆盖清单（畸形条目已在解析阶段丢弃），不是模型原文
             List<Map<String, String>> coverage = ReviewCoverageParser.toMaps(
                     ReviewCoverageParser.parse(verdict.getCoverage()));
-            // `RV-5`：判定快照与 review_record 同事务落库——复判时据此判断「对象是否还是原判对象」
-            Map<String, Object> snapshot = reviewEvidenceAssembler.buildReviewSnapshot(subTask);
+            // `RV-5`：判定快照与 review_record 同事务落库——复判时据此判断「对象是否还是原判对象」。
+            // `RV-6`：驳回记录额外冻结判定当时的五段证据（附件返工失效后仍可复判）
+            ReviewEvidenceView frozenEvidence = result == ReviewResult.REJECTED
+                    ? reviewExecutionEngine.buildEvidenceView(subTask) : null;
+            Map<String, Object> snapshot = reviewEvidenceAssembler.buildReviewSnapshot(
+                    subTask, result, frozenEvidence);
             reviewService.recordAutoReview(subTaskId, reviewerAgentId, result, score,
                     verdict.getIssues(), verdict.getComment(), coverage, snapshot);
         } catch (Exception e) {

@@ -56,7 +56,7 @@
 
 1. **content**：具体做什么、边界在哪里，尽量写成有序可执行步骤（含动作与预期中间产物）。
 2. **deliverable**：完成后产出什么，必须具体可检查。
-3. **acceptance**：如何判定完成，每条必须可检查——含可观察的验证点（判定动作 + 预期结果）；写法必须与 acceptanceKind 一致（AUTOMATED=可执行命令或断言；STRUCTURAL=可数结构断言；REVIEWED=≥2 条独立可打勾审查项；ATTESTED=谁/什么时点/留什么痕）。
+3. **acceptance**：如何判定完成，每条必须可检查——含可观察的验证点（判定动作 + 预期结果）；写法必须与 acceptanceKind 一致（AUTOMATED=可执行命令或断言；STRUCTURAL=可数结构断言；REVIEWED=≥2 条独立可打勾审查项；ATTESTED=谁/什么时点/留什么痕）。含中文正文的交付物（文档 / 报告 / 说明等）必须补一条编码断言：「正文为 UTF-8，且不出现 U+FFFD、私用区字符或 GBK / CP1252 双重解码乱码串」。
 4. **acceptanceKind**：`AUTOMATED` / `STRUCTURAL` / `REVIEWED` / `ATTESTED` 四值之一，与重写后的 acceptance 文本写法匹配；原值若与文本错配，可以修正为匹配的值。
 
 ## 输出契约
