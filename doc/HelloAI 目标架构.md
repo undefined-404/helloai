@@ -4,7 +4,7 @@
 >
 > 本文档定义未来稳定架构边界，不表示所有能力当前已经落地。
 >
-> 最后更新：2026-10-18（**§0 §13 / §14 状态订正**：备份与恢复 `Planned` → `Implemented`、知识库 `In Progress → Deliver` → `Implemented`，依据 `G-018` / `G-019` 已判 `DONE`，见 `review/HelloAI 架构V2进度与质量审计报告（2026-10-18）.md` §7.1 与 `LOG-20261018-021`）。此前 2026-10-11（**③ REF-4.3 交付 ⇒ REF-4 收官**：§14 状态行「In Progress → Deliver」，引用溯源 marker + 前端卡片交付，见 `LOG-20261011-005`）。此前 2026-10-11（**② REF-4.1/4.2 交付**：§14「Planned → In Progress」，见 `LOG-20261011-004`）；2026-10-09（**① 新增 §13 备份与恢复、§14 知识库（RAG）两条目标边界**——用户裁定（`D-2026-10-09-4`）
+> 最后更新：2026-11-05（**§0 状态表三处订正 + 新增 §16**：① §3 Capability Layer 的「Sandbox 仅契约、无真实隔离」**已失真**——OpenSandbox 提供真实 `ISOLATED` 边界且技能执行链已真机跑通（`SKX-9`），仍为 `Partial` 的原因改为「可隔离执行对象的覆盖面」；② §7 Sandbox Provider 状态 `Planned` → `Partial`（隔离真身已具备，「条件触发、不排期」的排期口径不变）；③ §6 Skill 补执行面（`SKX-11` 产物导出 / `SKX-12` 对话内直出，不改变包结构本身）；④ **新增 §16 个人助理工作台**（`G-028`，`Partial`）。此前 2026-10-18（**§0 §13 / §14 状态订正**：备份与恢复 `Planned` → `Implemented`、知识库 `In Progress → Deliver` → `Implemented`，依据 `G-018` / `G-019` 已判 `DONE`，见 `review/HelloAI 架构V2进度与质量审计报告（2026-10-18）.md` §7.1 与 `LOG-20261018-021`）。此前 2026-10-11（**③ REF-4.3 交付 ⇒ REF-4 收官**：§14 状态行「In Progress → Deliver」，引用溯源 marker + 前端卡片交付，见 `LOG-20261011-005`）。此前 2026-10-11（**② REF-4.1/4.2 交付**：§14「Planned → In Progress」，见 `LOG-20261011-004`）；2026-10-09（**① 新增 §13 备份与恢复、§14 知识库（RAG）两条目标边界**——用户裁定（`D-2026-10-09-4`）
 > 将二者正式立项，此前在活文档零登记，差距锚点 `G-018` / `G-019`；**② §5 订正**：「Fork 已落地」与代码实测不符，
 > 收窄为「Fork 仅快照复制、无入口、不驱动执行」，并进一步**将「入口 / 原 Run 冻结 / 驱动新 Run 执行」裁定为 WONTFIX**（`D-2026-10-09-5`）；
 > **③ §7 Sandbox Provider 降级为「条件触发」（`D-2026-10-09-6③`）**——复核判据为「当前没有可隔离的执行对象」（外部 agent 在它自己终端；内部 agent 工具面全是平台 API；
@@ -16,7 +16,7 @@
 # 0. 实现状态（Implementation Status）
 
 > **状态四值**：`Implemented`（已达成）· `Partial`（部分达成）· `Planned`（未启动，已登记）· `Non-goal`（明确非目标）。
-> **判定基线**：2026-10-18，HEAD `60829783`（**2026-10-18 增量审计**：§13 / §14 两行状态订正，见 `review/HelloAI 架构V2进度与质量审计报告（2026-10-18）.md` §7.1；其余行的逐项实测仍以 2026-10-09 / HEAD `d3c1b129` 那次为准，本轮复核结论一致。
+> **判定基线**：2026-11-05，HEAD `bcd15e2c`（**2026-11-05 增量**：§3 / §6 / §7 三行订正 + 新增 §16 行，依据差距表 `G-005` / `G-028` 与 `LOG-20261101` / `LOG-20261105`；**2026-10-18 增量审计**：§13 / §14 两行状态订正，见 `review/HelloAI 架构V2进度与质量审计报告（2026-10-18）.md` §7.1；其余行的逐项实测仍以 2026-10-09 / HEAD `d3c1b129` 那次为准，本轮未复核）。
 > 上一判定基线 2026-09-30 / HEAD `e2c7e8c`
 > 见 `doc/review/HelloAI 架构V2进度与质量审计报告（2026-09-30）.md`、`HelloAI 代码规范与架构偏离专项审计报告（2026-09-30）.md`）。
 
@@ -25,11 +25,11 @@
 | §3 | **Role Layer**（Planner / Reviewer·Quality Gate / Governance） | **Partial** | G-007 · G-012 · G-013 · G-016 | Planner ✅；Review 链 ✅；Governance（RBAC）✅ 批次一~四；**Quality Gate 契约族已收口**（`QualityGate` 统一契约 + 2 真闸门 `RepeatedFailureGate` / `FinalReportFidelityGate`，RM12）；通用多闸门决策未全量泛化（差距表 G-007） |
 | §3 | **Orchestration Layer**（Workflow / Scheduler / DAG / Dependency / Parallelism / Routing） | **Partial** | G-009 · G-010 · G-015 | Task·SubTask DAG / 依赖门禁 / 并行派发 / 路由 ✅；**Dynamic Workflow 语义未抽象**（P3 后置，且 §11 禁止新建第二套 Engine） |
 | §3 | **Runtime Layer**（AgentRuntime / Context / Session / AgentLoop） | **Implemented** | G-002 · G-003 | 2026-09-30 单轨硬切，`RuntimeTurnExecutor` 为唯一 `AgentRuntime` 实现；八件套契约齐备；每轮 checkpoint 与 tokenUsage 已落库 |
-| §3 | **Capability Layer**（Skill Package / Tool / MCP / Sandbox Provider） | **Partial** | G-004 · G-005 · G-008 | Skill 元数据层 + 安装入口 ✅、Tool / MCP ✅；**Sandbox 仅契约、无真实隔离** |
+| §3 | **Capability Layer**（Skill Package / Tool / MCP / Sandbox Provider） | **Partial** | G-004 · G-005 · G-008 | Skill 元数据层 + 安装入口 ✅、Tool / MCP ✅；**2026-11-05 订正（原写「Sandbox 仅契约、无真实隔离」，已失真）**：OpenSandbox 已提供真实 `ISOLATED` 边界（filesystem / resource / credential），技能执行链在容器内真机跑通（`internal_run_skill` 由模型自主触发，`SKX-9`）。仍判 `Partial` 的理由改为**覆盖面**——「可隔离执行对象」尚未扩到业务执行全链（`G-005` 条件①③未命中），而非能力为零 |
 | §3 | **Provider Layer**（Qoder / Trae / Codex …） | **Implemented** | G-014 · G-016 | 异构 Provider 契约清晰；外部 Agent 通道获 A 级端到端实证 |
 | §5 | Event Stream（Run / Turn / Step + Replay · Audit） | **Partial** | G-001 · G-006 | 写侧 + Replay / Audit / UI 已上线；**Fork 仅快照服务**（`AgentEventForkService` 108 行，把 `run-{taskId}-1` 的 `agent_event` 复制到新 run_id，**无任何生产调用方**）——**其触发入口 / 原 Run 冻结 / 驱动新 Run 执行三项由用户裁定 WONTFIX**（`D-2026-10-09-5`，2026-10-09；理由：用法已被 Return + Replay 覆盖，且须改 ADR-001 Run 模型与 execution command 载荷）；**Recovery 已建**（2026-10-16）：只读恢复点投影（`AgentEventQueryService#projectRecoveryPoint`）+ 续跑注入的事件流兜底 + 只读 REST 端点；消费面 `Timeline / Replay / Audit / Recovery` **四读侧齐备**（`D-2026-10-16-11`） |
-| §6 | Skill Capability Package | **Partial** | G-004 | 9 个元数据字段已落地（含 `inputSchema` / `outputSchema` / `validationRules`）；**Instructions 结构化未动**；**`Install`→`Validate`** 生命周期部分达成（安装入口 + 摄入闸门 + 来源打戳能力已落地） |
-| §7 | Sandbox Provider | **Planned**（条件触发，不排期） | G-005 | 契约已落地；**五边界隔离未实现**（`EnvironmentSandboxProvider` 一律不标 ISOLATED）；**例外：网络边界已以「出站 SSRF 守卫」交付（`REF-5.4`，`LOG-20261010-010`）** —— 该边界的正确实现本就与外联方（平台自身）有关，与容器隔离无关。**2026-10-09 复核：当前无可隔离的执行对象**——外部 agent 在它自己终端；内部 agent 工具面全是平台 API（`File`/`Path`/`ProcessBuilder` 0 命中）；平台无脚本引擎 / 表达式求值器 ⇒ 降级为条件触发（`D-2026-10-09-6③`），三个触发条件见 §7 |
+| §6 | Skill Capability Package | **Partial** | G-004 | 9 个元数据字段已落地（含 `inputSchema` / `outputSchema` / `validationRules`）；**Instructions 结构化未动**；**`Install`→`Validate`** 生命周期部分达成（安装入口 + 摄入闸门 + 来源打戳能力已落地）。**2026-11-05 补注**：执行面已扩（`SKX-11` 产物导出为下载附件 / `SKX-12` 对话内选技能当场直出），但二者属执行与交付，**不改变包结构本身**——本行状态不因此上调 |
+| §7 | Sandbox Provider | **Partial**（条件触发，不排期） | G-005 | 契约已落地，**且已有真实提供方**：OpenSandbox 提供 `ISOLATED`（filesystem / resource / credential）+ `PARTIAL`（network / process）五边界诚实标注，技能执行链在容器内真机跑通。**2026-11-05 状态订正**：原标 `Planned`，与代码事实不符——`Planned` 的含义是「未启动」，而隔离真身已存在；改判 `Partial`，**「条件触发、不排期」的排期口径不变**（`D-2026-10-09-6③`）。**例外：网络边界已以「出站 SSRF 守卫」交付（`REF-5.4`，`LOG-20261010-010`）** —— 该边界的正确实现本就与外联方（平台自身）有关，与容器隔离无关。三个触发条件见 §7；触发条件②「技能包被执行」已于 2026-11-01 命中（`SKX-9`），故 `G-005` 由「暂缓」改判重排期 |
 | §8 | Agent Fleet | **Partial** | G-008 · G-014 | Capability Match / Health ✅，多外部执行者同台已实证；**Cost 维度已接入选人比较链**（`AgentSelector.resolveCostRanks`，近 5 次成功均值 min-max 反向归一，B5.3）；**Latency 维度未做** |
 | §9 | 最终执行链 | **Implemented** | G-001 · G-002 · G-016 | 需求包 → Planner → Workflow → Scheduler → Runtime → Skill/Tool/Sandbox → 异构 Agent → Event Stream → Reviewer → PASS/REWORK/HUMAN_REVIEW/BLOCK 全链 A 级实证 |
 | §10 | Harness | **Non-goal** | — | 明示为 Runtime 参考架构，非目标产品 |
@@ -38,6 +38,8 @@
 | §13 | 备份与恢复 | **Implemented** | G-018 | **2026-10-18 订正（原标 `Planned`「完全空白」，与代码实测相反）**：全链成立（`LOG-20261010-007` / `LOG-20261010-008`）——备份编排（`pg_dump -Fc` 全库 + MinIO 对象清单递归枚举 + manifest 前置 peek + Redisson 单飞锁 + 仅淘汰自动备份）+ `platform_backup` 台账（`V105`）+ 恢复侧三门（跨引擎 / schema 高过运行时 / 在线）+ 管理端 preflight / restore 端点 + 独立 bucket `helloai-backups` + 停机恢复手册 `doc/manual/platform-backup-restore/runbook.md` |
 | §14 | 知识库（RAG） | **Implemented** | G-019 | **2026-10-18 订正（原标 `In Progress → Deliver`，未落终态）**：`REF-4` 全组收官 ⇒ 差距表 `G-019` 已判 `DONE`（`LOG-20261011-001`~`005`）：`kb_chunk`（`V107`，`vector(1024)` + HNSW-cosine）+ 自建余弦检索 + `search_knowledge` 工具（无 KB 即摘）+ `char_budget` 注入预算 + 引用溯源 marker + 管理端 `/api/kb/*`；真实 dashscope 嵌入 + 判别性召回验证通过。**生产启用（知识库内容入口与开关）属运维决策**（新能力默认关闭，`REF-6.13`），不影响本行状态 |
 | §15 | 外部 Agent 工作详情快照 | **Planned**（可后置） | G-020 | 完全空白。**用户裁定新增立项（`D-2026-10-09-6⑤`，2026-10-09）**——平台只审计「订单层面」，子任务内部过程是刻意留的黑盒；本能力提供**事后、经审批、可选**的取证通道。动手前三项设计约束（闭合 schema 双面 / 审批方 / 时间线粒度）见 §15 与 `REF-7` |
+
+| §16 | 个人助理工作台 | **Partial** | G-028 | 已建成第二个对话入口：`kind` 分流（助理 / 需求两套 pipeline 读写隔离）、右栏三段聚合（任务概况 / 最近任务 / 最近产物，产物三源归一）、助理身份 + 用户级长期记忆 + `owner` 归属、会话级模型钉住（与 Planner 选择解耦、失效模型不下发）、上下文 token 分项与压缩、模型偏好记忆 / 先思考后检索 / 工作概览注入 / 重新生成。**未做**：`PA-8`~`PA-10`（自动化定时任务 / 插件模板市场 / IM 与移动端）登记不启动。**边界**：复用既有 Task / SubTask / Runtime，**不拥有独立执行器** |
 
 **维护规则（2026-09-30 新增）**
 
@@ -567,3 +569,30 @@ RBAC 是平台治理（Governance）之下、所有业务模块共用的支撑�
 - **接线口径**：新增提交工具必须走既有 `McpMcpServer` 守卫（`assertAgentActive` / `assertToolEnabled` / `refreshDutyLease`），**不建平行通道**；且**默认关闭**（`REF-6.13`：新能力默认关闭、通过注入启用），不污染既有外部 agent 工具面。
 
 **动手前三项约束（未定不进实现）**：① 闭合 schema 与快照自由文本的双面设计；② 审批方（倾向复用人工介入 `HUMAN_REVIEW` 通道，不建第二套审批）；③ 落时间线的粒度（倾向先做「一条汇总事件 + `ref`」）。
+
+# 16. 个人助理工作台
+
+> **状态：`Partial`** ｜ **差距锚点：`G-028`** ｜ 判定基线 2026-11-05
+
+平台面向**人**的一等入口，与面向**任务**的需求对话并列。二者共用传输协议与存储模型，但**不共用编排**。
+
+目标形态：
+
+```text
+用户
+ └─► 工作台（/workbench）
+       ├─ 左：助理对话（kind=assistant，独立 pipeline）
+       └─ 右：任务概况 / 最近任务 / 最近产物（三源归一读取）
+             ├─ 执行产物（agent 交付）
+             ├─ 会话附件（对话上传）
+             └─ 技能产物（沙箱回传后登记）
+```
+
+**四条边界（防止做成第二套系统）**：
+
+1. **不拥有执行器**——助理要做事就复用既有 `Task` / `SubTask` / `Runtime`，不新建执行链、不新建状态机；
+2. **不复制会话**——助理会话与需求会话落**同一张表**，以 `kind` 分流读写，避免两套消息模型各自演化；
+3. **模型选择与 Planner 选择解耦**——工作台下拉选的是「无角色纯 LLM 模型」，需求对话选的是 Planner；二者候选源与端点均不同，不得合并成一个下拉；
+4. **失效能力不下发**——无凭据 / 供应商下架 / 模型停用的选项不返回也不灰显，由维护指引统一解释。
+
+**已知未做**：`PA-8` 自动化定时任务、`PA-9` 插件 / 模板市场、`PA-10` IM 渠道与移动端响应式（均登记不启动，条件触发）。

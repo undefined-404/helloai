@@ -181,6 +181,8 @@
 | G-026 | LLM 额度与用量监控 | 4 家外部供应商（deepseek / moonshot / minimax / dashscope）余额分散在各自控制台，平台侧仅能通过「调用失败」感知额度耗尽；`credential_vault` PLATFORM 级 10 条凭据（deepseek 3 / moonshot 3 / minimax 2 / dashscope 2）；博查 key 另存 `sys_config[web-search.bocha.api-key]`；`agent_completed` 的 `usage` 字段 **0 条落库**、token 仅单值无 model 维度 | 4 家（deepseek / moonshot / minimax / 博查）余额在平台内一处可查，每项带抓取时间与失败标记；通义无公开接口故不显示；只读悬浮控件 | PR2 | 已完成 | — |
 | G-027 | 项目级交付编排 | 平台只有「一次任务 → 静态 DAG → 派发 → LLM 验收」内循环：无项目级计划实体（planner 域 entity 仅 `ChatAttachment`/`ChatSkillRun`/`RequirementConversation`/`RequirementMessage` 四个会话相关表）；平台进程碰不到宿主仓库（唯一 `ProcessBuilder` 为 `PgDumpRunner` 备份专用）；沙箱 `network-policy: deny` 且无仓库持有模型；代码类验收无可执行判据（LLM 判 `pass/score`，fail-open） | 计划双表示（Document + Spec）+ 滚动式拆解（Phase 基于当时 `baseCommitSha` 细拆）；可执行验收机（命令退出码为权威，LLM 只判意图）；`git worktree` 隔离 + Git 权限分级；`touchedPaths` 交集判并行安全；Context Bundle 按任务组装约束；成本预算内建 | PR2 | 设计中 | 设计成文（`design/HelloAI 交付编排能力设计.md`，`Status=Planned`）；出 `plan/` 批次；`V1`~`V5` 待验证 |
 
+| G-028 | 个人助理工作台 | 助理对话与需求对话按 `kind` 分流（独立 `assistant` pipeline，读写隔离）；工作台 = 左对话 + 右栏三段（任务概况 / 最近任务 / 最近产物），产物三源归一（执行产物 + 会话附件 + 技能产物）；用户归属模型（`owner`）覆盖会话 / 任务 / 长期记忆；会话级模型钉住（`requirement_conversation.model_type` + `AgentModelPin` 覆盖入参，选「无角色纯 LLM 模型」与 Planner 选择彻底分离）；上下文窗口 token 分项占用 + 手动/自动压缩；`PA-13`~`PA-17` 补模型偏好记忆 / 先思考后检索 / 工作概览注入 / 重新生成 / 消息操作条 | 个人助理成为平台一等入口：能对话、能看全局、能取产物，且不新增第二套执行链 | PR2 | 部分完成 | `PA-8`~`PA-10` 登记不启动（自动化定时任务 / 插件模板市场 / IM 与移动端）；详见 `plan/HelloAI 个人助理工作台实施计划（2026-11-02）.md` |
+
 ## 1.1 专项任务索引（任务视角，状态不复述）
 
 > G 矩阵（上方）回答「还差什么能力」；本表回答「各专项的任务编号落在哪个文件」。**两者编号体系不同，不可互相替代。**
