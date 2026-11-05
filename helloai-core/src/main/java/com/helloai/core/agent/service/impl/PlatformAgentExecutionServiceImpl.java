@@ -4,6 +4,7 @@ import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
+import com.helloai.core.agent.domain.AgentModelPin;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.executor.AgentExecutor;
@@ -128,6 +129,27 @@ public class PlatformAgentExecutionServiceImpl implements PlatformAgentExecution
                 throw new BizException("Agent 不存在: " + agentId);
             }
             return executeStream(agent, task);
+        });
+    }
+
+    /**
+     * 流式执行（钉住模型）：解析 Agent → 换模型 → 复用同一条执行链。
+     *
+     * <p>唯一新增动作是 {@link AgentModelPin#pin(Agent, String)}：得到「原 Agent 的游离副本 +
+     * 覆盖后的 modelType」。因此能力校验、技能注入、打卡、执行器路由<b>全部不变</b>，
+     * 不存在第二条执行路径（CODE_STYLE §2.2 禁止重复抽象）。</p>
+     *
+     * <p>{@code modelType} 为空时 {@code pin} 原样返回对象 ⇒ 与方法级联的既有行为逐字一致。</p>
+     */
+    @Override
+    public Flux<com.helloai.core.agent.chat.LlmStreamChunk> executeStream(Long agentId, String modelType,
+                                                                         AgentTask task) {
+        return Flux.defer(() -> {
+            Agent agent = agentService.getById(agentId);
+            if (agent == null) {
+                throw new BizException("Agent 不存在: " + agentId);
+            }
+            return executeStream(AgentModelPin.pin(agent, modelType), task);
         });
     }
 

@@ -64,6 +64,20 @@ public class RequirementConversation extends BaseEntity {
     private Long plannerAgentId;
 
     /**
+     * 会话钉住的 LLM 模型（V142 新增，形如 {@code provider:model}）。
+     *
+     * <p><b>与 {@link #plannerAgentId} 的分工</b>：plannerAgentId 决定「谁来扮演助理」
+     * （PLANNER 角色，决定提示词与技能面），本字段只决定「用哪个模型答」。
+     * 个人工作台走「选模型」入口（无角色），需求对话页走「选 Planner」入口（角色绑定模型），
+     * 两条链路的候选集刻意不共用（2026-11-05 设计稿裁定）。</p>
+     *
+     * <p><b>NULL 语义</b>：老数据 / 未指定 ⇒ 执行链回落到 Planner Agent 自身绑定的
+     * {@code agent.model_type}，行为与本次改造前一致。指定时由
+     * {@code agent.domain.AgentModelPin} 在执行前钉住，只影响本次调用，不回写 Agent。</p>
+     */
+    private String modelType;
+
+    /**
      * 会话级联网搜索开关（Flyway 新增）。
      * <p>每轮 LLM 调用前若本字段为 NULL/true（CHAT/CLARIFY 任意模式都生效），
      * 服务端会预检索行业资料/竞品/技术方案后注入 {@code {{WEB_SEARCH_CONTEXT}}} 占位符。

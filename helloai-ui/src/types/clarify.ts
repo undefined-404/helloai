@@ -153,6 +153,26 @@ export interface PlannerOption {
   disabledReason: string | null
 }
 
+/**
+ * 工作台 Composer「选模型」候选（工作台选的是**无角色**的纯 LLM 模型，2026-11-05）。
+ *
+ * <p>与 {@link PlannerOption} 是两套候选集，不能互相替代：这里来自 LLM 模型注册表
+ * （{@code llm_provider_model}），Planner 下拉来自 Agent 名册（带角色）。</p>
+ *
+ * <p><b>只含当前可用的模型</b>：无 API Key / 供应商已下架 / 模型已停用的由服务端在
+ * 候选集里滤掉，不下发。前端因此不需要「置灰 + 原因」分支——列表底部的维护指引统一
+ * 回答「为什么少了某个模型」。</p>
+ */
+export interface LlmModelOption {
+  providerCode: string
+  providerName: string
+  modelName: string
+  /** 传回服务端的模型标识：`provider:model`（与服务端 AgentModelPin 同口径） */
+  modelType: string
+  /** 是否为该供应商的默认模型 */
+  defaultModel: boolean
+}
+
 /** PA-3 助理身份（读取面；vo 由 AssistantProfileService.getActiveByUser 按优先级兜底给出） */
 export interface AssistantProfile {
   name: string
@@ -200,6 +220,13 @@ export interface Workbench {
   profile: AssistantProfile
   taskOverview: WorkbenchTaskOverview
   activeAgents: WorkbenchActiveAgent[]
+  /**
+   * 被隐藏的外部 Agent 条数（心跳离线 / 休眠，不进候选）。
+   *
+   * <p>由后端单独给数，**不能**用「名册总数 - 可见数」推导：名册里还混着内部 LLM，
+   * 做减法会把常驻在线的内部 LLM 算成「被隐藏的外部 Agent」。</p>
+   */
+  hiddenOfflineAgents: number
   recentTasks: WorkbenchRecentTask[]
   artifacts: ArtifactItem[]
 }

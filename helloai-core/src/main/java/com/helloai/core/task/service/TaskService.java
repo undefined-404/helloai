@@ -105,6 +105,14 @@ public interface TaskService extends IService<Task> {
     List<Task> listActiveTasksForOwner(int limit);
 
     /**
+     * `PA-15`：按显式 owner 读取最近推进中的任务（助理工作概览用，不依赖 CurrentUser）。
+     *
+     * <p>口径与 {@link #listActiveTasksForOwner(int)} 一致：PLANNING / IN_PROGRESS，
+     * owner 为空的历史任务宽松并入；按更新时间倒序截断。</p>
+     */
+    List<Task> listActiveTasksByOwner(Long ownerId, int limit);
+
+    /**
      * 更新任务状态；任务不存在时返回 null（由 Controller 转 R.fail）。
      *
      * @param id     任务 ID

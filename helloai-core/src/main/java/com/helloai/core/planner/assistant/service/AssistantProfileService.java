@@ -11,7 +11,7 @@ public interface AssistantProfileService {
 
     /** 无任何记录的默认身份（数据库为空 / 读取异常时的渲染兜底）。 */
     AssistantSnapshot DEFAULT = new AssistantSnapshot(
-            "AI 助手", "你的个人助理", "deepseek-v3",
+            "AI 助手", "你的个人助理", "deepseek-v4-flash",
             java.util.List.of(), "你好，我是你的 AI 助理，有什么可以帮你？");
 
     /** 对话页顶部要渲染的助理身份快照（只读，不暴露实体形态）。 */

@@ -6,7 +6,9 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.agent.service.impl.LlmProviderCatalogServiceImpl;
+import com.helloai.core.system.port.LlmProviderModelRef;
 import com.helloai.core.system.port.LlmProviderProfile;
+import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -17,6 +19,8 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -38,6 +42,7 @@ class LlmProviderCatalogServiceTest {
     private AgentExecutionProperties executionProperties;
     private LlmProviderChatClientFactoryRegistry factoryRegistry;
     private PlatformProviderConfigService platformProviderConfigService;
+    private LlmProviderModelQueryService modelQueryService;
     private LlmProviderCatalogService catalogService;
 
     @BeforeEach
@@ -46,8 +51,9 @@ class LlmProviderCatalogServiceTest {
         executionProperties = mock(AgentExecutionProperties.class);
         factoryRegistry = mock(LlmProviderChatClientFactoryRegistry.class);
         platformProviderConfigService = mock(PlatformProviderConfigService.class);
+        modelQueryService = mock(LlmProviderModelQueryService.class);
         catalogService = new LlmProviderCatalogServiceImpl(queryService, executionProperties,
-                factoryRegistry, platformProviderConfigService);
+                factoryRegistry, platformProviderConfigService, modelQueryService);
     }
 
     private LlmProviderProfile llmProvider(String providerCode, String providerName,
@@ -256,6 +262,116 @@ class LlmProviderCatalogServiceTest {
                     agent("moonshot:moonshot-v1-8k"));
 
             assertThat(bound).isFalse();
+        }
+    }
+
+    /**
+     * listModelOptions（2026-11-05 工作台「选模型」数据源）。
+     *
+     * <p>关键约束：失效模型<b>仍要返回</b>（前端灰显 + 显示原因），只有「供应商记录已不存在」的
+     * 孤儿模型才跳过——否则用户会以为模型不存在，而不是它失效了。</p>
+     */
+    @Nested
+    @DisplayName("listModelOptions 模型候选与有效性")
+    class ModelOptions {
+
+        private LlmProviderModelRef ref(String provider, String model, boolean enabled,
+                                        boolean defaultModel) {
+            return new LlmProviderModelRef(provider, model, enabled, defaultModel, 0);
+        }
+
+        private void stubUsableProvider(String code, String name) {
+            when(queryService.listAllProfiles()).thenReturn(List.of(
+                    llmProvider(code, name, "OPENAI_COMPATIBLE", 1)));
+            when(platformProviderConfigService.isApiKeyConfigured(code)).thenReturn(true);
+        }
+
+        @Test
+        @DisplayName("无模型注册项时不查供应商表，直接返回空列表")
+        void shouldReturnEmptyWhenNoModelRef() {
+            when(modelQueryService.listAllRefs()).thenReturn(List.of());
+
+            assertThat(catalogService.listModelOptions()).isEmpty();
+            verify(queryService, never()).listAllProfiles();
+        }
+
+        @Test
+        @DisplayName("启用且供应商可用 → 进候选集，modelType 为 provider:model")
+        void shouldKeepUsableModel() {
+            stubUsableProvider("deepseek", "DeepSeek");
+            when(modelQueryService.listAllRefs()).thenReturn(List.of(
+                    ref("deepseek", "deepseek-v4-flash", true, true)));
+
+            List<LlmProviderCatalogService.ModelOption> options = catalogService.listModelOptions();
+
+            assertThat(options).singleElement().satisfies(o -> {
+                assertThat(o.modelType()).isEqualTo("deepseek:deepseek-v4-flash");
+                assertThat(o.defaultModel()).isTrue();
+            });
+        }
+
+        @Test
+        @DisplayName("模型自身停用 → 不进候选集（即便供应商也没配 Key）")
+        void shouldDropDisabledModel() {
+            // 供应商也没配 Key —— 两个条件任一不满足都该消失，且不因原因不同而回潮
+            when(queryService.listAllProfiles()).thenReturn(List.of(
+                    llmProvider("deepseek", "DeepSeek", "OPENAI_COMPATIBLE", 1)));
+            when(platformProviderConfigService.isApiKeyConfigured("deepseek")).thenReturn(false);
+            when(modelQueryService.listAllRefs()).thenReturn(List.of(
+                    ref("deepseek", "old-model", false, false)));
+
+            assertThat(catalogService.listModelOptions()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("供应商未配 API Key → 其模型不进候选集")
+        void shouldDropModelOfProviderWithoutApiKey() {
+            when(queryService.listAllProfiles()).thenReturn(List.of(
+                    llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1)));
+            when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(false);
+            when(modelQueryService.listAllRefs()).thenReturn(List.of(
+                    ref("moonshot", "moonshot-v1-8k", true, false)));
+
+            assertThat(catalogService.listModelOptions()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("模型启用但供应商已下架 → 不进候选集")
+        void shouldDropModelOfDisabledProvider() {
+            when(queryService.listAllProfiles()).thenReturn(List.of(
+                    llmProvider("dashscope", "DashScope", "OPENAI_COMPATIBLE", 0)));
+            when(platformProviderConfigService.isApiKeyConfigured("dashscope")).thenReturn(true);
+            when(modelQueryService.listAllRefs()).thenReturn(List.of(
+                    ref("dashscope", "qwen-max", true, false)));
+
+            assertThat(catalogService.listModelOptions()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("孤儿模型（供应商记录已不存在）不进候选")
+        void shouldSkipOrphanModel() {
+            stubUsableProvider("deepseek", "DeepSeek");
+            when(modelQueryService.listAllRefs()).thenReturn(List.of(
+                    ref("deepseek", "deepseek-v4-flash", true, false),
+                    ref("ghost", "ghost-model", true, false)));
+
+            assertThat(catalogService.listModelOptions())
+                    .extracting(LlmProviderCatalogService.ModelOption::modelName)
+                    .containsExactly("deepseek-v4-flash");
+        }
+
+        @Test
+        @DisplayName("排序：默认模型优先，停用的不出现在结果里")
+        void shouldSortByDefaultModel() {
+            stubUsableProvider("deepseek", "DeepSeek");
+            when(modelQueryService.listAllRefs()).thenReturn(List.of(
+                    ref("deepseek", "disabled-model", false, true),
+                    ref("deepseek", "deepseek-v4-flash", true, false),
+                    ref("deepseek", "deepseek-v4-pro", true, true)));
+
+            assertThat(catalogService.listModelOptions())
+                    .extracting(LlmProviderCatalogService.ModelOption::modelName)
+                    .containsExactly("deepseek-v4-pro", "deepseek-v4-flash");
         }
     }
 }

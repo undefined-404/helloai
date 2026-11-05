@@ -1124,9 +1124,9 @@
               >
                 会话已{{ conversation.status === 'FINALIZED' ? '生成任务' : '放弃' }}，只读展示；点击「新会话」开始新的需求澄清。
               </div>
-              <!-- 页脚：内容由 AI 生成，仅供参考 -->
+              <!-- 页脚：与 Kimi / DeepSeek 网页版同口径，输入框正下方居中一行 -->
               <div class="chat-disclaimer">
-                内容由 AI 生成，仅供参考
+                内容由 AI 生成，请仔细甄别
               </div>
             </div>
           </div>

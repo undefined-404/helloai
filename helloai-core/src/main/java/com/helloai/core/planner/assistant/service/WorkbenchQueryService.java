@@ -1,5 +1,6 @@
 package com.helloai.core.planner.assistant.service;
 
+import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.planner.assistant.service.AssistantProfileService.AssistantSnapshot;
 import com.helloai.core.planner.assistant.service.MyArtifactsQueryService.ArtifactItem;
 
@@ -23,6 +24,14 @@ public interface WorkbenchQueryService {
 
     /** 最近任务展示条数。 */
     int RECENT_TASK_LIMIT = 8;
+
+    /**
+     * `PA-15`：助理上下文用的「最近任务与子任务」概览（纯文本，超预算截断）。
+     *
+     * <p>只做只读聚合：按 owner 取最近推进中的任务，逐条带出子任务标题/状态/验收摘要。
+     * 未登录或该开关关闭时返回空串（调用方据此不注入）。</p>
+     */
+    String recentWorkBrief(Long userId);
 
     /** 最近产物展示条数。 */
     int RECENT_ARTIFACT_LIMIT = 20;
@@ -53,10 +62,21 @@ public interface WorkbenchQueryService {
     record RecentTask(Long id, String title, String status, OffsetDateTime createTime) {
     }
 
-    /** 三段式工作台快照。 */
+    /**
+     * 三段式工作台快照。
+     *
+     * @param profile              助理身份
+     * @param taskOverview         任务概况
+     * @param activeAgents         可见的活跃 Agent（内部 LLM 恒可见 + 外部 Agent 心跳在线者）
+     * @param hiddenOfflineAgents  被隐藏的外部 Agent 条数（心跳离线 / 休眠）；
+     *                             单独给数是因为前端做「总数 - 可见数」会把内部 LLM 误算进来
+     * @param recentTasks          最近任务
+     * @param artifacts            最近产物
+     */
     record Workbench(AssistantSnapshot profile,
                      TaskOverview taskOverview,
                      List<ActiveAgent> activeAgents,
+                     int hiddenOfflineAgents,
                      List<RecentTask> recentTasks,
                      List<ArtifactItem> artifacts) {
     }
@@ -67,4 +87,19 @@ public interface WorkbenchQueryService {
      * @return 三段快照；未登录时列表均为空、概况全零，绝不返回 null
      */
     Workbench aggregate();
+
+    /**
+     * Composer「选模型」候选集：<b>已注册的纯 LLM 模型</b> + 有效性判定（2026-11-05）。
+     *
+     * <p>与「选 Planner」刻意分开：工作台用户选的是模型（无角色），
+     * 需求对话页选的是带角色的 Planner（模型由角色绑定）。候选集因此<b>不共用</b>——
+     * 前者来自 {@code llm_provider_model} 注册表，后者来自 agent 名册。</p>
+     *
+     * <p><b>本域不重算「有效」</b>：直接复用 agent 域
+     * {@code LlmProviderCatalogService#listModelOptions}（供应商可用性 + 模型启用位的唯一
+     * 判定落点，见判据「判断依据属于谁，判定就由谁做」），避免两处一致性口径分叉。</p>
+     *
+     * @return 候选列表（含失效项，前端灰显）；无注册模型时返回空列表，绝不返回 null
+     */
+    List<LlmProviderCatalogService.ModelOption> modelOptions();
 }

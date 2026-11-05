@@ -109,6 +109,31 @@ class AssistantSearchQueryPlannerTest {
     }
 
     @Test
+    @DisplayName("平台内数据类问题（子任务/进度）：规则短路，不调用决策 LLM、不联网")
+    void plan_internalDataQuestion_skipsWithoutLlm() {
+        AssistantSearchPlan plan = planner.plan(conversation,
+                "最近的子任务都在做些什么？再测些什么？", false);
+
+        assertThat(plan.skipSearch()).isTrue();
+        assertThat(plan.attachmentIntent()).isEqualTo(AssistantSearchQueryPlanner.INTERNAL_DATA);
+        assertThat(plan.priorityQuery()).isNull();
+        verifyNoInteractions(promptRenderService, platformAgentExecutionService, plannerAgentPicker);
+    }
+
+    @Test
+    @DisplayName("LLM 判定 need_search=false：跳过联网（平台内数据可回答）")
+    void plan_llmSaysNoSearch_skips() {
+        when(promptRenderService.renderDecisionPrompt(conversation, MESSAGE)).thenReturn("P");
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(decisionJson("none", null, false), "stop", "llm", 100));
+
+        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, false);
+
+        assertThat(plan.skipSearch()).isTrue();
+        assertThat(plan.priorityQuery()).isNull();
+    }
+
+    @Test
     @DisplayName("决策调用异常：降级为规则检索，不抛异常")
     void plan_llmFailure_degrades() {
         when(promptRenderService.renderDecisionPrompt(conversation, MESSAGE)).thenReturn("P");
@@ -136,11 +161,16 @@ class AssistantSearchQueryPlannerTest {
     }
 
     private static String decisionJson(String attachmentIntent, String query) {
+        return decisionJson(attachmentIntent, query, true);
+    }
+
+    private static String decisionJson(String attachmentIntent, String query, boolean needSearch) {
+        String queryJson = query == null ? "null" : "\"" + query + "\"";
         return "{\"intent\":\"chat\",\"intent_reason\":\"direct_answer\","
                 + "\"clarification_question\":null,"
                 + "\"attachment_intent\":\"" + attachmentIntent + "\","
                 + "\"attachment_targets\":[],"
-                + "\"web_search\":{\"need_search\":true,\"search_query\":\"" + query
-                + "\",\"reason\":\"时效性\"}}";
+                + "\"web_search\":{\"need_search\":" + needSearch + ",\"search_query\":" + queryJson
+                + ",\"reason\":\"时效性\"}}";
     }
 }

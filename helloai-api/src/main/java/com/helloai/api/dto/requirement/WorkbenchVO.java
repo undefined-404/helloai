@@ -19,6 +19,9 @@ import java.util.List;
 public record WorkbenchVO(AssistantProfileVO profile,
                           TaskOverviewVO taskOverview,
                           List<ActiveAgentVO> activeAgents,
+                          // 被隐藏的外部 Agent 条数（心跳离线）。前端据此提示「藏了几个」，
+                          // 不能用「名册总数 - 可见数」推导——名册里还混着常驻在线的内部 LLM。
+                          int hiddenOfflineAgents,
                           List<RecentTaskVO> recentTasks,
                           List<ArtifactItemVO> artifacts) {
 
@@ -51,6 +54,7 @@ public record WorkbenchVO(AssistantProfileVO profile,
                 toOverview(workbench.taskOverview()),
                 workbench.activeAgents() == null ? List.of()
                         : workbench.activeAgents().stream().map(WorkbenchVO::toAgent).toList(),
+                workbench.hiddenOfflineAgents(),
                 workbench.recentTasks() == null ? List.of()
                         : workbench.recentTasks().stream().map(WorkbenchVO::toRecentTask).toList(),
                 ArtifactItemVO.fromList(workbench.artifacts()));

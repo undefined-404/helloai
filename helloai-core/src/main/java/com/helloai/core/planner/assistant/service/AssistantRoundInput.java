@@ -14,21 +14,24 @@ import java.util.List;
  *   <li>{@code skill} — 本轮选中的技能：{@code planner}（方案整理）/ {@code task}（直接拆解）/
  *       {@code pkg:<技能包名>}（产出型技能包）；</li>
  *   <li>{@code attachmentIds} — 本轮参与的附件 id（空 = 会话内全部附件参与）；</li>
- *   <li>{@code clientToken} — 新会话首句前上传附件的临时归属（仅新建会话生效，建会后按 token 认领）。</li>
+ *   <li>{@code clientToken} — 新会话首句前上传附件的临时归属（仅新建会话生效，建会后按 token 认领）；</li>
+ *   <li>{@code modelType} — 本轮钉住的 LLM 模型（{@code provider:model}；2026-11-05 追加末位）。</li>
  * </ul>
  *
  * @param webSearchEnabled 联网搜索开关（null=不覆盖会话既有值）
  * @param skill            本轮技能标识（null=本轮不加技能约束）
  * @param attachmentIds    本轮参与的附件 id（null/空=全部）
  * @param clientToken      新会话附件临时归属 token（仅新建会话生效）
+ * @param modelType        钉住的 LLM 模型（null=不覆盖会话既有值）
  */
 public record AssistantRoundInput(Boolean webSearchEnabled,
                                    String skill,
                                    List<Long> attachmentIds,
-                                   String clientToken) {
+                                   String clientToken,
+                                   String modelType) {
 
     /** 空入参（等价于「什么都不额外指定」）。 */
     public static AssistantRoundInput empty() {
-        return new AssistantRoundInput(null, null, null, null);
+        return new AssistantRoundInput(null, null, null, null, null);
     }
 }

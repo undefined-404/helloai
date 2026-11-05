@@ -12,13 +12,13 @@
               <span class="wb-topbar-name-text">{{ profile.name }}</span>
               <span v-if="currentTitle" class="wb-topbar-conv-chip">{{ currentTitle }}</span>
             </div>
-            <div class="wb-topbar-sub">{{ profile.identity }} · {{ agentLabel }}</div>
+            <div class="wb-topbar-sub">{{ profile.identity }} · {{ modelLabel }}</div>
           </div>
         </div>
         <div class="wb-topbar-ops">
-          <span class="wb-model-chip" :title="`当前助手：${agentLabel}`">
+          <span class="wb-model-chip" :title="modelChipTitle">
             <span class="wb-model-dot" />
-            <span>{{ agentLabel }}</span>
+            <span>{{ modelLabel }}</span>
           </span>
           <el-dropdown trigger="click" @command="onHistoryCommand">
             <button class="wb-icon-btn" type="button" title="历史对话">
@@ -89,7 +89,7 @@
 
         <div v-else class="wb-thread">
           <article
-            v-for="row in renderMessages"
+            v-for="(row, ri) in renderMessages"
             :key="String(row.msg.id)"
             class="wb-msg"
             :class="row.msg.role === 'user' ? 'is-user' : 'is-assistant'"
@@ -144,6 +144,16 @@
                 </button>
                 <button class="wb-act" type="button" @click="toTask(row.msg)">
                   <el-icon><Tickets /></el-icon>转为任务
+                </button>
+                <button
+                  v-if="ri === renderMessages.length - 1 && !sending"
+                  v-auth="'conversation:regenerate'"
+                  class="wb-act"
+                  type="button"
+                  title="重新生成最后一条回复"
+                  @click="regenerateLast"
+                >
+                  <el-icon><Refresh /></el-icon>重新生成
                 </button>
               </div>
             </div>
@@ -324,27 +334,87 @@
                 />
               </div>
 
-              <!-- 规划者 / 调度策略 -->
-              <el-dropdown trigger="click" @command="onPlannerCommand">
-                <button class="wb-tool-btn" type="button">
-                  <el-icon><User /></el-icon>
-                  <span>{{ plannerLabel }}</span>
-                  <el-icon class="wb-caret"><ArrowDown /></el-icon>
-                </button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="auto">优先空闲 Agent（系统自动）</el-dropdown-item>
-                    <el-dropdown-item
-                      v-for="o in plannerOptions"
-                      :key="String(o.id)"
-                      :command="String(o.id)"
-                      :disabled="!o.selectable"
-                    >
-                      {{ plannerOptionLabel(o) }}
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
+              <!--
+                选模型（2026-11-05 设计稿）：工作台选的是**无角色**的纯 LLM 模型。
+                带角色的 Planner 在需求对话页选——两套候选集来源不同，不共用下拉。
+                面板结构按设计稿：标题+可用数 / 规则说明 / 两行式条目 / 底部维护指引。
+              -->
+              <el-popover
+                v-model:visible="modelPanelVisible"
+                placement="top-start"
+                :width="320"
+                :offset="8"
+                :show-arrow="false"
+                trigger="click"
+                popper-class="wb-model-popper"
+              >
+                <template #reference>
+                  <button class="wb-tool-btn" type="button" :title="modelChipTitle">
+                    <el-icon><MagicStick /></el-icon>
+                    <span>{{ modelLabel }}</span>
+                    <span class="wb-tool-tag">LLM</span>
+                    <el-icon class="wb-caret"><ArrowDown /></el-icon>
+                  </button>
                 </template>
-              </el-dropdown>
+
+                <div class="wb-mp">
+                  <div class="wb-mp-head">
+                    <span class="wb-mp-title">LLM 模型</span>
+                    <span class="wb-mp-count">{{ modelOptions.length }} 个可用</span>
+                  </div>
+                  <p class="wb-mp-note">
+                    只列出「已注册 且 有效」的纯 LLM 模型；不含角色型 Planner，也不含外部 Agent。
+                  </p>
+                  <div class="wb-mp-list">
+                    <!--
+                      只有「会话尚未钉住模型」时才给「跟随助理 Agent」项：服务端把空值定义为
+                      「本轮不改」而非「取消钉住」，所以已钉住的会话点它会毫无效果——
+                      留一个点了没反应的项，比不给更糟。
+                    -->
+                    <button
+                      v-if="!hasPinnedModel"
+                      type="button"
+                      class="wb-mp-item"
+                      :class="{ 'is-active': !currentModelType }"
+                      @click="onModelCommand(AUTO_MODEL)"
+                    >
+                      <span class="wb-mp-mark">
+                        <el-icon v-if="!currentModelType"><Check /></el-icon>
+                        <span v-else class="wb-mp-dot" />
+                      </span>
+                      <span class="wb-mp-meta">
+                        <span class="wb-mp-name">跟随助理 Agent</span>
+                        <span class="wb-mp-desc">未指定时由助理绑定的模型回答</span>
+                      </span>
+                      <span v-if="!currentModelType" class="wb-mp-badge">已选</span>
+                    </button>
+                    <button
+                      v-for="m in modelOptions"
+                      :key="m.modelType"
+                      type="button"
+                      class="wb-mp-item"
+                      :class="{ 'is-active': m.modelType === currentModelType }"
+                      @click="onModelCommand(m.modelType)"
+                    >
+                      <span class="wb-mp-mark">
+                        <el-icon v-if="m.modelType === currentModelType"><Check /></el-icon>
+                        <span v-else class="wb-mp-dot" />
+                      </span>
+                      <span class="wb-mp-meta">
+                        <span class="wb-mp-name">{{ m.modelName }}</span>
+                        <span class="wb-mp-desc">{{ modelDesc(m) }}</span>
+                      </span>
+                      <span v-if="m.modelType === currentModelType" class="wb-mp-badge">已选</span>
+                    </button>
+                    <div v-if="!modelOptions.length" class="wb-mp-empty">
+                      暂无可用模型，请到「系统设置 › 模型注册」检查供应商密钥
+                    </div>
+                  </div>
+                  <div class="wb-mp-foot">
+                    模型与密钥在「系统设置 › 模型注册」维护，禁用/失效即从列表移除
+                  </div>
+                </div>
+              </el-popover>
             </div>
 
             <div class="wb-toolbar-right">
@@ -462,6 +532,8 @@
             </div>
           </div>
         </div>
+        <!-- 页脚：与 Kimi / DeepSeek 网页版同口径，输入框正下方居中一行 -->
+        <p class="wb-disclaimer">内容由 AI 生成，请仔细甄别</p>
       </div>
     </section>
 
@@ -473,7 +545,7 @@
           <span>工作台</span>
           <span class="wb-scope-chip">个人</span>
         </div>
-        <div class="wb-panel-ops">
+<!--        <div class="wb-panel-ops">
           <button class="wb-icon-btn" type="button" title="刷新" @click="refreshAll">
             <el-icon><Refresh /></el-icon>
           </button>
@@ -489,7 +561,7 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-        </div>
+        </div>-->
       </header>
 
       <div class="wb-panel-body">
@@ -500,7 +572,7 @@
               <span class="wb-status-avatar"><el-icon><MagicStick /></el-icon></span>
               <div class="wb-status-text">
                 <div class="wb-status-name">{{ profile.name }}</div>
-                <div class="wb-status-model">{{ agentLabel }}</div>
+                <div class="wb-status-model">{{ modelLabel }}</div>
               </div>
             </div>
             <span class="wb-ready-pill">
@@ -541,11 +613,18 @@
           </div>
         </section>
 
-        <!-- 活跃 Agent -->
+        <!-- 活跃 Agent（内部 LLM 常驻在线 + 外部 Agent 心跳在线者） -->
         <section class="wb-section wb-section--agents">
           <div class="wb-section-head">
-            <h3 class="wb-section-title">活跃 Agent</h3>
+            <h3 class="wb-section-title" :title="AGENT_ROSTER_RULE">活跃 Agent</h3>
             <span class="wb-section-count">{{ activeAgents.length }}</span>
+            <!--
+              隐藏条数必须显式展示：直接藏掉离线的外部 Agent 会让用户以为「这台不在平台上」，
+              而不是「它离线了」（判据「不静默失败」）。
+            -->
+            <span v-if="hiddenOfflineAgents > 0" class="wb-section-note" :title="hiddenAgentHint">
+              隐藏 {{ hiddenOfflineAgents }}
+            </span>
             <span class="wb-section-link" @click="router.push('/agents')">管理</span>
           </div>
           <div v-if="!activeAgents.length" class="wb-empty">暂无可用 Agent</div>
@@ -629,7 +708,7 @@ import {
 import MarkdownView from '@/components/MarkdownView.vue'
 import WebSearchBar from '@/views/requirement/WebSearchBar.vue'
 import { clarifyApi } from '@/api/clarify'
-import { streamAssistantCreate, streamAssistantSend, type ChatStreamHandlers } from '@/api/chatStream'
+import { streamAssistantCreate, streamAssistantSend, streamAssistantRegenerate, type ChatStreamHandlers } from '@/api/chatStream'
 import { skillApi, type ChatSkillOption } from '@/api/skill'
 import { quotaApi, type QuotaSnapshot } from '@/api/quota'
 import { promptEnhanceApi } from '@/api/promptEnhance'
@@ -639,7 +718,7 @@ import { saveBlobResponse } from '@/utils/download'
 import { fmtTime, splitDateTime } from '@/utils/tableConfig'
 import type {
   ArtifactItem, ChatAttachmentItem, ClarifyAssistantPayload, ClarifyConversationDetail,
-  ContextUsage, LongId, PlannerOption, RequirementConversation, RequirementMessage,
+  ContextUsage, LlmModelOption, LongId, RequirementConversation, RequirementMessage,
   RoundProcessTrace, WebSearchTrace, Workbench, WorkbenchActiveAgent
 } from '@/types'
 
@@ -647,6 +726,10 @@ const router = useRouter()
 const auth = useAuthStore()
 
 // ── 静态文案与快捷入口 ──
+/** 模型下拉的「自动」哨兵值：选中它 = 不钉模型，沿用助理 Agent 绑定的模型。 */
+const AUTO_MODEL = '__auto__'
+/** 活跃 Agent 的可见性规则说明（悬停可见；右栏高度固定，规则做提示而非正文）。 */
+const AGENT_ROSTER_RULE = '内部 LLM 常驻在线；外部 Agent 需心跳在线才计入'
 const SUGGESTIONS = [
   { title: '整理成方案', desc: '把讨论沉淀为方案', icon: Document, prompt: '帮我把刚才讨论的内容整理成一份可落地的方案，包含目标、步骤与验收标准。' },
   { title: '拆解任务', desc: '自动拆解可执行子任务', icon: Tickets, prompt: '请把这件事拆解成可执行的子任务清单，每个子任务标明负责角色与产出物。' },
@@ -895,8 +978,35 @@ const workbench = ref<Workbench | null>(null)
 const detail = ref<ClarifyConversationDetail | null>(null)
 const activeId = ref<LongId | null>(null)
 const conversations = ref<RequirementConversation[]>([])
-const plannerOptions = ref<PlannerOption[]>([])
-const selectedPlannerId = ref<LongId | null>(null)
+/**
+ * Composer「选模型」候选（当前**可用**的纯 LLM 模型）。
+ *
+ * <p>与 Planner 下拉是两套候选集：工作台选**无角色**模型，需求对话页选**带角色** Planner。
+ * 不可用的（无 API Key / 供应商已下架 / 模型停用）由服务端滤掉、不下发——列表底部
+ * 的维护指引统一回答「为什么少了某个模型」。</p>
+ */
+const modelOptions = ref<LlmModelOption[]>([])
+/** 模型面板展开态（自定义面板内容，需手动关闭）。 */
+const modelPanelVisible = ref(false)
+/** 本轮选中的模型（`provider:model`）；null / AUTO_MODEL = 跟随助理 Agent 绑定模型。 */
+const selectedModelType = ref<string | null>(null)
+
+// ── 用户偏好（跨刷新/重登保留）──
+// 上次所在会话 + 上次手选模型：只影响「新会话」的初始值；已有会话仍以会话钉住的模型为准，
+// 避免把 A 会话的选择带到 B 会话（该口径见 selectConversation 的注释）。
+const LAST_CONVERSATION_KEY = 'helloai.workbench.lastConversationId'
+const LAST_MODEL_KEY = 'helloai.workbench.lastModelType'
+function readPref(key: string): string | null {
+  try { return localStorage.getItem(key) } catch { return null }
+}
+function writePref(key: string, value: string | null) {
+  try {
+    if (value) localStorage.setItem(key, value)
+    else localStorage.removeItem(key)
+  } catch { /* 隐私模式 / 存储被禁：忽略，退回不记忆 */ }
+}
+/** 上次手选模型（已做可用性校验）；null = 跟随助理 Agent 绑定模型。 */
+const preferredModelType = ref<string | null>(readPref(LAST_MODEL_KEY))
 const contextUsage = ref<ContextUsage | null>(null)
 const quota = ref<QuotaSnapshot[]>([])
 
@@ -996,6 +1106,10 @@ const taskOverview = computed(() => workbench.value?.taskOverview ?? {
   pendingManual: 0
 })
 const activeAgents = computed(() => workbench.value?.activeAgents ?? [])
+/** 被隐藏的外部 Agent 条数（心跳离线，不进候选；内部 LLM 常驻在线不计入）。 */
+const hiddenOfflineAgents = computed(() => workbench.value?.hiddenOfflineAgents ?? 0)
+const hiddenAgentHint = computed(() =>
+  `已隐藏 ${hiddenOfflineAgents.value} 个外部 Agent：心跳离线，不进候选`)
 const recentTasks = computed(() => workbench.value?.recentTasks ?? [])
 const artifacts = computed(() => workbench.value?.artifacts ?? [])
 
@@ -1032,26 +1146,36 @@ const balanceText = computed(() => {
 /** 助理状态徽标：空闲「已就绪」，一轮对话在跑时「进行中」。 */
 const assistantReadyText = computed(() => sending.value ? '进行中' : '已就绪')
 
-/** 空闲 Agent 数（未在跑、未在审）：设计稿的「N 台可用」。 */
-const idleAgentCount = computed(() =>
-  activeAgents.value.filter(a => a.status !== 'RUNNING' && a.status !== 'REVIEWING').length)
+/**
+ * 当前生效的模型标识（`provider:model`）。
+ *
+ * <p>优先级：本轮手选 > 会话已钉住的模型 > null（沿用助理 Agent 绑定模型）。
+ * 换会话时清掉手选值，避免把 A 会话选的模型带到 B 会话——那会让「chip 显示 X、
+ * 实际用 Y 回答」成为可能。</p>
+ */
+const currentModelType = computed<string | null>(() =>
+  selectedModelType.value ?? detail.value?.conversation?.modelType ?? null)
 
-const plannerLabel = computed(() => {
-  if (selectedPlannerId.value == null) return `优先空闲 Agent（${idleAgentCount.value} 台可用）`
-  const opt = plannerOptions.value.find(o => String(o.id) === String(selectedPlannerId.value))
-  return opt ? opt.name : '规划者'
+/** chip 文案：命中候选集用模型名，未命中（已下线的历史模型）退回标识尾部。 */
+const modelLabel = computed(() => {
+  const type = currentModelType.value
+  if (!type) return profile.value.model
+  const hit = modelOptions.value.find(m => m.modelType === type)
+  if (hit) return hit.modelName
+  return type.includes(':') ? type.slice(type.indexOf(':') + 1) : type
 })
 
 /**
- * 头部/状态卡展示的 Agent：当前会话绑定的 Planner 优先（历史会话），
- * 新会话回落到输入区选中的 Planner；都没有时才用助理身份默认模型。
+ * chip 悬停说明。未钉模型时 chip 显示助理身份的默认模型（`assistant_profile.model`），
+ * 而**实际执行模型由派中的 Planner Agent 决定**——两者当前取值一致（默认 Planner 即绑
+ * deepseek-v4-flash），故提示语只讲「默认」，不承诺「本轮一定用它」。
  */
-const agentLabel = computed(() => {
-  const plannerId = detail.value?.conversation?.plannerAgentId ?? selectedPlannerId.value
-  if (plannerId == null) return profile.value.model
-  const opt = plannerOptions.value.find(o => String(o.id) === String(plannerId))
-  return opt ? opt.name : profile.value.model
-})
+const modelChipTitle = computed(() => currentModelType.value
+  ? `本轮模型：${currentModelType.value}（点击切换）`
+  : `默认模型：${profile.value.model}（点击切换）`)
+
+/** 当前会话是否已钉住模型（决定下拉里是否还有「自动」项，见模板注释）。 */
+const hasPinnedModel = computed(() => !!detail.value?.conversation?.modelType)
 
 /** 上下文占用百分比（0-100），用于输入区上下文按钮与其浮层。 */
 const contextRatioPct = computed(() => {
@@ -1079,9 +1203,21 @@ async function loadQuota() {
   } catch { /* 拦截器已弹错 */ }
 }
 
-async function loadPlannerOptions() {
+/**
+ * 拉取「选模型」候选（已注册的纯 LLM 模型）。
+ *
+ * <p>与 Planner 候选分开拉：工作台选模型、需求对话页选 Planner。接口失败静默降级为
+ * 空列表——此时下拉只剩「自动」，用户仍可用助理 Agent 绑定的模型，不阻塞对话。</p>
+ */
+async function loadModelOptions() {
   try {
-    plannerOptions.value = await clarifyApi.plannerOptions()
+    modelOptions.value = await clarifyApi.llmModelOptions()
+    // 上次手选的模型可能已停用/下架：清掉记忆，避免 chip 显示一个无法调用的模型
+    if (preferredModelType.value && !modelOptions.value.some(m => m.modelType === preferredModelType.value)) {
+      preferredModelType.value = null
+      writePref(LAST_MODEL_KEY, null)
+      if (selectedModelType.value != null) selectedModelType.value = null
+    }
   } catch { /* 拦截器已弹错 */ }
 }
 
@@ -1089,24 +1225,39 @@ async function loadConversations() {
   try {
     conversations.value = await clarifyApi.list('ASSISTANT')
   } catch { /* 拦截器已弹错 */ }
-  if (activeId.value != null || !conversations.value.length) return
+  if (activeId.value != null) return
+  if (!conversations.value.length) {
+    // 没有任何会话：chip 沿用上次手选模型（无记录即跟随助理 Agent）
+    selectedModelType.value = preferredModelType.value
+    return
+  }
+  // 优先回到「上次所在的会话」；它已不存在（被删）时回落最新，并清掉过期指针
+  const remembered = readPref(LAST_CONVERSATION_KEY)
+  const rememberedHit = remembered == null ? undefined
+    : conversations.value.find(c => String(c.id) === remembered)
   const latest = [...conversations.value].sort((a, b) => {
     const ta = a.createTime ? Date.parse(a.createTime) : 0
     const tb = b.createTime ? Date.parse(b.createTime) : 0
     return tb - ta
   })[0]
-  if (latest) void selectConversation(latest.id)
+  const target = rememberedHit ?? latest
+  if (!rememberedHit && remembered != null) writePref(LAST_CONVERSATION_KEY, null)
+  if (target) void selectConversation(target.id)
 }
 
 async function selectConversation(id: LongId) {
   // 切走前中断在跑的流（后端未完成回复不落库；收尾读到新会话时不会覆盖详情）
   chatStreamAbort?.abort()
   activeId.value = id
+  writePref(LAST_CONVERSATION_KEY, String(id))
   contextUsage.value = null
   try {
     detail.value = await clarifyApi.detail(id)
     // 会话级状态回填：联网搜索开关取会话原值；技能胶囊按会话重置
     webSearchEnabled.value = detail.value.conversation?.webSearchEnabled === true
+    // 模型是会话级钉住值：切会话即清掉【本轮手选】，回落到该会话自己的 modelType。
+    // 不清会把 A 会话选的模型带到 B 会话，出现「chip 显示 X、实际用 Y 回答」。
+    selectedModelType.value = null
     activeSkill.value = null
     clientToken.value = null
     await scrollToBottom()
@@ -1124,6 +1275,9 @@ function startNew() {
   // 联网搜索是会话级开关：新会话无历史值，回到默认关闭（与设计稿、与后端
   // assistantCreate 的默认值一致），避免沿用上个会话的开关造成语义漂移
   webSearchEnabled.value = false
+  // 新会话没有已钉模型：回到「上次手选模型」（无记录则跟随助理 Agent 绑定模型）
+  writePref(LAST_CONVERSATION_KEY, null)
+  selectedModelType.value = preferredModelType.value
   activeSkill.value = null
   attachments.value = []
   clientToken.value = null
@@ -1152,6 +1306,9 @@ async function send() {
   const webSearch = webSearchEnabled.value
   const skill = activeSkill.value
   const attachmentIds = effectiveAttachmentIds()
+  // 本轮钉住的模型：只有【用户显式选过】才下发。传 null = 由服务端沿用会话已钉模型
+  // 或助理 Agent 绑定模型——两者口径不同，不能在前端把 null 折成"默认值"再发。
+  const modelType = selectedModelType.value
   sending.value = true
   input.value = ''
   resetStreamState()
@@ -1165,6 +1322,7 @@ async function send() {
     onSession: (id) => {
       // 新会话首帧：确定会话 id，后续停止/收尾都落到它；附件批次已被后端认领
       activeId.value = id
+      writePref(LAST_CONVERSATION_KEY, String(id))
       settlingConversationId = id
       clientToken.value = null
     },
@@ -1181,11 +1339,46 @@ async function send() {
   try {
     if (existing != null) {
       await streamAssistantSend(existing, text, webSearch, skill,
-        handlers, abort.signal, attachmentIds)
+        handlers, abort.signal, attachmentIds, modelType)
     } else {
-      await streamAssistantCreate(text, selectedPlannerId.value, webSearch, skill,
-        handlers, abort.signal, clientToken.value, attachmentIds)
+      // 工作台不选 Planner（那是需求对话页的职责），plannerAgentId 一律 null = 系统自动挑助理
+      await streamAssistantCreate(text, null, webSearch, skill,
+        handlers, abort.signal, clientToken.value, attachmentIds, modelType)
     }
+  } finally {
+    await settleTask
+    chatStreamAbort = null
+    cleanupStreamTimers()
+    sending.value = false
+  }
+}
+
+/**
+ * 重新生成最后一条助手回复（`PA-16`）：不新增 user 消息，后端替换原回复；
+ * 前端复用同一套流式帧与收尾逻辑（done 后重拉详情，旧回复已被逻辑删除）。
+ */
+async function regenerateLast() {
+  const id = activeId.value
+  if (id == null || sending.value) return
+  sending.value = true
+  resetStreamState()
+  settlingConversationId = String(id)
+  const abort = new AbortController()
+  chatStreamAbort = abort
+  let settleTask: Promise<void> = Promise.resolve()
+  const handlers: ChatStreamHandlers = {
+    onToken: (token) => appendStreamToken(token),
+    onReasoning: (text) => appendStreamReasoning(text),
+    onProgress: (text) => appendProcessStep(text),
+    onDone: () => { settleTask = settleStream(true) },
+    onError: (message) => {
+      ElMessage.error(message)
+      settleTask = settleStream(false)
+    },
+    onAbort: () => { settleTask = settleStream(false) }
+  }
+  try {
+    await streamAssistantRegenerate(id, webSearchEnabled.value, handlers, abort.signal)
   } finally {
     await settleTask
     chatStreamAbort = null
@@ -1338,19 +1531,23 @@ async function toTask(m: RequirementMessage) {
 }
 
 // ── 工具栏 ──
-function onPlannerCommand(cmd: string) {
-  if (cmd === 'auto') {
-    selectedPlannerId.value = null
-    return
-  }
-  selectedPlannerId.value = cmd
+/**
+ * 模型面板选中：`AUTO_MODEL` 清空手选（跟随助理 Agent 绑定模型），否则钉住该模型。
+ *
+ * <p>只改本地态，不立即落库：真正的「钉住」由下一轮请求带 modelType 触发，
+ * 服务端在那一轮把它写到会话上。这样「选了但没发」不会产生一条无意义的会话变更。</p>
+ */
+function onModelCommand(cmd: string) {
+  selectedModelType.value = cmd === AUTO_MODEL ? null : cmd
+  // 记住本次手选：下次新会话 / F5 后沿用它；AUTO_MODEL 表示回到「跟随助理 Agent」，清掉记录
+  preferredModelType.value = selectedModelType.value
+  writePref(LAST_MODEL_KEY, preferredModelType.value)
+  modelPanelVisible.value = false
 }
 
-function plannerOptionLabel(opt: PlannerOption) {
-  const model = opt.accessType === 'API_KEY_LLM' ? (opt.modelType || '平台内') : '外部 Agent'
-  return opt.selectable
-    ? `${opt.name}（${model}）`
-    : `${opt.name}（${model}·${opt.disabledReason || '不可选'}）`
+/** 面板条目的第二行：供应商 · 状态。状态位取「已启用」，供应商默认模型额外标注。 */
+function modelDesc(opt: LlmModelOption) {
+  return `${opt.providerName} · 已启用${opt.defaultModel ? ' · 默认' : ''}`
 }
 
 async function optimizeInput() {
@@ -1578,7 +1775,7 @@ function startStream() {
 onMounted(() => {
   void loadWorkbench()
   void loadQuota()
-  void loadPlannerOptions()
+  void loadModelOptions()
   void loadConversations()
   startStream()
 })
@@ -1618,6 +1815,9 @@ onBeforeUnmount(() => {
   --wb-dot-sky: #0EA5E9;
   --wb-dot-red: #EF4444;
   --wb-dot-gray: #94A3B8;
+  /* 主内容列宽：设计稿只定了 1440 基准（消息列表 744 + 左右 36 内边距 = 816），
+     大屏由文件末尾「大屏列宽」媒体查询逐档放宽，避免 1920 下单侧留白 249px。 */
+  --wb-col: 816px;
 
   display: flex;
   align-items: stretch;
@@ -1856,7 +2056,7 @@ html.dark .wb-page {
 /* ── 对话态（设计稿：消息列表 744 宽 + 区域左右 36 内边距 + 条目间距 20） ── */
 .wb-thread {
   width: 100%;
-  max-width: 816px;
+  max-width: var(--wb-col);
   margin: 0 auto;
   padding: 28px 36px;
   display: flex;
@@ -2006,11 +2206,12 @@ html.dark .wb-page {
   padding-left: 10px;
 }
 
-/* ── 输入区（设计稿：输入区宽 872、左右 36 内边距、底部 12） ── */
+/* ── 输入区（设计稿：输入区宽 872、左右 36 内边距、底部 12）
+      872 由列宽派生（+56），保证输入框比消息区两侧各宽 28，任意档位都成立 ── */
 .wb-composer-wrap {
   flex-shrink: 0;
   width: 100%;
-  max-width: 872px;
+  max-width: calc(var(--wb-col) + 56px);
   margin: 0 auto;
   padding: 0 36px 12px;
 }
@@ -2020,6 +2221,14 @@ html.dark .wb-page {
   background: var(--wb-main-bg);
   box-shadow: var(--wb-shadow-input);
   padding: 14px 16px 12px;
+}
+/* 免责声明：输入框正下方居中一行，弱化成最浅一档墨色，不与工具栏抢视线 */
+.wb-disclaimer {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--wb-ink-faint);
 }
 .wb-input :deep(.el-textarea__inner) {
   box-shadow: none;
@@ -2082,6 +2291,16 @@ html.dark .wb-page {
 .wb-tool-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* 模型 chip 的「LLM」小标（设计稿：区分"模型"与"带角色的 Planner"，一眼看出这里选的是无角色模型） */
+.wb-tool-tag {
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9px;
+  line-height: 14px;
+  letter-spacing: 0.04em;
+  color: var(--wb-primary);
+  background: rgba(124, 92, 252, 0.12);
 }
 /* 置顶态：紫色描边 + 紫色图标 */
 .wb-tool-btn.is-on {
@@ -2160,8 +2379,8 @@ html.dark .wb-page {
   font-size: 11px;
 }
 .wb-send-btn {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border: none;
   border-radius: 10px;
   background: var(--wb-primary);
@@ -2316,6 +2535,176 @@ html.dark .wb-page {
 }
 
 /* ── 上下文浮层（popover 挂在 body 上，须走 :global 并补一份本页令牌）── */
+/* ── 模型选择面板（2026-11-05 设计稿）
+   popover 被 teleport 到 body，scoped 选择器与 --wb-* 都不继承，
+   故用 :global 并把本面板用到的配色令牌就地重声明。 ── */
+:global(.wb-model-popper) {
+  --wb-ink: #2B2836;
+  --wb-ink-strong: #1F1D2B;
+  --wb-ink-sub: #8A8798;
+  --wb-ink-faint: #B0ADBE;
+  --wb-primary: #7C5CFC;
+  --wb-primary-text: #6D4AFF;
+  --wb-tint: #F5F2FF;
+  --wb-divider: #ECEBF3;
+  --wb-card-border: #EEEDF4;
+  --wb-panel-bg: #FFFFFF;
+
+  padding: 0 !important;
+  border: 1px solid var(--wb-card-border) !important;
+  border-radius: 14px !important;
+  background: var(--wb-panel-bg) !important;
+  box-shadow: 0 12px 32px rgba(31, 29, 43, 0.14) !important;
+  overflow: hidden;
+}
+
+:global(html.dark .wb-model-popper) {
+  --wb-ink: #EEF2F8;
+  --wb-ink-strong: #F5F7FB;
+  --wb-ink-sub: #A9B4C7;
+  --wb-ink-faint: #6C7A94;
+  --wb-primary: #8B6BFF;
+  --wb-primary-text: #A78BFF;
+  --wb-tint: rgba(124, 92, 252, 0.16);
+  --wb-divider: #1C2438;
+  --wb-card-border: #242D47;
+  --wb-panel-bg: #161D2E;
+
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45) !important;
+}
+
+:global(.wb-mp) {
+  display: flex;
+  flex-direction: column;
+}
+
+:global(.wb-mp-head) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 13px 14px 8px;
+}
+
+:global(.wb-mp-title) {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wb-ink-strong);
+}
+
+:global(.wb-mp-count) {
+  font-size: 11.5px;
+  color: var(--wb-ink-sub);
+}
+
+:global(.wb-mp-note) {
+  margin: 0;
+  padding: 0 14px 10px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--wb-ink-sub);
+}
+
+:global(.wb-mp-list) {
+  max-height: 264px;
+  overflow-y: auto;
+  padding: 4px 6px 6px;
+  border-top: 1px solid var(--wb-divider);
+}
+
+:global(.wb-mp-item) {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  margin: 0;
+  padding: 8px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+:global(.wb-mp-item:hover),
+:global(.wb-mp-item.is-active) {
+  background: var(--wb-tint);
+}
+
+:global(.wb-mp-mark) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  font-size: 13px;
+  color: var(--wb-primary-text);
+}
+
+:global(.wb-mp-dot) {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wb-ink-faint);
+}
+
+:global(.wb-mp-meta) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+:global(.wb-mp-name) {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--wb-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.wb-mp-item.is-active .wb-mp-name) {
+  font-weight: 600;
+  color: var(--wb-primary-text);
+}
+
+:global(.wb-mp-desc) {
+  font-size: 11px;
+  color: var(--wb-ink-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.wb-mp-badge) {
+  flex: none;
+  padding: 3px 6px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  line-height: 1;
+  color: var(--wb-primary-text);
+  background: var(--wb-tint);
+}
+
+:global(.wb-mp-empty) {
+  padding: 14px 8px;
+  font-size: 11.5px;
+  text-align: center;
+  color: var(--wb-ink-sub);
+}
+
+:global(.wb-mp-foot) {
+  padding: 9px 14px;
+  border-top: 1px solid var(--wb-divider);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--wb-ink-faint);
+}
+
 :global(.wb-ctx-popover) {
   --wb-ink: #2B2836;
   --wb-ink-sub: #8A8798;
@@ -2644,6 +3033,13 @@ html.dark .wb-page {
   align-items: center;
   justify-content: center;
 }
+/* 被隐藏条数的弱化提示（活跃 Agent 区块）：显式说明「藏了 N 个」而不是静默隐藏 */
+.wb-section-note {
+  font-size: 10px;
+  color: var(--wb-ink-faint);
+  white-space: nowrap;
+  cursor: help;
+}
 .wb-section-link {
   margin-left: auto;
   font-size: 11px;
@@ -2924,6 +3320,20 @@ html.dark .wb-page {
   .wb-task-item:nth-child(n+3) {
     display: none;
   }
+}
+
+/* ── 大屏列宽：设计稿只覆盖 1440 基准（816），以下三档为向大屏的扩展。
+      收敛依据是「单行汉字数」（14px 字号，内容区 = 列宽 - 72）：
+      816→744 约 53 字/行，900→828 约 59，1000→928 约 66（常读上限）。
+      2160 以上超宽屏给 1080（约 72 字/行），属刻意的放宽档，再宽也不继续加。 ── */
+@media (min-width: 1560px) {
+  .wb-page { --wb-col: 900px; }
+}
+@media (min-width: 1800px) {
+  .wb-page { --wb-col: 1000px; }
+}
+@media (min-width: 2160px) {
+  .wb-page { --wb-col: 1080px; }
 }
 
 /* ── 窄屏：右栏落到下方，避免挤压对话区 ── */

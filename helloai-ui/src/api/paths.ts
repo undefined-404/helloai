@@ -220,11 +220,15 @@ export const paths = {
     assistantStreamCreate: '/requirement-conversations/assistant/streamCreate',
     assistantStreamSend: (id: string | number) =>
       `/requirement-conversations/assistant/streamSend/${enc(id)}`,
+    assistantStreamRegenerate: (id: string | number) =>
+      `/requirement-conversations/assistant/streamRegenerate/${enc(id)}`,
     assistantCreateTaskFromContext: (id: string | number) => `/requirement-conversations/assistant/createTaskFromContextById/${enc(id)}`,
     // PA-12：上下文窗口占用 / 手动压缩
     contextWindow: (id: string | number) => `/requirement-conversations/contextWindowById/${enc(id)}`,
     compact: (id: string | number) => `/requirement-conversations/compactById/${enc(id)}`,
     plannerOptions: '/requirement-conversations/listPlannerOptions',
+    // 工作台 Composer「选模型」候选：已注册的纯 LLM 模型（无角色），与 listPlannerOptions 是两套候选集
+    listLlmModelOptions: '/requirement-conversations/listLlmModelOptions',
     list: '/requirement-conversations',
     detail: (id: string | number) => `/requirement-conversations/getById/${enc(id)}`,
     finalize: (id: string | number) => `/requirement-conversations/finalizeById/${enc(id)}`,

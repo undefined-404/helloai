@@ -98,7 +98,9 @@ export async function streamAssistantCreate(
   handlers: ChatStreamHandlers,
   signal?: AbortSignal,
   clientToken?: string | null,
-  attachmentIds?: (string | number)[] | null
+  attachmentIds?: (string | number)[] | null,
+  /** 本轮钉住的模型（`provider:model`）；null = 沿用 Planner Agent 绑定模型 */
+  modelType?: string | null
 ): Promise<void> {
   return consumeSse(
     `/api${paths.clarifications.assistantStreamCreate}`,
@@ -108,7 +110,8 @@ export async function streamAssistantCreate(
       webSearchEnabled,
       skill: skill ?? null,
       clientToken: clientToken ?? null,
-      attachmentIds: attachmentIds?.length ? attachmentIds : null
+      attachmentIds: attachmentIds?.length ? attachmentIds : null,
+      modelType: modelType ?? null
     },
     handlers,
     signal
@@ -123,7 +126,9 @@ export async function streamAssistantSend(
   skill: string | null,
   handlers: ChatStreamHandlers,
   signal?: AbortSignal,
-  attachmentIds?: (string | number)[] | null
+  attachmentIds?: (string | number)[] | null,
+  /** 本轮钉住的模型（`provider:model`）；null = 沿用会话已钉模型 / Planner 绑定模型 */
+  modelType?: string | null
 ): Promise<void> {
   return consumeSse(
     `/api${paths.clarifications.assistantStreamSend(id)}`,
@@ -131,8 +136,24 @@ export async function streamAssistantSend(
       message,
       webSearchEnabled,
       skill: skill ?? null,
-      attachmentIds: attachmentIds?.length ? attachmentIds : null
+      attachmentIds: attachmentIds?.length ? attachmentIds : null,
+      modelType: modelType ?? null
     },
+    handlers,
+    signal
+  )
+}
+
+/** 助理对话：重新生成最后一条回复（PA-16）；不新增 user 消息，成功后前端重拉详情即可。 */
+export async function streamAssistantRegenerate(
+  id: LongId,
+  webSearchEnabled: boolean | null,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal
+): Promise<void> {
+  return consumeSse(
+    `/api${paths.clarifications.assistantStreamRegenerate(id)}`,
+    { webSearchEnabled },
     handlers,
     signal
   )

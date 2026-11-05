@@ -113,6 +113,10 @@ public class AssistantChatServiceImpl implements AssistantChatService {
     private final AssistantSkillDirective skillDirective;
     /** 消息 payload 构造（webSearch / process），与澄清链路同源，避免两套序列化口径。 */
     private final ClarifyReplyParser replyParser;
+    /** `PA-15`：最近任务与子任务概览（只读聚合，本域内服务）。 */
+    private final com.helloai.core.planner.assistant.service.WorkbenchQueryService workbenchQueryService;
+    /** `PA-15`：工作概览开关与预算（`helloai.assistant.work-brief-*`）。 */
+    private final com.helloai.common.config.AssistantChatProperties assistantChatProperties;
 
     private TransactionTemplate transactionTemplate;
 
@@ -127,11 +131,12 @@ public class AssistantChatServiceImpl implements AssistantChatService {
         if (firstMessage == null || firstMessage.isBlank()) {
             throw new BizException("消息不能为空");
         }
+        AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
         if (plannerAgentId != null) {
             plannerAgentPicker.validateSelectable(plannerAgentId);
         }
+        plannerAgentPicker.validateModelUsable(roundInput.modelType());
         Long userId = requireUser();
-        AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
         String trimmed = firstMessage.trim();
         RequirementConversation conversation = newConversation(trimmed, plannerAgentId, roundInput, userId);
         try {
@@ -150,11 +155,12 @@ public class AssistantChatServiceImpl implements AssistantChatService {
             if (firstMessage == null || firstMessage.isBlank()) {
                 throw new BizException("消息不能为空");
             }
+            AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
             if (plannerAgentId != null) {
                 plannerAgentPicker.validateSelectable(plannerAgentId);
             }
+            plannerAgentPicker.validateModelUsable(roundInput.modelType());
             Long userId = requireUser();
-            AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
             String trimmed = firstMessage.trim();
             RequirementConversation conversation = newConversation(trimmed, plannerAgentId, roundInput, userId);
             // 首帧必须是会话 id：done 后前端据此拉 detail、后续消息才能发到正确会话
@@ -175,7 +181,9 @@ public class AssistantChatServiceImpl implements AssistantChatService {
         Long userId = requireUser();
         RequirementConversation conversation = requireAssistantConversation(conversationId, userId);
         AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
+        plannerAgentPicker.validateModelUsable(roundInput.modelType());
         applyWebSearchFlag(conversation, roundInput);
+        applyModelPin(conversation, roundInput);
         return doRound(conversation, message.trim(), userId, roundInput);
     }
 
@@ -188,13 +196,49 @@ public class AssistantChatServiceImpl implements AssistantChatService {
             Long userId = requireUser();
             RequirementConversation conversation = requireAssistantConversation(conversationId, userId);
             AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
+            plannerAgentPicker.validateModelUsable(roundInput.modelType());
             applyWebSearchFlag(conversation, roundInput);
+            applyModelPin(conversation, roundInput);
             String trimmed = message.trim();
             log.info("助理流式对话轮开始: conversationId={}, round={}, webSearchEnabled={}",
                     conversationId, conversation.getRoundCount(), conversation.getWebSearchEnabled());
             return runAssistantRound(conversation, trimmed, userId, roundInput);
         }).onErrorResume(e -> {
             log.warn("助理流式对话轮失败: conversationId={}, err={}", conversationId, e.getMessage());
+            return Flux.just(ChatStreamEvent.error(streamErrorMessage(e)));
+        });
+    }
+
+    @Override
+    public Flux<ChatStreamEvent> streamRegenerate(Long conversationId, AssistantRoundInput input) {
+        return Flux.defer(() -> {
+            Long userId = requireUser();
+            RequirementConversation conversation = requireAssistantConversation(conversationId, userId);
+            AssistantRoundInput roundInput = input == null ? AssistantRoundInput.empty() : input;
+            plannerAgentPicker.validateModelUsable(roundInput.modelType());
+            applyWebSearchFlag(conversation, roundInput);
+            applyModelPin(conversation, roundInput);
+            List<RequirementMessage> messages = messageService.listByConversation(conversationId);
+            RequirementMessage last = messages.isEmpty() ? null : messages.get(messages.size() - 1);
+            if (last == null || !ROLE_ASSISTANT.equals(last.getRole())) {
+                throw new BizException("没有可重新生成的回复");
+            }
+            String lastUserContent = null;
+            for (int i = messages.size() - 2; i >= 0; i--) {
+                if (ROLE_USER.equals(messages.get(i).getRole())) {
+                    lastUserContent = messages.get(i).getContent();
+                    break;
+                }
+            }
+            if (lastUserContent == null || lastUserContent.isBlank()) {
+                throw new BizException("没有可重新生成的用户消息");
+            }
+            // 逻辑删除原回复：prepareRound 随后看到的末条即该 user 消息（同内容幂等，不会重复落库）
+            messageService.removeById(last.getId());
+            log.info("助理重新生成: conversationId={}, replacedMessageId={}", conversationId, last.getId());
+            return runAssistantRound(conversation, lastUserContent, userId, roundInput, true);
+        }).onErrorResume(e -> {
+            log.warn("助理重新生成失败: conversationId={}, err={}", conversationId, e.getMessage());
             return Flux.just(ChatStreamEvent.error(streamErrorMessage(e)));
         });
     }
@@ -207,6 +251,8 @@ public class AssistantChatServiceImpl implements AssistantChatService {
         conversation.setStatus(RequirementClarifyService.STATUS_ACTIVE);
         conversation.setRoundCount(0);
         conversation.setPlannerAgentId(plannerAgentId);
+        // 钉住的模型：请求显式带值时才落库；空 = 沿用 Planner Agent 自身绑定的模型（老数据语义）
+        conversation.setModelType(normalizeModelType(roundInput.modelType()));
         // 联网搜索开关：助理侧默认关闭（与设计图一致），请求显式带值时以请求为准
         conversation.setWebSearchEnabled(roundInput.webSearchEnabled() != null
                 ? roundInput.webSearchEnabled() : Boolean.FALSE);
@@ -235,6 +281,31 @@ public class AssistantChatServiceImpl implements AssistantChatService {
                 .eq(RequirementConversation::getId, conversation.getId())
                 .update();
         conversation.setWebSearchEnabled(enabled);
+    }
+
+    /**
+     * 钉住的模型可中途切换（2026-11-05）：请求带值时定点回写会话，后续轮次沿用。
+     *
+     * <p>与 {@link #applyWebSearchFlag} 同模式（定点 set，不整行 updateById——避免覆盖
+     * 并发自增的 {@code round_count}）。空值表示「本轮不改」，而不是「清空钉住」：
+     * 清空会让「App 端不传该字段」的既有调用方意外丢失用户的选择。</p>
+     */
+    private void applyModelPin(RequirementConversation conversation, AssistantRoundInput input) {
+        String modelType = normalizeModelType(input.modelType());
+        if (modelType == null || modelType.equals(conversation.getModelType())) {
+            return;
+        }
+        conversationService.lambdaUpdate()
+                .set(RequirementConversation::getModelType, modelType)
+                .eq(RequirementConversation::getId, conversation.getId())
+                .update();
+        conversation.setModelType(modelType);
+        log.info("助理会话钉住模型变更: conversationId={}, modelType={}", conversation.getId(), modelType);
+    }
+
+    /** 归一 {@code modelType}：空白一律折成 null（DB 侧表示「未钉住」），避免 '' 与 NULL 两套空值。 */
+    private static String normalizeModelType(String modelType) {
+        return modelType == null || modelType.isBlank() ? null : modelType.trim();
     }
 
     @Override
@@ -311,6 +382,13 @@ public class AssistantChatServiceImpl implements AssistantChatService {
      */
     private Flux<ChatStreamEvent> runAssistantRound(RequirementConversation conversation, String message,
                                                     Long userId, AssistantRoundInput input) {
+        return runAssistantRound(conversation, message, userId, input, false);
+    }
+
+    /** 同 {@link #runAssistantRound(RequirementConversation, String, Long, AssistantRoundInput)}，
+     *  {@code regenerate=true} 时不递增 round_count（替换而非新增一轮）。 */
+    private Flux<ChatStreamEvent> runAssistantRound(RequirementConversation conversation, String message,
+                                                    Long userId, AssistantRoundInput input, boolean regenerate) {
         Long conversationId = conversation.getId();
         // 过程数据随消息 payload 落库：done 后/刷新后仍可回看（对齐澄清链路）
         StringBuilder thinking = new StringBuilder();
@@ -324,16 +402,19 @@ public class AssistantChatServiceImpl implements AssistantChatService {
                             () -> prepareRound(conversation, message, userId));
                     PromptContext context = loadPromptContext(conversationId, message, userId, input, seed);
                     if (!Boolean.TRUE.equals(conversation.getWebSearchEnabled())) {
-                        return runStreamMainReply(conversation, context, null, steps, thinking);
+                        return runStreamMainReply(conversation, context, null, steps, thinking, regenerate);
                     }
                     AssistantSearchPlan searchPlan = resolveSearchPlan(conversation, message,
                             context.hasAttachments());
                     if (searchPlan.skipSearch()) {
-                        String skipStep = "附件内容可回答，本轮跳过联网检索";
+                        String skipStep = AssistantSearchQueryPlanner.INTERNAL_DATA
+                                .equals(searchPlan.attachmentIntent())
+                                ? "本轮问题基于平台内数据，跳过联网检索"
+                                : "附件内容可回答，本轮跳过联网检索";
                         steps.add(skipStep);
                         return Flux.concat(
                                 Flux.just(ChatStreamEvent.progress(skipStep)),
-                                runStreamMainReply(conversation, context, null, steps, thinking));
+                                runStreamMainReply(conversation, context, null, steps, thinking, regenerate));
                     }
                     String searchStep = RoundProgressText.searching(message);
                     steps.add(searchStep);
@@ -342,7 +423,7 @@ public class AssistantChatServiceImpl implements AssistantChatService {
                             Flux.defer(() -> {
                                 WebSearchOutcome outcome = doWebSearch(conversationId, message, searchPlan);
                                 steps.add(RoundProgressText.searchResult(outcome));
-                                return runStreamMainReply(conversation, context, outcome, steps, thinking);
+                                return runStreamMainReply(conversation, context, outcome, steps, thinking, regenerate);
                             }));
                 }));
     }
@@ -350,7 +431,8 @@ public class AssistantChatServiceImpl implements AssistantChatService {
     /** 流式主回复段：检索完成后执行 LLM 流，token/reasoning 增量转发，终态落库并 done。 */
     private Flux<ChatStreamEvent> runStreamMainReply(RequirementConversation conversation,
                                                      PromptContext context, WebSearchOutcome outcome,
-                                                     List<String> steps, StringBuilder thinking) {
+                                                     List<String> steps, StringBuilder thinking,
+                                                     boolean regenerate) {
         Long conversationId = conversation.getId();
         String webSearchContext = outcome == null ? "" : outcome.toContextText();
         String systemPrompt = buildSystemPrompt(context, webSearchContext);
@@ -362,7 +444,8 @@ public class AssistantChatServiceImpl implements AssistantChatService {
                 : Flux.empty();
         StringBuilder buffer = new StringBuilder();
         return Flux.concat(resultSteps,
-                platformAgentExecutionService.executeStream(planner.id(), task)
+                // 模型钉住：conversation.modelType 非空时覆盖 Planner Agent 自身绑定的模型（V142）
+                platformAgentExecutionService.executeStream(planner.id(), conversation.getModelType(), task)
                         .map(chunk -> {
                             // 思考只走 reasoning 帧，不并入正文与落库正文（避免污染最终回复）
                             if (chunk.isReasoning()) {
@@ -374,24 +457,27 @@ public class AssistantChatServiceImpl implements AssistantChatService {
                         })
                         .concatWith(Flux.defer(() -> {
                             // 停止生成 = 下游 dispose，本 defer 不执行 ⇒ 不落库（user 消息已落库，可重发）
-                            persistStreamOutcome(conversationId, buffer.toString(), outcome, thinking, steps);
+                            persistStreamOutcome(conversationId, buffer.toString(), outcome, thinking, steps, regenerate);
                             return Flux.just(ChatStreamEvent.done());
                         })));
     }
 
     /** 流式终态落库：assistant 消息（含 webSearch/process payload）+ round_count 原子自增。 */
     private void persistStreamOutcome(Long conversationId, String output, WebSearchOutcome outcome,
-                                      StringBuilder thinking, List<String> steps) {
+                                      StringBuilder thinking, List<String> steps, boolean regenerate) {
         String content = output == null ? "" : output.trim();
         String payload = replyParser.buildWebSearchOnlyPayload(outcome,
                 new RoundProcess(thinking.toString(), steps));
         transactionTemplate.executeWithoutResult(status -> {
             messageService.addMessage(conversationId, ROLE_ASSISTANT, content, payload);
-            // 流式轮不持锁跨 LLM，轮数用库内自增，避免基于锁外快照回写覆盖并发轮次
-            conversationService.lambdaUpdate()
-                    .setSql("round_count = COALESCE(round_count, 0) + 1")
-                    .eq(RequirementConversation::getId, conversationId)
-                    .update();
+            // 流式轮不持锁跨 LLM，轮数用库内自增，避免基于锁外快照回写覆盖并发轮次；
+            // 重新生成是「替换上一轮回复」，不计入新轮次（PA-16）
+            if (!regenerate) {
+                conversationService.lambdaUpdate()
+                        .setSql("round_count = COALESCE(round_count, 0) + 1")
+                        .eq(RequirementConversation::getId, conversationId)
+                        .update();
+            }
         });
         log.info("助理流式轮完成并落库: conversationId={}, thinkingChars={}, steps={}, webSearch={}",
                 conversationId, thinking.length(), steps.size(),
@@ -431,14 +517,25 @@ public class AssistantChatServiceImpl implements AssistantChatService {
         List<HistoryHit> related = historySearchService.search(userId, message, HIT_LIMIT);
         AttachmentBundle attachment = resolveAttachmentBundle(conversationId, message, input.attachmentIds());
         String skillInstruction = skillDirective.render(input.skill());
+        // `PA-15`：注入「最近任务与子任务」事实摘要，让「最近在做什么/在测什么」可被回答；
+        // 开关关闭或取数失败一律为空串（不阻断对话）。
+        String workBrief = "";
+        if (assistantChatProperties.isWorkBriefEnabled()) {
+            try {
+                workBrief = workbenchQueryService.recentWorkBrief(userId);
+            } catch (Exception e) {
+                log.warn("工作概览装配失败（不阻断本轮）: conversationId={}, err={}",
+                        conversationId, e.getMessage());
+            }
+        }
         return new PromptContext(message, profile, memories, recentWork, related, seed,
-                attachment.context(), attachment.present(), skillInstruction);
+                attachment.context(), attachment.present(), skillInstruction, workBrief);
     }
 
     private static String buildSystemPrompt(PromptContext context, String webSearchContext) {
         return AssistantPromptBuilder.build(context.profile(), context.memories(), context.recentWork(),
                 context.related(), context.seed().contextState().getSummary(),
-                context.seed().recentConversation(), webSearchContext,
+                context.seed().recentConversation(), context.workBrief(), webSearchContext,
                 context.attachmentContext(), context.skillInstruction());
     }
 
@@ -515,7 +612,8 @@ public class AssistantChatServiceImpl implements AssistantChatService {
                                  RoundSeed seed,
                                  String attachmentContext,
                                  boolean hasAttachments,
-                                 String skillInstruction) {
+                                 String skillInstruction,
+                                 String workBrief) {
     }
 
     /** 附件段产物：注入文本 + 会话是否确有附件（后者决定 answerable 能否跳过联网）。 */

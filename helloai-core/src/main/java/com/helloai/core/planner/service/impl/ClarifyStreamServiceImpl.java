@@ -231,7 +231,8 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                 ? Flux.just(ChatStreamEvent.progress(steps.get(steps.size() - 1)))
                 : Flux.empty();
         StringBuilder buffer = new StringBuilder();
-        return Flux.concat(resultSteps, platformAgentExecutionService.executeStream(planner.id(), agentTask)
+        return Flux.concat(resultSteps, platformAgentExecutionService.executeStream(planner.id(),
+                        conversation.getModelType(), agentTask)
                 .map(chunk -> {
                     if (chunk.isReasoning()) {
                         thinking.append(chunk.text());
@@ -356,7 +357,8 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                 ? Flux.just(ChatStreamEvent.progress(steps.get(steps.size() - 1)))
                 : Flux.empty();
         StringBuilder buffer = new StringBuilder();
-        return Flux.concat(resultSteps, platformAgentExecutionService.executeStream(planner.id(), agentTask)
+        return Flux.concat(resultSteps, platformAgentExecutionService.executeStream(planner.id(),
+                        conversation.getModelType(), agentTask)
                 .map(chunk -> {
                     // ★2026-10-18：思考过程走 reasoning 帧（前端实时展示），
                     // 绝不并入 buffer——buffer 参与 JSON 解析与落库，混入思考会毁掉解析

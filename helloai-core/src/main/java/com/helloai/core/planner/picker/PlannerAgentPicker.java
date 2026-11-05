@@ -9,8 +9,10 @@ import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.service.RequirementConversationService;
+import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.port.PlannerAgentRef;
@@ -50,6 +52,10 @@ public class PlannerAgentPicker implements TaskPlannerPickerPort {
     private final AgentDutyLeaseService agentDutyLeaseService;
     private final AgentLlmCredentialResolver agentLlmCredentialResolver;
     private final TaskService taskService;
+    /** 供应商可用性（`planner → agent` 顺向；与模型注册项组合出「模型是否有效」）。 */
+    private final LlmProviderCatalogService llmProviderCatalogService;
+    /** 模型注册项（`planner → system` 顺向，只读查询）。 */
+    private final LlmProviderModelQueryService llmProviderModelQueryService;
 
     /**
      * 按会话钉住的 Planner 选人；pinnedAgentId 为空或失效时走自动选择。
@@ -126,6 +132,37 @@ public class PlannerAgentPicker implements TaskPlannerPickerPort {
         }
         if (agent.status() != AgentStatus.ACTIVE) {
             throw new BizException("指定的 Planner Agent 已被禁用: " + agent.name());
+        }
+    }
+
+    /**
+     * 校验「本轮钉住的模型」是否有效（2026-11-05，与 {@link #validateSelectable} 同口径）。
+     *
+     * <p><b>为什么在服务端复检</b>：{@code modelType} 由前端提交，若不校验就落库并进入执行链，
+     * 用户的错误输入会一路带到 LLM 调用才报错（甚至静默回落到供应商默认模型，看起来「选了没生效」）。
+     * 这里提前 fail-close，错误信息能直接指到「模型停用 / 供应商不可用」。</p>
+     *
+     * <p><b>判定复用既有谓词，不复制规则</b>：{@code isModelAvailable}（模型启用）
+     * × {@code isProviderAvailable}（供应商启用 + 密钥已配 + 协议可路由），
+     * 两者之积与 {@code LlmProviderCatalogService#listModelOptions} 的 {@code usable} 同义。</p>
+     *
+     * @param modelType {@code provider:model}；null / blank 表示未指定，直接放行
+     */
+    public void validateModelUsable(String modelType) {
+        if (modelType == null || modelType.isBlank()) {
+            return;
+        }
+        String[] parts = modelType.trim().split(":", 2);
+        if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
+            throw new BizException("模型标识格式应为 provider:model，收到: " + modelType);
+        }
+        String provider = parts[0].trim();
+        String model = parts[1].trim();
+        if (!llmProviderModelQueryService.isModelAvailable(provider, model)) {
+            throw new BizException("指定的模型不存在或已停用: " + modelType);
+        }
+        if (!llmProviderCatalogService.isProviderAvailable(provider)) {
+            throw new BizException("该模型所属供应商当前不可用（未启用 / 未配置 API Key）: " + provider);
         }
     }
 

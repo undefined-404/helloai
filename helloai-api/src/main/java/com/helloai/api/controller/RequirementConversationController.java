@@ -8,6 +8,7 @@ import com.helloai.api.dto.requirement.SkillRunStatusVO;
 import com.helloai.api.dto.requirement.WorkbenchVO;
 import com.helloai.api.support.WorkbenchEventHub;
 import com.helloai.common.base.R;
+import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.planner.assistant.service.AssistantChatService;
 import com.helloai.core.planner.assistant.service.AssistantProfileService;
 import com.helloai.core.planner.assistant.service.AssistantRoundInput;
@@ -150,7 +151,7 @@ public class RequirementConversationController {
         return streamSse(response, "助理流式新建会话",
                 () -> assistantChatService.streamCreateConversation(req.getMessage(), req.getPlannerAgentId(),
                         new AssistantRoundInput(req.getWebSearchEnabled(), req.getSkill(),
-                                req.getAttachmentIds(), req.getClientToken())));
+                                req.getAttachmentIds(), req.getClientToken(), req.getModelType())));
     }
 
     /** 助理 SSE 流式追加一条消息（PA-11）：支持停止生成，事件协议与澄清链路一致。 */
@@ -162,7 +163,16 @@ public class RequirementConversationController {
         return streamSse(response, "助理流式对话(conversationId=" + id + ")",
                 () -> assistantChatService.streamSendMessage(id, req.getMessage(),
                         new AssistantRoundInput(req.getWebSearchEnabled(), req.getSkill(),
-                                req.getAttachmentIds(), null)));
+                                req.getAttachmentIds(), null, req.getModelType())));
+    }
+
+    /** 助理重新生成最后一条回复（PA-16）：取最后一条 user 消息重跑，替换原回复。 */
+    @SaCheckPermission("conversation:regenerate")
+    @PostMapping(value = "/assistant/streamRegenerate/{id}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter assistantStreamRegenerate(@PathVariable("id") Long id,
+                                                HttpServletResponse response) {
+        return streamSse(response, "助理重新生成(conversationId=" + id + ")",
+                () -> assistantChatService.streamRegenerate(id, AssistantRoundInput.empty()));
     }
 
     /**
@@ -337,6 +347,20 @@ public class RequirementConversationController {
     }
 
     /**
+     * 工作台 Composer「选模型」数据源（2026-11-05）：<b>已注册的纯 LLM 模型</b> + 有效性判定。
+     *
+     * <p><b>为什么与 {@link #listPlannerOptions} 分成两个端点</b>：两者是不同语义的候选集——
+     * 这里选「用哪个模型答」（无角色），那里选「谁来扮演 Planner」（角色，模型由角色绑定）。
+     * 合成一个端点必然让前端在同一个下拉里混排角色与模型（改造前的实际缺陷）。</p>
+     *
+     * <p>无鉴权注解：与 {@code assistantProfile} 同属工作台首屏展示数据，前端登录后才渲染。</p>
+     */
+    @GetMapping("/listLlmModelOptions")
+    public R<List<LlmProviderCatalogService.ModelOption>> listLlmModelOptions() {
+        return R.ok(workbenchQueryService.modelOptions());
+    }
+
+    /**
      * 对话页头部身份卡（PA-3）。
      *
      * <p>用户级助理优先，回退平台预置；表空/异常由服务给默认值兜底，永不 404。
@@ -354,7 +378,7 @@ public class RequirementConversationController {
     public R<ClarifyConversationDetail> assistantCreate(@Valid @RequestBody ClarifyMessageRequest req) {
         return R.ok(assistantChatService.createConversation(req.getMessage(), req.getPlannerAgentId(),
                 new AssistantRoundInput(req.getWebSearchEnabled(), req.getSkill(), req.getAttachmentIds(),
-                        req.getClientToken())));
+                        req.getClientToken(), req.getModelType())));
     }
 
     /** 助理会话追加一条消息并跑一轮（PA-11）。 */
@@ -363,7 +387,8 @@ public class RequirementConversationController {
     public R<ClarifyConversationDetail> assistantSend(@PathVariable("id") Long id,
                                                       @Valid @RequestBody ClarifyMessageRequest req) {
         return R.ok(assistantChatService.sendMessage(id, req.getMessage(),
-                new AssistantRoundInput(req.getWebSearchEnabled(), req.getSkill(), req.getAttachmentIds(), null)));
+                new AssistantRoundInput(req.getWebSearchEnabled(), req.getSkill(), req.getAttachmentIds(), null,
+                        req.getModelType())));
     }
 
     /**

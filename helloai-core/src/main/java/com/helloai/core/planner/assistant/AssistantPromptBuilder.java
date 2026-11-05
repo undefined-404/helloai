@@ -26,7 +26,7 @@ public final class AssistantPromptBuilder {
                                String conversationSummary,
                                List<String> recentConversation) {
         return build(profile, memories, recentWork, related, conversationSummary, recentConversation,
-                null, null, null);
+                null, null, null, null);
     }
 
     /**
@@ -42,6 +42,26 @@ public final class AssistantPromptBuilder {
                                List<HistoryHit> related,
                                String conversationSummary,
                                List<String> recentConversation,
+                               String webSearchContext,
+                               String attachmentContext,
+                               String skillInstruction) {
+        return build(profile, memories, recentWork, related, conversationSummary, recentConversation,
+                null, webSearchContext, attachmentContext, skillInstruction);
+    }
+
+    /**
+     * 全量版本 + `PA-15` 工作概览段。
+     *
+     * @param workBrief 最近任务与子任务概览（空 = 不注入）；由
+     *                  {@code WorkbenchQueryService#recentWorkBrief} 生成
+     */
+    public static String build(AssistantSnapshot profile,
+                               List<LongTermMemory> memories,
+                               List<HistoryHit> recentWork,
+                               List<HistoryHit> related,
+                               String conversationSummary,
+                               List<String> recentConversation,
+                               String workBrief,
                                String webSearchContext,
                                String attachmentContext,
                                String skillInstruction) {
@@ -63,6 +83,9 @@ public final class AssistantPromptBuilder {
         }
         appendMemories(sb, memories);
         appendHits(sb, "最近处理过的工作", recentWork);
+        if (workBrief != null && !workBrief.isBlank()) {
+            sb.append('\n').append(workBrief.trim()).append('\n');
+        }
         appendHits(sb, "与本次问题相关的历史对话", related);
         appendWebSearch(sb, webSearchContext);
         appendAttachments(sb, attachmentContext);

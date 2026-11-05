@@ -11,9 +11,11 @@ import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.RequirementConversationService;
+import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.policy.TaskAgentPolicy;
@@ -68,12 +70,19 @@ class PlannerAgentPickerTest {
     @Mock
     private TaskService taskService;
 
+    @Mock
+    private LlmProviderCatalogService llmProviderCatalogService;
+
+    @Mock
+    private LlmProviderModelQueryService llmProviderModelQueryService;
+
     private PlannerAgentPicker picker;
 
     @BeforeEach
     void setUp() {
         picker = new PlannerAgentPicker(agentService, conversationService,
-                agentDutyLeaseService, agentLlmCredentialResolver, taskService);
+                agentDutyLeaseService, agentLlmCredentialResolver, taskService,
+                llmProviderCatalogService, llmProviderModelQueryService);
         // 默认：全部凭证可用（单测按需覆盖）
         lenient().when(agentLlmCredentialResolver.hasUsableCredential(any(AgentProfileSnapshot.class)))
                 .thenReturn(true);
@@ -335,5 +344,67 @@ class PlannerAgentPickerTest {
                 });
         // 不在班的外部 Agent 不出现在下拉选
         assertThat(options).noneMatch(o -> o.getId() == 4L);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  validateModelUsable（工作台「选模型」的服务端复检）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("validateModelUsable：不传模型（null / 空白）放行，且不查注册表")
+    void shouldAllowAbsentModelWithoutQuery() {
+        picker.validateModelUsable(null);
+        picker.validateModelUsable("   ");
+
+        verify(llmProviderModelQueryService, never()).isModelAvailable(anyString(), anyString());
+        verify(llmProviderCatalogService, never()).isProviderAvailable(anyString());
+    }
+
+    @Test
+    @DisplayName("validateModelUsable：非法标识（缺 provider 或 model）报格式错误")
+    void shouldRejectMalformedModelType() {
+        assertThatThrownBy(() -> picker.validateModelUsable("deepseek-v4-flash"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("provider:model");
+        assertThatThrownBy(() -> picker.validateModelUsable(":deepseek-v4-flash"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("provider:model");
+        assertThatThrownBy(() -> picker.validateModelUsable("deepseek:"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("provider:model");
+    }
+
+    @Test
+    @DisplayName("validateModelUsable：模型未注册 / 已停用时拒绝，且不再问供应商")
+    void shouldRejectUnavailableModel() {
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "gone-model")).thenReturn(false);
+
+        assertThatThrownBy(() -> picker.validateModelUsable("deepseek:gone-model"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("不存在或已停用");
+        verify(llmProviderCatalogService, never()).isProviderAvailable(anyString());
+    }
+
+    @Test
+    @DisplayName("validateModelUsable：模型在册但供应商不可用（未启用 / 无密钥）时拒绝")
+    void shouldRejectUnavailableProvider() {
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-flash")).thenReturn(true);
+        when(llmProviderCatalogService.isProviderAvailable("deepseek")).thenReturn(false);
+
+        assertThatThrownBy(() -> picker.validateModelUsable("deepseek:deepseek-v4-flash"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("供应商当前不可用");
+    }
+
+    @Test
+    @DisplayName("validateModelUsable：模型在册且供应商可用时放行（冒号后含模型名照常解析）")
+    void shouldAllowUsableModel() {
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-flash")).thenReturn(true);
+        when(llmProviderCatalogService.isProviderAvailable("deepseek")).thenReturn(true);
+
+        picker.validateModelUsable(" deepseek:deepseek-v4-flash ");
+
+        verify(llmProviderModelQueryService).isModelAvailable("deepseek", "deepseek-v4-flash");
+        verify(llmProviderCatalogService).isProviderAvailable("deepseek");
     }
 }

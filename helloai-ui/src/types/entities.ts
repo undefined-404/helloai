@@ -497,6 +497,13 @@ export interface RequirementConversation {
   taskId: LongId | null
   // 手动指定的 Planner Agent ID（null=系统自动选择）
   plannerAgentId: LongId | null
+  /**
+   * 会话钉住的 LLM 模型（`provider:model`；V142）。
+   *
+   * <p>{@code plannerAgentId} 决定「谁扮演助理」，本字段只决定「用哪个模型答」。
+   * null = 沿用 Planner Agent 绑定的模型（老数据口径）。</p>
+   */
+  modelType?: string | null
   finalTitle: string | null
   finalDescription: string | null
   roundCount: number

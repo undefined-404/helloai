@@ -48,4 +48,21 @@ public interface PlatformAgentExecutionService {
      * 解析在<b>订阅时</b>进行（保持惰性），Agent 不存在时抛 BizException。
      */
     Flux<com.helloai.core.agent.chat.LlmStreamChunk> executeStream(Long agentId, AgentTask task);
+
+    /**
+     * 流式执行一次 Agent 任务，并把本次调用钉在指定 {@code modelType} 上（2026-11-05）。
+     *
+     * <p><b>用途</b>：个人工作台把「用户选的模型」落到执行上——会话记住
+     * {@code provider:model}，执行时覆盖 Agent 自身绑定的模型，其余（凭证 / 能力 / 角色）
+     * 仍走原 Agent。语义与 {@link #executeStream(Long, AgentTask)} 完全一致，
+     * 只是把模型换成入参指定的那一个。</p>
+     *
+     * <p><b>{@code modelType} 为空</b>（null / blank）⇒ 逐字等价于
+     * {@link #executeStream(Long, AgentTask)}，用于「老会话未指定模型」的兼容路径。</p>
+     *
+     * @param agentId   执行载体 Agent（提供凭证与能力面）
+     * @param modelType 本次钉住的 {@code provider:model}；空 = 不覆盖
+     * @param task      执行任务
+     */
+    Flux<com.helloai.core.agent.chat.LlmStreamChunk> executeStream(Long agentId, String modelType, AgentTask task);
 }

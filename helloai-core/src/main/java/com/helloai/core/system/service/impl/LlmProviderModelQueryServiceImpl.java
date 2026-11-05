@@ -3,14 +3,17 @@ package com.helloai.core.system.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.core.system.entity.LlmProviderModel;
 import com.helloai.core.system.port.LlmProviderModelProfile;
+import com.helloai.core.system.port.LlmProviderModelRef;
 import com.helloai.core.system.port.ModelCapabilities;
 import com.helloai.core.system.mapper.LlmProviderModelMapper;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * LLM Provider 模型查询服务实现。
@@ -68,6 +71,34 @@ public class LlmProviderModelQueryServiceImpl implements LlmProviderModelQuerySe
                         .orderByAsc(LlmProviderModel::getModelName)
         );
         return list != null ? list : Collections.emptyList();
+    }
+
+    @Override
+    public List<LlmProviderModelRef> listAllRefs() {
+        List<LlmProviderModel> list = llmProviderModelMapper.selectList(
+                new LambdaQueryWrapper<LlmProviderModel>()
+                        .eq(LlmProviderModel::getDeleted, 0)
+                        .orderByAsc(LlmProviderModel::getSortOrder)
+                        .orderByAsc(LlmProviderModel::getProviderCode)
+                        .orderByAsc(LlmProviderModel::getModelName)
+        );
+        if (list == null || list.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<LlmProviderModelRef> refs = new ArrayList<>(list.size());
+        for (LlmProviderModel model : list) {
+            if (model == null || model.getProviderCode() == null || model.getModelName() == null) {
+                continue;
+            }
+            // Integer 0/1 → boolean 的归一在提供方做（消费方只判布尔，不复制 0/1 字面量）
+            refs.add(new LlmProviderModelRef(
+                    model.getProviderCode().toLowerCase(Locale.ROOT),
+                    model.getModelName(),
+                    Integer.valueOf(1).equals(model.getEnabled()),
+                    Integer.valueOf(1).equals(model.getIsDefault()),
+                    model.getSortOrder()));
+        }
+        return refs;
     }
 
     @Override

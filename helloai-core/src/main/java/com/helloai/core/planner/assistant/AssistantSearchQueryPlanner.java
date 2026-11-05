@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 助理本轮联网检索决策：结合最近对话、上下文摘要、附件决策视图与系统时间，
@@ -44,10 +45,26 @@ public class AssistantSearchQueryPlanner {
 
             ## 场景约束（助理检索，必须遵守）
             - 本调用只用于助理本轮联网检索决策；intent 必须为 chat，clarification_question 必须为 null。
-            - 搜索开关已开启，web_search.need_search 必须为 true，search_query 必须是非空、可直接检索的独立关键词。
+            - **先判断数据来源，再决定是否联网**：问题若可由「平台内数据」回答（用户自己的任务 / 子任务 /
+              执行与核验记录 / 历史对话 / 个人记忆 / 工作台概况），web_search.need_search 必须为 false，
+              search_query 置 null，reason 写 internal_data。
+            - 只有依赖平台外、时效性事实（新闻 / 价格 / 官网 / 外部文档 / 公开资料）时才 need_search=true，
+              并给出可直接检索的独立关键词；此时 search_query 不得为空。
             - 历史中的「这次 / 上面 / 刚才」等指代必须结合历史改写为独立主题；相对时间转绝对日期。
             - 若附件已能完整回答，attachment_intent 设为 answerable；否则按 needs_external / none 判定。
             """;
+
+    /** 平台内数据类问题的意图标记（进 plan.attachmentIntent，供调用方选择提示文案）。 */
+    public static final String INTERNAL_DATA = "internal_data";
+
+    /** 强「平台内数据」信号：自身任务/子任务/核验/历史/记忆/进度。 */
+    private static final Pattern INTERNAL_INTENT = Pattern.compile(
+            "(子任务|任务进度|任务状态|任务情况|我的任务|执行记录|核验|审查记录|评审|返工|"
+                    + "上次对话|之前的对话|对话历史|记忆|在测什么|最近在测|测些什么|进展)");
+
+    /** 外部时效信号：出现任一项就不走规则短路，交 LLM 决策（宁可多搜，不误跳过）。 */
+    private static final Pattern EXTERNAL_INTENT = Pattern.compile(
+            "(最新|新闻|价格|官网|实时|今天|本周|发布|教程|文档|联网|搜索)");
 
     private final ClarifyPromptRenderService promptRenderService;
     private final ChatRoundDecisionParser decisionParser;
@@ -68,6 +85,12 @@ public class AssistantSearchQueryPlanner {
                 || !Boolean.TRUE.equals(conversation.getWebSearchEnabled())) {
             return AssistantSearchPlan.disabledPlan();
         }
+        // 先按确定性规则分诊：明确指向「平台内数据」的问题直接跳过联网，不花一次决策 LLM 调用。
+        // 只认强信号且不含外部时效词，命中才短路；边界情况仍交给下面的 LLM 决策（宁多不误跳）。
+        if (looksLikeInternalDataQuestion(userMessage)) {
+            log.info("助理检索决策: conversationId={}, skipSearch=true（平台内数据，规则短路）", conversation.getId());
+            return new AssistantSearchPlan(null, true, false, INTERNAL_DATA);
+        }
         long t0 = System.currentTimeMillis();
         try {
             AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
@@ -85,12 +108,14 @@ public class AssistantSearchQueryPlanner {
                 return AssistantSearchPlan.degradedPlan();
             }
             ChatRoundDecision decision = decisionParser.parse(result.getOutput());
-            String query = decision.webSearch() == null ? null : decision.webSearch().searchQuery();
+            // need_search=false ⇒ 模型判断本轮无需联网（平台内数据可回答）；搜索词一律忽略
+            boolean needSearch = decision.webSearch() != null && decision.webSearch().needSearch();
+            String query = needSearch && decision.webSearch() != null ? decision.webSearch().searchQuery() : null;
             if (query != null && query.isBlank()) {
                 query = null;
             }
             boolean answerable = decision.attachmentIntent() == AttachmentIntent.ANSWERABLE;
-            boolean skipSearch = answerable && hasAttachments;
+            boolean skipSearch = !needSearch || (answerable && hasAttachments);
             String attachmentIntent = decision.attachmentIntent() == null
                     ? "unknown" : decision.attachmentIntent().wireValue();
             log.info("助理检索决策: conversationId={}, query={}, attachmentIntent={}, skipSearch={}, costMs={}",
@@ -102,6 +127,15 @@ public class AssistantSearchQueryPlanner {
                     conversation.getId(), e.getMessage());
             return AssistantSearchPlan.degradedPlan();
         }
+    }
+
+    /** 规则分诊：明确指向平台内数据、且不含外部时效词时才返回 true。 */
+    static boolean looksLikeInternalDataQuestion(String userMessage) {
+        if (userMessage == null || userMessage.isBlank()) {
+            return false;
+        }
+        return INTERNAL_INTENT.matcher(userMessage).find()
+                && !EXTERNAL_INTENT.matcher(userMessage).find();
     }
 
     /**

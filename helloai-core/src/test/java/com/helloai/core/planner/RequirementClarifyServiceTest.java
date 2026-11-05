@@ -94,6 +94,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.atLeastOnce;
@@ -2713,7 +2714,7 @@ class RequirementClarifyServiceTest {
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "你好", 1)));
         stubDecisionRound(DECISION_CHAT_NO_SEARCH);
-        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeStream(anyLong(), nullable(String.class), any(AgentTask.class)))
                 .thenReturn(Flux.fromArray(tokenChunks)
                         .map(com.helloai.core.agent.chat.LlmStreamChunk::content));
     }
@@ -2768,7 +2769,7 @@ class RequirementClarifyServiceTest {
             return true;
         }).when(conversationService).save(any(RequirementConversation.class));
         stubDecisionRound(DECISION_CHAT_NO_SEARCH);
-        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeStream(anyLong(), nullable(String.class), any(AgentTask.class)))
                 .thenReturn(Flux.just(
                         com.helloai.core.agent.chat.LlmStreamChunk.content("最近 AI 新闻："),
                         com.helloai.core.agent.chat.LlmStreamChunk.content("模型密集发布")));
@@ -2805,7 +2806,7 @@ class RequirementClarifyServiceTest {
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "你好", 1)));
         // CLARIFY 模式绕过意图决策，主回复真流式：正文分片 + 末尾 JSON 块（与 prompt 输出格式一致）
-        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeStream(anyLong(), nullable(String.class), any(AgentTask.class)))
                 .thenReturn(Flux.just(
                         com.helloai.core.agent.chat.LlmStreamChunk.content("先确认一下："),
                         com.helloai.core.agent.chat.LlmStreamChunk.content("目标规模是？"),
@@ -2837,7 +2838,7 @@ class RequirementClarifyServiceTest {
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "你好", 1)));
         stubDecisionRound(DECISION_CHAT_NO_SEARCH);
-        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeStream(anyLong(), nullable(String.class), any(AgentTask.class)))
                 .thenReturn(Flux.error(new RuntimeException("上游 LLM 超时")));
 
         List<RequirementClarifyService.ChatStreamEvent> events =
@@ -2867,7 +2868,7 @@ class RequirementClarifyServiceTest {
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "你好", 1)));
         stubDecisionRound(DECISION_CHAT_NO_SEARCH);
-        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeStream(anyLong(), nullable(String.class), any(AgentTask.class)))
                 .thenReturn(Flux.error(new RuntimeException("上游 LLM 超时")));
 
         clarifyService.streamRound(CONV_ID, "你好", null).collectList().block();
@@ -2906,7 +2907,7 @@ class RequirementClarifyServiceTest {
         // 确认卡单条落库（applyClarifyDecision），主回复流式通道零调用
         verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), anyString(), anyString());
         verify(platformAgentExecutionService, never())
-                .executeStream(anyLong(), any(AgentTask.class));
+                .executeStream(anyLong(), nullable(String.class), any(AgentTask.class));
     }
 
     @Test
@@ -2924,7 +2925,7 @@ class RequirementClarifyServiceTest {
                  "clarification_question":"你想怎么落地？",
                  "web_search":{"need_search":false,"search_query":null,"reason":"无需搜索"}}
                 """);
-        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeStream(anyLong(), nullable(String.class), any(AgentTask.class)))
                 .thenReturn(Flux.just(
                         com.helloai.core.agent.chat.LlmStreamChunk.content("好的，先继续聊，需要转方案时再告诉我。")));
 
@@ -2945,7 +2946,7 @@ class RequirementClarifyServiceTest {
         assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
         // 主回复流式通道恰一次（被抑制后继续回复）；确认卡正文零播放
         verify(platformAgentExecutionService, times(1))
-                .executeStream(anyLong(), any(AgentTask.class));
+                .executeStream(anyLong(), nullable(String.class), any(AgentTask.class));
         verify(messageService, never()).addMessage(eq(CONV_ID), eq("assistant"),
                 eq(ConfirmCardProtocol.CONFIRM_ASK_TEXT), any());
     }

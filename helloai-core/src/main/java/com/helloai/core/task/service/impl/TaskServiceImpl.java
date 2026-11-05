@@ -190,6 +190,21 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     }
 
     @Override
+    public List<Task> listActiveTasksByOwner(Long ownerId, int limit) {
+        if (ownerId == null) {
+            return List.of();
+        }
+        int cap = limit <= 0 ? DEFAULT_RECENT_TASK_LIMIT : limit;
+        return list(new LambdaQueryWrapper<Task>()
+                .in(Task::getStatus, TaskStatus.PLANNING, TaskStatus.IN_PROGRESS)
+                .and(w -> w.isNull(Task::getOwnerId)
+                        .or().eq(Task::getOwnerId, ownerId))
+                .orderByDesc(Task::getUpdateTime)
+                .orderByDesc(Task::getCreateTime)
+                .last("limit " + cap));
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public Task updateStatus(Long id, TaskStatus status) {
         Task task = getById(id);

@@ -26,4 +26,16 @@ public class AssistantChatProperties {
      * 故自动抬高安全，同时 WARN 留痕。</p>
      */
     private long roundLockTtlSeconds = 240;
+
+    /** `PA-15`：是否在助理 Prompt 注入「最近任务与子任务」概览。默认开。 */
+    private boolean workBriefEnabled = true;
+
+    /** `PA-15`：概览最多任务数。 */
+    private int workBriefMaxTasks = 5;
+
+    /** `PA-15`：每个任务最多子任务数。 */
+    private int workBriefMaxSubTasks = 6;
+
+    /** `PA-15`：概览总字符上限（超出截断并标注）。 */
+    private int workBriefMaxChars = 3000;
 }

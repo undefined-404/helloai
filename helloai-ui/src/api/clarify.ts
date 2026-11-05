@@ -1,7 +1,7 @@
 import request from './request'
 import { paths } from './paths'
 import type { AxiosResponse } from 'axios'
-import type { ArtifactItem, AssistantProfile, ChatAttachmentItem, ClarifyConversationDetail, ClarifySelection, CompactResult, ContextUsage, PlannerOption, RequirementConversation, SkillRunStatus, Task, LongId, Workbench } from '@/types'
+import type { ArtifactItem, AssistantProfile, ChatAttachmentItem, ClarifyConversationDetail, ClarifySelection, CompactResult, ContextUsage, LlmModelOption, PlannerOption, RequirementConversation, SkillRunStatus, Task, LongId, Workbench } from '@/types'
 
 // V29 对话式需求澄清: 每轮走一次 LLM，耗时远超全局 30s，create/send/retry 单请求覆盖 timeout
 // v1.1 修复: 澄清会话 ID 为 Snowflake 长整型，URL/比较一律按 string 处理防 JS Number 精度丢失
@@ -38,6 +38,13 @@ export interface AssistantRoundOptions {
   skill?: string | null
   attachmentIds?: string[] | null
   clientToken?: string | null
+  /**
+   * 本轮钉住的 LLM 模型（`provider:model`，无角色）。
+   *
+   * <p>与 {@code plannerAgentId} 分工：Planner 决定「谁扮演助理」，modelType 只决定
+   * 「用哪个模型答」。为 null 时沿用 Planner Agent 绑定的模型（老会话口径）。</p>
+   */
+  modelType?: string | null
 }
 
 export const clarifyApi = {
@@ -69,7 +76,8 @@ export const clarifyApi = {
         webSearchEnabled: options?.webSearchEnabled ?? null,
         skill: options?.skill ?? null,
         attachmentIds: options?.attachmentIds ?? null,
-        clientToken: options?.clientToken ?? null
+        clientToken: options?.clientToken ?? null,
+        modelType: options?.modelType ?? null
       },
       { timeout: LLM_TIMEOUT_MS })
   },
@@ -81,7 +89,8 @@ export const clarifyApi = {
         message,
         webSearchEnabled: options?.webSearchEnabled ?? null,
         skill: options?.skill ?? null,
-        attachmentIds: options?.attachmentIds ?? null
+        attachmentIds: options?.attachmentIds ?? null,
+        modelType: options?.modelType ?? null
       },
       { timeout: LLM_TIMEOUT_MS })
   },
@@ -128,6 +137,15 @@ export const clarifyApi = {
   // Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）
   plannerOptions() {
     return request.get<any, PlannerOption[]>(paths.clarifications.plannerOptions)
+  },
+  /**
+   * 工作台 Composer「选模型」候选：已注册的**纯 LLM 模型**（无角色）+ 有效性标记。
+   *
+   * <p>不走 {@link plannerOptions}：工作台选模型、需求对话选带角色的 Planner，
+   * 两者候选集来源不同（{@code llm_provider_model} vs Agent 名册），合并会两头都不准。</p>
+   */
+  llmModelOptions() {
+    return request.get<any, LlmModelOption[]>(paths.clarifications.listLlmModelOptions)
   },
   // PA-3 当前用户活跃的助理身份（读取面；后端按用户置顶→…→默认兜底）
   assistantProfile() {

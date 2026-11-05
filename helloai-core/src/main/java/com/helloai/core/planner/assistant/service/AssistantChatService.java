@@ -53,6 +53,14 @@ public interface AssistantChatService {
     ClarifyConversationDetail sendMessage(Long conversationId, String message, AssistantRoundInput input);
 
     /**
+     * `PA-16` 重新生成最后一条回复（SSE）：取最后一条 user 消息重跑一轮，
+     * 逻辑删除原 assistant 消息、追加新回复；`round_count` 不递增。
+     *
+     * <p>前置条件：会话最后一条消息是 assistant（否则说明上轮未完成，走正常发送即可）。</p>
+     */
+    Flux<ChatStreamEvent> streamRegenerate(Long conversationId, AssistantRoundInput input);
+
+    /**
      * 从助理会话显式创建一条需求会话（血缘：来源会话 + 可选来源消息），
      * 把近期对话摘要作为需求会话的首条用户消息，随后由需求澄清流程接管。
      *

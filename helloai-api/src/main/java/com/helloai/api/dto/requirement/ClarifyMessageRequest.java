@@ -14,6 +14,21 @@ public class ClarifyMessageRequest {
     /** 手动指定的 Planner Agent ID（仅新建会话时生效；空=系统自动选择） */
     private Long plannerAgentId;
 
+    /**
+     * 钉住的 LLM 模型（{@code provider:model}，仅助理对话接口生效，2026-11-05）。
+     *
+     * <p><b>与 {@link #plannerAgentId} 的分工</b>：plannerAgentId 决定「谁来扮演助理」
+     * （角色面，需求对话页的入口）；本字段只决定「用哪个模型答」（个人工作台的入口）。
+     * 两者可并存：角色给提示词与技能，模型给这次回答。</p>
+     *
+     * <p>空 = 不覆盖，沿用会话已存值（新会话则回落到 Planner Agent 自身绑定的模型），
+     * 老调用方不传即行为不变。取值须来自 {@code /listLlmModelOptions}；
+     * 服务端<b>不信任前端</b>——落库前用
+     * {@code PlannerAgentPicker#validateModelUsable} 复检「模型启用 + 供应商可用」，
+     * 不满足即抛业务异常（与 plannerAgentId 的 {@code validateSelectable} 同一口径）。</p>
+     */
+    private String modelType;
+
     /** 结构化选项回答快照（仅追加消息时生效；空=纯文本回答） */
     private List<RequirementClarifyService.ClarifySelection> selectedOptions;
 
