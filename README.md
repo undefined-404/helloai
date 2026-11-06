@@ -210,15 +210,15 @@ HelloAI 希望把多个 Agent 组织起来：
 
 ```bash
 curl -fsSL https://gitee.com/undefined_404/helloai/raw/master/deploy/install.sh \
-  | HELLOAI_REF=v0.2.0 bash
+  | HELLOAI_REF=v0.2.1 bash
 ```
 
 它会从 [Gitee 发行版](https://gitee.com/undefined_404/helloai/releases) 取 **28 KB** 的 quickstart 包，
 铺到 `./helloai`，然后拉起整套栈。`app` / `web` 用**公开 ACR** 上的预构建镜像，匿名可拉、不用登录：
 
 ```
-crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/app:0.2.0
-crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/web:0.2.0
+crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/app:0.2.1
+crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/web:0.2.1
 ```
 
 打开 <http://localhost:8080>（服务器上是 `http://<公网IP>:8080`），默认管理员 **admin / admin123**。
@@ -227,13 +227,13 @@ crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/web:0.2.0
 
 ```bash
 # 装到指定目录（默认 ./helloai）
-curl -fsSL …/install.sh | HELLOAI_INSTALL_DIR=$HOME/helloai HELLOAI_REF=v0.2.0 bash
+curl -fsSL …/install.sh | HELLOAI_INSTALL_DIR=$HOME/helloai HELLOAI_REF=v0.2.1 bash
 
 # 带沙箱（画图 / 技能执行）；`--` 之后的一切原样传给 start.sh
-curl -fsSL …/install.sh | HELLOAI_REF=v0.2.0 bash -s -- --with-sandbox
+curl -fsSL …/install.sh | HELLOAI_REF=v0.2.1 bash -s -- --with-sandbox
 ```
 
-> ⚠️ `HELLOAI_REF=v0.2.0 curl … | bash` **是错的**——变量只作用于 `curl`，不会传给管道的接收端，
+> ⚠️ `HELLOAI_REF=v0.2.1 curl … | bash` **是错的**——变量只作用于 `curl`，不会传给管道的接收端，
 > 结果会静默按默认分支安装。
 >
 > 🔒 **默认密码固定写在 Flyway 迁移里，启动前改不了**。登进去第一件事改密码；
