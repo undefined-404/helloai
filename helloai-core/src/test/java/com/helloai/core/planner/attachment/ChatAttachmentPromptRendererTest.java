@@ -4,6 +4,7 @@ import com.helloai.common.constant.ChatAttachmentParseStatus;
 import com.helloai.core.knowledge.KnowledgeBaseService;
 import com.helloai.core.knowledge.KnowledgeSearchResult;
 import com.helloai.core.planner.entity.ChatAttachment;
+import com.helloai.core.planner.search.BochaRerankService;
 import com.helloai.core.planner.service.ChatAttachmentService;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
 import org.junit.jupiter.api.DisplayName;
@@ -34,6 +35,7 @@ class ChatAttachmentPromptRendererTest {
 
     private final ChatAttachmentService chatAttachmentService = mock(ChatAttachmentService.class);
     private final KnowledgeBaseService knowledgeBaseService = mock(KnowledgeBaseService.class);
+    private final BochaRerankService bochaRerankService = mock(BochaRerankService.class);
     /**
      * 用 1M 窗口复现 ATT-7 改造前的 200k 总预算，使存量断言的数值口径保持不变。
      * 窗口化行为本身由 {@link #shouldScaleBudgetByContextWindow()} 单独覆盖。
@@ -443,5 +445,70 @@ class ChatAttachmentPromptRendererTest {
 
         assertThat(rendered.retrieval()).contains("未检索附件片段");
         assertThat(rendered.context()).contains("正文");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  ATT-3：片段重排
+    // ══════════════════════════════════════════════════════════════
+
+    private KnowledgeSearchResult threeHitResult() {
+        return new KnowledgeSearchResult("怎么装", List.of(
+                new KnowledgeSearchResult.Hit("chat:9:1", 0, "第一片：前置准备"),
+                new KnowledgeSearchResult.Hit("chat:9:1", 1, "第二片：复制文件"),
+                new KnowledgeSearchResult.Hit("chat:9:1", 2, "第三片：重载配置")), 30, false);
+    }
+
+    private ChatAttachment ingestedAttachment() {
+        ChatAttachment ingested = attachment("大手册.md", ChatAttachmentParseStatus.READY, "正文");
+        ingested.setKbSource("chat:9:1");
+        return ingested;
+    }
+
+    @Test
+    @DisplayName("ATT-3：开关开启时按重排下标注入（第3片排到最前）")
+    void shouldRerankRetrievalHitsWhenEnabled() {
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(ingestedAttachment()));
+        when(knowledgeBaseService.search(anyString(), anyInt(), anyLong(), isNull(), anyInt(), anyList()))
+                .thenReturn(threeHitResult());
+        when(bochaRerankService.rerankOrder(eq("怎么装"), anyList())).thenReturn(List.of(2, 0, 1));
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(
+                chatAttachmentService, knowledgeBaseService, bochaRerankService, 128_000, true);
+        String retrieval = r.render(9L, "怎么装").retrieval();
+
+        assertThat(retrieval.indexOf("第三片")).isLessThan(retrieval.indexOf("第一片"));
+        assertThat(retrieval.indexOf("第一片")).isLessThan(retrieval.indexOf("第二片"));
+    }
+
+    @Test
+    @DisplayName("ATT-3：开关关闭时不调用重排，保持向量序")
+    void shouldKeepVectorOrderWhenRerankDisabled() {
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(ingestedAttachment()));
+        when(knowledgeBaseService.search(anyString(), anyInt(), anyLong(), isNull(), anyInt(), anyList()))
+                .thenReturn(threeHitResult());
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(
+                chatAttachmentService, knowledgeBaseService, bochaRerankService, 128_000, false);
+        String retrieval = r.render(9L, "怎么装").retrieval();
+
+        assertThat(retrieval.indexOf("第一片")).isLessThan(retrieval.indexOf("第二片"));
+        assertThat(retrieval.indexOf("第二片")).isLessThan(retrieval.indexOf("第三片"));
+        verifyNoInteractions(bochaRerankService);
+    }
+
+    @Test
+    @DisplayName("ATT-3：重排失败（返回 null）时降级为向量序，片段照样注入")
+    void shouldKeepVectorOrderWhenRerankFails() {
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(ingestedAttachment()));
+        when(knowledgeBaseService.search(anyString(), anyInt(), anyLong(), isNull(), anyInt(), anyList()))
+                .thenReturn(threeHitResult());
+        when(bochaRerankService.rerankOrder(eq("怎么装"), anyList())).thenReturn(null);
+
+        ChatAttachmentPromptRenderer r = new ChatAttachmentPromptRenderer(
+                chatAttachmentService, knowledgeBaseService, bochaRerankService, 128_000, true);
+        String retrieval = r.render(9L, "怎么装").retrieval();
+
+        assertThat(retrieval.indexOf("第一片")).isLessThan(retrieval.indexOf("第二片"));
+        assertThat(retrieval).contains("第三片");
     }
 }

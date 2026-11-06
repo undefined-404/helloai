@@ -2,6 +2,9 @@ package com.helloai.core.planner.clarify;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helloai.core.planner.search.WebModalCard;
+import com.helloai.core.planner.search.WebSearchOutcome;
+import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifyReply;
 import com.helloai.core.planner.service.RoundProcess;
 import org.junit.jupiter.api.DisplayName;
@@ -78,5 +81,50 @@ class ClarifyReplyParserProcessPayloadTest {
 
         assertThat(node.has("process")).isFalse();
         assertThat(node.path("progress").asInt()).isEqualTo(50);
+    }
+
+    @Test
+    @DisplayName("W-7 模态卡：webSearch payload 必须序列化 modalCards（空卡不写该键）")
+    void webSearchMap_carriesModalCards() throws Exception {
+        WebSearchOutcome outcome = WebSearchOutcome.builder()
+                .provider("router->bocha-ai-search")
+                .query("北京天气")
+                .queries(List.of("北京天气"))
+                .costMs(1757L)
+                .total(1)
+                .results(List.of(WebSearchResult.builder().title("结果").url("http://x").build()))
+                .modalCards(List.of(
+                        WebModalCard.builder().type("weather_china").title("北京今日天气")
+                                .summary("晴，14℃…").build(),
+                        WebModalCard.builder().type("weather_china").title("北京夜间天气")
+                                .summary("多云，2℃…").build()))
+                .build();
+
+        JsonNode node = objectMapper.readTree(parser.buildQuestionPayload(new ClarifyReply(), outcome));
+
+        assertThat(node.has("webSearch")).isTrue();
+        JsonNode cards = node.path("webSearch").path("modalCards");
+        assertThat(cards.isArray()).isTrue();
+        assertThat(cards).hasSize(2);
+        assertThat(cards.get(0).path("type").asText()).isEqualTo("weather_china");
+        assertThat(cards.get(0).path("title").asText()).isEqualTo("北京今日天气");
+        assertThat(cards.get(0).path("summary").asText()).contains("14℃");
+    }
+
+    @Test
+    @DisplayName("W-7 模态卡：无卡时 webSearch payload 不写 modalCards 键（前端忽略未知键）")
+    void webSearchMap_noModalCards_omitsKey() throws Exception {
+        WebSearchOutcome outcome = WebSearchOutcome.builder()
+                .provider("router->bocha-ai-search")
+                .query("北京")
+                .queries(List.of("北京"))
+                .costMs(1233L)
+                .total(15)
+                .results(List.of(WebSearchResult.builder().title("r").url("http://x").build()))
+                .build();
+
+        JsonNode node = objectMapper.readTree(parser.buildQuestionPayload(new ClarifyReply(), outcome));
+
+        assertThat(node.path("webSearch").has("modalCards")).isFalse();
     }
 }

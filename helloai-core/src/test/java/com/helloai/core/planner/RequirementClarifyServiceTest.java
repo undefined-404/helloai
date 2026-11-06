@@ -247,7 +247,7 @@ class RequirementClarifyServiceTest {
         streamService = new ClarifyStreamServiceImpl(
                 orchestrator, promptRenderService, commandSearch, messageService, conversationService,
                 plannerAgentPicker, platformAgentExecutionService, replyParser, confirmCard,
-                webSearchOrchestrator, roundLocker, skillDirective);
+                roundLocker, skillDirective);
         clarifyService = new RequirementClarifyServiceImpl(
                 conversationService, messageService, taskService, plannerAgentPicker,
                 orchestrator, streamService, finalizeService, commandSearch);
@@ -2755,7 +2755,7 @@ class RequirementClarifyServiceTest {
         verify(messageService).addMessage(CONV_ID, "user", "你好", null);
         verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
                 eq("你好，自由模式的回答 分片二 分片三"), argThat(p ->
-                        p != null && p.contains("\"process\"") && p.contains("正在联网检索：你好")));
+                        p != null && p.contains("\"process\"") && p.contains("本轮未联网检索（无需外部资料）")));
         verify(conversationService).updateById(conversation);
     }
 

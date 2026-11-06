@@ -416,12 +416,15 @@ public class AssistantChatServiceImpl implements AssistantChatService {
                                 Flux.just(ChatStreamEvent.progress(skipStep)),
                                 runStreamMainReply(conversation, context, null, steps, thinking, regenerate));
                     }
-                    String searchStep = RoundProgressText.searching(message);
+                    // ATT-8：先规划真实检索词，再用它发进度帧；检索阶段复用规划结果（不重跑）
+                    List<String> plannedQueries = planSearchQueries(message, searchPlan);
+                    String searchStep = RoundProgressText.searching(plannedQueries);
                     steps.add(searchStep);
                     return Flux.concat(
                             Flux.just(ChatStreamEvent.progress(searchStep)),
                             Flux.defer(() -> {
-                                WebSearchOutcome outcome = doWebSearch(conversationId, message, searchPlan);
+                                WebSearchOutcome outcome = doWebSearch(conversationId, message, searchPlan,
+                                        plannedQueries);
                                 steps.add(RoundProgressText.searchResult(outcome));
                                 return runStreamMainReply(conversation, context, outcome, steps, thinking, regenerate);
                             }));
@@ -553,15 +556,34 @@ public class AssistantChatServiceImpl implements AssistantChatService {
      * 规则词兜底。任何失败一律降级为 null（不阻断本轮问答）。
      */
     private WebSearchOutcome doWebSearch(Long conversationId, String message, AssistantSearchPlan plan) {
+        return doWebSearch(conversationId, message, plan, null);
+    }
+
+    /** 按预规划检索词执行（ATT-8）：{@code plannedQueries} 非 null 时不再重跑规划。 */
+    private WebSearchOutcome doWebSearch(Long conversationId, String message, AssistantSearchPlan plan,
+                                         List<String> plannedQueries) {
         try {
-            List<String> priority = (plan == null || plan.priorityQuery() == null
-                    || plan.priorityQuery().isBlank()) ? null : List.of(plan.priorityQuery());
-            return webSearchOrchestrator.doWebSearch(message, priority);
+            return webSearchOrchestrator.doWebSearch(message, priorityQueries(plan), null, plannedQueries);
         } catch (Exception e) {
             log.warn("助理联网搜索失败（降级为不注入资料）: conversationId={}, err={}",
                     conversationId, e.getMessage());
             return null;
         }
+    }
+
+    /** ATT-8：检索词预规划（不搜索、不抓页面）；失败降级为空候选，不影响本轮问答。 */
+    private List<String> planSearchQueries(String message, AssistantSearchPlan plan) {
+        try {
+            return webSearchOrchestrator.planCandidates(message, priorityQueries(plan));
+        } catch (RuntimeException e) {
+            log.warn("助理检索词预规划失败（降级为空候选）: err={}", e.toString());
+            return List.of();
+        }
+    }
+
+    private static List<String> priorityQueries(AssistantSearchPlan plan) {
+        return (plan == null || plan.priorityQuery() == null || plan.priorityQuery().isBlank())
+                ? null : List.of(plan.priorityQuery());
     }
 
     private String resolveWebSearchContext(RequirementConversation conversation, String message,

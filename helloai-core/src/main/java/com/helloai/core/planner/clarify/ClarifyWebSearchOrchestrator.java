@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -158,9 +159,30 @@ public class ClarifyWebSearchOrchestrator {
 
     /**
      * 联网搜索一次（带权威时钟注入版本，供测试固定日期）：委托
-     * {@link #doWebSearch(String, List, LocalDate)}；生产路径 today 传 null 用服务器实时日期。
+     * {@link #doWebSearch(String, List, LocalDate, List)}；生产路径 today 传 null 用服务器实时日期。
      */
     public WebSearchOutcome doWebSearch(String userMessage, List<String> priorityQueries, LocalDate today) {
+        return doWebSearch(userMessage, priorityQueries, today, null);
+    }
+
+    /**
+     * 预规划本轮候选检索词（`ATT-8`）：只做语义侧计算，<b>不搜索、不抓页面</b>，
+     * 供流式链路在发起检索前把真实候选词推成进度帧。
+     *
+     * <p>与 {@link #doWebSearch(String, List, LocalDate, List)} 共用同一段规划逻辑——
+     * 调用方把结果回传给后者即可，规划（含条件触发的 LLM 改写）不会跑第二遍。</p>
+     *
+     * <p>不含「直取失败 → 域名前置」：那一步依赖抓页面结果，只能在执行阶段完成，
+     * 因此进度帧里的检索词可能比最终实际检索词少一个域名前缀。</p>
+     *
+     * @return 归一化后的候选词；可能为空（消息全是元词 / 纯空白），空时执行阶段仅靠 URL 直取
+     */
+    public List<String> planCandidates(String userMessage, List<String> priorityQueries) {
+        return planCandidates(userMessage, priorityQueries, null);
+    }
+
+    /** 预规划重载：{@code today} 为权威时钟（测试固定日期用），null = 服务器实时日期。 */
+    public List<String> planCandidates(String userMessage, List<String> priorityQueries, LocalDate today) {
         LocalDate anchor = today == null ? LocalDate.now() : today;
         List<String> urls = extractUrls(userMessage);
         List<String> candidates = new ArrayList<>();
@@ -177,8 +199,6 @@ public class ClarifyWebSearchOrchestrator {
                 log.info("澄清联网搜索：兜底词为纯元词，放弃本轮检索 fallback={}", fallback);
             }
         }
-        List<WebPageContent> pages = fetchUserPages(urls);
-        boolean hasOkPage = pages.stream().anyMatch(WebPageContent::isOk);
         if (candidates.isEmpty() && !urls.isEmpty()) {
             // 纯 URL 消息：回退域名作搜索词（无论直取成败）
             String host = hostOfUrl(urls.get(0));
@@ -186,20 +206,41 @@ public class ClarifyWebSearchOrchestrator {
                 candidates = List.of(host);
                 log.info("澄清联网搜索：纯 URL 消息回退域名作搜索词: query={}", host);
             }
-        } else if (!urls.isEmpty() && !hasOkPage && !candidates.isEmpty()) {
+        }
+        // 第二层防线：候选词统一做相对时间词→绝对日期归一化（LLM 优化词/规则词/兜底词
+        // 全量覆盖，幂等）。搜索引擎不理解"今天/上周五"等相对时间语义，跨天对话时
+        // LLM 可能以历史日期为锚，规则层兜底修正后才发起检索
+        return normalizeCandidates(candidates, anchor);
+    }
+
+    /**
+     * 联网搜索一次（`ATT-8` 两阶段版本）：{@code plannedCandidates} 非 null 时跳过规划，
+     * 直接按预规划结果执行（抓页面 / 域名前置 / 候选检索 / 补搜 / 重排 / 合并）。
+     *
+     * @param plannedCandidates {@link #planCandidates} 的返回值；null = 在本次调用内规划
+     */
+    public WebSearchOutcome doWebSearch(String userMessage, List<String> priorityQueries, LocalDate today,
+                                        List<String> plannedCandidates) {
+        LocalDate anchor = today == null ? LocalDate.now() : today;
+        List<String> urls = extractUrls(userMessage);
+        List<String> candidates = plannedCandidates != null
+                ? new ArrayList<>(plannedCandidates)
+                : planCandidates(userMessage, priorityQueries, anchor);
+        List<WebPageContent> pages = fetchUserPages(urls);
+        boolean hasOkPage = pages.stream().anyMatch(WebPageContent::isOk);
+        if (!urls.isEmpty() && !hasOkPage && !candidates.isEmpty()) {
             // 语义文本存在但直取全部失败 → 首个候选词前置域名，
-            // 让搜索引擎检索该站点的公开资料（介绍/教程/文档）
+            // 让搜索引擎检索该站点的公开资料（介绍/教程/文档）。
+            // 纯 URL 消息的候选词已经是域名本身，跳过以免出现「host host」。
             String host = hostOfUrl(urls.get(0));
-            if (!host.isBlank()) {
+            if (!host.isBlank() && !candidates.get(0).toLowerCase(Locale.ROOT).startsWith(host.toLowerCase(Locale.ROOT))) {
                 List<String> prefixed = new ArrayList<>(candidates);
                 prefixed.set(0, host + " " + prefixed.get(0));
                 candidates = prefixed;
                 log.info("澄清联网搜索：直取失败，域名前置增强搜索词: query={}", prefixed.get(0));
             }
         }
-        // 第二层防线：候选词统一做相对时间词→绝对日期归一化（LLM 优化词/规则词/兜底词
-        // 全量覆盖，幂等）。搜索引擎不理解"今天/上周五"等相对时间语义，跨天对话时
-        // LLM 可能以历史日期为锚，规则层兜底修正后才发起检索
+        // 域名前置后重做一次归一化（幂等：保证前置词里的相对时间也被替换）
         candidates = normalizeCandidates(candidates, anchor);
 
         if (candidates.isEmpty() && !hasOkPage) {
@@ -274,7 +315,13 @@ public class ClarifyWebSearchOrchestrator {
                     log.warn("澄清联网搜索：并行任务异常（exceptionally 已转 null，此处不应到达）: err={}",
                             e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
                 }
-                for (int i = 0; i < futures.size() && searched.size() < maxResults; i++) {
+                // 注意：不得用 searched.size() < maxResults 作循环截止（W-7 历史 bug）。
+                // 结果条数一旦被前序候选词填满，后序词（可能携带模态卡）的 future 就被
+                // getNow 之前短路跳过、从未 absorb —— 模态卡随该词一起丢失（漂移经真实链路
+                // 日志实证：工具级「北京天气 modalCards=2」到 outcome 恒 0）。
+                // absorbs 及时按 URL 去重 + maxResults cap 结果，但模态卡不受结果条数约束，
+                // 须让所有 future 都进 absorb。故循环只以 futures 为界。
+                for (int i = 0; i < futures.size(); i++) {
                     WebSearchToolResult out = futures.get(i).getNow(null);
                     if (out == null) {
                         // 可查验：该词是「超时未完成」或「异常被 exceptionally 转 null」，
@@ -300,7 +347,12 @@ public class ClarifyWebSearchOrchestrator {
             long minGapBudget = Math.min(webSearchProperties.getAiSearchTimeoutMs(),
                     Math.max(1L, webSearchProperties.getMinGapSearchBudgetMs()));
             boolean budgetLeft = remainingMs >= minGapBudget;
-            if (!searched.isEmpty() && webSearchProperties.getAiSearchMaxRounds() > 1 && budgetLeft) {
+            // ★满额闸（2026-11-06 真机实测）：首轮已吃到 maxResults 时，补搜结果无处可放
+            // （循环第一行即 break），但缺口评估 LLM 仍会被调用——实测每次白付 1~14 秒。
+            // 补搜结果只追加不替换，满额时补搜不可能改变输出，故在调评估前先短路。
+            boolean resultsFull = searched.size() >= maxResults;
+            if (!searched.isEmpty() && webSearchProperties.getAiSearchMaxRounds() > 1
+                    && budgetLeft && !resultsFull) {
                 // ATT-6：补搜支持 1~3 条不同角度的变体。每条之前重算预算——变体的耗时是
                 // 单条的 N 倍，靠外层那一次预算判断挡不住（3 条各 25s 会把总时长拖到 75s+）。
                 List<String> gapQueries = searchGapAssessor.assessGaps(
@@ -340,9 +392,14 @@ public class ClarifyWebSearchOrchestrator {
                     rounds = 2;
                 }
             } else if (!searched.isEmpty() && webSearchProperties.getAiSearchMaxRounds() > 1) {
-                // 可查验：不是「没找到缺口」而是「预算不够补」——两者对排障的意义完全不同
-                log.info("澄清联网搜索：跳过缺口补搜（剩余预算 {}ms < 补搜最小预算 {}ms）: tried={}",
-                        remainingMs, minGapBudget, attempted);
+                // 可查验：区分跳过原因——满额 / 预算不足对排障意义不同，不能合并成一句
+                if (resultsFull) {
+                    log.info("澄清联网搜索：首轮已满 {} 条，跳过缺口评估与补搜: tried={}",
+                            maxResults, attempted);
+                } else {
+                    log.info("澄清联网搜索：跳过缺口补搜（剩余预算 {}ms < 补搜最小预算 {}ms）: tried={}",
+                            remainingMs, minGapBudget, attempted);
+                }
             }
             long costMs = System.currentTimeMillis() - t0;
             // W-5：语义重排只作用于搜索引擎结果——用户直取页面是第一手资料，

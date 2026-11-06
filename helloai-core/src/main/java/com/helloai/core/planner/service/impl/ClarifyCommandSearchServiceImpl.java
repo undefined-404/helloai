@@ -168,6 +168,15 @@ public class ClarifyCommandSearchServiceImpl implements ClarifyCommandSearchServ
                                                      String userMessage, String userPayload,
                                                      ChatRoundDecisionParser.ChatRoundDecision decision,
                                                      boolean degraded) {
+        return executeChatSearch(conversation,
+                planChatSearch(conversation, userMessage, userPayload, decision, degraded));
+    }
+
+    @Override
+    public PlannedChatSearch planChatSearch(RequirementConversation conversation,
+                                            String userMessage, String userPayload,
+                                            ChatRoundDecisionParser.ChatRoundDecision decision,
+                                            boolean degraded) {
         // ATT-5：附件能独立作答时否决联网（附件优先），<b>不受搜索策略限制</b>。
         // ALWAYS_ON 的语义是「每轮都允许联网」，不是「禁止判断本轮是否需要」——用户打开
         // 开关的意图是「你可以搜」，而不是「必须搜」。实测（LOG-20261023-016）：开关开着
@@ -180,7 +189,7 @@ public class ClarifyCommandSearchServiceImpl implements ClarifyCommandSearchServ
         switch (resolveSearchPolicy(conversation)) {
             case ALWAYS_ON:
                 // 每轮搜索，LLM 只提供优化词（优先候选），不决策是否需要
-                return doChatWebSearch(conversation, userMessage, userPayload,
+                return plan(conversation, userMessage, userPayload,
                         decision.webSearch() == null ? null : decision.webSearch().searchQuery());
             case OFF:
                 return null;
@@ -188,24 +197,50 @@ public class ClarifyCommandSearchServiceImpl implements ClarifyCommandSearchServ
                 // AUTO：LLM 决策 need_search；need=false 或未输出搜索决策 → 不搜；
                 // 决策降级（解析失败/调用异常）时规则搜索兜底，继承既有每轮检索行为
                 if (degraded) {
-                    return doChatWebSearch(conversation, userMessage, userPayload, null);
+                    return plan(conversation, userMessage, userPayload, null);
                 }
                 if (decision.webSearch() == null || !decision.webSearch().needSearch()) {
                     return null;
                 }
-                return doChatWebSearch(conversation, userMessage, userPayload,
+                return plan(conversation, userMessage, userPayload,
                         decision.webSearch().searchQuery());
         }
     }
 
-    /** 执行一次 CHAT 轮搜索：LLM 优化词作优先候选（空白/空串跳过），规则词兜底。 */
-    private WebSearchOutcome doChatWebSearch(RequirementConversation conversation,
-                                             String userMessage, String userPayload,
-                                             String priorityQuery) {
+    @Override
+    public PlannedChatSearch planClarifySearch(RequirementConversation conversation,
+                                               String userMessage, String userPayload) {
+        if (!isWebSearchEnabled(conversation)) {
+            return null;
+        }
+        return plan(conversation, userMessage, userPayload, null);
+    }
+
+    @Override
+    public WebSearchOutcome executeChatSearch(RequirementConversation conversation,
+                                              PlannedChatSearch planned) {
+        if (planned == null) {
+            return null;
+        }
+        return webSearchOrchestrator.doWebSearch(
+                planned.source(), null, null, planned.queries());
+    }
+
+    /** 规划候选词：LLM 优化词作优先候选（空白/空串跳过），规则词兜底；不搜索、不抓页面。 */
+    private PlannedChatSearch plan(RequirementConversation conversation,
+                                   String userMessage, String userPayload,
+                                   String priorityQuery) {
+        String source = resolveSearchSource(conversation.getId(), userMessage, userPayload);
         List<String> priority = (priorityQuery == null || priorityQuery.isBlank())
                 ? null : List.of(priorityQuery);
-        return webSearchOrchestrator.doWebSearch(
-                resolveSearchSource(conversation.getId(), userMessage, userPayload), priority);
+        try {
+            return new PlannedChatSearch(source, webSearchOrchestrator.planCandidates(source, priority));
+        } catch (RuntimeException e) {
+            // 规划失败不能把整轮对话拖死：退回空候选，执行阶段仍可经 URL 直取拿到资料
+            log.warn("检索词预规划失败（降级为空候选）: conversationId={}, err={}",
+                    conversation.getId(), e.toString());
+            return new PlannedChatSearch(source, List.of());
+        }
     }
 
     @Override

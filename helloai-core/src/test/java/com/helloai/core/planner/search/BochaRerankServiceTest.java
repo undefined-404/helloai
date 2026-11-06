@@ -2,12 +2,16 @@ package com.helloai.core.planner.search;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -104,5 +108,107 @@ class BochaRerankServiceTest {
 
         List<WebSearchResult> out = service.rerank("膝盖旧伤能不能跑步", input);
         assertThat(out).as("失败必须原样返回（同实例同顺序），绝不阻断").isSameAs(input);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  ATT-3：通用下标重排入口（附件片段复用）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("rerankOrder：无博查密钥 → null（调用方保持原顺序）")
+    void rerankOrder_noCredential_returnsNull() {
+        when(credentialKeyStore.resolveBochaApiKey()).thenReturn("  ");
+        BochaRerankService service = newService();
+
+        assertThat(service.rerankOrder("怎么装", List.of("a", "b"))).isNull();
+    }
+
+    @Test
+    @DisplayName("rerankOrder：网页重排开关关闭但 Key 就绪 → 仍重排（开关归调用方各自判定）")
+    void rerankOrder_webSwitchOff_stillReranks() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/rerank", exchange -> {
+            byte[] body = ("{\"data\":{\"results\":["
+                    + "{\"index\":1,\"relevance_score\":0.9},"
+                    + "{\"index\":0,\"relevance_score\":0.5}]}}")
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body);
+            }
+        });
+        server.start();
+        try {
+            when(properties.isRerankEnabled()).thenReturn(false);
+            when(credentialKeyStore.resolveBochaApiKey()).thenReturn("key");
+            when(properties.getRerankBaseUrl())
+                    .thenReturn("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/rerank");
+            when(properties.getRerankTimeoutMs()).thenReturn(5_000L);
+            when(properties.getRerankMaxDocuments()).thenReturn(50);
+            when(properties.getRerankModel()).thenReturn("gte-rerank");
+            BochaRerankService service = newService();
+
+            assertThat(service.rerankOrder("怎么装", List.of("a", "b"))).containsExactly(1, 0);
+            assertThat(service.rerank("怎么装", threeResults())).as("网页入口仍受自身开关约束")
+                    .hasSize(3);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    @DisplayName("rerankOrder：片段不足 2 条 → null（不浪费一次计费调用）")
+    void rerankOrder_singleDocument_returnsNull() {
+        BochaRerankService service = newService();
+
+        assertThat(service.rerankOrder("怎么装", List.of("a"))).isNull();
+    }
+
+    @Test
+    @DisplayName("rerankOrder：网络失败 → null，绝不抛异常")
+    void rerankOrder_networkFailure_returnsNull() {
+        when(credentialKeyStore.resolveBochaApiKey()).thenReturn("key");
+        when(properties.getRerankBaseUrl()).thenReturn("http://127.0.0.1:1/v1/rerank");
+        when(properties.getRerankTimeoutMs()).thenReturn(300L);
+        when(properties.getRerankMaxDocuments()).thenReturn(50);
+        when(properties.getRerankModel()).thenReturn("gte-rerank");
+        BochaRerankService service = newService();
+
+        assertThat(service.rerankOrder("怎么装", List.of("a", "b", "c"))).isNull();
+    }
+
+    @Test
+    @DisplayName("rerankOrder：按 relevance_score 降序返回原下标（本地 HTTP 桩）")
+    void rerankOrder_returnsOriginalIndices() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/rerank", exchange -> {
+            byte[] body = ("{\"data\":{\"results\":["
+                    + "{\"index\":2,\"relevance_score\":0.9},"
+                    + "{\"index\":0,\"relevance_score\":0.7},"
+                    + "{\"index\":1,\"relevance_score\":0.5}]}}")
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body);
+            }
+        });
+        server.start();
+        try {
+            when(credentialKeyStore.resolveBochaApiKey()).thenReturn("key");
+            when(properties.getRerankBaseUrl())
+                    .thenReturn("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/rerank");
+            when(properties.getRerankTimeoutMs()).thenReturn(5_000L);
+            when(properties.getRerankMaxDocuments()).thenReturn(50);
+            when(properties.getRerankModel()).thenReturn("gte-rerank");
+            BochaRerankService service = newService();
+
+            List<Integer> order = service.rerankOrder("怎么装", List.of("a", "b", "c"));
+
+            assertThat(order).containsExactly(2, 0, 1);
+        } finally {
+            server.stop(0);
+        }
     }
 }

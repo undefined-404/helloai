@@ -6,7 +6,6 @@ import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.clarify.ChatRoundDecisionParser;
 import com.helloai.core.planner.clarify.ClarifyReplyParser;
-import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
 import com.helloai.core.planner.clarify.ConfirmCardProtocol;
 import com.helloai.core.planner.clarify.SkillDirective;
 import com.helloai.core.planner.entity.RequirementConversation;
@@ -62,7 +61,6 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final ClarifyReplyParser replyParser;
     private final ConfirmCardProtocol confirmCardProtocol;
-    private final ClarifyWebSearchOrchestrator webSearchOrchestrator;
 
     /** 每会话轮次互斥锁（RC-1）：同步前置段持锁、解锁后再入 LLM 流段。 */
     private final ConversationRoundLocker roundLocker;
@@ -187,18 +185,28 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                             return playClarifyQuestion(conversation, roundDecision.decision());
                         }
                     }
-                    boolean willSearch = commandSearch.isWebSearchEnabled(conversation);
-                    String searchStep = willSearch
-                            ? RoundProgressText.searching(userMessage)
-                            : "本轮未联网检索（会话搜索开关关闭）";
+                    boolean webSearchEnabled = commandSearch.isWebSearchEnabled(conversation);
+                    // ATT-8：先规划真实候选词，再用它发进度帧；检索阶段复用规划结果（不重跑）
+                    ClarifyCommandSearchService.PlannedChatSearch planned = webSearchEnabled
+                            ? commandSearch.planChatSearch(conversation, userMessage, userPayload,
+                                    roundDecision.decision(), roundDecision.degraded())
+                            : null;
+                    String searchStep;
+                    if (!webSearchEnabled) {
+                        searchStep = "本轮未联网检索（会话搜索开关关闭）";
+                    } else if (planned == null) {
+                        searchStep = roundDecision.decision().vetoesWebSearch()
+                                ? "本轮未联网检索（附件内容可回答）"
+                                : "本轮未联网检索（无需外部资料）";
+                    } else {
+                        searchStep = RoundProgressText.searching(planned.queries());
+                    }
                     steps.add(searchStep);
                     return Flux.concat(
                             Flux.just(ChatStreamEvent.progress(searchStep)),
                             Flux.defer(() -> {
-                                WebSearchOutcome outcome = commandSearch.resolveChatSearchOutcome(
-                                        conversation, userMessage, userPayload,
-                                        roundDecision.decision(), roundDecision.degraded());
-                                if (willSearch) {
+                                WebSearchOutcome outcome = commandSearch.executeChatSearch(conversation, planned);
+                                if (planned != null) {
                                     steps.add(RoundProgressText.searchResult(outcome));
                                 }
                                 return runChatMainReply(conversation, outcome, steps, thinking, roundNo,
@@ -314,25 +322,23 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
      */
     private Flux<ChatStreamEvent> runClarifyStream(RequirementConversation conversation,
                                                    String userMessage, String userPayload) {
-        Long conversationId = conversation.getId();
         // ★过程数据（2026-10-18）：思考全文 + 检索步骤随 payload 落库（done 后仍可回看）
         StringBuilder thinking = new StringBuilder();
         List<String> steps = new ArrayList<>();
-        boolean willSearch = commandSearch.isWebSearchEnabled(conversation);
-        String searchStep = willSearch
-                ? RoundProgressText.searching(userMessage)
-                : "本轮未联网检索（会话搜索开关关闭）";
+        // ATT-8：CLARIFY 轮先规划候选词，再用真实检索词发进度帧（规划结果复用，不重跑）
+        ClarifyCommandSearchService.PlannedChatSearch planned =
+                commandSearch.planClarifySearch(conversation, userMessage, userPayload);
+        String searchStep = planned == null
+                ? "本轮未联网检索（会话搜索开关关闭）"
+                : RoundProgressText.searching(planned.queries());
         steps.add(searchStep);
         // 分层 defer：先发「正在检索」进度帧，再把同步阻塞的检索放进 defer 执行
         // （否则进度帧要等检索结束才与结果帧一起到达，用户依旧干等）
         return Flux.concat(
                 Flux.just(ChatStreamEvent.progress(searchStep)),
                 Flux.defer(() -> {
-                    WebSearchOutcome outcome = willSearch
-                            ? webSearchOrchestrator.doWebSearch(
-                                    commandSearch.resolveSearchSource(conversationId, userMessage, userPayload))
-                            : null;
-                    if (willSearch) {
+                    WebSearchOutcome outcome = commandSearch.executeChatSearch(conversation, planned);
+                    if (planned != null) {
                         steps.add(RoundProgressText.searchResult(outcome));
                     }
                     return runClarifyMainReply(conversation, userMessage, outcome, steps, thinking);

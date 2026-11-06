@@ -27,7 +27,8 @@ import java.util.Map;
  * 长尾查询下与真实意图偏差大）。</p>
  *
  * <p><b>定位：可选增强，永不阻断</b>。以下情形一律原样返回入参列表（保持原顺序）：
- * 开关关闭（{@code rerankEnabled=false}，默认）/ 无博查 API Key / 结果不足 2 条
+ * 调用方开关关闭（网页重排 {@code rerankEnabled} 默认 false；附件重排见
+ * {@code helloai.attachment.retrieval-rerank-enabled}）/ 无博查 API Key / 结果不足 2 条
  * （无可排空间）/ 请求失败 / 响应不可解析 / 超时。搜索是澄清轮的前置增强，
  * 重排再失败也不得让本轮对话失去已有检索结果。</p>
  *
@@ -70,9 +71,17 @@ public class BochaRerankService {
      * <p>便宜判定（不探测网络），供编排器在无必要时完全跳过本组件。</p>
      */
     public boolean isAvailable() {
-        if (!properties.isRerankEnabled()) {
-            return false;
-        }
+        return properties.isRerankEnabled() && hasCredential();
+    }
+
+    /**
+     * 通道可用性：只看博查密钥是否配置。
+     *
+     * <p>开关归属调用方——网页重排看 {@code helloai.web-search.rerank-enabled}，
+     * 附件片段重排看 {@code helloai.attachment.retrieval-rerank-enabled}。
+     * 若在此处统一判定网页开关，附件侧单独开启会被静默吞掉（2026-11-07 真机发现）。</p>
+     */
+    private boolean hasCredential() {
         String key = credentialKeyStore.resolveBochaApiKey();
         return key != null && !key.isBlank();
     }
@@ -89,20 +98,48 @@ public class BochaRerankService {
      * @return 重排后的新列表；不具备能力/失败/无排空间时返回**入参原列表**
      */
     public List<WebSearchResult> rerank(String query, List<WebSearchResult> results) {
-        if (results == null || results.size() < 2 || !isAvailable()
-                || query == null || query.isBlank()) {
+        if (results == null || results.isEmpty() || !isAvailable()) {
+            // 网页入口的开关（rerankEnabled）只在此处生效：rerankOrder 是通用通道，
+            // 开关归调用方各自判定，不能替附件侧做主（2026-11-07 真机发现）。
             return results;
         }
-        int maxDocs = Math.max(1, Math.min(properties.getRerankMaxDocuments(), MAX_DOCUMENTS));
-        List<WebSearchResult> head = results.size() <= maxDocs ? results : results.subList(0, maxDocs);
-        List<WebSearchResult> tail = results.size() <= maxDocs ? List.of() : results.subList(maxDocs, results.size());
-
-        List<String> documents = new ArrayList<>(head.size());
-        for (WebSearchResult r : head) {
+        List<String> documents = new ArrayList<>(results.size());
+        for (WebSearchResult r : results) {
             documents.add(documentText(r));
         }
+        List<Integer> order = rerankOrder(query, documents);
+        if (order == null) {
+            return results;
+        }
+        List<WebSearchResult> merged = new ArrayList<>(order.size());
+        for (int index : order) {
+            merged.add(results.get(index));
+        }
+        return merged;
+    }
+
+    /**
+     * 通用语义重排（`ATT-3` 复用入口）：按相关度返回 {@code documents} 的<b>原下标</b>序列。
+     *
+     * <p>与 {@link #rerank(String, List)} 共用同一套请求 / 解析 / 降级契约，
+     * 只是不绑定结果类型——会话附件片段重排只需重排文本，不需要网页结果对象。</p>
+     *
+     * <p>只送排前 {@code rerank-max-documents} 条，超出部分按原顺序附在末尾
+     * （控制成本，也不丢弃已有片段）。</p>
+     *
+     * @return 按相关度降序的原下标；通道不可用（无 Key）/ 无可排空间（< 2 条）/
+     *         请求失败 / 响应不可解析时返回 <b>null</b>，调用方保持原顺序
+     */
+    public List<Integer> rerankOrder(String query, List<String> documents) {
+        if (documents == null || documents.size() < 2 || !hasCredential()
+                || query == null || query.isBlank()) {
+            return null;
+        }
+        int maxDocs = Math.max(1, Math.min(properties.getRerankMaxDocuments(), MAX_DOCUMENTS));
+        List<String> head = documents.size() <= maxDocs ? documents : documents.subList(0, maxDocs);
+        int tailStart = head.size();
         try {
-            String body = objectMapper.writeValueAsString(bodyMap(query, documents));
+            String body = objectMapper.writeValueAsString(bodyMap(query, head));
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(properties.getRerankBaseUrl()))
                     .timeout(Duration.ofMillis(Math.max(1L, properties.getRerankTimeoutMs())))
@@ -115,26 +152,27 @@ public class BochaRerankService {
             if (response.statusCode() / 100 != 2) {
                 log.warn("博查 Rerank 返回非 2xx，降级原顺序: status={}, body={}",
                         response.statusCode(), truncate(response.body(), 200));
-                return results;
+                return null;
             }
-            List<WebSearchResult> reranked = parseReranked(response.body(), head);
-            if (reranked.isEmpty()) {
+            List<Integer> order = parseOrder(response.body(), head.size());
+            if (order.isEmpty()) {
                 log.warn("博查 Rerank 响应无可解析结果，降级原顺序");
-                return results;
+                return null;
             }
-            List<WebSearchResult> merged = new ArrayList<>(reranked);
-            merged.addAll(tail);
+            for (int i = tailStart; i < documents.size(); i++) {
+                order.add(i);
+            }
             log.info("博查 Rerank 完成: query={}, in={}, out={}, filtered={}",
-                    query, results.size(), merged.size(), results.size() - merged.size());
-            return merged;
+                    query, documents.size(), order.size(), documents.size() - order.size());
+            return order;
         } catch (Exception e) {
-            // 契约：重排失败绝不抛（调用方拿到原顺序，澄清主流程不受影响）
+            // 契约：重排失败绝不抛（调用方拿到原顺序，主流程不受影响）
             log.warn("博查 Rerank 失败，降级原顺序: query={}, err={}", query, e.getMessage());
-            return results;
+            return null;
         }
     }
 
-    /** 组装请求体（不请求文档原文：结果对象本地已有，只要 index+score）。 */
+    /** 组装请求体（不请求文档原文：调用方本地已有文本，只要 index+score）。 */
     private Map<String, Object> bodyMap(String query, List<String> documents) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", properties.getRerankModel());
@@ -146,14 +184,14 @@ public class BochaRerankService {
     }
 
     /**
-     * 解析 {@code data.results[]}（已按 relevance_score 降序）→ 原结果列表重排。
+     * 解析 {@code data.results[]}（已按 relevance_score 降序）→ 送排下标序列。
      *
-     * <p>{@code index} 是送排 documents 数组的下标（指向 head），据此映射回原对象；
-     * 下标越界/重复丢弃（防上游脏数据）。低于 {@code rerankMinScore} 的条目跳过。</p>
+     * <p>{@code index} 是送排 documents 数组的下标；下标越界/重复丢弃（防上游脏数据）。
+     * 低于 {@code rerankMinScore} 的条目跳过。</p>
      */
-    private List<WebSearchResult> parseReranked(String body, List<WebSearchResult> head) {
-        List<WebSearchResult> out = new ArrayList<>();
-        boolean[] used = new boolean[head.size()];
+    private List<Integer> parseOrder(String body, int size) {
+        List<Integer> out = new ArrayList<>();
+        boolean[] used = new boolean[size];
         double minScore = properties.getRerankMinScore();
         try {
             JsonNode root = objectMapper.readTree(body);
@@ -163,7 +201,7 @@ public class BochaRerankService {
             }
             for (JsonNode item : arr) {
                 int index = item.path("index").asInt(-1);
-                if (index < 0 || index >= head.size() || used[index]) {
+                if (index < 0 || index >= size || used[index]) {
                     continue;
                 }
                 double score = item.path("relevance_score").asDouble(0);
@@ -172,7 +210,7 @@ public class BochaRerankService {
                     continue;
                 }
                 used[index] = true;
-                out.add(head.get(index));
+                out.add(index);
             }
         } catch (Exception e) {
             log.warn("博查 Rerank 响应解析失败，降级原顺序: err={}", e.getMessage());

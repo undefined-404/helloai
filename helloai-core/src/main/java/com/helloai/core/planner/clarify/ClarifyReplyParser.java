@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
+import com.helloai.core.planner.search.WebModalCard;
 import com.helloai.core.planner.search.WebPageContent;
 import com.helloai.core.planner.search.WebSearchOutcome;
 import com.helloai.core.planner.search.WebSearchResult;
@@ -379,6 +380,20 @@ public class ClarifyReplyParser {
             items.add(item);
         }
         trace.put("results", items);
+        // W-7 模态卡：结构化垂域数据（天气/金价/股票…）随 payload 落库供前端查验。
+        // 注意不得遗漏——历史上 outcome.modalCards=2（日志已证）却因本处未序列化而在
+        // payload 恒缺失（与 orchestrator 循环短路是串行链路上两个独立漏点）。
+        if (outcome.getModalCards() != null && !outcome.getModalCards().isEmpty()) {
+            List<Map<String, Object>> cards = new ArrayList<>();
+            for (WebModalCard c : outcome.getModalCards()) {
+                Map<String, Object> card = new LinkedHashMap<>();
+                card.put("type", c.getType());
+                card.put("title", c.getTitle());
+                card.put("summary", c.getSummary());
+                cards.add(card);
+            }
+            trace.put("modalCards", cards);
+        }
         // URL 直取记录（含失败记录可查验）；无 URL 时不落键，前端忽略未知键零兼容成本
         if (outcome.getFetchedPages() != null && !outcome.getFetchedPages().isEmpty()) {
             List<Map<String, Object>> fetched = new ArrayList<>();

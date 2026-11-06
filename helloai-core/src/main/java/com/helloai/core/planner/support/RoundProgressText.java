@@ -2,6 +2,7 @@ package com.helloai.core.planner.support;
 
 import com.helloai.core.planner.search.WebSearchOutcome;
 
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -19,9 +20,18 @@ public final class RoundProgressText {
     private RoundProgressText() {
     }
 
-    /** 检索发起步骤：data 只放一行可读文本，检索词按上限截断。 */
-    public static String searching(String message) {
-        return "正在联网检索：" + abbreviate(message, PROGRESS_TEXT_LIMIT);
+    /**
+     * 检索发起步骤：展示<b>真实候选词</b>（`ATT-8`）。
+     *
+     * <p>改造前这里直接贴用户原话——「正在联网检索：帮我分析一下我上传的附件这个手册
+     * 方案是否正确」既不是检索词，也不像进度。候选词为空时只提示正在检索，
+     * 不拿原话充数（执行阶段仍可能因 URL 直取而拿到资料）。</p>
+     */
+    public static String searching(List<String> queries) {
+        if (queries == null || queries.isEmpty()) {
+            return "正在联网检索";
+        }
+        return "正在联网检索：" + abbreviate(String.join(" / ", queries), PROGRESS_TEXT_LIMIT);
     }
 
     /**

@@ -4,6 +4,8 @@ import com.helloai.core.planner.clarify.ChatRoundDecisionParser;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.search.WebSearchOutcome;
 
+import java.util.List;
+
 /**
  * 澄清会话的<b>命令解析 + 联网搜索决策 + 会话状态守卫</b>接口（RM9-c 从
  * {@link RequirementClarifyService} 实现类拆出的职责契约）。
@@ -63,6 +65,32 @@ public interface ClarifyCommandSearchService {
                                               String userMessage, String userPayload,
                                               ChatRoundDecisionParser.ChatRoundDecision decision,
                                               boolean degraded);
+
+    /**
+     * 本轮联网检索的预规划结果（`ATT-8`）。
+     *
+     * <p>{@code source} 是检索语义锚（普通轮为本轮消息，确认卡提交轮回退主题消息）；
+     * {@code queries} 是真实候选词——流式链路先用它生成进度帧，再原样回传给
+     * {@link #executeChatSearch}，规划（含条件触发的 LLM 改写）不会跑第二遍。</p>
+     */
+    record PlannedChatSearch(String source, List<String> queries) {
+    }
+
+    /**
+     * 预规划 CHAT 轮检索词（`ATT-8`）：只做语义侧计算，<b>不搜索、不抓页面</b>。
+     *
+     * @return null = 本轮不检索（搜索开关关闭 / 附件可独立作答 / LLM 判定无需检索）
+     */
+    PlannedChatSearch planChatSearch(RequirementConversation conversation, String userMessage,
+                                     String userPayload, ChatRoundDecisionParser.ChatRoundDecision decision,
+                                     boolean degraded);
+
+    /** 预规划 CLARIFY 轮检索词（不过联合决策，开关开启即规则检索）；null = 本轮不检索。 */
+    PlannedChatSearch planClarifySearch(RequirementConversation conversation, String userMessage,
+                                        String userPayload);
+
+    /** 按预规划结果执行检索；{@code planned} 为 null 时直接返回 null（本轮不检索）。 */
+    WebSearchOutcome executeChatSearch(RequirementConversation conversation, PlannedChatSearch planned);
 
     /** 解析联网搜索查询词来源（普通轮直接用本轮消息；确认卡提交轮回退历史主题消息）。 */
     String resolveSearchSource(Long conversationId, String userMessage, String userPayload);

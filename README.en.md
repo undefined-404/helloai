@@ -399,8 +399,8 @@ More screenshots in [`doc/images/`](doc/images/).
 - [x] Internal LLM execution chain: tool surface (read attachments / submit deliverables / self-report blocked) + lazy skill loading + cancel/timeout tree + explicit truncation terminal state + usage breakdown (REF-8 / G-021 / G-023)
 - [x] Sandbox execution chain: OpenSandbox controlled verification channel + per-subtask lifecycle reuse + workspace read-back fallback (ADR-005 / S-7~S-9)
 - [x] Domain-agnostic task decomposition: six task archetypes + four acceptance kinds + archetype-branched prompts + clarify stall guard + single-draft expand / regenerate (TD-1~TD-9 / TD-11)
-- [x] Web search optimization: dynamic freshness + parallel search + search term quality (W-1~W-4)
-- [x] Attachment-aware clarification: 3-state attachment intent + text / PDF injection + multi-variant search (ATT-1 / ATT-5 / ATT-6)
+- [x] Web search optimization: dynamic freshness + parallel search + search term quality + Bocha rerank (default off) + grounding + modal cards (W-1~W-10; P3 agentic multi-round search registered, not started)
+- [x] Attachment-aware clarification: 3-state attachment intent + text / PDF injection + post-analysis search + budget windowing (ATT-1 / ATT-5~ATT-7)
 - [x] Vendor / model catalog enrichment: model catalog + capability predicates + multi-key primary/backup (M-1~M-9)
 - [x] Multi-model executor field test: DeepSeek / MiniMax / Qwen internal LLM executors benchmarked (2026-10-25)
 

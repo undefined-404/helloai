@@ -4,6 +4,7 @@ import com.helloai.common.constant.ChatAttachmentParseStatus;
 import com.helloai.core.planner.entity.ChatAttachment;
 import com.helloai.core.knowledge.KnowledgeBaseService;
 import com.helloai.core.knowledge.KnowledgeSearchResult;
+import com.helloai.core.planner.search.BochaRerankService;
 import com.helloai.core.planner.service.ChatAttachmentService;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
 import lombok.extern.slf4j.Slf4j;
@@ -109,14 +110,29 @@ public class ChatAttachmentPromptRenderer {
      */
     private final int contextWindowTokens;
 
+    /** `ATT-3` 片段重排服务（与 W-5 网页重排共用博查通道；兼容构造为 null）。 */
+    private final BochaRerankService bochaRerankService;
+
+    /**
+     * 附件片段重排开关（`ATT-3`，默认关）。
+     *
+     * <p>与 {@code helloai.web-search.rerank-enabled} <b>分开</b>：两处都按次计费，
+     * 开启网页重排不应顺带让每轮附件检索也走付费调用。</p>
+     */
+    private final boolean retrievalRerankEnabled;
+
     @Autowired
     public ChatAttachmentPromptRenderer(
             ChatAttachmentService chatAttachmentService,
             KnowledgeBaseService knowledgeBaseService,
-            @Value("${helloai.attachment.context-window-tokens:128000}") int contextWindowTokens) {
+            BochaRerankService bochaRerankService,
+            @Value("${helloai.attachment.context-window-tokens:128000}") int contextWindowTokens,
+            @Value("${helloai.attachment.retrieval-rerank-enabled:false}") boolean retrievalRerankEnabled) {
         this.chatAttachmentService = chatAttachmentService;
         this.knowledgeBaseService = knowledgeBaseService;
+        this.bochaRerankService = bochaRerankService;
         this.contextWindowTokens = contextWindowTokens;
+        this.retrievalRerankEnabled = retrievalRerankEnabled;
     }
 
     /**
@@ -126,12 +142,18 @@ public class ChatAttachmentPromptRenderer {
      * 这样存量单测不必 mock 知识库，也不会因缺依赖 NPE。</p>
      */
     public ChatAttachmentPromptRenderer(ChatAttachmentService chatAttachmentService) {
-        this(chatAttachmentService, null, AttachmentContentPolicy.DEFAULT_CONTEXT_WINDOW_TOKENS);
+        this(chatAttachmentService, null, null, AttachmentContentPolicy.DEFAULT_CONTEXT_WINDOW_TOKENS, false);
     }
 
     /** 兼容构造：指定窗口但不注入 KB（单测按窗口验证预算，第三层固定返回占位）。 */
     public ChatAttachmentPromptRenderer(ChatAttachmentService chatAttachmentService, int contextWindowTokens) {
-        this(chatAttachmentService, null, contextWindowTokens);
+        this(chatAttachmentService, null, null, contextWindowTokens, false);
+    }
+
+    /** 兼容构造：注入 KB 但关闭片段重排（存量单测验证第三层检索本身）。 */
+    public ChatAttachmentPromptRenderer(ChatAttachmentService chatAttachmentService,
+                                        KnowledgeBaseService knowledgeBaseService, int contextWindowTokens) {
+        this(chatAttachmentService, knowledgeBaseService, null, contextWindowTokens, false);
     }
 
     /**
@@ -265,7 +287,7 @@ public class ChatAttachmentPromptRenderer {
             // 「正文层…检索层另外召回了第 31–37 片」这类面向工程师的过程汇报。
             // 片号对用户无意义，故在数据处直接声明用途——比只写进模板更靠近注意力焦点。
             sb.append("（以下片段供你取用：只在句末标注锚点，不要向用户复述片号、块标题、召回条数或检索过程）\n");
-            for (KnowledgeSearchResult.Hit hit : result.hits()) {
+            for (KnowledgeSearchResult.Hit hit : rerankHits(conversationId, query, result.hits())) {
                 String fileName = nameBySource.getOrDefault(hit.source(), "未知文件");
                 sb.append("### [").append(fileName).append(" 第 ").append(hit.chunkIdx() + 1).append(" 片]")
                         .append(" `[kb:").append(hit.source()).append('#').append(hit.chunkIdx()).append("]`")
@@ -280,6 +302,36 @@ public class ChatAttachmentPromptRenderer {
                     conversationId, e.toString());
             return NO_RETRIEVAL;
         }
+    }
+
+    /**
+     * 片段重排（`ATT-3`）：按与提问的语义相关度重排召回片段。
+     *
+     * <p><b>只在开关开启且博查通道可用时生效</b>：开关关 / 无 Key / 片段不足 2 条 /
+     * 请求失败 / 响应不可解析 → 原顺序返回。检索是附加值，重排失败不得让本轮
+     * 读不到附件（与正文层、检索层的降级契约一致）。</p>
+     *
+     * <p><b>边界</b>：字符预算截断发生在上游 {@code KnowledgeBaseService.search} 内，
+     * 这里只能调整「已返回片段」的顺序——128K 窗口下 16 片 × 600 字 ≈ 预算 9,600 字，
+     * 正常不触发截断。</p>
+     */
+    private List<KnowledgeSearchResult.Hit> rerankHits(Long conversationId, String query,
+                                                       List<KnowledgeSearchResult.Hit> hits) {
+        if (!retrievalRerankEnabled || bochaRerankService == null || hits.size() < 2) {
+            return hits;
+        }
+        List<String> documents = hits.stream().map(KnowledgeSearchResult.Hit::content).toList();
+        List<Integer> order = bochaRerankService.rerankOrder(query, documents);
+        if (order == null) {
+            return hits;
+        }
+        List<KnowledgeSearchResult.Hit> reordered = new ArrayList<>(order.size());
+        for (int index : order) {
+            reordered.add(hits.get(index));
+        }
+        log.info("附件片段重排完成: conversationId={}, in={}, out={}, filtered={}",
+                conversationId, hits.size(), reordered.size(), hits.size() - reordered.size());
+        return reordered;
     }
 
     /**
