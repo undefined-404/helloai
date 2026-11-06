@@ -33,7 +33,28 @@ REPO="${HELLOAI_REPO:-https://gitee.com/undefined_404/helloai}"
 # download a tree that has no installer to run. Release tags that DO ship the
 # bundle are v0.2.0 and later -- pin them with HELLOAI_REF=v0.2.1.
 REF="${HELLOAI_REF:-master}"
-TARGET="${HELLOAI_INSTALL_DIR:-$PWD/helloai}"
+
+# Where to lay the files down.
+#
+# Default is ./helloai -- fine for a first install, WRONG when the command is
+# run from inside an existing installation: the bundle then lands in
+# /opt/helloai/helloai and you get TWO directories. Because docker-compose.yml
+# pins `name: helloai-quickstart`, those two directories are the SAME compose
+# project sharing the SAME volumes, so the stack is whichever directory ran
+# ./start.sh last. That is exactly how a fresh 0.2.1 install shows up as 0.2.0
+# containers: the new copy came up, then the old directory's launcher (with its
+# old .env) recreated everything from the old tag.
+#
+# Detecting "current directory is already an installation" and upgrading in
+# place removes the whole class. HELLOAI_INSTALL_DIR still wins when set.
+IN_PLACE=0
+if [ -z "${HELLOAI_INSTALL_DIR:-}" ] \
+   && [ -f "$PWD/docker-compose.yml" ] && [ -f "$PWD/start.sh" ]; then
+  TARGET="$PWD"
+  IN_PLACE=1
+else
+  TARGET="${HELLOAI_INSTALL_DIR:-$PWD/helloai}"
+fi
 
 log() { printf '[helloai] %s\n' "$*"; }
 die() { printf '[helloai][error] %s\n' "$*" >&2; exit 1; }
@@ -130,6 +151,10 @@ chmod +x "$TARGET"/*.sh 2>/dev/null || true
 # while keeping the AES key that decrypts every stored LLM credential.
 [ -f "$TARGET/.env" ] && log "reusing existing .env (secrets kept)"
 
-log "bundle unpacked to $TARGET"
+if [ "$IN_PLACE" = "1" ]; then
+  log "upgrading in place at $TARGET"
+else
+  log "bundle unpacked to $TARGET"
+fi
 cd "$TARGET"
 exec ./start.sh "$@"
