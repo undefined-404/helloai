@@ -299,7 +299,7 @@ SandboxSpec / OpenSandboxProperties / OpenSandboxSandboxProvider / OpenSandboxEn
 > 平台首次具备可诚实标注 `ISOLATED` 的执行环境（filesystem/resource/credential = `ISOLATED`，
 > network/process = `PARTIAL`——刻意不标全 ISOLATED，防「安全沙箱已完成」误读）。**
 
-已落地（`S-1`~`S-5`，2026-10-17，见 `plan/HelloAI OpenSandbox 沙箱集成计划.md`）：
+已落地（`S-1`~`S-5`，2026-10-17，见 `archive/implemented/HelloAI OpenSandbox 沙箱集成计划.md`）：
 
 ```text
 SandboxSpec                      声明式 spec（type/image/entrypoint/resourceLimits/networkPolicy/scope/timeoutSeconds，纯声明）

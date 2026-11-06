@@ -4,7 +4,7 @@
 >
 > 本文只记录**当前 → 目标**的真实差距；**只保留最新状态、随迭代就地更新**，不累加过程记录。
 >
-> **最后更新：2026-11-06** —— 本轮：侧边栏一级菜单分组与菜单树读侧确定性修复（`V143` / `V144`）、菜单「默认首页」标记（`V145`）、额度浮窗可读性、`0.2.1` 发布链修复与发布（含「镜像源码快照早于工作区」的发现与 `13:38` 重打）。逐条见 `LOG-20261106`。
+> **最后更新：2026-11-06** —— 本轮：侧边栏一级菜单分组与菜单树读侧确定性修复（`V143` / `V144`）、菜单「默认首页」标记（`V145`）、额度浮窗可读性、`0.2.1` 发布链修复与发布（含「镜像源码快照早于工作区」的发现与 `13:38` 重打）；发版全流程（镜像 / 附件 / 源码包 / tag 四条通道）沉淀为操作手册 `doc/manual/release-pipeline/runbook-windows.md`（该手册已出第二版：把每条命令与现役脚本逐条比对，修正 4 处「照做会得出错误结论」的条目——fat jar 嵌套层 grep、compose 项目名写死、回滚被 `sync_image_tags` 覆盖、`upgrade:` 文案）；**服务器升级"仍是 0.2.0"定位为目录自嵌套（`install.sh` 默认 `TARGET=$PWD/helloai`）叠加 compose 写死 `name:` 后旧目录可静默回滚版本，已改 `install.sh` 为就地升级，并在服务器实测 `upgrade: …0.2.0 -> …0.2.1` 通过（`app`/`web` 均 `:0.2.1` healthy、首页 `HTTP 200`）**。逐条见 `LOG-20261106`。
 >
 > 过程与订正历史按「做过什么」归 `doc/log/`：2026-09 批次见 `doc/archive/log/2026-09.md`，2026-10 批次见 `doc/log/2026-10.md`，2026-11 批次见 `doc/log/2026-11.md`。
 >
@@ -25,7 +25,7 @@
 | `BASE-x.y` | 基础架构专项任务（`doc/archive/implemented/HelloAI 基础架构调整实施计划.md`，2026-10-12 已完成归档；编号已退役，不再新增） |
 | `REF-x.y` | 借鉴落地专项任务（`plan/HelloAI 借鉴落地实施计划.md`，2026-10-09 建号）；`x` 取 1~8 —— **`REF-8` 内部 LLM 能力面**（2026-10-12 新增，`D-2026-10-12-1`） |
 | `M-x` | **供应商 / 模型注册信息完善**（magpie 借鉴，2026-10-13 建号，`x` 取 1~9）：来源 `research/magpie_借鉴分析.md`，实施见 `plan/HelloAI 借鉴落地实施计划.md` **§11**。与 `REF-x.y` **并列**——`REF-` 号段 `x` 已占满 1~8，不扩号段 |
-| `S-x` | **OpenSandbox 沙箱专项任务**（2026-10-17 建号，`x` 取 1~10）：`S-1`~`S-6` 实施见 `plan/HelloAI OpenSandbox 沙箱集成计划.md`；**`S-7`~`S-9` 沙箱执行链**（S-7 执行通道 / S-8 工具接线 / S-9 机械判定接入）实施见 `archive/implemented/HelloAI 沙箱执行链设计方案（2026-10-17）.md`；**`S-10` 危险命令守卫 = 后置登记不启动**（待执行通道被真实业务高频使用后评估误用面再启动，对齐 REF-8.9 独立预算闸同款处置）。与 `REF-x.y` / `M-x` 并列——`REF-` 号段不扩，另立号段（实测 `doc/archive/**` 无 `S-` 号段 ⇒ 不撞号） |
+| `S-x` | **OpenSandbox 沙箱专项任务**（2026-10-17 建号，`x` 取 1~10）：`S-1`~`S-6` 实施见 `archive/implemented/HelloAI OpenSandbox 沙箱集成计划.md`；**`S-7`~`S-9` 沙箱执行链**（S-7 执行通道 / S-8 工具接线 / S-9 机械判定接入）实施见 `archive/implemented/HelloAI 沙箱执行链设计方案（2026-10-17）.md`；**`S-10` 危险命令守卫 = 后置登记不启动**（待执行通道被真实业务高频使用后评估误用面再启动，对齐 REF-8.9 独立预算闸同款处置）。与 `REF-x.y` / `M-x` 并列——`REF-` 号段不扩，另立号段（实测 `doc/archive/**` 无 `S-` 号段 ⇒ 不撞号） |
 | `W-x` | **联网搜索效果优化专项任务**（2026-10-18 建号，`x` 取 1~7）：P0（W-1 编排器请求 answer / W-3 动态 freshness）+ P1（W-2 并行搜索 / W-4 搜索词质量）+ P2（W-5 Rerank / W-6 Grounding / W-7 模态卡）；实施见 `plan/HelloAI 联网搜索效果优化实施计划（2026-10-18）.md`。**P3 Agentic 多轮搜索 = 登记不启动**。与 `S-x` / `M-x` / `REF-x.y` / `T-n` 并列——实测 `doc/archive/**` 无 `W-` 号段 ⇒ 不撞号 |
 | `ATT-x` | **需求对话附件专项任务**（2026-10-23 建号，`x` 取 1~7）：`ATT-1` 文本 + PDF 文本层 + 两层 Prompt 注入（**已落地**，`LOG-20261022-014`）/ `ATT-2` 视觉直读（图片与扫描件共用一条通道）/ `ATT-3` 大文件 RAG + 引用回源 / `ATT-4` 版面增强（Docling sidecar，**登记不启动**）/ `ATT-5` 附件意图三态判定（`none`/`answerable`/`needs_external`）/ `ATT-6` 分析后检索（不确定点→检索词，补搜多变体）/ `ATT-7` 附件预算窗口化（按模型窗口折算注入预算）。实施见 `plan/HelloAI 需求对话附件实施计划（2026-10-22）.md`（2026-10-23 由「设计方案」拆分更名；设计见 `design/HelloAI 需求对话附件设计.md`，调研见 `research/HelloAI 需求对话附件产品对标调研（2026-10-22）.md`）。与 `S-x` / `W-x` / `M-x` / `REF-x.y` 并列——`REF-` 号段不扩。实测 `doc/**` 全库无 `ATT-` 号段 ⇒ 不撞号；**刻意不用 `A-`**：`archive/implemented/deploy-checklist-arch-collect-2026-10.md` 内有 `A-1`/`A-2` 操作选项号，且「REF-5 四项之外 A 档」已在用「A 档」二字，两处都会混 |
 | `PC-x` | **Paperclip 借鉴落地专项任务**（2026-10-23 建号，`x` 取 1~19）：`PC-1`~`PC-6` 现有机制补硬（env 黑名单 / 唤醒原因 / 409 语义 / 三配额分离 / 双入口契约 / 成本闸门）/ `PC-7`~`PC-11` CLI 推通道（适配器 / headless 契约 / 输出解析 / session 续接 / run 归一）/ `PC-12`~`PC-19` 有条件再做。实施见 `plan/HelloAI Paperclip 借鉴落地计划（2026-10-21）.md`。**建号动因**：旧稿用「阶段 + 序号」寻址（如「阶段二·1」），该地址不可被外部引用，且违反治理规则 §6.5「分期标签已冻结」——本次一并清偿，治理规则 §6.5 同步记录。与 `S-x` / `W-x` / `ATT-x` / `M-x` / `REF-x.y` 并列。实测 `doc/**` 无 `PC-` 号段 ⇒ 不撞号 |
@@ -72,11 +72,11 @@
 > | ⑤ | **V2 里程碑** | 项目级路线 | `阶段 0`（MVP）~ `阶段 5`（能力经济性） | `review/HelloAI 架构V2进度与质量审计报告（2026-09-29 / 09-30）.md` |
 > | ⑥ | **开发生命周期** | 每次开发任务的流程（**仍活跃 ⇒ 保留**） | `Step 0`（工作区检查）~ `Step 9` | 协作规约 §10-14 |
 > | ⑦ | **运行时字段** | `step` = 事件类型槽位（**非分期**，仅同名） | `0` / `5` / `6` / `7` … | `ADR-001 §5.2`；`agent_event.step` |
-> | ⑧ | **真身灰度联调**（原口径名「灰度第 0 步」，2026-10-09 补登记） | P0-B 双轨切换的联调执行口径（现已终结：灰度机制随单轨硬切不复存在） | `第 0 步`（2026-09-08） | `doc/archive/log/2026-09.md` `LOG-20260908-006`；`plan/HelloAI 重构实施计划.md`（已改称能力名） |
+> | ⑧ | **真身灰度联调**（原口径名「灰度第 0 步」，2026-10-09 补登记） | P0-B 双轨切换的联调执行口径（现已终结：灰度机制随单轨硬切不复存在） | `第 0 步`（2026-09-08） | `doc/archive/log/2026-09.md` `LOG-20260908-006`；`archive/implemented/HelloAI 重构实施计划.md`（已改称能力名） |
 >
 > **已知同号冲突（去标签的直接动因）**：①↔② 对 `Phase 2` 定义不同（① = Tool Executor，② = AgentLoop 多步化）；①↔③ 撞号（`Phase 2E/2F/2H` 属命令链）；`Step`／`步` 多义（① 能力供电 / ⑥ 开发流程 / ⑦ 字段值 / ⑧ 灰度联调）；`阶段` 二义（④ 报告 / ⑤ 里程碑）。
 >
-> **处置（2026-10-09）**：①~⑤ 已在**活文档与生产代码**中去除裸标签（保留能力名、`ADR-*` / `LOG-*` / `N-0xx` 等**durable 锚点**）；`doc/archive/**` 与 `doc/review/**`（历史现场 / 报告）**保留原样**；⑥ 保留；**⑧ 于 2026-10-09 补登记并同批去标签**（`plan/HelloAI 重构实施计划.md` 三处改称「真身灰度联调」+ 挂 `LOG-20260908-006` 锚点）。
+> **处置（2026-10-09）**：①~⑤ 已在**活文档与生产代码**中去除裸标签（保留能力名、`ADR-*` / `LOG-*` / `N-0xx` 等**durable 锚点**）；`doc/archive/**` 与 `doc/review/**`（历史现场 / 报告）**保留原样**；⑥ 保留；**⑧ 于 2026-10-09 补登记并同批去标签**（`archive/implemented/HelloAI 重构实施计划.md` 三处改称「真身灰度联调」+ 挂 `LOG-20260908-006` 锚点）。
 
 **当前生效的取舍决策**
 
@@ -156,7 +156,7 @@
 | G-002 | Executor 迁移 | `RuntimeTurnExecutor` 为唯一 `AgentRuntime`；旧链入口全删；无配置级回退开关 | Runtime 成为唯一执行契约 | PR0 | 已完成 | — |
 | G-003 | AgentRuntime | 八件套契约齐备；工具侧两个语义位（按条件可用 / 按上下文动态描述）生效；`CRITICAL_TOOLS` 三件套不可关闭 | Context + Session + Skill + Tool + Loop + Event + Environment + SandboxProvider 全落地 | PR0 | 已完成 | — |
 | G-004 | Skill Capability | 元数据源 = classpath frontmatter + 目录扫描（9 字段）；技能包安装入口含摄入闸门、受控存储与审计 | Metadata / Version / Tools / Schema / Dependencies 全量 + requiredTools→tools 联动 + 受控存储安装 | PR1 | 已完成 | — |
-| G-005 | Sandbox Provider | 需隔离执行对象的契约仍缺；但技能执行链已在容器内真机跑通（`internal_run_skill` 模型自主触发，SKX-9 已验真） | 真正的 Provider 化执行环境与隔离策略 | PR1 | 暂缓 | 条件②已命中，重排期待议。**2026-11-01：触发条件②「技能包被执行」已命中**（SKX-9 真机模型触发沙箱内执行）⇒ 依口径重排期；条件①「平台增加碰宿主工具」③「平台自持浏览器」仍不命中；SKX-9 判据③外链口径经用户裁定保留署名、技能按通过。详见 `plan/HelloAI 技能执行面接入实施计划（2026-10-26）.md` §SKX-9 |
+| G-005 | Sandbox Provider | **OpenSandbox Provider 现役并被执行链消费**（`S-1`~`S-9` 完成，`OpenSandboxProvider` + 声明式 spec + 五边界策略 + 探针；`RuntimeTurnExecutor` 经 `SandboxProvider.resolve` 使用）；`S-10` 危险命令守卫未实现；技能执行链已在容器内真机跑通（`internal_run_skill` 模型自主触发，SKX-9 已验真） | 真正的 Provider 化执行环境与隔离策略 | PR1 | 暂缓 | 条件②已命中，重排期待议。**2026-11-06 事实并入**：Provider/执行链事实见 `design/Sandbox_Provider.md`，实施记录归档于 `archive/implemented/HelloAI OpenSandbox 沙箱集成计划.md`；**触发条件①「平台增加碰宿主工具」③「平台自持浏览器」仍未命中**；SKX-9 判据③外链口径经用户裁定保留署名、技能按通过。详见 `plan/HelloAI 技能执行面接入实施计划（2026-10-26）.md` §SKX-9 |
 | G-006 | Replay / Audit | 写侧 + 对账闭环；Timeline / Replay / Audit 三读侧经 REST + UI 工作台；外部执行轨迹与事件同址 | 基于统一 Event 查询回放；外部 Agent 全周期轨迹可对齐 | PR1 | 已完成 | — |
 | G-007 | Quality Gate | Reviewer 闭环（执行 → Review → PASS / REJECT → REWORK） | Rule + Test + LLM 统一决策 | PR2 | 待开始 | 统一决策未启动，当前仅有链上增强 |
 | G-008 | Agent Fleet Routing | 选人四维（Capability / Health / Load / Policy）+ 成本维度已入比较链；外部 tokens 回报协议就绪 | 五维选人完整生效，成本可参与候选间比较 | PR2 | 部分完成 | 成本候选间比较待第 2 个 LLM agent 样本；成本闸门接线决策 |
@@ -193,7 +193,7 @@
 |---|---|---|---|
 | `REF-x.y` | REF-1 ~ REF-8（含 `REF-8.1`~`REF-8.9` 子项） | 8 组 | `plan/HelloAI 借鉴落地实施计划.md` §3 ~ §10 各节 `Status` |
 | `M-x` | M-1 ~ M-9 | 9 | `plan/HelloAI 借鉴落地实施计划.md` §11（**全部完成**） |
-| `S-x` | S-1 ~ S-10 | 10 | `plan/HelloAI OpenSandbox 沙箱集成计划.md` §3；`S-7`~`S-9` 见 `archive/implemented/HelloAI 沙箱执行链设计方案（2026-10-17）.md`；`S-10` 登记不启动 |
+| `S-x` | S-1 ~ S-10 | 10 | `archive/implemented/HelloAI OpenSandbox 沙箱集成计划.md` §3；`S-7`~`S-9` 见 `archive/implemented/HelloAI 沙箱执行链设计方案（2026-10-17）.md`；`S-10` 登记不启动 |
 | `W-x` | W-1 ~ W-7 | 7 | `plan/HelloAI 联网搜索效果优化实施计划（2026-10-18）.md` 各节；`P3 Agentic 多轮搜索` 登记不启动 |
 | `ATT-x` | ATT-1 ~ ATT-4 | 4 | `plan/HelloAI 需求对话附件实施计划（2026-10-22）.md` 头部状态行 + `ATT-x` 各节 |
 | Paperclip | 阶段一 / 二 / 三（不引入编号前缀） | 3 阶段 | `plan/HelloAI Paperclip 借鉴落地计划（2026-10-21）.md` §1 ~ §3 |
@@ -224,7 +224,7 @@
 
 单轨后的结构约束（长期有效）见 `design/Agent_Runtime.md` §迁移模型。
 
-**落地事实与验证证据**：`LOG-20260930-001`（硬切）/ `LOG-20260930-002`（外部 CLI_CLIENT E2E）。【过程记录原在 `plan/HelloAI 重构实施计划.md`，已于同批回填 `LOG-20260908-006`】
+**落地事实与验证证据**：`LOG-20260930-001`（硬切）/ `LOG-20260930-002`（外部 CLI_CLIENT E2E）。【过程记录原在 `archive/implemented/HelloAI 重构实施计划.md`，已于同批回填 `LOG-20260908-006`】
 
 ## G-003 AgentRuntime
 

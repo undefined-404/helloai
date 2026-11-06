@@ -75,7 +75,7 @@ Windows 上 `bash` 这个名字被 WSL 占用（`C:\Windows\system32\bash.exe`�
 cd /e/yhzx/1027/helloai        # 等价于 E:\yhzx\1027\helloai
 ```
 
-> 如果你的 GitHub 装在非默认位置，Git Bash 的可执行文件是 `E:\Program Files\Git\bin\bash.exe`。
+> 如果你的 Git 装在非默认位置，Git Bash 的可执行文件是 `E:\Program Files\Git\bin\bash.exe`。
 > 非要在 PowerShell 里调，只能用这一种写法（**不能用 `\` 换行**，PowerShell 的续行符是反引号）：
 > ```powershell
 > & "E:\Program Files\Git\bin\bash.exe" -lc "cd /e/yhzx/1027/helloai/deploy/quickstart && ./build-release.sh --version 0.2.1 --push crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai --skip-sandbox"
@@ -195,7 +195,7 @@ cat ~/.docker/config.json | grep -A2 crpi
 | `deploy/quickstart/.env.example` | 2 | **最关键**：两行镜像地址，包内 `.env` 由它生成 |
 | `deploy/quickstart/README.md` | ~25 | 面向用户的说明：示例命令、产物大小表、目录树 |
 | `README.md`（仓库根） | ~6 | 一键安装段落里的 `HELLOAI_REF` 镜像地址 |
-| `deploy/install.sh` | 3 | 注释与示例里的 `HELLOAI_REF=v0.2.1` |
+| `deploy/install.sh` | 4 | 注释与示例里的 `HELLOAI_REF=v0.2.1` |
 
 `deploy/quickstart/rejoin.sh` 与 `build-release.sh` 里的版本号只是**示例注释**（真实值由 `--version` 参数传入），可以不改。
 
@@ -327,11 +327,20 @@ docker create --name _chk helloai-app:0.2.1 >/dev/null
 docker cp _chk:/app/helloai-start.jar .tmp/chk.jar
 docker rm _chk >/dev/null
 
-# ① 迁移脚本（改成你本次新增的版本号区间）
+# ① 迁移脚本（改成你本次新增的版本号区间）—— 在 fat jar 顶层，可直接查
 unzip -l .tmp/chk.jar | grep -E "db/migration/V14[3-9]"
 
-# ② 后端类是否存在（示例：本次新增字段）
-unzip -l .tmp/chk.jar | grep -i "SysPermission"
+# ② 后端类是否存在 —— 必须先剥一层嵌套 jar，见下方说明
+cd .tmp && rm -rf jarx && mkdir jarx && cd jarx
+unzip -qo ../chk.jar 'BOOT-INF/lib/helloai-*.jar'
+for j in BOOT-INF/lib/helloai-*.jar; do
+  unzip -l "$j" | grep -i "SysPermission" | sed "s#^#$(basename "$j"): #"
+done
+# 想看字段名（比"类存在"更硬）：解出 class 再 javap
+unzip -qo BOOT-INF/lib/helloai-core-*.jar 'com/helloai/core/system/entity/SysPermission.class'
+JDK="$HOME/.jdks/ms-17.0.20.1"        # 按你机器上的实际 JDK 改；IDE 装的通常在 ~/.jdks/
+"$JDK/bin/javap" -p com/helloai/core/system/entity/SysPermission.class | grep -i "home"
+cd /e/yhzx/1027/helloai
 
 # ③ 前端产物标记（换成本次新增的 CSS 类 / 标识符，注意用前端里的驼峰写法）
 docker create --name _chkw helloai-web:0.2.1 >/dev/null
@@ -339,6 +348,11 @@ docker cp _chkw:/usr/share/nginx/html .tmp/webchk >/dev/null 2>&1
 docker rm _chkw >/dev/null
 grep -rl "isDefaultHome" .tmp/webchk | head -2
 ```
+
+> **`unzip -l 外层.jar | grep SysPermission` 一定是 0 命中**，别被它骗了。Spring Boot fat jar 的
+> 业务类在 `BOOT-INF/lib/helloai-core-*.jar` 这类**嵌套 jar** 里，`unzip -l` 只列到那一层 jar 文件为止，
+> 不会进到里面。`db/migration/*.sql` 例外——它在 `BOOT-INF/classes/` 下，顶层可见。
+> 判据：①能直接查、②必须剥一层。
 
 判据：
 
@@ -496,7 +510,9 @@ quickstart 0.2.1 —— 新增个人工作台、额度浮窗、菜单一级分�
 安装（需 Docker）：
 curl -fsSL https://gitee.com/undefined_404/helloai/raw/master/deploy/install.sh | HELLOAI_REF=v0.2.1 bash
 
-已装旧版本的机器：同一条命令，会自动停旧栈（保留数据卷）并升级镜像标签。
+已装旧版本的机器（先 cd 进原安装目录，否则会装成第二个目录）：
+cd /opt/helloai && curl -fsSL https://gitee.com/undefined_404/helloai/raw/master/deploy/install.sh | HELLOAI_REF=v0.2.1 bash
+会自动停旧栈（数据卷保留）、同步 .env 里的镜像标签、就地升级到 0.2.1。
 
 镜像（公开，匿名可拉）：
 crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/app:0.2.1
@@ -536,6 +552,25 @@ docker pull crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/ap
 
 ### 10.3 服务器上升级（已装旧版本）
 
+**先 `cd` 到安装目录**，这一步是前提，不是习惯：
+
+```bash
+cd /opt/helloai                     # ← 必须在安装目录内执行
+curl -fsSL https://gitee.com/undefined_404/helloai/raw/master/deploy/install.sh \
+  | HELLOAI_REF=v0.2.1 bash
+```
+
+`install.sh` 的落点是这么判的（第 50-58 行）：
+
+| 条件 | `TARGET` | 结果 |
+|---|---|---|
+| 当前目录有 `docker-compose.yml` + `start.sh`，且未设 `HELLOAI_INSTALL_DIR` | `$PWD` | **就地升级**（推荐） |
+| 显式给了 `HELLOAI_INSTALL_DIR` | 该值 | 升级到指定目录，最稳 |
+| 都不是（在 `/root` 之类的地方跑） | `$PWD/helloai` | 装成**第二个目录**，原目录一个字不动 |
+
+第三种就是 `0.2.1` 首次升级踩的坑：在 `/home/admin/helloai` 里执行，装进了 `/home/admin/helloai/helloai`，而 `docker-compose.yml:36` 写死 `name: helloai-quickstart`，两个目录在 Docker 眼里是**同一个 stack、同一批数据卷**——最后由哪个目录 `./start.sh` 决定跑哪个版本，于是"装完了还是 0.2.0"。
+所以最保险的写法是**显式给目录**：
+
 ```bash
 curl -fsSL https://gitee.com/undefined_404/helloai/raw/master/deploy/install.sh \
   | HELLOAI_REF=v0.2.1 HELLOAI_INSTALL_DIR=/opt/helloai bash
@@ -543,16 +578,20 @@ curl -fsSL https://gitee.com/undefined_404/helloai/raw/master/deploy/install.sh 
 
 **不需要先 `./stop.sh`**：0.2.1 起 `start.sh` 的 `check_port` 会识别"占 8080 的是自己这一栈"，自动 `compose down --remove-orphans`（不带 `-v`，四个数据卷保留）后继续。只有 0.2.0 及更早版本才需要手动先停。
 
-期望依次看到：
+期望依次看到（注意第一条和后面两条**都以 `upgrade:` 开头**，靠括号内容区分）：
 
 ```
-upgrade detected: 0.2.0 -> 0.2.1 (data volumes and .env secrets are kept)
-upgrade: HELLOAI_APP_IMAGE .../app:0.2.0 -> .../app:0.2.1
-upgrade: HELLOAI_WEB_IMAGE .../web:0.2.0 -> .../web:0.2.1
-an existing HelloAI stack owns port 8080; stopping it to apply the upgrade
+[helloai] upgrade: 0.2.0 -> 0.2.1 (data volumes and .env secrets are kept)
+[helloai] upgrade: HELLOAI_APP_IMAGE .../app:0.2.0 -> .../app:0.2.1
+[helloai] upgrade: HELLOAI_WEB_IMAGE .../web:0.2.0 -> .../web:0.2.1
+[helloai] an existing HelloAI stack owns port 8080; stopping it to apply the upgrade (data volumes are kept)
 ```
 
-缺第一行 = `install.sh` 是旧的（检查 `raw/master` 是否含 `PREV_VER`）；缺中间两行 = `sync_image_tags` 没命中（检查 `.env` 里的仓库前缀是否被你改成了别的）。
+| 缺哪条 | 说明 |
+|---|---|
+| 少了 `(data volumes and .env secrets are kept)` 那条 | `install.sh` 是旧的（`raw/master` 上没 `PREV_VER`），或目标目录没有旧 `RELEASE`（说明装错地方了 → 用 11 节的 `find … -name RELEASE` 确认） |
+| 少了 `HELLOAI_APP_IMAGE` / `HELLOAI_WEB_IMAGE` 两条 | `start.sh` 是旧的（没有 `sync_image_tags`），或 `.env` 里的仓库前缀被你改成了别的（脚本出于保护不覆盖） |
+| 少了 `owns port` 那条 | 正常——本机 8080 当时没被占用 |
 
 ### 10.4 数据影响（升级前心里有数）
 
@@ -572,7 +611,37 @@ docker exec <上一步的容器名> pg_dump -U postgres helloai > /root/helloai-
 
 库用户是 `postgres`、库名是 `helloai`（见 `docker-compose.yml` 的 `POSTGRES_USER` / `POSTGRES_DB`），**不是** `-U helloai`。
 
-容器名的规律是 `<compose 项目名>-postgres-1`，而项目名取**安装目录名**（`docker-compose.yml` 顶层没有 `name:`）。所以装在 `/opt/helloai` 是 `helloai-postgres-1`，直接解压包里目录跑则是 `helloai-quickstart-0.2.1-postgres-1`。别硬记，用 `docker ps` 看。
+容器名**与安装目录无关**：`deploy/quickstart/docker-compose.yml:36` 把项目名写死成 `name: helloai-quickstart`，所以不论装在 `/opt/helloai` 还是别处，容器都叫 `helloai-quickstart-postgres-1`。
+
+> 早期版本的文档写错过这一点，说"项目名取安装目录名"。**那是另外两份 compose 文件的规则**，别混：
+>
+> | 文件 | 用途 | `name:` | 项目名来源 |
+> |---|---|---|---|
+> | `deploy/quickstart/docker-compose.yml` | **一键安装 / 升级**（本文讨论的就是它） | 有，写死 `helloai-quickstart` | 固定 |
+> | `docker-compose.server.yml`（仓库根） | 服务器部署 | 无 | 目录名 |
+> | `docker-compose.yml`（仓库根） | 本地开发中间件 | 无 | 目录名 |
+
+这个写死的 `name:` 有一个副作用必须知道：**同一台机器上放两个安装目录，它们不是两个栈，而是同一个栈**（同项目名 = 同数据卷 + 同容器名）。哪边最后执行 `./start.sh`，跑的哪边的 `.env`。判断"当前目录解析出什么版本"只能用：
+
+```bash
+docker compose config | grep -E "image:.*helloai/(app|web)"
+```
+
+`docker ps` 里的 `CREATED`（容器新起）证明不了换了镜像，只有 `IMAGE` 列算证据。
+
+### 10.5 升级后确认数据库迁移真的跑了
+
+`app` healthy 已间接证明 Flyway 成功（迁移失败会阻止启动），但值得直接看一眼落库结果：
+
+```bash
+cd /opt/helloai
+docker compose exec -T postgres psql -U postgres -d helloai \
+  -c "select version, success from flyway_schema_history order by installed_rank desc limit 6;"
+```
+
+期望本次新增的最高版本（如 `145`）`success = t`。出现 `f` 就是迁移失败，去 `docker compose logs app | grep -i flyway` 看原因。
+
+> 数据库没有被"替换"，只是在原库上追加了几个迁移。`postgres_data` 卷里的旧数据原样保留。
 
 ---
 
@@ -592,6 +661,9 @@ docker exec <上一步的容器名> pg_dump -U postgres helloai > /root/helloai-
 | 端口 8080 被占直接退出 | 旧栈仍在跑 | 0.2.1 起自动 `down` 自家栈；非自家进程占用则改 `HELLOAI_HTTP_PORT` |
 | 发行版附件下载 404 | 文件名不对（如传了 `.zip`） | 必须叫 `helloai-quickstart-<版本>.tar.gz` |
 | 发行版源码包是旧的 | tag 没挪 | 见 8.2 / 8.3 |
+| 手动改 `.env` 回滚到旧 tag，`./start.sh` 后标签又变回新版 | 0.2.1 起 `start.sh` 会把 `.env` 的镜像标签同步成 `.env.example` 的值，只改 `.env` 一个文件必然被覆盖 | 换回旧整包（12.1 方案 A），或把 `.env` 和 `.env.example` 一起改（方案 B） |
+| `upgrade: ... (data volumes and .env secrets are kept)` 没打印 | 目标目录没有旧 `RELEASE`，即装错地方了 | `find <安装根> -maxdepth 3 -name RELEASE`；用 `HELLOAI_INSTALL_DIR` 显式指定 |
+| `start.sh` 打印 `points at a custom repository (...); left as is` | `.env` 里的仓库前缀与 `.env.example` 不同（你曾经改指自建镜像） | 想升级就把 `.env` 两行改成官方地址；想钉死版本就保持现状（这是保护机制，不是错误） |
 
 ---
 
@@ -599,14 +671,57 @@ docker exec <上一步的容器名> pg_dump -U postgres helloai > /root/helloai-
 
 ### 12.1 用户侧回滚到上一版
 
+> **别再只改 `.env` 两行就跑 `./start.sh`。** 0.2.1 起 `start.sh` 的 `sync_image_tags` 会把 `.env` 里的镜像标签改回 `.env.example` 里的值，手工 `sed` 到 `0.2.0` 再启动，会被它当场改回 `0.2.1`——回滚静默失效，而且没有任何报错。回滚必须**连脚本一起回**。
+
+**方案 A：换回旧整包（推荐，语义最干净）**
+
+用**旧 tag 的 installer** 把旧脚本铺回去。这条路最稳：它不依赖那个版本的发行版附件一定还在（旧 installer 的第二候选是源码归档，tag 在就能取到）：
+
 ```bash
 cd /opt/helloai
-./stop.sh
+cp -a .env /root/helloai-env-before-rollback.bak     # 先备份唯一不可再生的东西
+./stop.sh                                            # 保留四个数据卷
+
+curl -fsSL https://gitee.com/undefined_404/helloai/raw/v0.2.0/deploy/install.sh \
+  | HELLOAI_REF=v0.2.0 HELLOAI_INSTALL_DIR=/opt/helloai bash
+
+grep -c sync_image_tags start.sh                     # 期望 0（旧脚本没有该函数）
+grep -E "^HELLOAI_(APP|WEB)_IMAGE=" .env.example      # 期望 :0.2.0
+
+# 旧脚本不会自动改 tag，这一步必须手工做
 sed -i -E 's#(HELLOAI_(APP|WEB)_IMAGE=.*):0\.2\.1#\1:0.2.0#' .env
+grep -E "^HELLOAI_(APP|WEB)_IMAGE=" .env              # 期望 :0.2.0
+
 ./start.sh
 ```
 
-**数据库不会自动降级**。若新版跑过 `INSERT`/`ALTER`，回滚后可能因缺列报错，需要用 10.4 的备份恢复。
+> `HELLOAI_INSTALL_DIR=/opt/helloai` 不能省：v0.2.0 的 `install.sh` 还没有"就地升级"的检测，不给这个变量会装进 `/opt/helloai/helloai`。
+> 若 `raw/v0.2.0` 取不到（tag 被删），退路是 `dist/0.2.0/helloai-quickstart-0.2.0.tar.gz` 直接解压覆盖。
+
+**方案 B：保留新脚本，把 `.env` 与 `.env.example` 一起改（应急用）**
+
+`sync_image_tags` 是拿 `.env.example` 的值去覆盖 `.env`；**两边一致时它什么也不做**。所以两个文件一起改就钉住了：
+
+```bash
+cd /opt/helloai
+sed -i -E 's#(HELLOAI_(APP|WEB)_IMAGE=.*):0\.2\.1#\1:0.2.0#' .env .env.example
+grep -E "^HELLOAI_(APP|WEB)_IMAGE=" .env .env.example   # 四条都必须是 :0.2.0
+./start.sh
+```
+
+三种组合的实测行为（从 `start.sh` 抽出真实函数跑的）：
+
+| `.env` | `.env.example` | 结果 |
+|---|---|---|
+| `:0.2.0` | `:0.2.0` | **保持 0.2.0** ✅ 方案 B 生效 |
+| `:0.2.0` | `:0.2.1` | **被改回 0.2.1** ❌ 这就是"只改 `.env` 回滚无效"的原因 |
+| 仓库前缀不同 | `:0.2.1` | 跳过并 `warn`，但**镜像拉不到**（换了仓库名） |
+
+方案 B 只适合临时回滚排查：下次跑正常升级时，新包里的 `.env.example` 会把 `:0.2.0` 覆盖掉，标签又会同步上去。真要长期钉住某台机器的版本，用方案 A（换回旧整包），或者把镜像同步到你自己的私有仓库后用不同的仓库前缀（守卫会自动放行）。
+
+**数据库不会自动降级。** 若新版跑过 `INSERT`/`ALTER`，回滚后可能因缺列报错，需要用 10.4 的备份恢复。
+
+另外：回滚**不会**清理新版建的对象（如 `V145` 加的 `is_default_home` 列）。列存在但旧代码不读，通常无害；但如果旧代码有 `SELECT *` 映射到实体，可能因未知列报错，那就必须删列或恢复备份。
 
 ### 12.2 发布侧回滚
 
@@ -679,3 +794,16 @@ curl -fsSL -o /tmp/a.tgz "https://gitee.com/undefined_404/helloai/repository/arc
 | 源码包（改 tag 前） | 33,689,365 字节，`install.sh` 内 `PREV_VER` 命中 0 |
 | 源码包（改 tag 后） | 33,721,947 字节，`install.sh` 内 `PREV_VER` 命中 4 |
 | ACR digest | 本地与远端 `211557c7…` / `db4fab34…` 逐字符一致 |
+| **真实服务器 0.2.0→0.2.1 升级** | `upgrade: 0.2.0 -> 0.2.1` + 两条镜像标签改写全部命中；`flyway_schema_history` 末三条 `145/144/143` 均 `success = t`；六个容器 healthy；`HTTP 200` |
+| 升级后 `.env` | mtime 仍是升级前的时间（`10-29 22:21`），7 个 secret 一字未改 |
+
+> 这次升级同时暴露了"在安装目录内执行 → 嵌套出 `helloai/helloai`"的问题，`install.sh` 已就地升级修好（对应 `1ae05e14`）。照本文 10.3 显式给 `HELLOAI_INSTALL_DIR` 或先 `cd` 都不会再遇到。
+
+---
+
+## 修订记录
+
+| 版本 | 改动 |
+|---|---|
+| 首版（`0d43b33b`） | 15 节全流程 |
+| 第 2 版 | 对照真实脚本逐条核过，修 4 处会误导的错：<br>① §7.1 后端自检原写"在外层 fat jar 上直接 grep `SysPermission`"，实测 **0 命中**（业务类在 `BOOT-INF/lib/*.jar` 嵌套层）→ 改成剥一层再查 + `javap` 看字段；<br>② §10.4 原写"项目名取安装目录名"，与 §11 故障表自相矛盾 → 改为 `name: helloai-quickstart` 写死，并区分仓库里三份 compose 文件；<br>③ §12.1 原回滚只改 `.env`，会被 `sync_image_tags` 当场改回 → 改为"换回旧整包"与"两文件一起改"两方案（三种组合已实测）；<br>④ §10.3 期望输出把 `upgrade:` 写成 `upgrade detected:`，与实际不符 → 按真实文案改，并补"必须先 `cd` 到安装目录"的三种落点表。<br>另新增 §10.5（升级后查 Flyway）、故障表 3 行、附录 2 行。 |

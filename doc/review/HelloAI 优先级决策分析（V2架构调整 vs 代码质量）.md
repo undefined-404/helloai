@@ -261,7 +261,7 @@
 
 - ✅ `doc/HelloAI 项目基线文档.md`（职责是「我们现在是什么」）**确含旧链口径**（`LegacyExecutorAdapter` / `RuntimeAgentRuntimeRouter` / `TurnLlmCaller` / `runtime-enabled`，§7 组件清单与「当前含义」段）→ **已订正为单轨实况**（旧链与灰度开关 2026-09-30 已删）；
 - ✅ `doc/HelloAI_项目介绍.md` 的执行链叙事段（§3.5 改造主线 / §3.8.2 落地进度 / §5.1 目标态树 / §5.2 迁移锚点表 / §5.3 迁移策略 / §6 进度速览 / §7 一页总结）**确述旧链与灰度开关** → **已加单轨硬切订正**；
-- ✅ `doc/plan/HelloAI 重构实施计划.md` §3 现状基线与 P0-B 各段、`doc/design/Agent_Runtime.md`「迁移模型」段 → 已加**历史段订正横幅**（保留过程记录，但显式标注已被单轨硬切取代）；
+- ✅ `doc/archive/implemented/HelloAI 重构实施计划.md` §3 现状基线与 P0-B 各段、`doc/design/Agent_Runtime.md`「迁移模型」段 → 已加**历史段订正横幅**（保留过程记录，但显式标注已被单轨硬切取代）；
 - ✅ `doc/HelloAI_CODE_STYLE.md` §47.2 集成测试示例里的 `LegacyExecutorAdapter`（已删类）→ 换为 `RuntimeTurnExecutor / ChatModel`；
 - ✅ `doc/HelloAI_登录页原创AI虚拟人物生成提示词.md`（231 行，2026-07-23，不属架构文档体系）→ 移至 `doc/helloai_avatar/`（与生成产物同目录）；
 - ✅ `doc/HelloAI 文档治理审计.md`（2026-09-07 治理记录）→ 移至 `doc/review/` 并规范命名为「（2026-09-07）」；**（2026-10-17 追加指针：该报告结论已全部消化，现位于 `doc/archive/reference/`）**；

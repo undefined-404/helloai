@@ -30,6 +30,8 @@ FILES=(
   "HelloAI 技能执行面接入实施计划（2026-10-26）.md"
   "HelloAI 个人助理工作台实施计划（2026-11-02）.md"
   "HelloAI 核验双域改造实施计划（2026-11-04）.md"
+  "HelloAI 联网搜索效果优化实施计划（2026-10-18）.md"
+  "HelloAI 借鉴落地实施计划.md"
 )
 
 PY=""
@@ -55,9 +57,19 @@ ID = re.compile(r"^\| \*{0,2}((?:SKX|RV|SR|PA|PC|S|W|ATT|TD|REF|M|Q)-\d+)[^|]*\|
 SEC = re.compile(r"^#{2,4} \*{0,2}((?:SKX|RV|SR|PA|PC|S|W|ATT|TD|Q)-\d+)")
 ls = io.open(sys.argv[1], encoding="utf-8").read().split("\n")
 bad, checked = [], 0
+header = None
 for i, l in enumerate(ls):
+    if l.startswith("|"):
+        if header is None:
+            header = l
+    else:
+        header = None
     m = ID.match(l)
     if m:
+        # 只有「状态 + 剩余动作」表头下的行才按状态行解析；
+        # 其它 REF/PC 表格是设计明细，最后两列不是状态，不能误判。
+        if header is None or "状态" not in header or "剩余动作" not in header:
+            continue
         c = [x.strip() for x in l.split("|")]
         if c and c[-1] == "":
             c = c[:-1]          # 行尾 "|" 会切出一个空段，去掉后再取末两列

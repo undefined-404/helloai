@@ -1478,7 +1478,7 @@ doc/README.md
 doc/HelloAI 项目基线文档.md
 doc/HelloAI 目标架构.md
 doc/HelloAI 实现差距表.md
-doc/plan/HelloAI 重构实施计划.md
+doc/plan/<当前任务对应的专项计划>.md
 doc/HelloAI_CODE_STYLE.md
 
 根据当前任务继续阅读对应 design 文档。

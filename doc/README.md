@@ -15,7 +15,7 @@
 | `HelloAI 项目基线文档.md` | 当前代码和已落地能力 | ✅ |
 | `HelloAI 目标架构.md` | 稳定目标边界 | ✅ |
 | `HelloAI 实现差距表.md` | Current → Target 差距（**只记当前状态，随迭代就地更新**） | ✅ |
-| `plan/HelloAI 重构实施计划.md` | 当前实施顺序（业务主线） | ✅ |
+| `plan/`（在办专项计划） | 当前实施顺序（以各计划 `Status` 头为准；重构主线已于 2026-11-06 归档，尾项由差距表追踪） | ✅ |
 | `HelloAI_CODE_STYLE.md` | 代码与工程规范 | ✅ |
 | `HelloAI_AI开发协作规约.md` | AI Agent 开发行为规约（生命周期 / 验证体系 / 红线） | ✅ |
 | `文档体系分类与治理规则.md` | 文档分类、准入规则与流转纪律（元文档） | 参考 |
@@ -135,7 +135,7 @@ README.md
 → HelloAI 项目基线文档.md
 → HelloAI 目标架构.md
 → HelloAI 实现差距表.md
-→ plan/HelloAI 重构实施计划.md
+→ archive/implemented/HelloAI 重构实施计划.md
 → 对应 design/ 专项文档
 → 代码
 ```

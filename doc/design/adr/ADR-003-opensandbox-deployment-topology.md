@@ -5,7 +5,7 @@
 | **编号**   | ADR-003 |
 | **状态**   | Accepted（2026-10-17，批次 3 落地；S-5 交付物） |
 | **日期**   | 2026-10-17 |
-| **关联文档** | [`plan/HelloAI OpenSandbox 沙箱集成计划.md`](../../plan/HelloAI%20OpenSandbox%20沙箱集成计划.md) §4.6（S-5 网络隔离）、[`HelloAI 项目基线文档.md`](../../HelloAI%20项目基线文档.md) §7/§10、`LOG-20261017-008` / `-009` / `-010` |
+| **关联文档** | [`archive/implemented/HelloAI OpenSandbox 沙箱集成计划.md`](../../archive/implemented/HelloAI%20OpenSandbox%20沙箱集成计划.md) §4.6（S-5 网络隔离）、[`HelloAI 项目基线文档.md`](../../HelloAI%20项目基线文档.md) §7/§10、`LOG-20261017-008` / `-009` / `-010` |
 | **决策类型** | 部署拓扑 + 网络隔离（S-5 前置契约，先于 S-6 验证集） |
 
 > **⚠️ §2（app 不加入 `opensandbox-net`）已被 [`ADR-006`](ADR-006-app-join-opensandbox-network.md) 取代（2026-10-27）**：
