@@ -155,6 +155,40 @@ rand_hex12() { rand_hex 12; }
 rand_hex16() { rand_hex 16; }
 rand_hex32() { rand_hex 32; }
 
+# ---------------------------------------------------------------- upgrade
+# Align the two image lines in .env with THIS bundle's .env.example.
+#
+# WHY THIS EXISTS: bootstrap_env only fills the 7 empty secrets, so an .env
+#   created by the previous release keeps pointing at the previous tag. The
+#   scripts update, `docker compose pull` finds the old tag already present,
+#   `up` recreates nothing -- i.e. the upgrade silently does nothing. That is
+#   the exact failure this function removes.
+#
+# WHY SECRETS ARE STILL UNTOUCHED: rewriting HELLOAI_CREDENTIAL_AES_KEY_BASE64
+#   would make every stored LLM credential undecryptable. Only these two keys
+#   are safe to rewrite, so only these two are rewritten.
+#
+# GUARD: a different repository part means .env points at a user-built image
+#   (`--no-pull` with local tags). Leave it alone.
+repo_of() { printf '%s' "$1" | sed 's/:[^:/]*$//'; }
+
+sync_image_tags() {
+  [ -f "$ENV_FILE" ] && [ -f "$EXAMPLE_FILE" ] || return 0
+  local key want cur
+  for key in HELLOAI_APP_IMAGE HELLOAI_WEB_IMAGE; do
+    want="$(sed -n "s/^$key=//p" "$EXAMPLE_FILE" | head -n1)"
+    cur="$(env_get "$key")"
+    [ -n "$want" ] || continue
+    [ "$cur" = "$want" ] && continue
+    if [ -n "$cur" ] && [ "$(repo_of "$cur")" != "$(repo_of "$want")" ]; then
+      warn "$key points at a custom repository ($cur); left as is"
+      continue
+    fi
+    env_set "$key" "$want"
+    log "upgrade: $key ${cur:-(unset)} -> $want"
+  done
+}
+
 validate_env() {
   env_require HELLOAI_APP_IMAGE
   env_require HELLOAI_WEB_IMAGE
@@ -219,10 +253,25 @@ port_busy() {
   fi
 }
 
+own_stack_up() {
+  [ -n "$(dc ps -q 2>/dev/null)" ]
+}
+
 check_port() {
   local port="${HELLOAI_HTTP_PORT:-8080}"
   if port_busy "$port"; then
-    die "host port $port is already in use. Set HELLOAI_HTTP_PORT in $ENV_FILE to a free port (e.g. 8081) and re-run."
+    # Upgrade path: the port is taken by OUR OWN stack (same compose project,
+    #   derived from this directory name). Older releases died here, which made
+    #   `install.sh` unusable on an existing installation. Stop our own stack
+    #   instead -- `down` without -v keeps every data volume.
+    if own_stack_up; then
+      log "an existing HelloAI stack owns port $port; stopping it to apply the upgrade (data volumes are kept)"
+      dc --profile sandbox down --remove-orphans \
+        || die "could not stop the existing stack -- run ./stop.sh manually, then re-run ./start.sh"
+      log "existing stack stopped"
+    else
+      die "host port $port is already in use by another process. Set HELLOAI_HTTP_PORT in $ENV_FILE to a free port (e.g. 8081) and re-run."
+    fi
   fi
   log "web entry will be published on port $port"
 }
@@ -396,6 +445,7 @@ ensure_rabbitmq() {
 main() {
   preflight
   bootstrap_env
+  sync_image_tags
   validate_env
 
   # shellcheck disable=SC1091

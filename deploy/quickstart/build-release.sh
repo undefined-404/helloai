@@ -32,7 +32,14 @@
 #   ./build-release.sh --version 0.1.0
 #   ./build-release.sh --version 0.1.0 --no-build        # reuse existing local tags
 #   ./build-release.sh --version 0.1.0 --skip-sandbox    # core bundle only
+#   ./build-release.sh --version 0.1.0 --bundle-only     # re-stage scripts/docs only
 #   ./build-release.sh --version 0.1.0 --push registry.cn-hangzhou.aliyuncs.com/yourns
+#
+# --bundle-only re-cuts helloai-quickstart-<ver>.tar.gz from the current working
+#   tree WITHOUT rebuilding images or re-running `docker save`. It exists because
+#   start.sh / README.md / docker-compose.yml live in the bundle, not in the
+#   images: fixing a typo in them used to require a 582 MB re-save. Prerequisite:
+#   the version's images and offline tars already exist (i.e. a full run happened).
 #
 # --push takes <registry>/<namespace>; the pushed repositories are the last
 #   path segment of APP_REPO / WEB_REPO (defaults: app, web). Override them
@@ -47,6 +54,7 @@ VERSION=""
 PUSH_PREFIX=""
 NO_BUILD=0
 SKIP_SANDBOX=0
+BUNDLE_ONLY=0
 
 log()  { printf '[release] %s\n' "$*"; }
 warn() { printf '[release][warn] %s\n' "$*" >&2; }
@@ -63,6 +71,7 @@ while [ $# -gt 0 ]; do
     --push)         PUSH_PREFIX="${2:-}"; shift 2 ;;
     --no-build)     NO_BUILD=1; shift ;;
     --skip-sandbox) SKIP_SANDBOX=1; shift ;;
+    --bundle-only)  BUNDLE_ONLY=1; shift ;;
     -h|--help)      usage ;;
     *)              die "unknown option: $1 (try --help)" ;;
   esac
@@ -77,6 +86,30 @@ esac
 QS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$QS_DIR/../.." && pwd)"
 OUT="$ROOT/dist/$VERSION"
+
+# --bundle-only must reproduce the SAME bundle a full run produced. Both the
+#   image lines in .env.example and `sandbox_bundled` are derived from the
+#   flags, so a bare `--bundle-only` would silently rewrite them: local tags
+#   that nobody can pull, and sandbox "yes" when no sandbox archive exists.
+#   Inherit both from the previous RELEASE unless --push was given explicitly.
+if [ "$BUNDLE_ONLY" -eq 1 ]; then
+  _prev_rel="$OUT/helloai-quickstart-$VERSION/RELEASE"
+  if [ -f "$_prev_rel" ]; then
+    if [ -z "$PUSH_PREFIX" ]; then
+      _prev_reg="$(sed -n 's/^registry: //p' "$_prev_rel" | head -n1)"
+      case "$_prev_reg" in
+        ''|'(none'*) ;;
+        *) PUSH_PREFIX="$_prev_reg"
+           log "--bundle-only: inherited registry $_prev_reg" ;;
+      esac
+    fi
+    _prev_sb="$(sed -n 's/^sandbox_bundled: //p' "$_prev_rel" | head -n1)"
+    if [ "$_prev_sb" = "no" ]; then
+      SKIP_SANDBOX=1
+      log "--bundle-only: inherited sandbox_bundled=no"
+    fi
+  fi
+fi
 
 APP_TAG="helloai-app:$VERSION"
 WEB_TAG="helloai-web:$VERSION"
@@ -293,6 +326,17 @@ push_images() {
 log "version=$VERSION root=$ROOT"
 preflight
 mkdir -p "$OUT"
+
+# Re-cut only the script bundle. Images, offline tars and the manifest are left
+#   untouched; the checksum file is rewritten because the bundle's hash moved.
+if [ "$BUNDLE_ONLY" -eq 1 ]; then
+  log "--bundle-only: re-staging scripts + docs, images untouched"
+  stage_bundle
+  write_checksums
+  printf '\nBundle rebuilt: %s/helloai-quickstart-%s.tar.gz (%s)\n' \
+    "$OUT" "$VERSION" "$(du -h "$OUT/helloai-quickstart-$VERSION.tar.gz" | cut -f1)"
+  exit 0
+fi
 
 build_images
 ensure_core_images

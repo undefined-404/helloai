@@ -96,7 +96,20 @@ QS="$(dirname "${START_FILE:-/nonexistent}")"
 
 # --- 4. Lay down the files ----------------------------------------------------
 mkdir -p "$TARGET"
+# Read the OLD version before overwriting RELEASE, otherwise the upgrade line
+# below can never fire (the bundle carries its own RELEASE).
+PREV_VER=""
+if [ -f "$TARGET/RELEASE" ]; then
+  PREV_VER="$(sed -n 's/^version: //p' "$TARGET/RELEASE" | head -n1)"
+fi
 cp -R "$QS"/. "$TARGET"/
+NEW_VER=""
+if [ -f "$TARGET/RELEASE" ]; then
+  NEW_VER="$(sed -n 's/^version: //p' "$TARGET/RELEASE" | head -n1)"
+fi
+if [ -n "$PREV_VER" ] && [ "$PREV_VER" != "$NEW_VER" ]; then
+  log "upgrade: $PREV_VER -> $NEW_VER (data volumes and .env secrets are kept)"
+fi
 # start.sh looks for pull-sandbox-images.sh next to itself first. Its position
 # depends on the fetch form, so check both and stay quiet when neither matches
 # (the script only matters for --with-sandbox):

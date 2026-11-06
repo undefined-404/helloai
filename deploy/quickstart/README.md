@@ -26,8 +26,9 @@ cd helloai-quickstart-0.2.1
 > 中间件（postgres / redis / rabbitmq / minio）仍来自 Docker Hub。国内建议先配好
 > Docker 镜像加速（`/etc/docker/daemon.json` 的 `registry-mirrors`），否则这一步会慢。
 >
-> 升级到新版本：改 `.env` 里的 `HELLOAI_APP_IMAGE` / `HELLOAI_WEB_IMAGE` 标签，
-> 再 `./start.sh` 即可（Docker 层缓存，只拉变化的层）。
+> 升级到新版本：**重跑一次上面这条命令，把 `HELLOAI_REF` 换成新 tag 即可**。
+> 0.2.1 起安装器会自动更新 `.env` 里的两个镜像标签、停掉旧栈（保留数据卷）、
+> 拉新镜像，不需要手工改任何文件。详见 [§7 升级](#7-升级)。
 
 ### 方式二：离线包（断网 / 镜像仓库不可达时用）
 
@@ -302,16 +303,35 @@ split -b 95M -d -a 3 helloai-offline-core-0.2.1.tar.gz helloai-offline-core-0.2.
 
 ## 7. 升级
 
+**推荐：重跑一次安装命令，把 `HELLOAI_REF` 指到新 tag**，其余不用管。
+
+```bash
+curl -fsSL https://gitee.com/undefined_404/helloai/raw/master/deploy/install.sh \
+  | HELLOAI_REF=v0.2.1 HELLOAI_INSTALL_DIR=/你的原安装目录 bash
+```
+
+它按顺序做四件事，都是 0.2.1 起内建的：
+
+1. 覆盖 `start.sh` / `docker-compose.yml` / `.env.example` 等脚本文件；
+2. **自动把 `.env` 里的两个镜像标签改到新版本**（只改这两行）；
+3. 检测到端口被**自己这一栈**占着 → 自动 `down`（不带 `-v`，数据卷保留），
+   被别人占着才报错；
+4. 拉新镜像并启动，Flyway 自动补迁移。
+
+> **为什么不自动改 `.env` 的其他行**：`HELLOAI_CREDENTIAL_AES_KEY_BASE64` 是解密
+> **全部已存 LLM API Key** 的唯一密钥。换成新生成的密钥，历史凭据永久无法解密
+> （只能逐个重录）。所以脚本只动那两个镜像 tag，密钥一行不碰。
+
+> 若 `.env` 里的镜像指向**你自己构建的仓库**（`--no-pull` 场景），脚本会识别出
+> 仓库前缀不同并跳过，不会覆盖你的配置。
+
+**手动升级（等价做法）**：
+
 ```bash
 ./stop.sh
 # 只改 .env 里的 HELLOAI_APP_IMAGE / HELLOAI_WEB_IMAGE 两行版本号
 ./start.sh
 ```
-
-> **绝不要用新包的 `.env.example` 覆盖现有 `.env`。**
-> `.env` 里的 `HELLOAI_CREDENTIAL_AES_KEY_BASE64` 是解密**全部已存 LLM API Key**
-> 的唯一密钥。一旦换成新生成的密钥，历史凭据永久无法解密（只能逐个重录）。
-> 升级的正确做法是「只动那两行 tag」，其余行一个字都不改。
 
 - 数据卷保留，Flyway 在应用启动时自动执行迁移；
 - `app` 与 `web` 必须使用**同一个版本号**（同一个发布包内天然一致）；
