@@ -403,7 +403,7 @@ function handleMoreCommand(cmd: string, row: SysRole) {
 async function openAssignPermissions(row: SysRole) {
   permTarget.value = row
   if (allPermissions.value.length === 0) {
-    allPermissions.value = await rbacApi.permissions()
+    allPermissions.value = await rbacApi.assignablePermissions()
   }
   permCheckedIds.value = await rbacApi.rolePermissionIds(row.id)
   permVisible.value = true

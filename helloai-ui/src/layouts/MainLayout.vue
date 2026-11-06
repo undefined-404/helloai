@@ -33,9 +33,11 @@
       </div>
 
       <el-menu
+        ref="menuRef"
         :default-active="activeMenu"
         :collapse="collapsed"
         :collapse-transition="false"
+        :unique-opened="true"
         class="sidebar-menu"
         @select="onMenuSelect"
       >
@@ -159,7 +161,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, type Component } from 'vue'
+import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import {
@@ -188,6 +190,8 @@ const auth = useAuthStore()
 const themeStore = useThemeStore()
 const collapsed = ref(false)
 const passwordDialogVisible = ref(false)
+/** el-menu 实例：用于按当前路由主动展开所属分组（el-menu 无受控 openKeys） */
+const menuRef = ref<any>(null)
 
 // 单一来源：store 已是 sessionStorage 的唯一镜像
 const isAdmin = auth.isAdmin
@@ -292,6 +296,33 @@ const activeMenu = computed(() => {
     return route.query.status === 'DEAD_LETTER' ? '/sub-tasks?status=DEAD_LETTER' : '/sub-tasks'
   }
   return path
+})
+
+/**
+ * 查找 path 所属分组（目录）的索引。
+ *
+ * 点击侧边栏时 el-menu 会自行展开分组，但刷新、直接输入地址、从别处跳转时不会：
+ * 分组保持收起，当前项的高亮也看不见。故进入页面后按路由反查一次并主动展开。
+ */
+function findGroupKey(nodes: SysPermission[], path: string): string | null {
+  for (const n of nodes) {
+    if (!n.children?.length) continue
+    if (n.children.some((c) => (c.path || c.code) === path)) return n.path || n.code
+    const deeper = findGroupKey(n.children, path)
+    if (deeper) return deeper
+  }
+  return null
+}
+
+function syncOpenGroup() {
+  if (collapsed.value) return
+  const key = findGroupKey(visibleMenus.value, activeMenu.value)
+  if (key) menuRef.value?.open?.(key)
+}
+
+// 菜单树异步加载、路由切换、侧边栏展开/收起，三者任一变化都要重算所属分组
+watch([activeMenu, visibleMenus, collapsed], () => {
+  nextTick(syncOpenGroup)
 })
 
 function openPasswordDialog() {

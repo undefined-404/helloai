@@ -17,7 +17,7 @@
 #
 # ARGUMENTS / ENV
 #   bash -s -- --with-sandbox        everything after `--` goes to start.sh
-#   HELLOAI_REF=v0.2.0               pin a tag instead of the moving branch
+#   HELLOAI_REF=v0.2.1               pin a tag instead of the moving branch
 #   HELLOAI_INSTALL_DIR=$HOME/hai    where to unpack (default ./helloai)
 #   HELLOAI_REPO=<url>               mirror / fork
 #
@@ -29,9 +29,9 @@ set -euo pipefail
 
 REPO="${HELLOAI_REPO:-https://gitee.com/undefined_404/helloai}"
 # Default to the branch on purpose: a tag is the right default for a RELEASE,
-# but this repo's existing tags (v1.0.0) predate deploy/quickstart, so pointing
-# at them would download a tree that has no installer to run. Pin a tag once
-# 0.2.0 is tagged: HELLOAI_REF=v0.2.0.
+# but older tags (v1.0.0) predate deploy/quickstart, so pointing at them would
+# download a tree that has no installer to run. Release tags that DO ship the
+# bundle are v0.2.0 and later -- pin them with HELLOAI_REF=v0.2.1.
 REF="${HELLOAI_REF:-master}"
 TARGET="${HELLOAI_INSTALL_DIR:-$PWD/helloai}"
 
@@ -92,7 +92,7 @@ tar xzf "$TMP/src.tar.gz" -C "$TMP"
 START_FILE="$(find "$TMP" -maxdepth 4 -type f -name start.sh | sed -n '1p')"
 QS="$(dirname "${START_FILE:-/nonexistent}")"
 [ -n "$START_FILE" ] && [ -f "$QS/docker-compose.yml" ] || die "this ref ($REF) does not ship the quickstart bundle.
-    Pin a tag/release that contains it: HELLOAI_REF=v0.2.0"
+    Pin a tag/release that contains it: HELLOAI_REF=v0.2.1"
 
 # --- 4. Lay down the files ----------------------------------------------------
 mkdir -p "$TARGET"

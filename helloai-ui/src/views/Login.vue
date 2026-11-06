@@ -266,14 +266,15 @@ async function loadSetupStatus() {
 }
 
 function handleLoginSuccess() {
-  router.push('/dashboard')
+  // 根路径由守卫按「菜单默认首页」解析，不再写死 /dashboard
+  router.push('/')
 }
 
 onMounted(() => {
   // 单一来源：store 已是 sessionStorage 的镜像，从 store 读取
   const auth = useAuthStore()
   if (auth.isAdmin) {
-    router.replace('/dashboard')
+    router.replace('/')
     return
   }
   if (auth.isAgent) {

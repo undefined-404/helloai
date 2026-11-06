@@ -43,4 +43,7 @@ public class SysPermissionSaveRequest {
 
     /** 外链地址（非空时点击新窗口打开，不注册前端路由） */
     private String externalLink;
+
+    /** 默认首页：0=否 1=是（全平台唯一；仅可跳转的菜单可设） */
+    private Integer isDefaultHome;
 }

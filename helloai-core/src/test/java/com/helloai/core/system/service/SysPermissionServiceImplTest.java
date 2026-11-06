@@ -155,6 +155,29 @@ class SysPermissionServiceImplTest {
         }
 
         @Test
+        @DisplayName("API 类型不可设为默认首页")
+        void create_apiAsDefaultHome_shouldThrow() throws Exception {
+            SysPermissionServiceImpl spy = spyWithCount(0L);
+            SysPermission req = newReq("test:add", "API", null);
+            req.setIsDefaultHome(1);
+
+            BizException ex = assertThrows(BizException.class, () -> spy.createPermission(req));
+            assertThat(ex.getMessage()).contains("仅菜单");
+        }
+
+        @Test
+        @DisplayName("默认首页必须是可跳转页面：组件为空应拒绝")
+        void create_defaultHomeWithoutComponent_shouldThrow() throws Exception {
+            SysPermissionServiceImpl spy = spyWithCount(0L);
+            SysPermission req = newReq("test:view", "MENU", null);
+            req.setComponent(null);
+            req.setIsDefaultHome(1);
+
+            BizException ex = assertThrows(BizException.class, () -> spy.createPermission(req));
+            assertThat(ex.getMessage()).contains("组件路径");
+        }
+
+        @Test
         @DisplayName("合法 MENU 创建成功，code 归一大写")
         void create_menu_success() throws Exception {
             SysPermissionServiceImpl spy = spyWithCount(0L);

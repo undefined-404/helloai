@@ -26,6 +26,8 @@ export interface SysPermission {
   keepAlive?: number | null
   /** 外链地址（非空时点击新窗口打开，不注册前端路由） */
   externalLink?: string | null
+  /** 默认首页：0=否 1=是（全平台唯一） */
+  isDefaultHome?: number | null
   /** 子菜单（仅菜单树接口返回时填充） */
   children?: SysPermission[]
 }
@@ -123,6 +125,8 @@ export interface SysPermissionSaveRequest {
   hidden?: number | null
   keepAlive?: number | null
   externalLink?: string | null
+  /** 默认首页：0=否 1=是（全平台唯一；仅可跳转菜单可设） */
+  isDefaultHome?: number | null
 }
 
 /** 用户信息更新请求（字段为 null 时不更新，对齐后端 SysUserUpdateRequest） */

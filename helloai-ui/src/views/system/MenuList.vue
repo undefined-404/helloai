@@ -61,7 +61,20 @@
             prop="name"
             label="菜单名称"
             min-width="190"
-          />
+          >
+            <template #default="{ row }">
+              <span>{{ row.name }}</span>
+              <el-tag
+                v-if="row.isDefaultHome === 1"
+                size="small"
+                type="success"
+                effect="plain"
+                class="tag-gap"
+              >
+                首页
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column
             prop="code"
             label="权限码"
@@ -297,6 +310,15 @@
           />
           <span class="muted hint">开启后切换页面保留组件状态</span>
         </el-form-item>
+        <el-form-item label="默认首页">
+          <el-switch
+            v-model="form.isDefaultHome"
+            :active-value="1"
+            :inactive-value="0"
+            :disabled="!form.component"
+          />
+          <span class="muted hint">登录后默认进入此菜单（全平台唯一；分组/外链不可设）</span>
+        </el-form-item>
         <el-form-item label="排序">
           <el-input-number
             v-model="form.sort"
@@ -390,7 +412,8 @@ const form = ref<SysPermissionSaveRequest>({
   component: '',
   hidden: 0,
   keepAlive: 0,
-  externalLink: ''
+  externalLink: '',
+  isDefaultHome: 0
 })
 const editRules = {
   code: [{ required: true, message: '请输入权限码', trigger: 'blur' }],
@@ -437,7 +460,8 @@ function openCreate(parent: SysPermission | null) {
     component: '',
     hidden: 0,
     keepAlive: 0,
-    externalLink: ''
+    externalLink: '',
+    isDefaultHome: 0
   }
   editVisible.value = true
 }
@@ -455,7 +479,8 @@ function openEdit(row: SysPermission) {
     component: row.component ?? '',
     hidden: row.hidden ?? 0,
     keepAlive: row.keepAlive ?? 0,
-    externalLink: row.externalLink ?? ''
+    externalLink: row.externalLink ?? '',
+    isDefaultHome: row.isDefaultHome ?? 0
   }
   editVisible.value = true
 }

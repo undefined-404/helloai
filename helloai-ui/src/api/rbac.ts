@@ -44,6 +44,10 @@ export const rbacApi = {
   permissions() {
     return request.get<any, SysPermission[]>(paths.rbac.permissions)
   },
+  /** 角色授权候选（排除菜单分组目录，勾选分组不产生授权效果） */
+  assignablePermissions() {
+    return request.get<any, SysPermission[]>(paths.rbac.assignablePermissions)
+  },
 
   // ── BASE-2.1 菜单/权限管理：全量权限树 + CRUD ──
   permissionTree() {

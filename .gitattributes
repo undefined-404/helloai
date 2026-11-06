@@ -19,6 +19,13 @@ scripts/shell/*.sh text eol=lf
 # （服务器侧只读探测，含 $() 与 heredoc），继续逐文件钉必漏；deploy/*.sh 现全部为 LF，
 # 通配不产生规范化噪音。**此后新增 deploy 脚本不必再改本文件。**
 deploy/*.sh text eol=lf
+# 2026-11-06：上面那句「此后新增 deploy 脚本不必再改本文件」是错的 —— gitattributes
+# 的 `*` **不跨目录**，deploy/quickstart/*.sh 从未落在 `deploy/*.sh` 的射程内。
+# 后果：core.autocrlf=true 的机器上 `git checkout` 会把 build-release.sh 转成 CRLF，
+# 在 Git Bash 里执行报 "bad interpreter: /bin/bash^M" 或 $'\r': command not found
+# —— 而工作区当时恰好是 LF，所以「当下能跑」掩盖了「下次 checkout 就炸」。
+# 改为 `deploy/**/*.sh` 覆盖任意深度；上一层规则保留，兼容不识别 `**` 的旧客户端。
+deploy/**/*.sh text eol=lf
 # 部署 compose：由服务器上的 docker compose 读取，且会被直接上传到 Linux
 # （工作树若为 CRLF，用户从工作树直接拷贝上传即带入 CRLF）。索引与工作树统一 LF。
 # 2026-10-07 补充：伴随 docker-compose.server.yml 去中文（转纯 ASCII）一并规范行尾。

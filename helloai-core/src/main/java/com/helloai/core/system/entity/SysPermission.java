@@ -41,6 +41,9 @@ public class SysPermission extends BaseEntity {
     private String externalLink;
     /** 是否配置数据权限：0=未配置（默认，不过滤）1=已配置（按 sys_permission_data_rule 过滤） */
     private Integer ruleFlag;
+    /** 默认首页：0=否（默认）1=是（全平台唯一，登录后落到该菜单 path） */
+    @TableField("is_default_home")
+    private Integer isDefaultHome;
 
     /** 子菜单（仅菜单树接口返回时填充，非表字段） */
     @TableField(exist = false)

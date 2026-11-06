@@ -29,10 +29,16 @@
       <!-- 展开态面板 -->
       <div
         v-else
+        ref="panelRef"
         class="qw-panel"
         @pointerdown.stop
       >
-        <div class="qw-panel-head">
+        <!-- 头部整行可点收起（与浮球「点一下展开」对称，无需去找右上角 ×） -->
+        <div
+          class="qw-panel-head"
+          title="点击收起"
+          @click="onPanelCollapseClick"
+        >
           <span class="qw-title">LLM 额度</span>
           <div class="qw-actions">
             <button
@@ -41,13 +47,13 @@
               class="qw-refresh"
               :disabled="loading"
               :title="loading ? '刷新中…' : '立即刷新'"
-              @click="refresh"
+              @click.stop="refresh"
             >{{ loading ? '刷新中…' : '刷新' }}</button>
             <button
               type="button"
               class="qw-close"
               title="收起"
-              @click="collapsePanel"
+              @click.stop="collapsePanel"
             >×</button>
           </div>
         </div>
@@ -91,7 +97,12 @@
           </li>
         </ul>
 
-        <div class="qw-foot">
+        <!-- 底部「自动刷新 / 最后更新」整行也可点收起，与头部对称 -->
+        <div
+          class="qw-foot"
+          title="点击收起"
+          @click="onPanelCollapseClick"
+        >
           <span class="qw-mode">{{ modeText }}</span>
           <span
             class="qw-fetch-hint"
@@ -104,7 +115,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { quotaApi, QUOTA_PROVIDER_LABELS, type QuotaSnapshot, type QuotaWidgetConfig } from '@/api/quota'
 
@@ -114,6 +125,12 @@ const POS_KEY = 'quota.widget.pos'
 const DEFAULT_POS = { x: 20, y: 20 }
 const DEF_W = 260
 const DEF_H = 240
+/** 展开面板与视口边缘的安全间距（面板永不出可视窗口）。 */
+const MARGIN = 10
+/** 折叠态胶囊高度，用于推算浮球顶边位置（与 .qw-pill 的 height 保持同步）。 */
+const PILL_H = 34
+/** 展开面板宽度，用于水平 clamp（与 .qw-panel 的 width 保持同步）。 */
+const PANEL_W = 264
 /** 配置读取失败时的缺省：开启 + 60s（与后端缺省一致，fail-open）。 */
 const DEFAULT_CONFIG: QuotaWidgetConfig = { enabled: true, refreshIntervalSeconds: 60 }
 /** 相对时间文案的刷新周期（与轮询解耦，手动模式下也能持续更新「几分钟前」）。 */
@@ -128,6 +145,14 @@ const data = ref<QuotaSnapshot[]>([])
 const lastFetchedAt = ref<number>(0)
 const nowTick = ref(Date.now())
 const pos = ref({ ...DEFAULT_POS })
+/** 视口尺寸：展开态定位依赖它，resize 时更新以重新收敛。 */
+const viewport = ref({ w: window.innerWidth, h: window.innerHeight })
+/** 展开态面板元素，用于测量真实高度决定展开方向。 */
+const panelRef = ref<HTMLElement | null>(null)
+/** 展开方向：true=向上生长（默认，面板底边对齐浮球底边）；false=向下打开（浮球贴顶时）。 */
+const openUp = ref(true)
+/** 向下打开时的面板顶边（视口坐标），已 clamp 进可视窗口。 */
+const openTop = ref(MARGIN)
 let timer: ReturnType<typeof setInterval> | null = null
 let clockTimer: ReturnType<typeof setInterval> | null = null
 let dragged = false
@@ -183,10 +208,24 @@ const modeText = computed(() => autoRefreshSeconds.value > 0
   ? `自动刷新：每 ${intervalLabel(autoRefreshSeconds.value)}`
   : '自动刷新已关闭')
 
-const positionStyle = computed(() => ({
-  right: pos.value.x + 'px',
-  bottom: pos.value.y + 'px'
-}))
+/**
+ * 定位：
+ * - 折叠态：以右下角为锚（right/bottom），与拖拽逻辑一致；
+ * - 展开态：默认仍向上生长（面板底边对齐浮球底边）；浮球贴近视口顶部导致
+ *   上方放不下时改为向下打开，并整体 clamp 进可视窗口 —— 头部与 × 永远可见。
+ */
+const positionStyle = computed(() => {
+  if (!expanded.value) {
+    return { right: pos.value.x + 'px', bottom: pos.value.y + 'px' }
+  }
+  // 水平：面板比浮球宽，向右对齐时需保证左边缘不出界（浮球被拖到左侧时右移贴边）
+  const maxRight = Math.max(MARGIN, viewport.value.w - PANEL_W - MARGIN)
+  const right = Math.max(MARGIN, Math.min(pos.value.x, maxRight))
+  if (openUp.value) {
+    return { right: right + 'px', bottom: pos.value.y + 'px' }
+  }
+  return { right: right + 'px', top: openTop.value + 'px' }
+})
 
 // 授权口径按动作码 quota:view（CODE_STYLE §43：不以角色代替授权判定）；平台开关关闭则不渲染
 const visible = computed(() => auth.hasPermission('quota:view') && config.value.enabled)
@@ -329,6 +368,42 @@ function collapsePanel() {
   expanded.value = false
 }
 
+/** 头部 / 底部整行点击收起；行内的刷新、× 按钮各自处理，不连带收起。 */
+function onPanelCollapseClick(e: MouseEvent) {
+  const target = e.target as HTMLElement | null
+  if (target?.closest('button')) return
+  collapsePanel()
+}
+
+/**
+ * 决定展开方向并算出安全位置：
+ * 以浮球底边为基准，若上方能完整容纳面板则向上生长，否则向下打开
+ * （面板顶边对齐浮球顶边，再 clamp 进视口），保证头部与关闭按钮始终可见。
+ */
+function reposition() {
+  if (!expanded.value) return
+  const vh = viewport.value.h
+  const h = panelRef.value?.offsetHeight ?? DEF_H
+  const pillTop = vh - pos.value.y - PILL_H
+  const spaceAbove = pillTop - MARGIN
+  if (h <= spaceAbove) {
+    openUp.value = true
+    return
+  }
+  openUp.value = false
+  const maxTop = Math.max(MARGIN, vh - h - MARGIN)
+  openTop.value = Math.max(MARGIN, Math.min(pillTop, maxTop))
+}
+
+/** 展开：先按向上生长渲染，DOM 就绪后按真实高度收敛（面板高度随供应商条数变化）。 */
+async function expand() {
+  expanded.value = true
+  // 仅手动刷新模式不因展开触发外部请求，用户可显式点「刷新」
+  if (autoRefreshSeconds.value > 0) fetchData()
+  await nextTick()
+  reposition()
+}
+
 function onPointerDown(e: PointerEvent) {
   if (expanded.value) return // 面板内不整拖
   pressed = true
@@ -356,9 +431,7 @@ function onPointerUp() {
   if (expanded.value) return
   if (!dragged) {
     // 非拖拽 = 轻点 → 展开（订阅 pointerup，避免点击态与拖拽冲突）
-    expanded.value = true
-    // 仅手动刷新模式不因展开触发外部请求，用户可显式点「刷新」
-    if (autoRefreshSeconds.value > 0) fetchData()
+    void expand()
   }
   dragged = false
 }
@@ -405,6 +478,17 @@ function stopClock() {
   }
 }
 
+/** 视口变化：折叠态拖拽边界与展开态方向都需重新收敛。 */
+function onResize() {
+  viewport.value = { w: window.innerWidth, h: window.innerHeight }
+  reposition()
+}
+
+/** 面板高度随供应商条数 / 失败文案变化：展开态需重新判方向，避免撑出视口。 */
+watch(providers, () => {
+  if (expanded.value) void nextTick(reposition)
+})
+
 async function onVisibility() {
   if (document.visibilityState !== 'visible') return
   // 设置可能在其他标签页被改过：回到前台重读，轮询节奏随之切换
@@ -444,6 +528,7 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', onVisibility)
   window.addEventListener('pointermove', onPointerMove)
   window.addEventListener('pointerup', onPointerUp)
+  window.addEventListener('resize', onResize)
 })
 
 onBeforeUnmount(() => {
@@ -452,6 +537,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
   window.removeEventListener('pointermove', onPointerMove)
   window.removeEventListener('pointerup', onPointerUp)
+  window.removeEventListener('resize', onResize)
 })
 </script>
 
@@ -460,7 +546,7 @@ onBeforeUnmount(() => {
   position: fixed;
   z-index: 3000;
   user-select: none;
-  font-family: var(--ha-font, inherit);
+  font-family: var(--ha-font-family, inherit);
 }
 .quota-widget.expanded {
   /* 展开面板随内容自适应，避免拖拽定位框过大 */
@@ -476,13 +562,14 @@ onBeforeUnmount(() => {
   padding: 0 14px;
   border-radius: 999px;
   border: 1px solid var(--ha-border, rgba(128,128,128,.3));
-  background: var(--ha-content-bg, #fff);
+  /* 不透明实色（原用 --ha-content-bg，浅色主题该 token 为 #EAE7E71C，11% 透明度会透出下层内容） */
+  background: var(--ha-surface-elevated, #FFFFFF);
   box-shadow: var(--ha-shadow-lg, 0 6px 20px rgba(0,0,0,.18));
   cursor: grab;
   touch-action: none;
   font-size: 13px;
   font-weight: 600;
-  color: var(--ha-text-primary, #222);
+  color: var(--ha-ink, #1A2233);
   white-space: nowrap;
 }
 .qw-total { line-height: 1; }
@@ -501,9 +588,12 @@ onBeforeUnmount(() => {
   width: 264px;
   border-radius: 12px;
   border: 1px solid var(--ha-border, rgba(128,128,128,.3));
-  background: var(--ha-content-bg, #fff);
+  /* 同胶囊：实色浮层底（--ha-surface-elevated 亮 #FFFFFF / 暗 #121828），不用半透明内容底 */
+  background: var(--ha-surface-elevated, #FFFFFF);
   box-shadow: var(--ha-shadow-lg, 0 10px 30px rgba(0,0,0,.2));
-  overflow: hidden;
+  /* 极端矮视口兜底：面板自身滚动，不撑出可视窗口 */
+  max-height: calc(100vh - 20px);
+  overflow: hidden auto;
 }
 .qw-panel-head {
   display: flex;
@@ -511,8 +601,15 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   padding: 10px 12px;
   border-bottom: 1px solid var(--ha-border, rgba(128,128,128,.15));
+  /* 整行可点收起，给出可点提示；sticky 保证面板内滚动时关闭仍可见 */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--ha-surface-elevated, #FFFFFF);
+  cursor: pointer;
 }
-.qw-title { font-size: 13px; font-weight: 700; }
+.qw-panel-head:hover { background: var(--ha-surface-hover, rgba(0,0,0,.04)); }
+.qw-title { font-size: 13px; font-weight: 700; color: var(--ha-ink, #1A2233); }
 .qw-actions { display: flex; align-items: center; gap: 6px; }
 .qw-refresh,
 .qw-close {
@@ -520,12 +617,12 @@ onBeforeUnmount(() => {
   background: transparent;
   cursor: pointer;
   font-size: 12px;
-  color: var(--ha-text-secondary, #666);
+  color: var(--ha-ink-secondary, #4A5568);
   padding: 2px 6px;
   border-radius: 6px;
 }
 .qw-refresh:hover:not(:disabled),
-.qw-close:hover { background: var(--ha-hover, rgba(0,0,0,.06)); }
+.qw-close:hover { background: var(--ha-surface-hover, rgba(0,0,0,.06)); }
 .qw-refresh:disabled { opacity: .5; cursor: default; }
 
 .qw-list { list-style: none; margin: 0; padding: 6px 0; }
@@ -536,8 +633,13 @@ onBeforeUnmount(() => {
   padding: 6px 12px;
   font-size: 12.5px;
 }
-.qw-name { width: 74px; flex-shrink: 0; color: var(--ha-text-secondary, #666); }
-.qw-value { font-weight: 600; color: var(--ha-text-primary, #222); }
+.qw-name { width: 74px; flex-shrink: 0; color: var(--ha-ink-secondary, #4A5568); }
+/* 金额用主文本色（暗色 #EEF2F8 / 亮色 #1A2233），等宽数字提升可读性 */
+.qw-value {
+  font-weight: 600;
+  color: var(--ha-ink, #1A2233);
+  font-variant-numeric: tabular-nums;
+}
 .qw-value.amount { min-width: 62px; }
 .qw-value.quota { flex: 1; display: flex; flex-direction: column; gap: 3px; }
 .qw-quota-val { font-size: 12px; }
@@ -555,11 +657,11 @@ onBeforeUnmount(() => {
   margin-left: auto;
   text-align: right;
   font-size: 11px;
-  color: var(--ha-text-secondary, #999);
+  color: var(--ha-muted, #8B96AB);
   white-space: nowrap;
 }
 .qw-fail { color: #ef4444; }
-.qw-src { margin-left: 4px; font-size: 10px; padding: 0 4px; border-radius: 4px; background: var(--ha-hover, rgba(0,0,0,.06)); }
+.qw-src { margin-left: 4px; font-size: 10px; padding: 0 4px; border-radius: 4px; background: var(--ha-surface-hover, rgba(0,0,0,.06)); }
 .qw-src.live   { color: #22c55e; }
 .qw-src.cached { color: #f59e0b; }
 .qw-src.failed { color: #ef4444; }
@@ -574,8 +676,11 @@ onBeforeUnmount(() => {
   padding: 6px 12px 8px;
   border-top: 1px solid var(--ha-border, rgba(128,128,128,.15));
   font-size: 11px;
-  color: var(--ha-text-secondary, #999);
+  color: var(--ha-muted, #8B96AB);
+  /* 整行可点收起，与头部一致给出可点提示 */
+  cursor: pointer;
 }
+.qw-foot:hover { background: var(--ha-surface-hover, rgba(0,0,0,.04)); }
 .qw-mode {
   white-space: nowrap;
 }

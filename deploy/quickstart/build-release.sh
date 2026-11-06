@@ -34,6 +34,11 @@
 #   ./build-release.sh --version 0.1.0 --skip-sandbox    # core bundle only
 #   ./build-release.sh --version 0.1.0 --push registry.cn-hangzhou.aliyuncs.com/yourns
 #
+# --push takes <registry>/<namespace>; the pushed repositories are the last
+#   path segment of APP_REPO / WEB_REPO (defaults: app, web). Override them
+#   when your registry uses different repository names:
+#   APP_REPO=helloai-app WEB_REPO=helloai-web ./build-release.sh ...
+#
 # ASCII-only file (repo convention for deploy artifacts).
 # ============================================================
 set -euo pipefail
@@ -76,14 +81,23 @@ OUT="$ROOT/dist/$VERSION"
 APP_TAG="helloai-app:$VERSION"
 WEB_TAG="helloai-web:$VERSION"
 
+# Registry REPOSITORY names -- the last path segment, which is a DIFFERENT
+#   string from the local image tags above. They must match what the shipped
+#   .env.example advertises, or `start.sh` will pull a repository nobody can
+#   see: a `docker push` to a new name succeeds, then every consumer 404s.
+#   The public ACR publishes <registry>/<namespace>/app and /web, so those are
+#   the defaults. A fork with different names overrides APP_REPO / WEB_REPO.
+APP_REPO="${APP_REPO:-app}"
+WEB_REPO="${WEB_REPO:-web}"
+
 # In the bundle, .env points at whatever the consumer can actually reach:
 #   with --push  -> the registry reference (they can pull)
 #   without      -> the local tag (they must docker load the offline archive)
 APP_ENV_REF="$APP_TAG"
 WEB_ENV_REF="$WEB_TAG"
 if [ -n "$PUSH_PREFIX" ]; then
-  APP_ENV_REF="$PUSH_PREFIX/helloai-app:$VERSION"
-  WEB_ENV_REF="$PUSH_PREFIX/helloai-web:$VERSION"
+  APP_ENV_REF="$PUSH_PREFIX/$APP_REPO:$VERSION"
+  WEB_ENV_REF="$PUSH_PREFIX/$WEB_REPO:$VERSION"
 fi
 
 # Middleware is version-pinned EXCEPT minio, which is :latest across all five
@@ -265,8 +279,8 @@ push_images() {
   if [ -z "$PUSH_PREFIX" ]; then
     return 0
   fi
-  local app_ref="$PUSH_PREFIX/helloai-app:$VERSION"
-  local web_ref="$PUSH_PREFIX/helloai-web:$VERSION"
+  local app_ref="$PUSH_PREFIX/$APP_REPO:$VERSION"
+  local web_ref="$PUSH_PREFIX/$WEB_REPO:$VERSION"
   log "pushing $app_ref"
   docker tag "$APP_TAG" "$app_ref" || die "could not tag $app_ref"
   docker push "$app_ref" || die "push failed for $app_ref"

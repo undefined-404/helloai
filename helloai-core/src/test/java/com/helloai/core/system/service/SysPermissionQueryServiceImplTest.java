@@ -82,6 +82,21 @@ class SysPermissionQueryServiceImplTest {
         SysPermission p = newPermission(id, code);
         p.setType("MENU");
         p.setParentId(parentId);
+        // 真实菜单叶子都有 component；空页面的 MENU 会在树构建时被当作空目录剔除
+        p.setComponent("test/Page");
+        return p;
+    }
+
+    /** 分组目录：无 component、无页面，仅靠 children 聚合。 */
+    private SysPermission menuGroup(Long id, String code) {
+        SysPermission p = menu(id, code, null);
+        p.setComponent(null);
+        return p;
+    }
+
+    private SysPermission api(Long id, String code) {
+        SysPermission p = newPermission(id, code);
+        p.setType("API");
         return p;
     }
 
@@ -209,6 +224,73 @@ class SysPermissionQueryServiceImplTest {
         }
 
         @Test
+        @DisplayName("分组自身无授权码、子菜单已授权：分组仍出现且子菜单归位")
+        void unauthorizedGroup_shouldStillAppearWhenChildGranted() {
+            when(sysPermissionMapper.selectList(any())).thenReturn(List.of(
+                    menuGroup(200L, "group:task"),
+                    menu(1L, "dashboard:view", 200L),
+                    menu(2L, "task:view", 200L)));
+            when(sysUserRoleMapper.selectList(any())).thenReturn(List.of(newUserRole(2L)));
+            when(sysRoleMapper.selectBatchIds(any())).thenReturn(List.of(newRole(2L, "ADMIN", "ACTIVE")));
+            // 只授予 dashboard:view，未授予分组码 group:task
+            when(sysRolePermissionMapper.selectList(any())).thenReturn(List.of(rolePermission(1L)));
+            when(sysPermissionMapper.selectBatchIds(any())).thenReturn(List.of(newPermission(1L, "dashboard:view")));
+
+            List<SysPermission> tree = queryService.listMenuTree(1001L);
+
+            assertThat(tree).extracting(SysPermission::getCode).containsExactly("group:task");
+            assertThat(tree.get(0).getChildren())
+                    .extracting(SysPermission::getCode)
+                    .containsExactly("dashboard:view");
+        }
+
+        @Test
+        @DisplayName("已授权但可见子节点全被过滤：空分组一并剔除")
+        void visibleButEmptyGroup_shouldBeDropped() {
+            when(sysPermissionMapper.selectList(any())).thenReturn(List.of(
+                    menuGroup(200L, "group:task"),
+                    menu(1L, "dashboard:view", 200L),
+                    menu(2L, "task:view", null)));
+            when(sysUserRoleMapper.selectList(any())).thenReturn(List.of(newUserRole(2L)));
+            when(sysRoleMapper.selectBatchIds(any())).thenReturn(List.of(newRole(2L, "ADMIN", "ACTIVE")));
+            // 授予 group:task + task:view，但 dashboard:view 未授权
+            when(sysRolePermissionMapper.selectList(any()))
+                    .thenReturn(List.of(rolePermission(1L), rolePermission(2L)));
+            when(sysPermissionMapper.selectBatchIds(any()))
+                    .thenReturn(List.of(newPermission(1L, "group:task"), newPermission(2L, "task:view")));
+
+            List<SysPermission> tree = queryService.listMenuTree(1001L);
+
+            assertThat(tree).extracting(SysPermission::getCode).containsExactly("task:view");
+        }
+
+        @Test
+        @DisplayName("父节点缺失的可见菜单兜底为一级，不因悬空 parent 丢失")
+        void danglingParent_shouldFallbackToRoot() {
+            when(sysPermissionMapper.selectList(any())).thenReturn(List.of(
+                    menu(1L, "dashboard:view", 999L)));
+            when(sysUserRoleMapper.selectList(any())).thenReturn(List.of(newUserRole(2L)));
+            when(sysRoleMapper.selectBatchIds(any())).thenReturn(List.of(newRole(2L, "ADMIN", "ACTIVE")));
+            when(sysRolePermissionMapper.selectList(any())).thenReturn(List.of(rolePermission(1L)));
+            when(sysPermissionMapper.selectBatchIds(any())).thenReturn(List.of(newPermission(1L, "dashboard:view")));
+
+            List<SysPermission> tree = queryService.listMenuTree(1001L);
+
+            assertThat(tree).extracting(SysPermission::getCode).containsExactly("dashboard:view");
+        }
+
+        @Test
+        @DisplayName("无任何子节点的空分组被剔除，不渲染成无路由菜单")
+        void emptyGroupWithoutChildren_shouldBeDropped() {
+            when(sysPermissionMapper.selectList(any())).thenReturn(List.of(
+                    menuGroup(200L, "group:task")));
+            when(sysUserRoleMapper.selectList(any())).thenReturn(List.of(newUserRole(1L)));
+            when(sysRoleMapper.selectBatchIds(any())).thenReturn(List.of(newRole(1L, "SUPER_ADMIN", "ACTIVE")));
+
+            assertThat(queryService.listMenuTree(1001L)).isEmpty();
+        }
+
+        @Test
         @DisplayName("无任何权限的用户返回空菜单树")
         void noPermission_shouldReturnEmptyTree() {
             when(sysPermissionMapper.selectList(any())).thenReturn(List.of(
@@ -217,6 +299,25 @@ class SysPermissionQueryServiceImplTest {
             when(sysUserRoleMapper.selectList(any())).thenReturn(List.of());
 
             assertThat(queryService.listMenuTree(1001L)).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("角色授权候选（排除菜单分组目录）")
+    class Assignable {
+
+        @Test
+        @DisplayName("group:* 分组被排除，菜单与接口权限保留")
+        void shouldExcludeMenuGroups() {
+            when(sysPermissionMapper.selectList(any())).thenReturn(List.of(
+                    menuGroup(200L, "group:task"),
+                    menu(1L, "dashboard:view", 200L),
+                    api(30L, "user:delete")));
+
+            List<SysPermission> permissions = queryService.listAssignable();
+
+            assertThat(permissions).extracting(SysPermission::getCode)
+                    .containsExactly("dashboard:view", "user:delete");
         }
     }
 
@@ -255,12 +356,6 @@ class SysPermissionQueryServiceImplTest {
 
             assertThat(tree).hasSize(1);
             assertThat(tree.get(0).getCode()).isEqualTo("orphan:view");
-        }
-
-        private SysPermission api(Long id, String code) {
-            SysPermission p = newPermission(id, code);
-            p.setType("API");
-            return p;
         }
     }
 }

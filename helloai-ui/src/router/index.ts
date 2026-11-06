@@ -5,7 +5,7 @@ import MainLayout from '@/layouts/MainLayout.vue'
 import NotFound from '@/views/NotFound.vue'
 import { useAuthStore } from '@/stores/auth'
 import { rbacApi } from '@/api/rbac'
-import { buildDynamicRoutes, AGENT_STATIC_ROUTES, removeDynamicRoutes } from './dynamic'
+import { buildDynamicRoutes, AGENT_STATIC_ROUTES, removeDynamicRoutes, resolveDefaultHomePath } from './dynamic'
 
 /**
  * 静态白名单路由（BASE-1.3）：初始化向导 / 登录 / 404 兜底。
@@ -45,8 +45,7 @@ const routes: RouteRecordRaw[] = [
     path: '/',
     name: 'root',
     component: MainLayout,
-    redirect: '/dashboard',
-    // 业务页面动态注入到 MainLayout 根下
+    // 登录落点由守卫按「菜单默认首页」解析，不再写死 /dashboard
     children: []
   }
 ]
@@ -60,6 +59,8 @@ const router = createRouter({
 let routesBuilt = false
 let builtForType: 'admin' | 'agent' | null = null
 let builtForToken = ''
+/** 当前登录态的登录落点（admin 取菜单默认首页 / agent 固定 /inbox） */
+let defaultHomePath: string | null = null
 /**
  * 本次页面会话内是否已因「菜单漂移」强制重建过动态路由。
  * 服务端菜单/权限变更后（如新增菜单），同一 SPA 会话的已构建路由不会自动包含新路径，
@@ -78,13 +79,16 @@ async function ensureDynamicRoutes(auth: ReturnType<typeof useAuthStore>): Promi
   if (routesBuilt) {
     removeDynamicRoutes(router)
   }
+  defaultHomePath = null
   if (type === 'admin') {
     // 权限 = 路由可达性：菜单树（已按权限码过滤）决定注册哪些路由
     const menus = await rbacApi.menuTree()
+    defaultHomePath = resolveDefaultHomePath(menus)
     const dynamic = buildDynamicRoutes(menus)
     // 挂到 MainLayout 根路由（name='root'）下；addRoute 第一参数须为父路由 name
     dynamic.forEach((r) => router.addRoute('root', r))
   } else {
+    defaultHomePath = '/inbox'
     AGENT_STATIC_ROUTES.forEach((r) => router.addRoute('root', r))
   }
   routesBuilt = true
@@ -135,6 +139,13 @@ router.beforeEach(async (to) => {
         ElMessage.error('菜单加载失败，请刷新页面重试')
       }
     }
+  }
+
+  // 根路径 → 菜单默认首页（admin 按菜单标记解析，无标记则取第一个可见页面）；
+  // agent 固定落收件箱。放在动态路由就绪之后，保证目标路径已注册。
+  if (to.path === '/') {
+    const home = auth.adminToken ? defaultHomePath : '/inbox'
+    return home ? { path: home, replace: true } : '/404'
   }
 
   // 菜单漂移自愈：命中兜底路由（路径未注册）且本会话尚未自愈过 → 服务端菜单可能已变更

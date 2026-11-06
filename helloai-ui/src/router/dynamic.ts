@@ -76,9 +76,13 @@ export function buildDynamicRoutes(menus: SysPermission[]): RouteRecordRaw[] {
   const walk = (nodes: SysPermission[]): string[] => {
     const leafPaths: string[] = []
     for (const n of nodes) {
-      // path 含 '?'（死信池 /sub-tasks?status=...）仅侧边栏入口，不注册路由
-      if (!n.path || n.path.includes('?')) continue
+      // 先递归子树：无 path / path 带 '?'（死信池 /sub-tasks?status=...）只表示「自身不注册路由」，
+      // 不表示整棵子树都不注册。放在守卫之后会把子节点一并丢掉，且无任何提示。
       const childLeafs = n.children?.length ? walk(n.children) : []
+      if (!n.path || n.path.includes('?')) {
+        leafPaths.push(...childLeafs)
+        continue
+      }
       // 外链菜单（BASE-3.1）：点击新窗口打开，不注册前端路由；子节点若有仍照常注册
       if (n.externalLink) {
         leafPaths.push(...childLeafs)
@@ -105,7 +109,9 @@ export function buildDynamicRoutes(menus: SysPermission[]): RouteRecordRaw[] {
           leafPaths.push(n.path)
         }
       } else if (n.children?.length && childLeafs.length > 0) {
-        // 聚合父节点：redirect 到第一个可见子（如 /settings → /system/users）
+        // 聚合父节点：redirect 到第一个可见子（如 /settings → /system/users）。
+        // 不回填 n.path：分组自身不是可跳转目标，父级 redirect 应直接落到真实叶子，
+        // 否则未来出现嵌套分组会形成「父分组 → 子分组 → 叶子」的二次重定向。
         const name = `${DYNAMIC_ROUTE_PREFIX}group-${n.path.replace(/\W+/g, '-')}`
         routes.push({
           path: n.path,
@@ -114,7 +120,6 @@ export function buildDynamicRoutes(menus: SysPermission[]): RouteRecordRaw[] {
           meta: { title: n.name, icon: n.icon, hidden: n.hidden === 1 }
         })
         registered.add(n.path)
-        leafPaths.push(n.path)
       }
     }
     return leafPaths
@@ -128,6 +133,47 @@ export function buildDynamicRoutes(menus: SysPermission[]): RouteRecordRaw[] {
     }
   }
   return routes
+}
+
+/** 可注册路由、可作为登录落点的菜单：有 path、无查询参数、有组件、非外链。 */
+function isNavigableMenu(node: SysPermission): boolean {
+  return !!node.path && !node.path.includes('?') && !node.externalLink && !!node.component
+}
+
+function findMarkedHome(nodes: SysPermission[]): string | null {
+  for (const node of nodes) {
+    if (node.isDefaultHome === 1) {
+      if (isNavigableMenu(node)) return node.path as string
+      // 分组被误标时向下找第一个可跳转子页面
+      if (node.children?.length) {
+        const child = firstNavigableMenu(node.children)
+        if (child) return child
+      }
+    }
+    const deeper = findMarkedHome(node.children ?? [])
+    if (deeper) return deeper
+  }
+  return null
+}
+
+function firstNavigableMenu(nodes: SysPermission[]): string | null {
+  for (const node of nodes) {
+    if (node.hidden === 1) continue
+    if (isNavigableMenu(node)) return node.path as string
+    if (node.children?.length) {
+      const child = firstNavigableMenu(node.children)
+      if (child) return child
+    }
+  }
+  return null
+}
+
+/**
+ * 解析登录后的默认落点：优先取菜单管理中标记的「默认首页」，
+ * 当前用户无权访问该菜单时回退到其菜单树第一个可见、可跳转的页面。
+ */
+export function resolveDefaultHomePath(menus: SysPermission[]): string | null {
+  return findMarkedHome(menus) ?? firstNavigableMenu(menus)
 }
 
 /**

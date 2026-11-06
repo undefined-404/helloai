@@ -15,6 +15,13 @@ import java.util.List;
 public interface SysPermissionQueryService {
 
     /**
+     * 菜单分组目录的权限码前缀。
+     *
+     * <p>分组只用于侧边栏聚合，不参与鉴权；角色授权界面必须排除，避免勾选后无任何效果。</p>
+     */
+    String MENU_GROUP_CODE_PREFIX = "group:";
+
+    /**
      * 查询用户角色码列表（如 {@code [SUPER_ADMIN]} / {@code [ADMIN]}）。
      */
     List<String> listRoleCode(Long userId);
@@ -25,9 +32,17 @@ public interface SysPermissionQueryService {
     List<String> listPermissionCode(Long userId);
 
     /**
-     * 列出全部权限码实体（供「角色授权」界面勾选，以及前端菜单按码过滤）。
+     * 列出全部权限码实体（供「权限管理」界面展示，以及前端菜单按码过滤）。
      */
     List<SysPermission> listAll();
+
+    /**
+     * 列出可参与「角色授权」的权限码实体：排除菜单分组目录。
+     *
+     * <p>分组目录（{@link #MENU_GROUP_CODE_PREFIX}）没有独立授权语义，勾选它不会授予任何
+     * 子菜单权限；子菜单仍按各自权限码判定，故不进入授权候选。</p>
+     */
+    List<SysPermission> listAssignable();
 
     /**
      * 查询用户可见菜单树（type=MENU，按权限码过滤后 parent 挂接）。

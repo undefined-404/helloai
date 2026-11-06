@@ -35,11 +35,18 @@ public class SysPermissionController {
     private final SysPermissionService sysPermissionService;
     private final SysPermissionDataRuleService sysPermissionDataRuleService;
 
-    /** 权限码全量列表（平铺，角色授权勾选用） */
+    /** 权限码全量列表（平铺，权限管理展示用） */
     @SaCheckPermission("permission:view")
     @GetMapping
     public R<List<MenuTreeNodeVO>> list() {
         return R.ok(MenuTreeNodeVOs.fromList(sysPermissionQueryService.listAll()));
+    }
+
+    /** 角色授权候选权限（排除菜单分组目录：勾选分组不会授予任何子菜单） */
+    @SaCheckPermission("permission:view")
+    @GetMapping("/assignable")
+    public R<List<MenuTreeNodeVO>> assignable() {
+        return R.ok(MenuTreeNodeVOs.fromList(sysPermissionQueryService.listAssignable()));
     }
 
     /** 全量权限树（管理页展示：MENU 挂层级，API 平铺叶子） */
@@ -102,6 +109,7 @@ public class SysPermissionController {
         p.setHidden(req.getHidden());
         p.setKeepAlive(req.getKeepAlive());
         p.setExternalLink(req.getExternalLink());
+        p.setIsDefaultHome(req.getIsDefaultHome());
         return p;
     }
 }

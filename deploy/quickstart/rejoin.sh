@@ -8,7 +8,7 @@
 # Run this in the directory where you downloaded the pieces:
 #   ./rejoin.sh <VER>
 # e.g.
-#   ./rejoin.sh 0.2.0
+#   ./rejoin.sh 0.2.1
 # then verify:
 #   sha256sum -c SHA256SUMS-<VER>.txt
 #
@@ -16,7 +16,7 @@
 # ============================================================
 set -euo pipefail
 
-VER="${1:?usage: $0 <version>  (e.g. $0 0.2.0)}"
+VER="${1:?usage: $0 <version>  (e.g. $0 0.2.1)}"
 cd "$(dirname "$0")"
 
 parts=$(ls helloai-offline-*-part-* 2>/dev/null || true)

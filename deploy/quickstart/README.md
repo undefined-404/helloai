@@ -11,15 +11,15 @@
 `app` / `web` 两个预构建镜像放在公开 ACR 上，**匿名可拉、不需要登录**：
 
 ```
-crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/app:0.2.0
-crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/web:0.2.0
+crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/app:0.2.1
+crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai/web:0.2.1
 ```
 
 仓库地址已写进 `.env.example`，所以只需：
 
 ```bash
-tar xzf helloai-quickstart-0.2.0.tar.gz
-cd helloai-quickstart-0.2.0
+tar xzf helloai-quickstart-0.2.1.tar.gz
+cd helloai-quickstart-0.2.1
 ./start.sh
 ```
 
@@ -31,25 +31,31 @@ cd helloai-quickstart-0.2.0
 
 ### 方式二：离线包（断网 / 镜像仓库不可达时用）
 
-> 离线包（core + sandbox + 清单，共 5 个文件）由**发布说明**提供下载链接。
+> 离线包（core + 清单，共 4 个文件；沙箱包按需另行生成）由**发布说明**提供下载链接。
 > 断网 / 镜像仓库不可达时才需要它。
 
 | 文件 | 大小 | 要不要 |
 |---|---|---|
-| `helloai-quickstart-0.2.0.tar.gz` | 28 KB | **必须**（脚本 + compose + 本说明） |
-| `helloai-offline-core-0.2.0.tar.gz` | 556 MB | **必须**（app + web + 4 个中间件镜像） |
-| `helloai-offline-sandbox-0.2.0.tar.gz` | 711 MB | 可选，仅 `--with-sandbox` 需要 |
-| `IMAGES-0.2.0.txt` | 2.4 KB | 建议（镜像 ID / digest 清单） |
-| `SHA256SUMS-0.2.0.txt` | 384 B | 建议（校验下载完整性） |
+| `helloai-quickstart-0.2.1.tar.gz` | 28 KB | **必须**（脚本 + compose + 本说明） |
+| `helloai-offline-core-0.2.1.tar.gz` | 556 MB | **必须**（app + web + 4 个中间件镜像） |
+| `helloai-offline-sandbox-0.2.1.tar.gz` | 711 MB | 可选，仅 `--with-sandbox` 需要（`--skip-sandbox` 发版时**不产这个包**） |
+| `IMAGES-0.2.1.txt` | 1.2 KB | 建议（镜像 ID / digest 清单） |
+| `SHA256SUMS-0.2.1.txt` | 281 B | 建议（校验下载完整性） |
+
+> **Gitee 附件单文件上限 100 MB**，所以 core 包在发行版里是切成 **95 MB 的
+> `...-part-001`** 等多片上传的。把这些片和 `rejoin.sh` 下载到**同一目录**后先拼。
 
 ```bash
+# 0) 若是切片下载：先拼回完整包
+./rejoin.sh 0.2.1
+
 # 1) 校验（建议）
-sha256sum -c SHA256SUMS-0.2.0.txt
+sha256sum -c SHA256SUMS-0.2.1.txt
 
 # 2) 解压并启动
-tar xzf helloai-quickstart-0.2.0.tar.gz
-cd helloai-quickstart-0.2.0
-cp ../helloai-offline-core-0.2.0.tar.gz .    # 必须放脚本同目录
+tar xzf helloai-quickstart-0.2.1.tar.gz
+cd helloai-quickstart-0.2.1
+cp ../helloai-offline-core-0.2.1.tar.gz .    # 必须放脚本同目录
 ./start.sh --offline
 ```
 
@@ -207,17 +213,17 @@ docker compose -f docker-compose.yml logs rabbitmq | tail
 用户侧只需要下载 + 解压 + `--offline`。
 
 ```text
-helloai-quickstart-0.2.0/                 # 脚本包解开后的目录
+helloai-quickstart-0.2.1/                 # 脚本包解开后的目录
 ├── start.sh / docker-compose.yml / ...
-├── helloai-offline-core-0.2.0.tar.gz     # 必选：app + web + 4 个中间件
-└── helloai-offline-sandbox-0.2.0.tar.gz  # 可选：只有 --with-sandbox 才需要
+├── helloai-offline-core-0.2.1.tar.gz     # 必选：app + web + 4 个中间件
+└── helloai-offline-sandbox-0.2.1.tar.gz  # 可选：只有 --with-sandbox 才需要
 ```
 
 > 两个 `helloai-offline-*.tar.gz` **必须放在脚本同一目录**——`--offline` 是在
 > `start.sh` 所在目录里找它们的。放到上一层目录不会被发现。
 
 ```bash
-cd helloai-quickstart-0.2.0
+cd helloai-quickstart-0.2.1
 ./start.sh --offline                    # 核心模式
 ./start.sh --offline --with-sandbox     # 需要沙箱时
 ```
@@ -229,25 +235,62 @@ cd helloai-quickstart-0.2.0
 
 ### 维护者：产出发布包
 
+一条命令同时完成「打镜像 → 推 ACR → 生成 quickstart 包」：
+
 ```bash
 # 在发版机执行（有 Docker + bash；Linux / WSL / Git Bash 均可）
 cd deploy/quickstart
-./build-release.sh --version 0.2.0
+
+# 只发「一键安装（推荐）」：镜像推 ACR，不需要离线包
+./build-release.sh --version 0.2.1 \
+  --push crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai \
+  --skip-sandbox
+
+# 完整发布（含离线包，多 ~1.3 GB 与十几分钟）
+./build-release.sh --version 0.2.1 \
+  --push crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai
 ```
 
-产物在 `dist/0.2.0/`：脚本包、`helloai-offline-core-<ver>.tar.gz`、
-`helloai-offline-sandbox-<ver>.tar.gz`、`IMAGES-<ver>.txt`（镜像 ID 与 digest）、
-`SHA256SUMS-<ver>.txt`。把这 5 个文件上传到网盘（或 Gitee Release 附件）即可分发。
+**Windows PowerShell 下不能直接执行 `./build-release.sh`**，有两个原因：
 
-可选——如果你确实有镜像仓库，加 `--push` 会额外推送（不推也不影响离线包可用）：
+1. PowerShell 里 `bash` 命中的是 WSL 启动器 `C:\Windows\system32\bash.exe`，
+   不是 Git Bash —— 两者的路径、docker、行尾处理都不一样；
+2. `\` 在 PowerShell 里不是续行符（反引号才是），多行命令在解析阶段就断了。
+
+显式调用 Git for Windows 自带的 bash，**一行写完不续行**：
+
+```powershell
+# 把 bash 路径换成本机 Git 的安装位置（默认 C:\Program Files\Git\bin\bash.exe）
+& "E:\Program Files\Git\bin\bash.exe" -lc "cd /e/yhzx/1027/helloai/deploy/quickstart && ./build-release.sh --version 0.2.1 --push crpi-y0c6x9ls3zo4d4je.cn-beijing.personal.cr.aliyuncs.com/helloai --skip-sandbox"
+```
+
+`-lc` 里的 `/e/...` 是 Git Bash 的盘符写法（`E:` → `/e`），不是 Windows 路径。
+
+产物在 `dist/<ver>/`：`helloai-quickstart-<ver>.tar.gz`、
+`helloai-offline-core-<ver>.tar.gz`（`--skip-sandbox` 时不产 sandbox 包）、
+`IMAGES-<ver>.txt`（镜像 ID 与 digest）、`SHA256SUMS-<ver>.txt`。
+
+**分发时「一键安装」只需要一个文件**：把 `helloai-quickstart-<ver>.tar.gz`
+作为**附件**挂到 Gitee 发行版（tag `v<ver>`），文件名必须精确保持
+`helloai-quickstart-<ver>.tar.gz`——`deploy/install.sh` 是按
+`<repo>/releases/download/v<ver>/helloai-quickstart-<ver>.tar.gz` 这个固定名拼 URL 的，
+改名即 404。
+
+Gitee 附件单文件上限 100 MB，离线 core 包（556 MB）必须切片上传：
 
 ```bash
-./build-release.sh --version 0.2.0 --push registry.cn-hangzhou.aliyuncs.com/<namespace>
+split -b 95M -d -a 3 helloai-offline-core-0.2.1.tar.gz helloai-offline-core-0.2.1-part-
+# 产出 part-000 … part-006，连同 rejoin.sh 一起挂到发行版
 ```
 
-> **为什么默认不建镜像仓库。** 仓库托管在 Gitee，没有现成的 ghcr.io / ACR 地址；
-> 而镜像仓库的长期成本（存储、带宽、认证、多架构构建、镜像 GC）对一个个人项目
-> 换不来离线 tar 包已经给出的东西——可复现、可校验、零基础设施。
+**`--push` 的参数是 `<registry>/<namespace>`，不是仓库名全路径。**
+脚本会拼成 `<registry>/<namespace>/app:<ver>` 与 `/web:<ver>`（即 `.env.example`
+里 advertised 的那两个仓库）。若你的仓库叫别的名字，用 `APP_REPO` / `WEB_REPO` 覆盖。
+推之前必须先 `docker login <registry>`。
+
+> **为什么脚本不关心 registry。** 仓库托管在 Gitee，没有现成的 ghcr.io 地址；
+> 离线 tar 包本身已给出「可复现、可校验、零基础设施」的分发方式，registry 只是
+> 让「一键安装」省掉下载 556 MB 的可选加速项。
 >
 > **中间件也必须一起打包**，否则 `--offline` 仍然要访问 Docker Hub。
 > `build-release.sh` 已经把 4 个中间件放进 core 包。
@@ -261,9 +304,14 @@ cd deploy/quickstart
 
 ```bash
 ./stop.sh
-# 修改 .env 里的 HELLOAI_APP_IMAGE / HELLOAI_WEB_IMAGE 版本号
+# 只改 .env 里的 HELLOAI_APP_IMAGE / HELLOAI_WEB_IMAGE 两行版本号
 ./start.sh
 ```
+
+> **绝不要用新包的 `.env.example` 覆盖现有 `.env`。**
+> `.env` 里的 `HELLOAI_CREDENTIAL_AES_KEY_BASE64` 是解密**全部已存 LLM API Key**
+> 的唯一密钥。一旦换成新生成的密钥，历史凭据永久无法解密（只能逐个重录）。
+> 升级的正确做法是「只动那两行 tag」，其余行一个字都不改。
 
 - 数据卷保留，Flyway 在应用启动时自动执行迁移；
 - `app` 与 `web` 必须使用**同一个版本号**（同一个发布包内天然一致）；

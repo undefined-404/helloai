@@ -279,6 +279,8 @@ export const paths = {
     roleById: (id: string | number) => `/admin/roles/${enc(id)}`,
     rolePermissions: (id: string | number) => `/admin/roles/${enc(id)}/permissions`,
     permissions: '/admin/permissions',
+    /** 角色授权候选权限（后端已排除 group:* 菜单分组目录） */
+    assignablePermissions: '/admin/permissions/assignable',
     // BASE-2.1 菜单/权限管理：全量权限树 + CRUD（MENU 挂层级 + API 平铺）
     permissionTree: '/admin/permissions/tree',
     permissionCreate: '/admin/permissions',

@@ -29,6 +29,7 @@ public final class MenuTreeNodeVOs {
         vo.setHidden(p.getHidden());
         vo.setKeepAlive(p.getKeepAlive());
         vo.setExternalLink(p.getExternalLink());
+        vo.setIsDefaultHome(p.getIsDefaultHome());
         if (p.getChildren() != null && !p.getChildren().isEmpty()) {
             vo.setChildren(p.getChildren().stream().map(MenuTreeNodeVOs::from).toList());
         }
