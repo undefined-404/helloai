@@ -79,9 +79,38 @@ public final class AcceptanceKindValidator {
     private static final Pattern COMMAND_STRONG = Pattern.compile(
             "(运行|执行|调用|执行命令|pytest|mvn|npm|curl|grep|断言|assert)");
 
-    /** 预期结果特征：数字 / 布尔 / 状态码 / 时间等可判定产物。 */
+    /**
+     * 预期结果特征：数字 / 布尔 / 状态码 / 时间等可判定产物。
+     *
+     * <p><b>★2026-11-07 真机误伤修复（dashscope / qwen3.7-plus 实测）</b>：业务系统验收的预期结果
+     * 常常<b>不是</b>「成功 / 失败 / 200 / true」这类通用词，而是<b>业务枚举赋值</b>与<b>字段存在断言</b>。
+     * 实测被 fail-close 的原文：「调用内容发布接口后…返回 {@code matchResult=HIT} 且内容状态变更为
+     * {@code PENDING_MANUAL_REVIEW}；机审结果记录中包含 {@code ruleId} 与 {@code ruleVersion} 字段」——
+     * 动作成分「调用」已命中 {@link #COMMAND_LIKE}，预期结果却<b>零命中</b>，显式 AUTOMATED 被判
+     * 写法不匹配，整批 6 条草案全部作废，用户拿不到任何草案。这是纯误伤：该文本比
+     * 「接口返回 200」信息量更高、同样可机器判定。</p>
+     *
+     * <p>故补三类特征（只增不减，保持既有 Pass 不回归）：
+     * <ol>
+     *   <li><b>赋值式断言</b> {@code key=value} / {@code key: value}——枚举、状态码、字段值；</li>
+     *   <li><b>字段存在断言</b>「包含 / 含有 / 含 / 存在 / 返回 / 输出 + 标识符」——要求后续紧跟
+     *       ASCII 标识符，中文宾语（「输出完整文档」）不命中，不会让 STRUCTURAL 写作式蒙混；</li>
+     *   <li><b>全大写枚举常量</b>（须含下划线，如 {@code PENDING_MANUAL_REVIEW}）——排除 {@code UTF}
+     *       这类普通缩写。</li>
+     * </ol>
+     * 放宽方向是单向的（只影响 {@code AUTOMATED} 的 Pass 判定，不影响 STRUCTURAL / REVIEWED /
+     * ATTESTED 的 fail-close），因此不会把误伤转移到其它 kind；空话（「功能正常，体验良好」）
+     * 不含等号赋值与大写枚举，仍判 Fail。</p>
+     */
     private static final Pattern EXPECTED_OUTCOME = Pattern.compile(
-            "(\\d+\\s*[%条页个次份项章节秒分钟天月年]|[0-9]+\\s*passed|passed|failed|all ok|\\bok\\b|成功|通过|失败|200|404|500|true|false|为空|非空|存在|缺失|0 条|0 项)");
+            "(\\d+\\s*[%条页个次份项章节秒分钟天月年]|[0-9]+\\s*passed|passed|failed|all ok|\\bok\\b|成功|通过|失败|200|404|500|true|false|为空|非空|存在|缺失|0 条|0 项"
+                    // ① 赋值式断言：matchResult=HIT / status: PAID
+                    + "|[A-Za-z_][A-Za-z0-9_.]*\\s*[=＝]\\s*[A-Za-z0-9_\\-]+"
+                    // ② 字段存在断言：包含 ruleId 字段（宾语必须是 ASCII 标识符）
+                    + "|(包含|含有|含|存在|返回|输出)\\s*[A-Za-z_][A-Za-z0-9_.]*"
+                    // ③ 全大写枚举常量：PENDING_MANUAL_REVIEW
+                    + "|\\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\\b"
+                    + ")");
 
     /**
      * 可数量词：数字 + 单位 / 明确的数量词头（STRUCTURAL 硬约束）。

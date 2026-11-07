@@ -26,6 +26,35 @@ class AcceptanceKindValidatorTest {
     }
 
     @Test
+    @DisplayName("AUTOMATED 真机回归（2026-11-07 dashscope）：业务枚举赋值 + 字段断言文本")
+    void automatedPassWithBusinessEnumAndFieldAssertion() {
+        // 原文来自 dashscope/qwen3.7-plus 真实拆解第 2 条，改前被 fail-close 导致整批 6 条草案作废
+        Result r = AcceptanceKindValidator.validate(AcceptanceKind.AUTOMATED,
+                "调用内容发布接口后，对包含预置敏感词的内容触发机审，返回 matchResult=HIT 且内容状态变更为 "
+                        + "PENDING_MANUAL_REVIEW，该内容出现在人工复审队列中；对不包含敏感词的内容触发机审，"
+                        + "返回 matchResult=PASS 且内容状态变更为 MACHINE_PASSED；机审结果记录中包含 ruleId 与 "
+                        + "ruleVersion 字段，值与实际使用的规则一致。");
+        assertThat(r).isInstanceOf(Result.Pass.class);
+    }
+
+    @Test
+    @DisplayName("AUTOMATED 放宽不回归：空话仍 Fail（不含等号赋值与大写枚举）")
+    void automatedStillFailsOnVagueAfterRelax() {
+        Result r = AcceptanceKindValidator.validate(AcceptanceKind.AUTOMATED,
+                "功能正常，体验良好，符合预期");
+        assertThat(r).isInstanceOf(Result.Fail.class);
+    }
+
+    @Test
+    @DisplayName("STRUCTURAL 不回归：中文宾语「输出完整文档」不触发字段断言，仍按可数量词判定")
+    void structuralChineseObjectNotTreatedAsFieldAssertion() {
+        Result fail = AcceptanceKindValidator.validate(AcceptanceKind.STRUCTURAL, "撰写现状与挑战，输出完整文档");
+        assertThat(fail).isInstanceOf(Result.Fail.class);
+        Result pass = AcceptanceKindValidator.validate(AcceptanceKind.STRUCTURAL, "输出 5 个章节且每章有结论");
+        assertThat(pass).isInstanceOf(Result.Pass.class);
+    }
+
+    @Test
     @DisplayName("AUTOMATED 反例：只有空话，无命令无预期结果")
     void automatedFailVague() {
         Result r = AcceptanceKindValidator.validate(AcceptanceKind.AUTOMATED,
