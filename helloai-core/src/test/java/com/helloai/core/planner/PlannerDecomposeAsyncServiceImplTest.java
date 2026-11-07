@@ -18,6 +18,7 @@ import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.planner.context.DecomposeContextSnapshotRenderer;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.policy.PlanBatchGateChecker;
 import com.helloai.core.planner.policy.RequirementPackageParser;
 import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.planner.service.impl.PlannerDecomposeAsyncServiceImpl;
@@ -61,7 +62,7 @@ import static org.mockito.Mockito.when;
  * PlannerDecomposeAsyncServiceImpl 单元测试（拆解异步化改造，LLM 段用例迁移自
  * PlannerAnalysisServiceTest）：幂等守卫 / 成功落库 / markdown fence 容错 /
  * JSON 解析失败回退 / LLM 调用失败回退 / 幽灵依赖 / dependsOn 回写 /
- * validateDependencies 依赖环校验 / G-011 需求包渲染与 uncertainties 管理。
+ * 门 1/2 批次门禁 / G-011 需求包渲染与 uncertainties 管理。
  *
  * <p>异步方法在测试中同步直调（不经 Spring 代理），失败路径内部闭环不抛异常，
  * 断言回退 PENDING（lambdaUpdate）与 task_plan_failed timeline。</p>
@@ -469,8 +470,8 @@ class PlannerDecomposeAsyncServiceImplTest {
         // 整批拒绝：不落库任何草案（残缺草案比拆解失败更贵——执行/审查侧将失去验收依据）
         verify(subTaskService, never()).saveDrafts(any());
         verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
-        // 审计先于抛出：draftSeq / field 精确指向第 2 条 acceptance
-        verify(taskTimelineService).recordEvent(
+        // 审计先于抛出：draftSeq / field 精确指向第 2 条 acceptance；且走独立事务入口
+        verify(taskTimelineService).recordEventInNewTx(
                 eq(TASK_ID), isNull(), eq("task_plan_draft_field_missing"),
                 eq(AgentRole.PLANNER), eq(9L),
                 argThat(payload -> "acceptance".equals(payload.get("field"))
@@ -478,6 +479,62 @@ class PlannerDecomposeAsyncServiceImplTest {
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_failed"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-13 S4：门 1 成环 → 落库前整批阻断，findings 落 task.context.gateFindings + timeline")
+    void shouldBlockBeforeSaveWhenBatchGateFails() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [
+                          {"title":"甲","content":"内容甲","deliverable":"交付物甲完整清单","acceptance":"验收判据甲说明文字","dependsOn":[2]},
+                          {"title":"乙","content":"内容乙","deliverable":"交付物乙完整清单","acceptance":"验收判据乙说明文字","dependsOn":[1]}
+                        ]
+                        """, "stop", "llm", 100));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 门 1 阻断在 saveDrafts 之前：DB 中不产生任何草案行
+        verify(subTaskService, never()).saveDrafts(any());
+        verify(subTaskService, never()).listDraftsInInsertOrder(anyLong(), any());
+        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
+        verify(taskTimelineService).recordEventInNewTx(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> contextCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(taskService).updateContextInNewTx(eq(TASK_ID), contextCaptor.capture());
+        assertThat(contextCaptor.getValue()).containsKey("gateFindings");
+        // 审计写点不得走共享事务版本（否则 expand 抛错时会被回滚）
+        verify(taskService, never()).updateContext(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("TD-13 S4：门 2 无告警规则 → 不再产出 gateFindings 与 task_plan_gate_warned")
+    void shouldNotEmitGateFindingsWhenDraftHasQuotedTermNotRepeatedInAcceptance() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [
+                          {"title":"甲","content":"内容甲","deliverable":"输出《巡检台账》契约文档","acceptance":"运行 X 命令输出预期 Y"},
+                          {"title":"乙","content":"内容乙","deliverable":"输出《巡检报表》统计脚本","acceptance":"接口 Z 返回 200 状态码"}
+                        ]
+                        """, "stop", "llm", 100));
+        when(subTaskService.saveDrafts(any())).thenReturn(List.of());
+        lenient().when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(new ArrayList<>());
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTaskDraft>> draftsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(subTaskService).saveDrafts(draftsCaptor.capture());
+        assertThat(draftsCaptor.getValue()).allSatisfy(
+                d -> assertThat(d.context()).doesNotContainKey(SubTaskContextKeys.GATE_FINDINGS));
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_warned"), any(), any(), anyMap());
     }
 
     @Test
@@ -615,52 +672,6 @@ class PlannerDecomposeAsyncServiceImplTest {
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_generated"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  validateDependencies：依赖环校验
-    // ══════════════════════════════════════════════════════════════
-
-    private PlannerAnalysisService.PlanDraftItem item(List<Integer> dependsOn) {
-        PlannerAnalysisService.PlanDraftItem it = new PlannerAnalysisService.PlanDraftItem();
-        it.setTitle("t");
-        it.setContent("c");
-        it.setDependsOn(dependsOn);
-        return it;
-    }
-
-    @Test
-    @DisplayName("validateDependencies：合法 DAG（链式+汇聚）通过，null/空依赖视为无依赖")
-    void shouldAcceptValidDag() {
-        // 1 ← 2，(1,2) ← 3，4 无依赖
-        List<PlannerAnalysisService.PlanDraftItem> items = List.of(
-                item(null), item(List.of(1)), item(List.of(1, 2)), item(List.of()));
-        asyncService.validateDependencies(items); // 不抛即通过
-    }
-
-    @Test
-    @DisplayName("validateDependencies：成环整批拒绝")
-    void shouldRejectCyclicDependencies() {
-        // 1→2→3→1 成环
-        List<PlannerAnalysisService.PlanDraftItem> items = List.of(
-                item(List.of(3)), item(List.of(1)), item(List.of(2)));
-        assertThatThrownBy(() -> asyncService.validateDependencies(items))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("循环依赖");
-    }
-
-    @Test
-    @DisplayName("validateDependencies：序号越界/自引用拒绝")
-    void shouldRejectOutOfRangeAndSelfReference() {
-        assertThatThrownBy(() -> asyncService.validateDependencies(
-                List.of(item(List.of(5)), item(null))))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("依赖序号非法");
-
-        assertThatThrownBy(() -> asyncService.validateDependencies(
-                List.of(item(List.of(1)))))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("不得依赖自身");
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -829,6 +840,39 @@ class PlannerDecomposeAsyncServiceImplTest {
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
         verify(subTaskService).saveDrafts(captor.capture());
         assertThat(captor.getValue().get(0).context())
+                .doesNotContainKey(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS);
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_acceptance_precondition_unmet"),
+                any(), any(), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-13 S1：UNCONFIRMED 申报在别的草案 → 本条不标注（跨草案拼接已删除）")
+    void shouldNotAnnotateFromOtherDraftsUncertainties() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"竞品 A 事实采集","content":"采集公开功能与定价",
+                          "deliverable":"证据台账表（每条含来源 URL）",
+                          "acceptance":"STRUCTURAL：证据条目 ≥15 条，每条附来源 URL",
+                          "uncertainties":[{"kind":"TO_LOOK_UP","note":"竞品 A 定价页需联网查"}]},
+                         {"title":"代号映射确认","content":"确认 A/B/C 对应哪三款真实产品",
+                          "deliverable":"代号映射确认记录表（含 3 行）",
+                          "acceptance":"STRUCTURAL：输出 1 份映射确认表，含 3 行记录",
+                          "uncertainties":[{"kind":"UNCONFIRMED","note":"A/B/C 对应哪三款真实产品待业务方拍板"}]}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L), draft(12L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
+        verify(subTaskService).saveDrafts(captor.capture());
+        assertThat(captor.getValue()).hasSize(2);
+        assertThat(captor.getValue().get(0).context())
+                .doesNotContainKey(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS);
+        assertThat(captor.getValue().get(1).context())
                 .doesNotContainKey(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS);
         verify(taskTimelineService, never()).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_acceptance_precondition_unmet"),
@@ -1141,14 +1185,14 @@ class PlannerDecomposeAsyncServiceImplTest {
     }
 
     @Test
-    @DisplayName("TD-5 长度闸：acceptance/deliverable 低于字符下限 → fail-close 整批拒绝，不落库")
-    void shouldRejectWhenFieldLengthBelowFloor() {
+    @DisplayName("TD-5 长度闸：acceptance 低于字符下限 → fail-close 整批拒绝，不落库")
+    void shouldRejectWhenAcceptanceBelowFloor() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
-        // 各字段非空（过必填校验）但 deliverable=3 字符 < 8 下限 → 长度闸拒绝
+        // 各字段非空（过必填校验）但 acceptance=5 字符 < 10 下限 → 长度闸拒绝
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"产出物","content":"c","deliverable":"报告","acceptance":"验收判据说明文字内容"}]
+                        [{"title":"产出物","content":"c","deliverable":"报告","acceptance":"通过即可"}]
                         """, "stop", "llm", 100));
 
         asyncService.executeDecompose(TASK_ID);
@@ -1158,6 +1202,24 @@ class PlannerDecomposeAsyncServiceImplTest {
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_failed"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("P1-C：deliverable 极短但不为空 → 正常落库（`三行状态回执` 存量合法形态）")
+    void shouldSaveWhenDeliverableIsShortButNotBlank() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"接口自检","content":"c","deliverable":"三行状态回执","acceptance":"三项可数断言：① 正文包含 API-CHECK-DONE ② getMySkill=200 ③ list=200"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(subTaskService).saveDrafts(any());
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"), any(), any(), anyMap());
     }
 
     @Test
@@ -1242,6 +1304,33 @@ class PlannerDecomposeAsyncServiceImplTest {
         // ⑤ timeline 记录展开事件
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(ORIGINAL_DRAFT_ID), eq("task_plan_draft_expanded"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-13 S4 / P1-A：expand 被门禁阻断时审计走独立事务入口（外层回滚不清除 gateFindings）")
+    void shouldAuditInNewTxWhenExpandBlocked() {
+        stubExpandContext("""
+                [
+                  {"title":"子步骤A","content":"先准备","deliverable":"准备产物完整清单","acceptance":"运行 X 命令输出预期 Y"},
+                  {"title":"子步骤B","content":"后执行","deliverable":"执行产物完整清单","acceptance":"   "}
+                ]
+                """);
+
+        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining(PlanBatchGateChecker.G2_BLANK);
+
+        // 业务回滚：不落任何草案
+        verify(subTaskService, never()).saveDrafts(any());
+        // 审计保留：必须走 REQUIRES_NEW 入口，不能走共享事务版本
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> contextCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(taskService).updateContextInNewTx(eq(TASK_ID), contextCaptor.capture());
+        assertThat(contextCaptor.getValue()).containsKey(SubTaskContextKeys.GATE_FINDINGS);
+        verify(taskService, never()).updateContext(anyLong(), any());
+        verify(taskTimelineService).recordEventInNewTx(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
     }
 
@@ -1335,6 +1424,136 @@ class PlannerDecomposeAsyncServiceImplTest {
         // ③ timeline 记录重生成事件
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(ORIGINAL_DRAFT_ID), eq("task_plan_draft_regenerated"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-9 regenerate / P1-A：缺字段失败时审计走独立事务入口（不被业务回滚清除）")
+    void regenerateMissingFieldShouldAuditInNewTx() {
+        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
+                draftFullTD9(ORIGINAL_DRAFT_ID, "原标题", "原内容", "原交付物产物",
+                        "原验收判据内容", List.of()));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("""
+                        {"title":"标题","content":"内容","deliverable":"交付物产物完整清单"}
+                        """, "stop", "llm", 100));
+        when(agentSkillSpecService.listPackages()).thenReturn(List.of());
+
+        assertThatThrownBy(() -> asyncService.regenerateById(ORIGINAL_DRAFT_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("缺少 acceptance");
+
+        verify(subTaskService, never()).updateDraftContent(anyLong(), any(), any(), any(), any());
+        verify(taskTimelineService).recordEventInNewTx(
+                eq(TASK_ID), isNull(), eq("task_plan_draft_field_missing"),
+                eq(AgentRole.PLANNER), eq(9L),
+                argThat(payload -> "acceptance".equals(payload.get("field"))));
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  s4-5：「阻断必留痕」补齐到另外两个阻断点 + 成功路径清 gateFindings
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("s4-5 expand：acceptance 低于下限 → 抛错并走独立事务留痕（G2_LEN_MIN）")
+    void shouldAuditGateBlockedWhenExpandAcceptanceTooShort() {
+        // acceptance=3 字符 < 10：批量路径由门 2 判定（此前只验过 G2_BLANK 的审计）
+        stubExpandContext("""
+                [{"title":"跑个命令","content":"执行命令","deliverable":"输出回执","acceptance":"跑一下"}]
+                """);
+
+        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("验收判据过短");
+
+        verify(subTaskService, never()).saveDrafts(any());
+        verify(taskService, never()).updateContext(anyLong(), any());
+        verify(taskTimelineService).recordEventInNewTx(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
+                eq(AgentRole.PLANNER), eq(9L),
+                argThat(payload -> String.valueOf(payload.get("findings"))
+                        .contains(PlanBatchGateChecker.G2_LEN_MIN)));
+    }
+
+    @Test
+    @DisplayName("s4-5 expand：显式 AUTOMATED 但验收是空话 → 抛错并走独立事务留痕（G2_KIND_FORM_CONFLICT）")
+    void shouldAuditGateBlockedWhenExpandKindMismatch() {
+        // 各字段非空且 acceptance 够长 → 门 2 放行，由 TD-5 的写法校验 fail-close
+        stubExpandContext("""
+                [{"title":"写文档","content":"撰写交付文档","deliverable":"交付文档成品",
+                  "acceptance":"质量良好且表达清晰通顺","acceptanceKind":"AUTOMATED"}]
+                """);
+
+        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("与写法不匹配");
+
+        verify(subTaskService, never()).saveDrafts(any());
+        // 审计必须走独立事务：expandById 带事务，共享事务会被随后的抛出回滚
+        verify(taskService, never()).updateContext(anyLong(), any());
+        verify(taskTimelineService).recordEventInNewTx(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
+                eq(AgentRole.PLANNER), eq(9L),
+                argThat(payload -> String.valueOf(payload.get("findings"))
+                        .contains(PlanBatchGateChecker.G2_KIND_FORM_CONFLICT)));
+    }
+
+    @Test
+    @DisplayName("s4-5 regenerate：acceptance 低于下限 → 抛错并走独立事务留痕（G2_LEN_MIN）")
+    void shouldAuditGateBlockedWhenRegenerateAcceptanceTooShort() {
+        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
+                draftFullTD9(ORIGINAL_DRAFT_ID, "原标题", "原内容", "原交付物产物",
+                        "原验收判据内容", List.of()));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        {"title":"原标题","content":"新内容","deliverable":"新交付物",
+                         "acceptance":"跑一下"}
+                        """, "stop", "llm", 100));
+        when(agentSkillSpecService.listPackages()).thenReturn(List.of());
+
+        assertThatThrownBy(() -> asyncService.regenerateById(ORIGINAL_DRAFT_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("验收判据过短");
+
+        verify(subTaskService, never()).updateDraftContent(anyLong(), any(), any(), any(), any());
+        verify(taskService, never()).updateContext(anyLong(), any());
+        verify(taskTimelineService).recordEventInNewTx(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
+                eq(AgentRole.PLANNER), eq(9L),
+                argThat(payload -> String.valueOf(payload.get("findings"))
+                        .contains(PlanBatchGateChecker.G2_LEN_MIN)));
+    }
+
+    @Test
+    @DisplayName("s4-5 成功拆解：清空上一次残留的 gateFindings（写空列表 + clearedAt）")
+    void shouldClearGateFindingsAfterSuccessfulDecompose() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"产出报告","content":"c","deliverable":"研究报告成品文档",
+                          "acceptance":"不少于 5 章完整内容","acceptanceKind":"STRUCTURAL"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(subTaskService).saveDrafts(any());
+        // 成功路径必须清掉历史阻断记录，否则 S5 门 3a 会把上一轮的 findings 当成「当前未解」
+        verify(taskService).updateContextInNewTx(eq(TASK_ID),
+                argThat(ctx -> {
+                    Object gate = ctx.get(SubTaskContextKeys.GATE_FINDINGS);
+                    return gate instanceof Map<?, ?> m
+                            && m.get("findings") instanceof List<?> l && l.isEmpty()
+                            && m.get("clearedAt") != null;
+                }));
+        // 成功路径不得产生阻断审计
+        verify(taskTimelineService, never()).recordEventInNewTx(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
     }
 }

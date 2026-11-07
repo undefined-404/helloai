@@ -10,6 +10,7 @@ import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
@@ -47,6 +48,17 @@ public class TaskTimelineServiceImpl extends ServiceImpl<TaskTimelineMapper, Tas
         timeline.setPayload(payload != null ? payload : Map.of());
         save(timeline);
         log.debug("TaskTimeline event recorded: type={}, agentId={}, role={}", eventType, agentId, role);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void recordEventInNewTx(Long taskId,
+                                   Long subTaskId,
+                                   String eventType,
+                                   AgentRole role,
+                                   Long agentId,
+                                   Map<String, Object> payload) {
+        recordEvent(taskId, subTaskId, eventType, role, agentId, payload);
     }
 
     @Override

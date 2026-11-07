@@ -45,9 +45,11 @@ import com.helloai.core.task.support.AttachmentObjectPurgeSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -514,5 +516,34 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setOwnerId(draft.ownerId());
         save(task);
         return getView(task.getId());
+    }
+
+    @Override
+    public void updateContext(Long taskId, Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return;
+        }
+        Task task = getById(taskId);
+        if (task == null) {
+            return;
+        }
+        Map<String, Object> merged = task.getContext() == null
+                ? new HashMap<>() : new HashMap<>(task.getContext());
+        merged.putAll(context);
+        task.setContext(merged);
+        // updateById 带 @Version：版本不符时返回 false 而非抛错（§15 不绕过乐观锁）。
+        // 此处不能再读-改-写重试（审计写点无幂等保证），但必须留痕——静默 false 会让
+        // 「findings 已写」与「库里没有」两个事实分叉，且 S5 消费方看的是库。
+        if (!updateById(task)) {
+            log.warn("task.context 按键合并写入未生效（版本冲突）: taskId={}, keys={}",
+                    taskId, context.keySet());
+        }
+    }
+
+    /** 审计模式的 context 写点：挂起外层事务独立提交，外层回滚不影响已写的 findings。 */
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void updateContextInNewTx(Long taskId, Map<String, Object> context) {
+        updateContext(taskId, context);
     }
 }

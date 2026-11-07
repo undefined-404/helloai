@@ -283,4 +283,27 @@ public interface TaskService extends IService<Task> {
 
     /** 由创建物料建任务（写命令）并返回落库后的只读快照（RM5 批 5a）。 */
     TaskView createFromDraft(TaskDraft draft);
+
+    /**
+     * 按键合并任务 {@code context}（`TD-13 S4`：阻断类门禁 findings 的持久落点）。
+     *
+     * <p><b>只覆盖传入的 key</b>，未传入的 key 保留库中现值：先取<b>最新行</b>再逐键写入，
+     * 避免调用方拿旧快照整段覆盖掉两次写入之间第三方改动的 key（{@code @Version} 只保护
+     * 版本号，不保护内容）。null / 空 map 为空操作；任务不存在时静默返回。</p>
+     */
+    void updateContext(Long taskId, Map<String, Object> context);
+
+    /**
+     * 同 {@link #updateContext}，但以 `REQUIRES_NEW` 独立事务提交——**审计写点专用**。
+     *
+     * <p><b>为什么需要</b>：`TD-9` 单条展开/重生成带 {@code @Transactional}，门禁阻断时
+     * 抛 {@code BizException} 会让同一事务里的 findings 一并回滚，用户只看到错误消息、
+     * 库里不留任何排障线索。审计数据不应与业务共命运（同 {@code SubmissionActivityRecorder}
+     * 的取舍）。</p>
+     *
+     * <p><b>为什么不直接把 {@link #updateContext} 改成独立事务</b>：{@code task.context}
+     * 同时承载业务语义（需求摘要等），需要与业务同生共死的写入必须能随外层回滚；
+     * 只把传播行为绑在这个入口上，避免留下「业务已回滚、context 却说成功」的假记录。</p>
+     */
+    void updateContextInNewTx(Long taskId, Map<String, Object> context);
 }

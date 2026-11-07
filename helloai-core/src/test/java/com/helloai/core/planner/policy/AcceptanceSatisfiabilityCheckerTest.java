@@ -134,46 +134,28 @@ class AcceptanceSatisfiabilityCheckerTest {
     }
 
     @Test
-    @DisplayName("任务级判据：本条无 UNCONFIRMED 但任务级有 → 标注（2026-10-25 准确率修正）")
-    void shouldAnnotateWhenTaskLevelHasUnconfirmed() {
-        // 模拟 LOG-20261025-016 场景：草案 2（竞品 A 事实采集）自己报 TO_LOOK_UP，
-        // 但任务级有 UNCONFIRMED（草案 7/8 申报的「A/B/C 未确认」）
+    @DisplayName("TD-13 S1：本条只有 TO_LOOK_UP → 不标注（跨草案缺口不再参与本条判定）")
+    void shouldIgnoreUnconfirmedDeclaredByOtherDrafts() {
+        // 模拟 LOG-20261025-016 场景：草案 2 自己报 TO_LOOK_UP，UNCONFIRMED 申报在别的草案。
+        // S1 后判据只认本条 uncertainties ⇒ 本条不标注；跨草案影响面由 blockedBy（S2）表达。
         List<UncertaintyDraft> itemUncertainties = List.of(
                 new UncertaintyDraft(UncertaintyDraft.KIND_TO_LOOK_UP, "竞品 A 定价页需联网查", "U1"));
-        List<UncertaintyDraft> taskLevelUncertainties = List.of(
-                new UncertaintyDraft(UncertaintyDraft.KIND_TO_LOOK_UP, "竞品 A 定价页需联网查", "U1"),
-                unconfirmed(INCIDENT_NOTE, "U2"));
 
         AcceptanceSatisfiabilityChecker.Result result = AcceptanceSatisfiabilityChecker.check(
-                INCIDENT_ACCEPTANCE, itemUncertainties, List.of(), taskLevelUncertainties);
-
-        assertThat(result.unmet()).isTrue();
-        assertThat(result.preconditionRefs()).containsExactly("U2");
-        assertThat(result.uncertaintyNotes()).containsExactly(INCIDENT_NOTE);
-    }
-
-    @Test
-    @DisplayName("任务级判据：任务级无 UNCONFIRMED → 不标注（退化为单条口径）")
-    void shouldNotAnnotateWhenTaskLevelHasNoUnconfirmed() {
-        List<UncertaintyDraft> itemUncertainties = List.of(
-                new UncertaintyDraft(UncertaintyDraft.KIND_TO_LOOK_UP, "竞品 A 定价页需联网查", "U1"));
-        List<UncertaintyDraft> taskLevelUncertainties = List.of(
-                new UncertaintyDraft(UncertaintyDraft.KIND_TO_LOOK_UP, "竞品 A 定价页需联网查", "U1"),
-                new UncertaintyDraft(UncertaintyDraft.KIND_TO_DERIVE, "份额需按口径推算", "U2"));
-
-        AcceptanceSatisfiabilityChecker.Result result = AcceptanceSatisfiabilityChecker.check(
-                INCIDENT_ACCEPTANCE, itemUncertainties, List.of(), taskLevelUncertainties);
+                INCIDENT_ACCEPTANCE, itemUncertainties, List.of());
 
         assertThat(result.unmet()).isFalse();
     }
 
     @Test
-    @DisplayName("任务级判据：taskLevelUncertainties 为 null → 退化为单条口径")
-    void shouldFallbackToItemLevelWhenTaskLevelIsNull() {
-        AcceptanceSatisfiabilityChecker.Result result = AcceptanceSatisfiabilityChecker.check(
-                INCIDENT_ACCEPTANCE, List.of(unconfirmed(INCIDENT_NOTE, "U1")), List.of(), null);
+    @DisplayName("TD-13 S1：ref 在本草案内解析不到 → 判定为不可解析（调用方据此不落标注）")
+    void shouldRejectRefsNotDeclaredByThisDraft() {
+        List<UncertaintyDraft> own = List.of(unconfirmed(INCIDENT_NOTE, "U1"));
 
-        assertThat(result.unmet()).isTrue();
-        assertThat(result.preconditionRefs()).containsExactly("U1");
+        assertThat(AcceptanceSatisfiabilityChecker.allRefsResolvable(List.of("U1"), own)).isTrue();
+        assertThat(AcceptanceSatisfiabilityChecker.allRefsResolvable(List.of("U1", "U8"), own)).isFalse();
+        // 空引用集视为可解析（= 无标注），不得让守卫自己制造告警
+        assertThat(AcceptanceSatisfiabilityChecker.allRefsResolvable(List.of(), own)).isTrue();
+        assertThat(AcceptanceSatisfiabilityChecker.allRefsResolvable(List.of("U1"), List.of())).isFalse();
     }
 }

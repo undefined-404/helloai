@@ -50,7 +50,7 @@ import static org.mockito.Mockito.when;
  * confirm / reject 状态流转。
  *
  * <p>LLM 拆解段用例（成功落库、JSON 解析失败、幽灵依赖、dependsOn 回写、
- * validateDependencies 等）已迁至 {@code PlannerDecomposeAsyncServiceImplTest}。</p>
+ * 门 1/2 批次门禁等）已迁至 {@code PlannerDecomposeAsyncServiceImplTest}。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("PlannerAnalysisService")

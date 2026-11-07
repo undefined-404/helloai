@@ -44,6 +44,20 @@ public interface TaskTimelineService extends IService<TaskTimeline> {
                      Map<String, Object> payload);
 
     /**
+     * 同 {@link #recordEvent}，但以 `REQUIRES_NEW` 独立事务提交——**失败路径的审计写点专用**。
+     *
+     * <p>带事务的业务方法（如 `TD-9` 单条展开）在抛 {@code BizException} 时，同一事务里
+     * 已写的时间线会随业务一起回滚；而「为什么失败」恰是排障唯一需要的证据，不能与业务
+     * 共命运。默认 {@link #recordEvent} 保持 {@code REQUIRED}，让正常路径的事件与业务同生共死。</p>
+     */
+    void recordEventInNewTx(Long taskId,
+                            Long subTaskId,
+                            String eventType,
+                            AgentRole role,
+                            Long agentId,
+                            Map<String, Object> payload);
+
+    /**
      * 查询指定子任务的时间线条目，按时间升序（ 派发控制台联调）。
      *
      * <p>供 {@code GET /api/sub-tasks/{id}/timeline} 调用。

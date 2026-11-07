@@ -27,6 +27,15 @@ public final class SubTaskContextKeys {
      */
     public static final String ACCEPTANCE_PRECONDITIONS = "acceptancePreconditions";
 
+    /**
+     * 门 2 告警项（{@code List<Finding>}，`TD-13 S4`）。
+     *
+     * <p>写入：{@code PlannerDecomposeAsyncServiceImpl#buildDrafts}（只写 {@code severity=WARN}）；
+     * 阻断类 findings 不落草案——那时草案行尚未存在，改落 {@code task.context.gateFindings}。
+     * <b>键缺失 = 无告警</b>。</p>
+     */
+    public static final String GATE_FINDINGS = "gateFindings";
+
     private SubTaskContextKeys() {
     }
 }

@@ -1,6 +1,5 @@
 package com.helloai.core.planner.service;
 
-import com.helloai.core.planner.service.PlannerAnalysisService.PlanDraftItem;
 import com.helloai.core.task.port.SubTaskView;
 
 import java.util.List;
@@ -31,14 +30,6 @@ public interface PlannerDecomposeAsyncService {
      * @param taskId 任务 ID（调用前已由同步守卫推进至 PLANNING）
      */
     void executeDecompose(Long taskId);
-
-    /**
-     * 依赖校验：序号越界/自引用即拒，再用 Kahn 拓扑排序做环检测，
-     * 成环整批拒绝（抛 BizException → 拆解失败回退 PENDING 可重拆）。
-     *
-     * <p>序号为 1-based（指向同批草案中的第 N 条）；dependsOn 为 null/空视为无依赖。</p>
-     */
-    void validateDependencies(List<PlanDraftItem> items);
 
     /**
      * `TD-9` 单条草案细拆（expand）：把一条草案按 FINE 粒度拆成 N 条子草案。

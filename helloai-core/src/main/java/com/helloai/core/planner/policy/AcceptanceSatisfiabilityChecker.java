@@ -106,6 +106,24 @@ public final class AcceptanceSatisfiabilityChecker {
     }
 
     /**
+     * 校验 {@code refs} 是否全部能在 {@code uncertainties} 内解析到（`TD-13 S1` 落库前守卫）。
+     *
+     * <p>作用域与 {@link #ensureRefs} 一致 = 本子任务内：{@code acceptancePreconditions}
+     * 只写在持有它的子任务 {@code context} 里，跨草案引用由 {@code blockedBy} 表达。
+     * 解析不到即不落标注（fail-safe：回落为「无豁免」，保持现状严格）。</p>
+     */
+    public static boolean allRefsResolvable(List<String> refs, List<UncertaintyDraft> uncertainties) {
+        if (refs == null || refs.isEmpty()) {
+            return true;
+        }
+        Set<String> known = new LinkedHashSet<>();
+        for (UncertaintyDraft u : ensureRefs(uncertainties)) {
+            known.add(u.ref());
+        }
+        return known.containsAll(refs);
+    }
+
+    /**
      * 标注结果。
      *
      * @param preconditionRefs 命中的不确定性引用（形如 {@code U1}）；**空 = 无标注**
@@ -122,35 +140,19 @@ public final class AcceptanceSatisfiabilityChecker {
     }
 
     /**
-     * 四条判据**全部满足**才标注（刻意收窄，宁可少标）。
+     * 四条判据**全部满足**才标注。
      *
-     * @param acceptance     该条草案的验收判据原文（`acceptance`）
-     * @param uncertainties  该条草案**已归一化**的不确定性列表（`normalizeUncertainties` 之后，
-     *                       元素上的 {@code ref} 已由落库侧补齐非空）
-     * @param upstreamTexts  该条草案 {@code dependsOn} 指向的草案的标题/正文摘要；空列表 = 无依赖
+     * <p><b>作用域严格限定在持有它的子任务内</b>（`TD-13 S1`）：2026-10-25 曾把条件 1 放宽成
+     * 「任务级存在 UNCONFIRMED」，但跨草案拼接会重排 {@code ref}，落库后引用在草案内解析不到。
+     * 跨草案影响面改由 `TD-13 S2` 的结构化 {@code blockedBy} 表达，不再从这里兜。</p>
+     *
+     * @param acceptance           该条草案的验收判据原文（`acceptance`）
+     * @param uncertainties        该条草案**已归一化**的不确定性列表（`ref` 已由落库侧补齐非空）
+     * @param upstreamTexts        该条草案 {@code dependsOn} 指向的草案的标题/正文摘要；空列表 = 无依赖
      * @return 标注结果；{@link Result#NONE} 表示不标注
      */
     public static Result check(String acceptance, List<UncertaintyDraft> uncertainties,
                                List<String> upstreamTexts) {
-        return check(acceptance, uncertainties, upstreamTexts, null);
-    }
-
-    /**
-     * 四条判据**全部满足**才标注（任务级口径，2026-10-25 准确率修正）。
-     *
-     * <p><b>与单条口径的差异</b>：条件 1 从「本条有 UNCONFIRMED」改为「任务级存在 UNCONFIRMED」。
-     * 根因是 LOG-20261025-016 实测：模型把「A/B/C 是谁」只申报在下游草案 7/8，而真正需要它的
-     * 2/3/4 报成 TO_LOOK_UP ⇒ 单条口径标了不该标的、漏了该标的。任务级口径下，只要任务里
-     * 有 UNCONFIRMED，所有命中实证型来源的草案都会被标注（多标只影响观测，少标会让豁免失灵）。</p>
-     *
-     * @param acceptance           该条草案的验收判据原文（`acceptance`）
-     * @param uncertainties        该条草案**已归一化**的不确定性列表（用于条件 1 的兜底）
-     * @param upstreamTexts        该条草案 {@code dependsOn} 指向的草案的标题/正文摘要；空列表 = 无依赖
-     * @param taskLevelUncertainties 任务级 uncertainties（所有草案的汇总）；null = 退化为单条口径
-     * @return 标注结果；{@link Result#NONE} 表示不标注
-     */
-    public static Result check(String acceptance, List<UncertaintyDraft> uncertainties,
-                               List<String> upstreamTexts, List<UncertaintyDraft> taskLevelUncertainties) {
         // 条件 4：依赖已表达缺输入 ⇒ 不再重复标注（先判，省掉后面的解析）
         if (hasClarifyUpstream(upstreamTexts)) {
             return Result.NONE;
@@ -165,14 +167,11 @@ public final class AcceptanceSatisfiabilityChecker {
             return Result.NONE;
         }
         // 条件 1：存在「只能问人」的缺口（TO_LOOK_UP / TO_DERIVE 排除在外——执行者可自助解决）
-        // 2026-10-25 准确率修正：优先看任务级，任务级没有才看本条（兜底）
-        List<UncertaintyDraft> candidates = taskLevelUncertainties != null && !taskLevelUncertainties.isEmpty()
-                ? taskLevelUncertainties : uncertainties;
         List<String> refs = new ArrayList<>();
         List<String> notes = new ArrayList<>();
         // ref 由落库侧 ensureRefs 保证非空；此处再走一遍同一实现，只是防「别的调用方
         // 直接传未归一化列表」时产出空引用（空引用会让核验侧定位不到缺口原文）。
-        for (UncertaintyDraft u : ensureRefs(candidates)) {
+        for (UncertaintyDraft u : ensureRefs(uncertainties)) {
             if (!UncertaintyDraft.KIND_UNCONFIRMED.equals(u.kind())) {
                 continue;
             }
