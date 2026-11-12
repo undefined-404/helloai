@@ -155,10 +155,25 @@ class G006ExternalExecutionRecordIT extends AbstractItTestBase {
      *
      * <p>按 FK 依赖顺序（子 → 父）删除，避免 {code task} 残留 sub_task 引用触发
      * {@code sub_task_task_id_fkey}（2026-10-22 全量 *IT 实跑暴露的撞段教训）。</p>
+     *
+     * <p><b>★2026-11-12 补全引用 sub_task 的 5 张表</b>（CI 门禁 5 实跑暴露）：
+     * 本类原先只清 {@code agent_execution_record}，当其它 IT（当时是撞 9601 段的
+     * {@code ReviewRecheckCandidateIT}）在 {@code sub_task.id=9601} 上留下
+     * {@code review_record} 行时，{@code DELETE FROM sub_task} 直接撞
+     * {@code review_record_sub_task_id_fkey} ⇒ 残留 ⇒ 下一轮 seed 撞 {@code task_pkey}。
+     * 现按 pg 外键实测清单（attachment / conversation_archive / conversation_message /
+     * review_recheck_log / review_record）全部先清；{@code review_recheck_log} 又引用
+     * {@code review_record.id}，故必须先于 review_record 删除。清场按本类自己的
+     * 9601~9607 段过滤，不会误伤其它类的数据。</p>
      */
     @AfterEach
     void cleanup() {
         for (long i = 0; i <= 6; i++) {
+            jdbcTemplate.update("DELETE FROM review_recheck_log WHERE sub_task_id = ?", SUB_TASK_ID + i);
+            jdbcTemplate.update("DELETE FROM review_record WHERE sub_task_id = ?", SUB_TASK_ID + i);
+            jdbcTemplate.update("DELETE FROM attachment WHERE sub_task_id = ?", SUB_TASK_ID + i);
+            jdbcTemplate.update("DELETE FROM conversation_archive WHERE sub_task_id = ?", SUB_TASK_ID + i);
+            jdbcTemplate.update("DELETE FROM conversation_message WHERE sub_task_id = ?", SUB_TASK_ID + i);
             jdbcTemplate.update("DELETE FROM agent_execution_record WHERE sub_task_id = ?", SUB_TASK_ID + i);
             jdbcTemplate.update("DELETE FROM sub_task WHERE id = ?", SUB_TASK_ID + i);
             jdbcTemplate.update("DELETE FROM agent WHERE id = ?", AGENT_ID + i);

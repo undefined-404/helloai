@@ -2,6 +2,7 @@ package com.helloai.it;
 
 import com.helloai.core.review.dto.RecheckStats;
 import com.helloai.core.review.mapper.ReviewRecheckLogMapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,20 +24,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @DisplayName("RV-6 抽检候选（驳回侧）真实库验证")
 class ReviewRecheckCandidateIT extends AbstractItTestBase {
 
-    // 96xx 段：与其它 IT 类隔离（容器为跨类静态单例）
-    private static final long TASK = 9601L;
-    private static final long MODULE = 9601L;
-    private static final long SUB = 9601L;
-    private static final long AGENT = 9601L;
+    // 98xx 段：与其它 IT 类隔离（容器为跨类静态单例）。
+    // ★2026-11-12 修 CI：原用 96xx 段，与 G006ExternalExecutionRecordIT（9601~9607）撞号；
+    //   且本类当时只有 @BeforeEach 无 @AfterEach，跑完把 task/sub_task 9601 与 5 条
+    //   review_record 留在共享容器里 ⇒ 后续 G006 seed 撞 task_pkey、cleanup 撞
+    //   review_record_sub_task_id_fkey（CI 门禁 5 红）。现迁 98xx 段并补 @AfterEach。
+    private static final long TASK = 9801L;
+    private static final long MODULE = 9801L;
+    private static final long SUB = 9801L;
+    private static final long AGENT = 9801L;
 
-    private static final long APPROVED_NO_SNAPSHOT = 9601L;
-    private static final long REJECTED_NO_SNAPSHOT = 9602L;
-    private static final long REJECTED_WITH_FROZEN = 9603L;
-    private static final long INCONCLUSIVE_WITH_SNAPSHOT = 9604L;
-    private static final long REJECTED_WITHOUT_FROZEN = 9605L;
+    private static final long APPROVED_NO_SNAPSHOT = 9801L;
+    private static final long REJECTED_NO_SNAPSHOT = 9802L;
+    private static final long REJECTED_WITH_FROZEN = 9803L;
+    private static final long INCONCLUSIVE_WITH_SNAPSHOT = 9804L;
+    private static final long REJECTED_WITHOUT_FROZEN = 9805L;
 
-    private static final long RECHECK_REJECTED = 9611L;
-    private static final long RECHECK_APPROVED = 9612L;
+    private static final long RECHECK_REJECTED = 9811L;
+    private static final long RECHECK_APPROVED = 9812L;
 
     private static final String SNAPSHOT_JSON = "{\"schemaVersion\":1}";
     private static final String FROZEN_SNAPSHOT_JSON =
@@ -87,6 +92,23 @@ class ReviewRecheckCandidateIT extends AbstractItTestBase {
         jdbcTemplate.update("DELETE FROM module WHERE id = ?", MODULE);
         jdbcTemplate.update("DELETE FROM task WHERE id = ?", TASK);
         jdbcTemplate.update("DELETE FROM agent WHERE id = ?", AGENT);
+    }
+
+    /**
+     * 用例后清场（★2026-11-12 修 CI 门禁 5）。
+     *
+     * <p><b>为什么必须有</b>：`*IT` 共享同一个 Testcontainers 静态单例库，本类原先只有
+     * `@BeforeEach` 无 `@AfterEach` ⇒ 最后一个用例跑完把 task / sub_task / module / agent
+     * 与 5 条 review_record 留在库里。实测后果：后续 `G006ExternalExecutionRecordIT`
+     * seed task 9601 撞 `task_pkey`，cleanup 删 sub_task 9601 撞
+     * `review_record_sub_task_id_fkey`，门禁 5 连续报 5 个 Error。</p>
+     *
+     * <p>与 {@code @BeforeEach} 对称（两边都调 {@link #clearResidual()}）：
+     * 上一个用例中途失败时，下一次 seed 也能从干净态开始。</p>
+     */
+    @AfterEach
+    void cleanup() {
+        clearResidual();
     }
 
     private OffsetDateTime since() {
