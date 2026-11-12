@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS idx_task_agent_member_agent ON task_agent_member(agen
 - **改派不写 `leave_time`**：按需求「改派进来的能看、原来干过的也能看」，**加入过即成员**（`status` 保持 ACTIVE）。
 - **自愈（两层）**：
   1. **启动一次性重建**：从权威源 `sub_task.assigned_agent_id` 补齐成员表（幂等，可反复执行）。
-  2. **判据内 derive-on-miss 兜底**（2026-10-03 追加，替代原计划的"四类入队钩子"）：
+  2. **判据内 derive-on-miss 兜底**（2026-10-03 追加）：
      `isMember` 未命中时再查权威源"该 agent 当前是否为该任务任一子任务执行者"，命中即视为成员。
 
 **为什么用 derive-on-miss 替代"四类入队钩子"**：钩子需分别挂在 ≥3 条独立写入路径
@@ -96,6 +96,26 @@ CREATE INDEX IF NOT EXISTS idx_task_agent_member_agent ON task_agent_member(agen
 语义上"正在为该任务干活"必然蕴含"属于该任务团队"，故兜底保守且正确。
 代价：成员表的 `join_source` 在运行期主要落 `REBUILT`；审计粒度弱于钩子方案，
 若后续需要精确入队来源审计，再补钩子作为增强（两者可并存，不冲突）。
+
+### 3.4 2026-11-11 修订：运行期实时入队（G-031）
+
+**问题**：3.3 中「钩子分散、易漏挂」的前提在 RM9-b 之后已不成立——`assigned_agent_id`
+的全部写入已收敛到 `SubTaskStateMachineServiceImpl` 一处；但在此之前，运行期**从未真正挂过钩子**，
+唯一写入点是启动重建。于是全新库/drop 重建后，**新派发的任务在下次重启前成员表必为空**
+（详情页「本任务参与成员」空白），derive-on-miss 只兜住了鉴权，没兜住展示。
+
+**现在（钩子成为主路径）**：登记与归属变更**同事务**（成员行写不进去则整体回滚，不留半态）：
+
+| 入口（唯一状态机） | join_source | 覆盖场景 |
+| --- | --- | --- |
+| `changeStatus(...agentId)` | `ASSIGNED` | 拆解分配、调度派发、死信人工指派、REST 指派 |
+| `claimAtomic(subTaskId, agentId)` | `CLAIMED` | 外部 Agent MCP `claimSubTask` 认领 |
+| `reassign(...)` / `rework(...)` / `reworkFresh(...)` 换人 | `REASSIGNED` | 改派、返工换人 |
+
+**保留的两层兜底**：启动重建（存量补齐）+ 判据 derive-on-miss（鉴权）不变；
+展示侧 `listMembers` 另加差集补齐（2026-11-10，见 `G-031`）——正常路径差集为空、零写入，
+只在中途漏写/存量脏数据时补位。钩子落地后 `join_source` 恢复真实入口审计粒度，
+`REBUILT` 仅在兜底触发时出现。
 
 ---
 
