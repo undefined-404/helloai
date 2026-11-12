@@ -16,6 +16,7 @@ import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.service.TaskAgentMemberService;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskNotificationServiceImpl;
@@ -89,6 +90,8 @@ class SubTaskServiceQuotaTest {
     @Mock private ObjectProvider<AgentExecutionRecordService> agentExecutionRecordServiceProvider;
     // 共享预算原子累加 mapper（状态机行读写谓词，quota 用例经状态机触达）
     @Mock private SubTaskMapper subTaskMapper;
+    // G-031：成员表实时入队（quota 用例只到 PENDING→ASSIGNED，会写一次）
+    @Mock private TaskAgentMemberService taskAgentMemberService;
     // 执行会话服务（quota 用例不触达，仅防 NPE）
     @Mock private AgentSessionService agentSessionService;
 
@@ -110,10 +113,12 @@ class SubTaskServiceQuotaTest {
                 // 租约看门狗配置（assignNext 不涉及租约，默认值即可）
                 new WatchdogProperties(), taskTimelineService, agentServiceProvider,
                 attachmentServiceProvider, agentEventRecorder, implicitScoreCalculator,
-                rewardService, reviewPort, applicationEventPublisher, agentExecutionRecordServiceProvider));
+                rewardService, reviewPort, applicationEventPublisher,
+                agentExecutionRecordServiceProvider, taskAgentMemberService));
         SubTaskLeaseService leaseService = mock(SubTaskLeaseService.class);
         subTaskService = new SubTaskServiceImpl(
-                subTaskMapper, queryService, stateMachineService, leaseService);
+                subTaskMapper, queryService, stateMachineService, leaseService,
+                mock(TaskDerivationService.class), mock(RuntimeContractGateService.class));
         // §6.140 收口：行锁改走 AgentService.lockByIdForUpdate（ObjectProvider 懒解析）；
         // lenient：状态校验失败路径不触发行锁，避免 UnnecessaryStubbing
         lenient().when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);

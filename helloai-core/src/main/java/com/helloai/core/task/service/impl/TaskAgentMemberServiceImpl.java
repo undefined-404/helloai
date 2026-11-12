@@ -82,11 +82,62 @@ public class TaskAgentMemberServiceImpl
         if (taskId == null) {
             return Collections.emptyList();
         }
+        List<TaskAgentMember> members = queryMembers(taskId);
+        // 读时 derive-on-miss：成员表是权威源（sub_task.assigned_agent_id）的派生快照，
+        // 运行期没有入队钩子，只有启动重建。重建后新建的任务在下次重启前会缺行，
+        // 详情页因此显示「暂无参与成员」。这里按任务做一次幂等补齐，保留启动重建为兜底。
+        if (backfillFromAuthoritative(taskId, members)) {
+            members = queryMembers(taskId);
+        }
+        return members;
+    }
+
+    private List<TaskAgentMember> queryMembers(Long taskId) {
         List<TaskAgentMember> members = baseMapper.selectList(
                 com.baomidou.mybatisplus.core.toolkit.Wrappers.<TaskAgentMember>lambdaQuery()
                         .eq(TaskAgentMember::getTaskId, taskId)
                         .orderByAsc(TaskAgentMember::getJoinTime));
         return members != null ? members : Collections.emptyList();
+    }
+
+    /**
+     * 用本任务当前执行者补齐成员表（幂等 upsert，`join_source=REBUILT`）。
+     *
+     * <p><b>为什么按差集补齐</b>：每次只写「表里没有、权威源有」的成员；
+     * 正常情况下差集为空，零写入。写失败只告警，不影响本次展示（鉴权侧另有
+     * {@link #isCurrentExecutorOfTask} 兜底，不依赖本次回填成功）。</p>
+     *
+     * @return 是否发生过补齐（调用方据此决定是否重查）
+     */
+    private boolean backfillFromAuthoritative(Long taskId, List<TaskAgentMember> members) {
+        List<TaskAgentMember> authorities = baseMapper.selectAuthoritativeAssignmentsByTask(taskId);
+        if (authorities == null || authorities.isEmpty()) {
+            return false;
+        }
+        java.util.Set<Long> known = new java.util.HashSet<>();
+        for (TaskAgentMember m : members) {
+            if (m != null && m.getAgentId() != null) {
+                known.add(m.getAgentId());
+            }
+        }
+        int added = 0;
+        for (TaskAgentMember a : authorities) {
+            if (a == null || a.getAgentId() == null || !known.add(a.getAgentId())) {
+                continue;
+            }
+            try {
+                baseMapper.upsert(IdWorker.getId(), taskId, a.getAgentId(),
+                        TaskMemberJoinSource.REBUILT.name(), OPERATOR);
+                added++;
+            } catch (Exception e) {
+                log.warn("成员表懒回填失败（不影响展示，下次详情再试）: taskId={}, agentId={}, err={}",
+                        taskId, a.getAgentId(), e.getMessage());
+            }
+        }
+        if (added > 0) {
+            log.info("成员表懒回填完成: taskId={}, 新增={}", taskId, added);
+        }
+        return added > 0;
     }
 
     @Override

@@ -1,9 +1,17 @@
 package com.helloai.core.task.port;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.helloai.common.constant.UncertaintyKind;
+
+import java.util.List;
 
 /**
  * 不确定项写入物料（task 域对外契约，RM5 批 5a）。
+ *
+ * <p><b>本 record 同时是拆解 Prompt 输出的 JSON 契约的元素形状</b>，故显式声明
+ * {@code @JsonIgnoreProperties(ignoreUnknown = true)}：模型多写一个键（如 {@code severity}）
+ * 不该让整条不确定性解析失败——`resolveUncertainties` 的兜底是「整批回落空列表」，
+ * 那会让一条多余字段把**整个草案的缺口申报全部丢掉**，而调用方看不出异常。</p>
  *
  * <p><b>字段名与 {@code task.entity.Uncertainty} 逐字对齐</b>（{@code kind} / {@code note} /
  * {@code ref}）——该结构同时是**拆解 Prompt 输出的 JSON 契约**
@@ -24,11 +32,19 @@ import com.helloai.common.constant.UncertaintyKind;
  *             （fail-safe 保持现状严格），见计划 §6 风险 8。
  *             模型可自行输出；缺失时由落库侧 {@code normalizeUncertainties} 统一补
  *             {@code U<序号>}（生成规则只有一个事实源）。
+ * @param blockedBy 该缺口**卡住本批哪几条草案**（`TD-13 S2`，本批 1-based 草案序号数组；
+ *             可空 = 未申报）。<b>这是 `TD-11` 断点① 的补齐</b>：`ref` 被钉成本子任务局部，
+ *             模型没有字段能表达「这个缺口影响草案 2/3/4」，只能就近贴在草案 7/8 上——
+ *             2026-10-25 事故里真正被卡的 3 条草案一条标注都没拿到，根因就在这里。
+ *             归一化（越界 / 自引用 / 去重）由落库侧统一做并留 WARN；服务端不据此改
+ *             {@code dependsOn}（影响面 ≠ 依赖边，两者语义不同，不得互换）。
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record UncertaintyDraft(
         String kind,
         String note,
-        String ref
+        String ref,
+        List<Integer> blockedBy
 ) {
 
     /** 已申报假设（= {@link UncertaintyKind#ASSUMPTION}）。 */
@@ -51,7 +67,17 @@ public record UncertaintyDraft(
      * 生成**——生成规则只有一个事实源，否则两处都会各自编号。</p>
      */
     public UncertaintyDraft(String kind, String note) {
-        this(kind, note, null);
+        this(kind, note, null, null);
+    }
+
+    /**
+     * 不写 {@code blockedBy} 的便捷构造（`TD-13 S2` 之前的调用方与测试沿用）。
+     *
+     * <p>与上面的两参构造同理：{@code blockedBy} 缺失即「未申报影响面」，不是空数组——
+     * 空数组的语义是「模型明确声明不影响任何草案」，消费侧对两者的展示措辞不同。</p>
+     */
+    public UncertaintyDraft(String kind, String note, String ref) {
+        this(kind, note, ref, null);
     }
 }
 

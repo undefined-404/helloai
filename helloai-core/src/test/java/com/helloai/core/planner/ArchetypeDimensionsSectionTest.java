@@ -151,7 +151,7 @@ class ArchetypeDimensionsSectionTest {
         Set<String> supported = Set.of(
                 "TASK_TITLE", "TASK_DESCRIPTION", "TASK_ARCHETYPE", "TASK_REQUIRED_SKILLS",
                 "SKILL_CATALOG", "EXECUTOR_PROFILE", "TASK_DIFFICULTY", "GRANULARITY",
-                "REQUIREMENT_PACKAGE", "TASK_CONTEXT_SNAPSHOT", "SUBTASK_COUNT_RULE");
+                "REQUIREMENT_PACKAGE", "TASK_CONTEXT_SNAPSHOT", "EXECUTION_ENV", "SUBTASK_COUNT_RULE");
         Set<String> found = new LinkedHashSet<>();
         Matcher matcher = PLACEHOLDER.matcher(loadTemplate());
         while (matcher.find()) {
@@ -161,7 +161,7 @@ class ArchetypeDimensionsSectionTest {
                 .as("渲染器支持集合必须覆盖模板实际用到的全部占位符")
                 .containsAll(found);
         assertThat(found)
-                .as("模板应恰好用满 11 项；少了说明有段内容漏注入，多了说明渲染器没跟上")
+                .as("模板应恰好用满 12 项；少了说明有段内容漏注入，多了说明渲染器没跟上")
                 .hasSize(supported.size());
     }
 

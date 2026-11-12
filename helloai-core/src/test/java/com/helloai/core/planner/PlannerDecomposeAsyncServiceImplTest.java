@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.PlanAttemptStatus;
 import com.helloai.common.constant.SubTaskContextKeys;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
@@ -17,15 +18,28 @@ import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.planner.context.DecomposeContextSnapshotRenderer;
+import com.helloai.core.planner.entity.PlanAttempt;
+import com.helloai.core.planner.entity.PlanDraft;
+import com.helloai.core.planner.mapper.PlanDraftMapper;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
-import com.helloai.core.planner.policy.PlanBatchGateChecker;
+import com.helloai.common.util.DraftGateChecker;
+import com.helloai.common.util.ExecutionEnv;
 import com.helloai.core.planner.policy.RequirementPackageParser;
+import com.helloai.core.planner.policy.TaskContextKeys;
+import com.helloai.core.planner.port.PlanDraftView;
+import com.helloai.core.planner.service.PlanAttemptService;
+import com.helloai.core.planner.service.PlanDraftRoundService;
+import com.helloai.core.planner.service.PlanDraftService;
 import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.planner.service.impl.PlannerDecomposeAsyncServiceImpl;
+import com.helloai.core.planner.support.PlanDraftFindingsStore;
+import com.helloai.core.planner.support.PlanGateRunner;
+import com.helloai.core.task.support.SubTaskGateFindingsStore;
 import com.helloai.core.task.port.SubTaskDraft;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.port.UncertaintyDraft;
+import com.helloai.core.task.port.UncertaintyView;
 import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.port.PlannerAgentRef;
 import com.helloai.core.task.service.SubTaskService;
@@ -36,25 +50,36 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.nullable;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -98,22 +123,98 @@ class PlannerDecomposeAsyncServiceImplTest {
     @Mock
     private DecomposeContextSnapshotRenderer contextSnapshotRenderer;
 
+    /** `TD-16b` 尝试栅栏：旁挂设施，默认无记录（见 setUp 的 lenient stub）。 */
+    @Mock
+    private PlanAttemptService planAttemptService;
+
+    /** `TD-16c` 暂存区写入/轮次：本测试只关心主流程编排，写入与轮次细节由 `PlanDraftRoundServiceImplTest` 覆盖。 */
+    @Mock
+    private PlanDraftRoundService planDraftRoundService;
+
+    /** `TD-16d` `B4`：根层 code 序号取任务内已用最大值（默认桩 0 ⇒ 从 1 起）。 */
+    @Mock
+    private PlanDraftMapper planDraftMapper;
+
+    /** `AD-5a-3b-2b`：拆解落库段以暂存区为唯一事实源。 */
+    @Mock
+    private PlanDraftService planDraftService;
+
+    /** 展开深度分档（设计 §7）：用真实实例——分档表本身就是被测语义，mock 掉断言会退化。 */
+    private final com.helloai.common.config.PlannerDecomposeProperties plannerDecomposeProperties =
+            new com.helloai.common.config.PlannerDecomposeProperties();
+
     private PlannerDecomposeAsyncServiceImpl asyncService;
+
+    /**
+     * 单测没有容器，{@link org.springframework.transaction.support.TransactionTemplate} 需要一个
+     * 真能返回事务状态的管理器。这里用一个「什么都不做」的实现：commit / rollback 都是空操作，
+     * 因此用例看到的是**回调本身的返回值**，而不是真实事务语义——这正是我们要测的
+     * （落库段的编排与状态分流），事务回滚本身由 Spring 保证。
+     */
+    private final PlatformTransactionManager transactionManager = new PlatformTransactionManager() {
+        @Override
+        public TransactionStatus getTransaction(TransactionDefinition definition) {
+            return new SimpleTransactionStatus();
+        }
+
+        @Override
+        public void commit(TransactionStatus status) {
+            // no-op：单测不验证真实提交
+        }
+
+        @Override
+        public void rollback(TransactionStatus status) {
+            // no-op：单测不验证真实回滚
+        }
+    };
 
 
     @BeforeEach
     void setUp() {
-        // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）
+        // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）；
+        // gateFindings 存储与门禁编排同样用真实实例：payload 形状、「写/清同源」、结论挂哪条草案
+        // 正是被测语义（mock 掉会让断言退化成「有没有调用某个方法」）。
         asyncService = new PlannerDecomposeAsyncServiceImpl(
                 taskService, subTaskService, plannerAgentPicker,
+                new PlanGateRunner(new SubTaskGateFindingsStore(subTaskService), taskTimelineService,
+                        plannerDecomposeProperties),
                 platformAgentExecutionService, taskTimelineService,
-                agentService, agentSkillSpecService, contextSnapshotRenderer, new ObjectMapper());
+                agentService, agentSkillSpecService, contextSnapshotRenderer, new ObjectMapper(),
+                transactionManager, planAttemptService, planDraftRoundService, planDraftMapper,
+                planDraftService, new PlanDraftFindingsStore(planDraftMapper));
+
+        // 暂存区 findings 存储用真实实现（写/清同源是被测语义）；mapper 用最小内存桩承接读改写
+        lenient().when(planDraftMapper.selectById(anyLong())).thenAnswer(inv -> {
+            PlanDraft row = new PlanDraft();
+            row.setId(inv.getArgument(0));
+            row.setTaskId(TASK_ID);
+            return row;
+        });
+
+        // TD-16b：栅栏是旁挂设施，默认「没有 attempt 记录」⇒ 所有栅栏操作静默跳过，
+        // 既有用例断言的主流程行为不受影响。需要验证栅栏语义的用例自己 stub。
+        lenient().when(planAttemptService.findLatestByBatchKey(anyString()))
+                .thenReturn(java.util.Optional.empty());
+
+        // V146：异步段只读入口写好的 attemptId，读不到就直接跳过（不擅自补 UUID）
+        lenient().when(taskService.currentDecomposeAttempt(anyLong())).thenReturn("attempt-test");
+        // 拆解成功后的状态推进：PLANNING → AWAITING_PLAN_CONFIRM
+        // 注意用四参版本：三参 casStatus 只比状态，挡不住「上一轮拆解唤醒后命中下一轮的 PLANNING」
+        lenient().when(taskService.casStatusForAttempt(anyLong(),
+                        eq(TaskStatus.PLANNING), eq(TaskStatus.AWAITING_PLAN_CONFIRM), anyString()))
+                .thenReturn(true);
 
     }
 
     private TaskView planningTask() {
         return new TaskView(TASK_ID, "搭建报表模块", "需要一个日报统计模块", null, null, null, null, null,
                 TaskStatus.PLANNING, null, null, null, null, null, null, null);
+    }
+
+    /** 带固定创建时刻的拆解中任务（`code` 的日期前缀由它决定，不能靠 {@code now()}）。 */
+    private TaskView planningTaskAt(OffsetDateTime created) {
+        return new TaskView(TASK_ID, "搭建报表模块", "需要一个日报统计模块", null, null, null, null, null,
+                TaskStatus.PLANNING, null, null, null, null, created, created, null);
     }
 
     /** 任务快照（不可变，等价原 setStatus/setPriority 写法）。 */
@@ -124,9 +225,7 @@ class PlannerDecomposeAsyncServiceImplTest {
 
     /** 重加载草案快照（含优先级与 context，等价原 setPriority/setContext 写法）。 */
     private SubTaskView draftFull(long id, String priority, Map<String, Object> context) {
-        return new SubTaskView(id, TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null,
-                null, null, null, null, null, null, context, List.of(), null, null, priority, null, null,
-                null, null, null, null, null, null, null);
+        return new SubTaskView(id, TASK_ID, SubTaskStatus.PENDING, null, null, null, null, null, null, null, null, context, List.of(), null, null, priority, null, null, null, null, null, null, null, null, null, null);
     }
 
     private SubTaskView draftWithPriority(long id, String priority) {
@@ -147,9 +246,105 @@ class PlannerDecomposeAsyncServiceImplTest {
         return new PlannerAgentRef(9L, "planner-llm");
     }
 
+    /**
+     * 「门禁视为合格」的草案视图：四要素齐全、acceptance 含命令 + 预期结果（AUTOMATED Pass）。
+     *
+     * <p>2026-11-08 起门禁判的是**已落库草案的字段**，不再是 LLM 输出文本；reload 桩若仍是全 null，
+     * 每条草案都会命中 {@code G2_BLANK}，用例就变成「验阻断」而不是原意。故默认给合规值，
+     * 需要构造不合格草案的用例显式用 {@link #draftBroken} / {@link #draftWithKind}。</p>
+     */
     private SubTaskView draft(long id) {
-        return new SubTaskView(id, TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null,
-                null, null, null, null, null, null, List.of());
+        return draftFullTD9(id, "草案" + id, "内容说明" + id, "交付物清单" + id,
+                "运行 pytest 输出 5 passed", List.of());
+    }
+
+    /**
+     * 指定 acceptance 文本与显式 kind 声明的草案视图（门 2 边界用例专用）。
+     *
+     * @param declaredKind 显式声明的 kind 原文；{@code null} = 未声明（走 Warn 放行路径）
+     */
+    private SubTaskView draftWithKind(long id, String acceptance, String declaredKind, List<Long> dependsOn) {
+        Map<String, Object> context = new HashMap<>();
+        if (declaredKind != null) {
+            context.put(SubTaskContextKeys.ACCEPTANCE_KIND_DECLARED, declaredKind);
+        }
+        return new SubTaskView(id, TASK_ID, SubTaskStatus.PENDING, null, null, "写文档", "撰写交付文档", "交付文档成品", acceptance, null, null, context, List.of(), dependsOn, null, "MEDIUM", null, List.of(), null, null, null, null, null, OffsetDateTime.now(), null, null);
+    }
+
+    /** 字段残缺的草案视图（acceptance 空白或过短等），用于验证「只诊断该条、不报废整批」。 */
+    private SubTaskView draftBroken(long id, String acceptance) {
+        return draftFullTD9(id, "残缺条目", "内容", "交付物产物完整清单", acceptance, List.of());
+    }
+
+    /**
+     * 把执行表形状的夹具映射为暂存区行并打桩 {@code listByTask}（`AD-5a-3b-2b` 落库段唯一输入）。
+     *
+     * <p>依赖按夹具 id → 同批 code 翻译，门 1 的图结构与旧用例保持一致。</p>
+     */
+    private void staged(SubTaskView... fixtures) {
+        Map<Long, String> idToCode = new HashMap<>();
+        for (int i = 0; i < fixtures.length; i++) {
+            if (fixtures[i].id() != null) {
+                idToCode.put(fixtures[i].id(), stagedCode(i + 1));
+            }
+        }
+        List<PlanDraftView> rows = new ArrayList<>(fixtures.length);
+        for (int i = 0; i < fixtures.length; i++) {
+            SubTaskView v = fixtures[i];
+            List<String> depCodes = v.dependsOn() == null ? List.of()
+                    : v.dependsOn().stream().map(idToCode::get)
+                            .filter(java.util.Objects::nonNull).toList();
+            rows.add(new PlanDraftView(v.id(), TASK_ID, stagedCode(i + 1), 1, i + 1,
+                    v.title(), v.content(), v.deliverable(), v.acceptance(), v.acceptanceKind(),
+                    v.priority() == null ? null : com.helloai.common.constant.TaskPriority.valueOf(v.priority()),
+                    v.isContract(), v.requiredSkills(), v.constraints(),
+                    toUncertaintyDrafts(v.uncertainties()), depCodes, v.context(), v.updateTime()));
+        }
+        lenient().when(planDraftService.listByTask(TASK_ID)).thenReturn(rows);
+    }
+
+    private static String stagedCode(int seq) {
+        return String.format("20261110%04d", seq);
+    }
+
+    private static List<UncertaintyDraft> toUncertaintyDrafts(List<UncertaintyView> views) {
+        if (views == null) {
+            return null;
+        }
+        List<UncertaintyDraft> drafts = new ArrayList<>(views.size());
+        for (UncertaintyView u : views) {
+            if (u != null) {
+                drafts.add(new UncertaintyDraft(u.kind(), u.note(), u.ref(), u.blockedBy()));
+            }
+        }
+        return drafts;
+    }
+
+    /** 暂存区行（`AD-5a-3b-2b`：草案没有执行表副本时的重生成输入）。 */
+    private static PlanDraftView stagedDraftView(long id, String code, String title, String content,
+                                                 String deliverable, String acceptance) {
+        return new PlanDraftView(id, TASK_ID, code, 1, 1, title, content, deliverable, acceptance,
+                null, null, 0, List.of(), null, List.of(), List.of(), null, OffsetDateTime.now());
+    }
+
+    /** 拆解落库段交给暂存区的草案批次（`writeDrafts` 的入参）。 */
+    @SuppressWarnings("unchecked")
+    private List<SubTaskDraft> savedDrafts() {
+        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
+        return captor.getValue();
+    }
+
+    /** 某条暂存区行最终落库的 context（findings 存储按 id 写回）。 */
+    private Map<String, Object> findingsContext(long draftId) {
+        ArgumentCaptor<PlanDraft> captor = ArgumentCaptor.forClass(PlanDraft.class);
+        verify(planDraftMapper, org.mockito.Mockito.atLeastOnce()).updateById(captor.capture());
+        return captor.getAllValues().stream()
+                .filter(row -> draftId == row.getId())
+                .reduce((a, b) -> b)
+                .map(PlanDraft::getContext)
+                .orElseThrow();
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -195,20 +390,17 @@ class PlannerDecomposeAsyncServiceImplTest {
                         [{"title":"仅标题","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         ```
                         """, "stop", "llm", 100));
-        SubTaskView reloaded = draftWithPriority(11L, "HIGH");
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(reloaded));
+        staged(draftWithPriority(11L, "HIGH"));
 
         asyncService.executeDecompose(TASK_ID);
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(captor.capture());
-        assertThat(captor.getValue()).hasSize(1);
-        assertThat(captor.getValue().get(0).priority()).isEqualTo("HIGH");
+        List<SubTaskDraft> saved = savedDrafts();
+        assertThat(saved).hasSize(1);
+        assertThat(saved.get(0).priority()).isEqualTo("HIGH");
     }
 
     @Test
-    @DisplayName("正常拆解：markdown fence 容错解析，草案落库 PENDING_PLAN_REVIEW，start/end/generated timeline 齐全")
+    @DisplayName("正常拆解：markdown fence 容错解析，草案写入暂存区（待确认），start/end/generated timeline 齐全")
     void shouldDecomposeAndPersistDrafts() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
@@ -223,19 +415,15 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         // saveBatch 后按 items 顺序重加载草案（防御实体 ID 未回填）；
         // mock 不落库，stub list 返回带 id 与审计上下文的"重加载结果"
-        SubTaskView reloaded1 = draftFull(11L, "HIGH", Map.of("plannerAgentId", 9L));
-        SubTaskView reloaded2 = draftFull(12L, "MEDIUM", Map.of("plannerAgentId", 9L));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(reloaded1, reloaded2));
+        staged(draftFull(11L, "HIGH", Map.of("plannerAgentId", 9L)),
+                draftFull(12L, "MEDIUM", Map.of("plannerAgentId", 9L)));
 
         asyncService.executeDecompose(TASK_ID);
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(captor.capture());
-        List<SubTaskDraft> drafts = captor.getValue();
+        List<SubTaskDraft> drafts = savedDrafts();
         assertThat(drafts).hasSize(2);
         assertThat(drafts).allSatisfy(d -> {
-            assertThat(d.status()).isEqualTo(SubTaskStatus.PENDING_PLAN_REVIEW);
+            assertThat(d.status()).isEqualTo(SubTaskStatus.PENDING);
             assertThat(d.taskId()).isEqualTo(TASK_ID);
             assertThat(d.context()).containsEntry("plannerAgentId", 9L);
         });
@@ -252,6 +440,34 @@ class PlannerDecomposeAsyncServiceImplTest {
     }
 
     @Test
+    @DisplayName("B4：根层 code 序号取「任务内已用最大值 + 1」，draftSeq 仍是批内 1..N")
+    void shouldStartRootSeqAfterExistingMax() {
+        OffsetDateTime created = OffsetDateTime.parse("2026-11-08T10:00:00+08:00");
+        when(taskService.getView(TASK_ID)).thenReturn(planningTaskAt(created));
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [
+                          {"title":"设计表结构","content":"建表","deliverable":"DDL","acceptance":"运行 x 输出 y"},
+                          {"title":"实现接口","content":"实现","deliverable":"代码","acceptance":"运行 a 输出 b"}
+                        ]
+                        """, "stop", "llm", 100));
+        staged(draftFull(11L, "HIGH", null), draftFull(12L, "HIGH", null));
+        // 该任务已用过根段 0001~0005（上一轮 reject 后 DISCARDED + 软删）
+        when(planDraftMapper.findMaxRootSeq(TASK_ID)).thenReturn(5);
+
+        asyncService.executeDecompose(TASK_ID);
+
+        List<SubTaskDraft> drafts = savedDrafts();
+        // 第二轮必须从 0006 起：从 0001 重起会与上一轮残留行同号 ⇒ 撞 uk_plan_draft_code
+        assertThat(drafts).extracting(SubTaskDraft::draftCode)
+                .containsExactly("202611080006", "202611080007");
+        // draftSeq 与 code 的 seq 是两件事：前者是批内位置（dependsOn 引用它、
+        // uk_sub_task_decompose_attempt 用它区分同批），**不能**跟着变成全局号
+        assertThat(drafts).extracting(SubTaskDraft::draftSeq).containsExactly(1, 2);
+    }
+
+    @Test
     @DisplayName("task_plan_llm_call_end 事件携带耗时毫秒、finishReason、tokenUsage")
     void shouldRecordLlmCallEndWithObservabilityFields() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
@@ -260,7 +476,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
@@ -292,7 +508,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"文档产出","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
@@ -315,7 +531,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"普通执行","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
@@ -326,6 +542,63 @@ class PlannerDecomposeAsyncServiceImplTest {
         // 占位符已完全渲染无残留（模板第 7 条示例含技能名是固定模板文案，非泄漏；
         // 降级语义 = 占位符被降级文案替换且无未渲染残留）
         assertThat(prompt).doesNotContain("{{TASK_REQUIRED_SKILLS}}");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  执行环境段（{{EXECUTION_ENV}}，2026-11-12）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("执行环境：未声明 → 注入显式标记（不是空段）+ 占位符无残留")
+    void shouldInjectUndeclaredMarkerWhenNoExecutionEnv() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"普通执行","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
+                        """, "stop", "llm", 100));
+        staged(draft(11L));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
+        assertThat(captor.getValue().getUserPrompt())
+                // 空段会让模型既不申报也不追问；标记才是可判定信号
+                .contains("未声明执行环境")
+                .doesNotContain("{{EXECUTION_ENV}}");
+    }
+
+    @Test
+    @DisplayName("执行环境：已声明 → 路径 / 基线 / 数据源原样进提示词（模型据此照抄，不再写「仓库中」）")
+    void shouldInjectDeclaredExecutionEnv() {
+        Map<String, Object> context = Map.of(TaskContextKeys.EXECUTION_ENV, Map.of(
+                ExecutionEnv.KEY_REPO, Map.of("kind", "local", "value", "E:/yhzx/1027/helloai", "baseRef", "main"),
+                ExecutionEnv.KEY_RUNTIME, List.of("jdk17", "bash"),
+                ExecutionEnv.KEY_DATASOURCES, List.of(
+                        Map.of("type", "postgresql", "url", "localhost:15432/helloai", "ready", true))));
+        TaskView task = new TaskView(TASK_ID, "搭建报表模块", "需要一个日报统计模块", null, null, null, null, null,
+                TaskStatus.PLANNING, null, null, context, null, null, null, null);
+        when(taskService.getView(TASK_ID)).thenReturn(task);
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"普通执行","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
+                        """, "stop", "llm", 100));
+        staged(draft(11L));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
+        assertThat(captor.getValue().getUserPrompt())
+                .contains("E:/yhzx/1027/helloai")
+                .contains("main")
+                .contains("jdk17")
+                .contains("postgresql")
+                .contains("已就绪")
+                .doesNotContain("未声明执行环境")
+                .doesNotContain("{{EXECUTION_ENV}}");
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -347,13 +620,14 @@ class PlannerDecomposeAsyncServiceImplTest {
                            "requiredSkills":["eng-doc-standard","幻觉技能"],"constraints":"不得改对外接口"}
                         ]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(captor.capture());
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
         SubTaskDraft saved = captor.getValue().get(0);
         // 目录命中保留、幻觉标签丢弃
         assertThat(saved.requiredSkills()).containsExactly("eng-doc-standard");
@@ -379,7 +653,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
@@ -410,15 +684,14 @@ class PlannerDecomposeAsyncServiceImplTest {
                           {"title":"字符串布尔","content":"contract 给字符串","deliverable":"交付物产物完整清单","acceptance":"验证点全部通过确认完成","contract":"true","dependsOn":[1]}
                         ]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(
-                draft(11L), draft(12L), draft(13L), draft(14L)));
-        when(subTaskService.listViewsByIds(List.of(11L))).thenReturn(List.of(draft(11L)));
+        staged(draft(11L), draft(12L), draft(13L), draft(14L));
 
         asyncService.executeDecompose(TASK_ID);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(captor.capture());
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
         List<SubTaskDraft> drafts = captor.getValue();
         assertThat(drafts).hasSize(4);
         // 布尔 true / 字符串 "true" → 1；false/缺省 → 0（Boolean.TRUE.equals 语义降级）
@@ -441,8 +714,8 @@ class PlannerDecomposeAsyncServiceImplTest {
 
         asyncService.executeDecompose(TASK_ID);
 
-        verify(subTaskService, never()).saveDrafts(any());
-        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
+        verify(planDraftRoundService, never()).writeDrafts(anyLong(), anyString(), any(), any());
+        verify(taskService).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_failed"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
@@ -453,8 +726,8 @@ class PlannerDecomposeAsyncServiceImplTest {
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("P1 必填兜底：草案缺 acceptance（空白占位）→ fail-close 回退 PENDING + 定位审计")
-    void shouldRollbackWhenDraftMissingAcceptance() {
+    @DisplayName("2026-11-08 口径：草案 acceptance 空白 → 照常落库 + 该条带 G2_BLANK，任务留 PLANNING 待修正")
+    void shouldPersistDraftsWithBlockingFindingWhenAcceptanceBlank() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
@@ -464,26 +737,31 @@ class PlannerDecomposeAsyncServiceImplTest {
                           {"title":"残缺条目","content":"内容","deliverable":"交付物产物完整清单","acceptance":"   "}
                         ]
                         """, "stop", "llm", 100));
+        // 落库后重读：第 2 条 acceptance 仍是空白（模型就这么输出的）
+        staged(draft(11L), draftBroken(12L, "   "));
 
         asyncService.executeDecompose(TASK_ID);
 
-        // 整批拒绝：不落库任何草案（残缺草案比拆解失败更贵——执行/审查侧将失去验收依据）
-        verify(subTaskService, never()).saveDrafts(any());
-        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
-        // 审计先于抛出：draftSeq / field 精确指向第 2 条 acceptance；且走独立事务入口
+        // 不报废整批：草案照常写入暂存区（待确认草案不在执行表，不参与 claim/派发），任务留在 PLANNING
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
+        verify(taskService, never()).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"), eq(AgentRole.PLANNER), isNull(), anyMap());
+        // 结论落在命中的草案上；未命中的草案写清零 payload（写与清同源）
+        assertThat(String.valueOf(findingsContext(12L).get(SubTaskContextKeys.GATE_FINDINGS)))
+                .contains(DraftGateChecker.G2_BLANK);
+        Object clearGate = findingsContext(11L).get(SubTaskContextKeys.GATE_FINDINGS);
+        assertThat(clearGate).isInstanceOfSatisfying(Map.class,
+                m -> assertThat(m.get("findings")).isInstanceOfSatisfying(List.class, List::isEmpty));
+        // 阻断仍留痕（排障只需要这一条：谁不合格、为什么）
         verify(taskTimelineService).recordEventInNewTx(
-                eq(TASK_ID), isNull(), eq("task_plan_draft_field_missing"),
-                eq(AgentRole.PLANNER), eq(9L),
-                argThat(payload -> "acceptance".equals(payload.get("field"))
-                        && Integer.valueOf(2).equals(payload.get("draftSeq"))));
-        verify(taskTimelineService).recordEvent(
-                eq(TASK_ID), isNull(), eq("task_plan_failed"),
-                eq(AgentRole.PLANNER), isNull(), anyMap());
+                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
     }
 
     @Test
-    @DisplayName("TD-13 S4：门 1 成环 → 落库前整批阻断，findings 落 task.context.gateFindings + timeline")
-    void shouldBlockBeforeSaveWhenBatchGateFails() {
+    @DisplayName("2026-11-08 口径：门 1 成环 → 草案落库 + G1_CYCLE 挂首条，不再落库前整批报废")
+    void shouldPersistDraftsWithCycleFinding() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
@@ -493,26 +771,27 @@ class PlannerDecomposeAsyncServiceImplTest {
                           {"title":"乙","content":"内容乙","deliverable":"交付物乙完整清单","acceptance":"验收判据乙说明文字","dependsOn":[1]}
                         ]
                         """, "stop", "llm", 100));
+        SubTaskView a = draftFullTD9(11L, "甲", "内容甲", "交付物甲完整清单", "运行 pytest 输出 5 passed", List.of(12L));
+        SubTaskView b = draftFullTD9(12L, "乙", "内容乙", "交付物乙完整清单", "运行 pytest 输出 5 passed", List.of(11L));
+        staged(a, b);
 
         asyncService.executeDecompose(TASK_ID);
 
-        // 门 1 阻断在 saveDrafts 之前：DB 中不产生任何草案行
-        verify(subTaskService, never()).saveDrafts(any());
-        verify(subTaskService, never()).listDraftsInInsertOrder(anyLong(), any());
-        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
+        // 草案落库、任务不回退：环是「计划需要修」而不是「这一批拿不到」
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
+        verify(taskService, never()).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
+        // 环是批次级问题（无单条主体）⇒ 确定性地挂到首条草案
+        assertThat(String.valueOf(findingsContext(11L).get(SubTaskContextKeys.GATE_FINDINGS)))
+                .contains(DraftGateChecker.G1_CYCLE);
         verify(taskTimelineService).recordEventInNewTx(
                 eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
-                eq(AgentRole.PLANNER), eq(9L), anyMap());
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> contextCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(taskService).updateContextInNewTx(eq(TASK_ID), contextCaptor.capture());
-        assertThat(contextCaptor.getValue()).containsKey("gateFindings");
-        // 审计写点不得走共享事务版本（否则 expand 抛错时会被回滚）
-        verify(taskService, never()).updateContext(anyLong(), any());
+                eq(AgentRole.PLANNER), eq(9L),
+                argThat(payload -> "decompose".equals(payload.get("phase"))
+                        && String.valueOf(payload.get("items")).contains(DraftGateChecker.G1_CYCLE)));
     }
 
     @Test
-    @DisplayName("TD-13 S4：门 2 无告警规则 → 不再产出 gateFindings 与 task_plan_gate_warned")
+    @DisplayName("TD-13 S4：门 2 合规（deliverable 带书名号但 acceptance 有断言）→ 无 gate_warned、无阻断")
     void shouldNotEmitGateFindingsWhenDraftHasQuotedTermNotRepeatedInAcceptance() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
@@ -523,18 +802,17 @@ class PlannerDecomposeAsyncServiceImplTest {
                           {"title":"乙","content":"内容乙","deliverable":"输出《巡检报表》统计脚本","acceptance":"接口 Z 返回 200 状态码"}
                         ]
                         """, "stop", "llm", 100));
-        when(subTaskService.saveDrafts(any())).thenReturn(List.of());
-        lenient().when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(new ArrayList<>());
+        staged(draft(11L), draft(12L));
 
         asyncService.executeDecompose(TASK_ID);
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<SubTaskDraft>> draftsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(draftsCaptor.capture());
-        assertThat(draftsCaptor.getValue()).allSatisfy(
+        // 门禁结论不再写进 SubTaskDraft.context：它挂在暂存区行的 context 上
+        assertThat(savedDrafts()).allSatisfy(
                 d -> assertThat(d.context()).doesNotContainKey(SubTaskContextKeys.GATE_FINDINGS));
-        verify(taskTimelineService, never()).recordEvent(
+        verify(taskTimelineService, never()).recordEventInNewTx(
                 eq(TASK_ID), isNull(), eq("task_plan_gate_warned"), any(), any(), anyMap());
+        verify(taskTimelineService, never()).recordEventInNewTx(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"), any(), any(), anyMap());
     }
 
     @Test
@@ -549,8 +827,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                           {"title":"条目二","content":"内容二","deliverable":"交付物二完整产出","acceptance":"接口 Z 返回 200 状态码"}
                         ]
                         """, "stop", "llm", 100));
-        when(subTaskService.saveDrafts(any())).thenReturn(List.of());
-        lenient().when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(new ArrayList<>());
+        staged(draft(11L), draft(12L));
 
         asyncService.executeDecompose(TASK_ID);
 
@@ -569,9 +846,9 @@ class PlannerDecomposeAsyncServiceImplTest {
 
         asyncService.executeDecompose(TASK_ID);
 
-        verify(subTaskService, never()).saveDrafts(any());
+        verify(planDraftRoundService, never()).writeDrafts(anyLong(), anyString(), any(), any());
         // 失败回退走 CAS（lambdaUpdate）
-        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
+        verify(taskService).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_failed"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
@@ -587,8 +864,8 @@ class PlannerDecomposeAsyncServiceImplTest {
 
         asyncService.executeDecompose(TASK_ID);
 
-        verify(subTaskService, never()).saveDrafts(any());
-        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
+        verify(planDraftRoundService, never()).writeDrafts(anyLong(), anyString(), any(), any());
+        verify(taskService).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_failed"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
@@ -604,50 +881,46 @@ class PlannerDecomposeAsyncServiceImplTest {
 
         asyncService.executeDecompose(TASK_ID);
 
-        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
+        verify(taskService).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_failed"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  §6.100 幽灵依赖防御 / dependsOn 回写
+    //  dependsOn 越界 / 回写
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("§6.100: 幽灵依赖防御——依赖回写引用未落库 ID 时整批拒绝并回退")
+    @DisplayName("依赖序号越界 → 丢边 + 该条带 G1_DEP_OUT_OF_RANGE，草案照常落库")
     void shouldRejectWhenDependsOnPointsToMissingDraft() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
-        // 第 2 条依赖第 1 条（序号 1 → 重加载 drafts 的 id=11L）
+        // 第 2 条依赖序号 5，本批只有 2 条 ⇒ 越界
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
                         ```json
                         [
                           {"title":"第一步","content":"准备","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容","dependsOn":[]},
-                          {"title":"第二步","content":"执行","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容","dependsOn":[1]}
+                          {"title":"第二步","content":"执行","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容","dependsOn":[5]}
                         ]
                         ```
                         """, "stop", "llm", 100));
-        SubTaskView reloaded1 = draft(11L);
-        SubTaskView reloaded2 = draft(12L);
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(reloaded1, reloaded2));
-        // 幽灵场景：依赖 ID 11 在所有草案之外，listByIds 查不到
-        when(subTaskService.listViewsByIds(List.of(11L))).thenReturn(List.of());
+        staged(draft(11L), draft(12L));
 
         asyncService.executeDecompose(TASK_ID);
 
-        // 幽灵依赖不得静默落库：任何依赖回写都不执行
-        verify(subTaskService, never()).updateDependsOn(anyLong(), any());
-        // 拆解失败回退 PENDING + task_plan_failed
-        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
-        verify(taskTimelineService).recordEvent(
-                eq(TASK_ID), isNull(), eq("task_plan_failed"),
-                eq(AgentRole.PLANNER), isNull(), anyMap());
+        // 越界边不落暂存区（edits 为空时 applyDependencies 收到空 map 并直接返回）
+        verify(planDraftService).applyDependencies(eq(TASK_ID), argThat(Map::isEmpty));
+        // 但草案仍落库：问题以 block finding 的形式挂在第 2 条草案上（用户可先修依赖再确认）
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
+        assertThat(String.valueOf(findingsContext(12L).get(SubTaskContextKeys.GATE_FINDINGS)))
+                .contains(DraftGateChecker.G1_DEP_OUT_OF_RANGE);
+        verify(taskService, never()).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
     }
 
     @Test
-    @DisplayName("§6.100: 依赖回写目标全部存在时正常落库（序号→真实 id 映射）")
+    @DisplayName("依赖回写：序号 → 同批 code 写入暂存区 depends_on_codes")
     void shouldApplyDependsOnWhenAllTargetsExist() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
@@ -660,15 +933,13 @@ class PlannerDecomposeAsyncServiceImplTest {
                         ]
                         ```
                         """, "stop", "llm", 100));
-        SubTaskView reloaded1 = draft(11L);
-        SubTaskView reloaded2 = draft(12L);
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(reloaded1, reloaded2));
-        when(subTaskService.listViewsByIds(List.of(11L))).thenReturn(List.of(reloaded1));
+        staged(draft(11L), draft(12L));
 
         asyncService.executeDecompose(TASK_ID);
 
-        // 序号 1 → 真实 id 11L，回写第 2 条草案
-        verify(subTaskService).updateDependsOn(eq(12L), eq(List.of(11L)));
+        // 序号 1 → 第 1 条的 code，回写第 2 条草案
+        verify(planDraftService).applyDependencies(TASK_ID,
+                Map.of("202611100002", List.of("202611100001")));
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_generated"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
@@ -714,7 +985,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
@@ -743,7 +1014,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
@@ -769,13 +1040,14 @@ class PlannerDecomposeAsyncServiceImplTest {
                             {"kind":"UNCONFIRMED","note":"接口是否有存量调用方未确认"}
                           ]}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(captor.capture());
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
         List<UncertaintyDraft> uncertainties = captor.getValue().get(0).uncertainties();
         assertThat(uncertainties).hasSize(2)
                 .extracting(UncertaintyDraft::kind)
@@ -796,13 +1068,14 @@ class PlannerDecomposeAsyncServiceImplTest {
                           "acceptance":"STRUCTURAL：证据条目总数 ≥15 条，每条附来源 URL 且页面内容与原文摘录一致",
                           "uncertainties":[{"kind":"UNCONFIRMED","note":"A/B/C 对应哪三款真实产品待业务方拍板"}]}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(captor.capture());
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
         // 只标注：acceptance / acceptanceKind 一字未改，草案照常落库
         SubTaskDraft saved = captor.getValue().get(0);
         assertThat(saved.context().get(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS))
@@ -832,13 +1105,14 @@ class PlannerDecomposeAsyncServiceImplTest {
                           "acceptance":"STRUCTURAL：输出 5 个章节，每章 ≥1 条结论",
                           "uncertainties":[{"kind":"UNCONFIRMED","note":"接口是否有存量调用方未确认"}]}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(captor.capture());
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
         assertThat(captor.getValue().get(0).context())
                 .doesNotContainKey(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS);
         verify(taskTimelineService, never()).recordEvent(
@@ -862,13 +1136,14 @@ class PlannerDecomposeAsyncServiceImplTest {
                           "acceptance":"STRUCTURAL：输出 1 份映射确认表，含 3 行记录",
                           "uncertainties":[{"kind":"UNCONFIRMED","note":"A/B/C 对应哪三款真实产品待业务方拍板"}]}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L), draft(12L)));
+        staged(draft(11L), draft(12L));
 
         asyncService.executeDecompose(TASK_ID);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(captor.capture());
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
         assertThat(captor.getValue()).hasSize(2);
         assertThat(captor.getValue().get(0).context())
                 .doesNotContainKey(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS);
@@ -877,6 +1152,90 @@ class PlannerDecomposeAsyncServiceImplTest {
         verify(taskTimelineService, never()).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_acceptance_precondition_unmet"),
                 any(), any(), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-13 S2：缺口申报跨草案影响面 → blockedBy 原样落库（3 条其它草案）")
+    void shouldPersistCrossDraftBlockedBy() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"代号映射确认","content":"确认 A/B/C 对应哪三款真实产品",
+                          "deliverable":"代号映射确认记录表（含 3 行）",
+                          "acceptance":"STRUCTURAL：输出 1 份映射确认表，含 3 行记录",
+                          "uncertainties":[{"kind":"UNCONFIRMED","note":"A/B/C 对应哪三款真实产品待业务方拍板",
+                                            "ref":"U1","blockedBy":[2,3,4]}]},
+                         {"title":"竞品 A 事实采集","content":"采集公开功能与定价",
+                          "deliverable":"证据台账表 A（每条含来源 URL）",
+                          "acceptance":"STRUCTURAL：证据条目 ≥4 条，每条附来源 URL"},
+                         {"title":"竞品 B 事实采集","content":"采集公开功能与定价",
+                          "deliverable":"证据台账表 B（每条含来源 URL）",
+                          "acceptance":"STRUCTURAL：证据条目 ≥4 条，每条附来源 URL"},
+                         {"title":"竞品 C 事实采集","content":"采集公开功能与定价",
+                          "deliverable":"证据台账表 C（每条含来源 URL）",
+                          "acceptance":"STRUCTURAL：证据条目 ≥4 条，每条附来源 URL"}]
+                        """, "stop", "llm", 100));
+        staged(draft(11L), draft(12L), draft(13L), draft(14L));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
+        List<UncertaintyDraft> uncertainties = captor.getValue().get(0).uncertainties();
+        assertThat(uncertainties).hasSize(1);
+        // 断点① 的证据：同一缺口能一次表达「卡住 2/3/4 三条彼此无依赖的草案」
+        assertThat(uncertainties.get(0).blockedBy()).containsExactly(2, 3, 4);
+        // 未申报影响面的条目必须保持 null（与「申报为空」语义不同，不得被归一成 []）
+        assertThat(captor.getValue().get(1).uncertainties()).isEmpty();
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_uncertainty_blocked_by_normalized"),
+                any(), any(), anyMap());
+    }
+
+    @Test
+    @DisplayName("TD-13 S2：blockedBy 自引用 / 越界 / 重复被丢弃并聚合审计")
+    void shouldNormalizeInvalidBlockedBy() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"代号映射确认","content":"确认 A/B/C 对应哪三款真实产品",
+                          "deliverable":"代号映射确认记录表（含 3 行）",
+                          "acceptance":"STRUCTURAL：输出 1 份映射确认表，含 3 行记录",
+                          "uncertainties":[
+                            {"kind":"UNCONFIRMED","note":"A/B/C 映射未确认","ref":"U1","blockedBy":[1,2,2,9,0]},
+                            {"kind":"ASSUMPTION","note":"假定内部数据口径不变","ref":"U2"}
+                          ]},
+                         {"title":"证据台账","content":"采集公开事实",
+                          "deliverable":"证据台账表（每条含来源 URL）",
+                          "acceptance":"STRUCTURAL：证据条目 ≥15 条，每条附来源 URL"}]
+                        """, "stop", "llm", 100));
+        staged(draft(11L), draft(12L));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
+        List<UncertaintyDraft> uncertainties = captor.getValue().get(0).uncertainties();
+        // 1 = 自引用（本草案序号），9 / 0 = 越界，重复的 2 只留一个
+        assertThat(uncertainties.get(0).blockedBy()).containsExactly(2);
+        assertThat(uncertainties.get(1).blockedBy()).isNull();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_uncertainty_blocked_by_normalized"),
+                eq(AgentRole.PLANNER), eq(9L), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+                .containsEntry("draftSeq", 1)
+                .containsEntry("ref", "U1")
+                .containsEntry("keptBlockedBy", List.of(2));
+        assertThat((List<?>) payloadCaptor.getValue().get("dropped")).hasSize(4);
     }
 
     @Test
@@ -893,13 +1252,14 @@ class PlannerDecomposeAsyncServiceImplTest {
                             {"kind":"UNCONFIRMED","note":"正常缺口"}
                           ]}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(captor.capture());
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
         List<UncertaintyDraft> uncertainties = captor.getValue().get(0).uncertainties();
         // 非法 kind 降级不丢弃；空白 note 条目丢弃
         assertThat(uncertainties).hasSize(2);
@@ -927,13 +1287,14 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容","uncertainties":"非法形态"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(captor.capture());
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
         assertThat(captor.getValue().get(0).uncertainties()).isEmpty();
     }
 
@@ -952,11 +1313,11 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"只拆目标","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
-        verify(subTaskService).saveDrafts(any());
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(taskTimelineService).recordEvent(
@@ -979,11 +1340,11 @@ class PlannerDecomposeAsyncServiceImplTest {
                         [{"title":"只拆目标","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "constraints":"不得改线上配置"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
-        verify(subTaskService).saveDrafts(any());
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
         verify(taskTimelineService, never()).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_constraints_missing"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
@@ -1006,7 +1367,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "uncertainties":[{"kind":"ASSUMPTION","note":"数据源可达"}]}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
@@ -1027,7 +1388,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "uncertainties":[{"kind":"UNCONFIRMED","note":"接口是否有存量调用方未确认"}]}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
@@ -1045,7 +1406,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"第一步","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
@@ -1076,12 +1437,12 @@ class PlannerDecomposeAsyncServiceImplTest {
                         [{"title":"文档产出","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "requiredSkills":["eng-doc-standard"]}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
         // 告警而非阻断：草案仍落库
-        verify(subTaskService).saveDrafts(any());
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(taskTimelineService).recordEvent(
@@ -1107,7 +1468,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         [{"title":"文档产出","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
                           "requiredSkills":["eng-doc-standard"]}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
@@ -1121,51 +1482,58 @@ class PlannerDecomposeAsyncServiceImplTest {
     //  ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("TD-5 接线：acceptanceKind 缺失（回落 AUTOMATED）且文本普通 → Warn 放行，草案照常落库")
+    @DisplayName("TD-5 接线：acceptanceKind 缺失（回落 AUTOMATED）且文本普通 → Warn 挂草案，不阻断落库")
     void shouldWarnAndPersistWhenKindMissing() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
-        // acceptanceKind 字段缺失 → parse 回落 AUTOMATED；文本「评审通过」无命令/断言 → 应走 Warn 而非 Fail
+        // acceptanceKind 字段缺失 → parse 回落 AUTOMATED；文本无命令/断言 → 应走 Warn 而非 Fail
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
                         [{"title":"设计表结构","content":"建表","deliverable":"DDL 建表脚本","acceptance":"评审通过且无语法错误"},
                          {"title":"实现统计接口","content":"实现","deliverable":"接口代码实现文件","acceptance":"接口返回 200 状态码"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L), draft(12L)));
+        // 落库后重读：第 1 条文本无命令/断言（Warn），第 2 条合规
+        staged(draftWithKind(11L, "评审通过且无语法错误", null, List.of()), draft(12L));
 
         asyncService.executeDecompose(TASK_ID);
 
         // 不阻断：草案仍落库
-        verify(subTaskService).saveDrafts(any());
-        // Warn 路径：缺失 kind 的「评审通过」记一条审计 hint（不抛异常）
-        verify(taskTimelineService).recordEvent(
-                eq(TASK_ID), isNull(), eq("task_plan_acceptance_kind_mismatch"),
-                eq(AgentRole.PLANNER), eq(9L), anyMap());
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
+        // Warn 结论挂在命中的那条草案上
+        assertThat(String.valueOf(findingsContext(11L).get(SubTaskContextKeys.GATE_FINDINGS)))
+                .contains(DraftGateChecker.G2_KIND_FORM_CONFLICT);
+        // 只有 warn 没有 block ⇒ 记 warned 事件、不记 blocked
+        verify(taskTimelineService).recordEventInNewTx(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_warned"),
+                eq(AgentRole.PLANNER), eq(9L),
+                argThat(payload -> Integer.valueOf(1).equals(payload.get("warnCount"))));
+        verify(taskTimelineService, never()).recordEventInNewTx(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"), any(), any(), anyMap());
     }
 
     @Test
-    @DisplayName("TD-5 接线：显式声明 AUTOMATED 但文本不含命令/预期结果 → fail-close 整批拒绝，不落库")
+    @DisplayName("TD-5 接线：显式声明 AUTOMATED 但验收是空话 → 该条带 G2_KIND_FORM_CONFLICT（不整批作废）")
     void shouldRejectWhenExplicitAutomatedMismatch() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
-        // 显式 AUTOMATED + 空话「质量良好」→ Fail（fail-close）
+        // 显式 AUTOMATED + 空话「质量良好」→ Fail
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"写文档","content":"c","deliverable":"d","acceptance":"质量良好","acceptanceKind":"AUTOMATED"}]
+                        [{"title":"写文档","content":"c","deliverable":"d","acceptance":"质量良好且表达清晰通顺","acceptanceKind":"AUTOMATED"}]
                         """, "stop", "llm", 100));
+        // 「是否显式声明」靠 context 里的原文，不能靠落库枚举（parse 会把未声明回落成 AUTOMATED）
+        staged(draftWithKind(11L, "质量良好且表达清晰通顺", "AUTOMATED", List.of()));
 
         asyncService.executeDecompose(TASK_ID);
 
-        // fail-close：saveDrafts 绝不调用；拆解失败回退 PENDING + task_plan_failed
-        verify(subTaskService, never()).saveDrafts(any());
-        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
-        verify(taskTimelineService).recordEvent(
-                eq(TASK_ID), isNull(), eq("task_plan_failed"),
-                eq(AgentRole.PLANNER), isNull(), anyMap());
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
+        assertThat(String.valueOf(findingsContext(11L).get(SubTaskContextKeys.GATE_FINDINGS)))
+                .contains(DraftGateChecker.G2_KIND_FORM_CONFLICT);
+        verify(taskService, never()).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
     }
 
     @Test
-    @DisplayName("TD-5 接线：显式声明 STRUCTURAL + 可数量词 → 通过，草案落库")
+    @DisplayName("TD-5 接线：显式声明 STRUCTURAL + 可数量词 → 通过，草案落库且无 findings")
     void shouldPassWhenExplicitStructuralCountable() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
@@ -1173,35 +1541,37 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"产出报告","content":"c","deliverable":"研究报告成品文档","acceptance":"不少于 5 章完整内容","acceptanceKind":"STRUCTURAL"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draftWithKind(11L, "不少于 5 章完整内容", "STRUCTURAL", List.of()));
 
         asyncService.executeDecompose(TASK_ID);
 
-        verify(subTaskService).saveDrafts(any());
-        // 显式声明合法 → 无 mismatch 审计
-        verify(taskTimelineService, never()).recordEvent(
-                eq(TASK_ID), isNull(), eq("task_plan_acceptance_kind_mismatch"),
-                eq(AgentRole.PLANNER), eq(9L), anyMap());
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
+        // 合规 ⇒ 写的是清零 payload（同一入口同时承担「清上一轮结论」）
+        Object clearGate = findingsContext(11L).get(SubTaskContextKeys.GATE_FINDINGS);
+        assertThat(clearGate).isInstanceOfSatisfying(Map.class,
+                m -> assertThat(m.get("findings")).isInstanceOfSatisfying(List.class, List::isEmpty));
+        verify(taskTimelineService, never()).recordEventInNewTx(
+                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"), any(), any(), anyMap());
     }
 
     @Test
-    @DisplayName("TD-5 长度闸：acceptance 低于字符下限 → fail-close 整批拒绝，不落库")
+    @DisplayName("TD-5 长度闸：acceptance 低于字符下限 → 该条带 G2_LEN_MIN（不整批作废）")
     void shouldRejectWhenAcceptanceBelowFloor() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
-        // 各字段非空（过必填校验）但 acceptance=5 字符 < 10 下限 → 长度闸拒绝
+        // 各字段非空（过空白校验）但 acceptance=4 字符 < 10 下限 → 长度闸命中
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
                         [{"title":"产出物","content":"c","deliverable":"报告","acceptance":"通过即可"}]
                         """, "stop", "llm", 100));
+        staged(draftBroken(11L, "通过即可"));
 
         asyncService.executeDecompose(TASK_ID);
 
-        verify(subTaskService, never()).saveDrafts(any());
-        verify(taskService).casStatus(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING);
-        verify(taskTimelineService).recordEvent(
-                eq(TASK_ID), isNull(), eq("task_plan_failed"),
-                eq(AgentRole.PLANNER), isNull(), anyMap());
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
+        assertThat(String.valueOf(findingsContext(11L).get(SubTaskContextKeys.GATE_FINDINGS)))
+                .contains(DraftGateChecker.G2_LEN_MIN);
+        verify(taskService, never()).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
     }
 
     @Test
@@ -1213,11 +1583,11 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"接口自检","content":"c","deliverable":"三行状态回执","acceptance":"三项可数断言：① 正文包含 API-CHECK-DONE ② getMySkill=200 ③ list=200"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
-        verify(subTaskService).saveDrafts(any());
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
         verify(taskTimelineService, never()).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"), any(), any(), anyMap());
     }
@@ -1231,225 +1601,71 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         [{"title":"产出文档","content":"c","deliverable":"文档成品交付完整版","acceptance":"验收判据说明文字内容"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
-        verify(subTaskService).saveDrafts(any());
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  `TD-9` 单条草案 expand / regenerate
+    //  `TD-9` 单条草案 regenerate
     //  ══════════════════════════════════════════════════════════════
 
     private static final Long ORIGINAL_DRAFT_ID = 55L;
 
-    /** `TD-9` 单条草案视图（四要素 + 优先级 + 依赖齐全，PENDING_PLAN_REVIEW）。 */
-    /** `TD-9` 单条草案视图（四要素 + 优先级 + 依赖齐全，PENDING_PLAN_REVIEW；createTime 非 null）。 */
+    /** `TD-9` 单条草案视图（四要素 + 优先级 + 依赖齐全，待确认；createTime 非 null）。 */
     private SubTaskView draftFullTD9(long id, String title, String content, String deliverable,
                                      String acceptance, List<Long> dependsOn) {
-        return new SubTaskView(id, TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null,
-                title, content, deliverable, acceptance, null, null, null, List.of(), dependsOn,
-                null, "MEDIUM", null, List.of(), null, null, null, null, null,
-                OffsetDateTime.now(), null);
+        return new SubTaskView(id, TASK_ID, SubTaskStatus.PENDING, null, null, title, content, deliverable, acceptance, null, null, null, List.of(), dependsOn, null, "MEDIUM", null, List.of(), null, null, null, null, null, OffsetDateTime.now(), null, null);
     }
 
-    /** expand 共享打桩：原草案 + 任务 + Planner + LLM 输出数组 + 重加载新增两条。 */
-    private void stubExpandContext(String llmOutput) {
-        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
-                draftFullTD9(ORIGINAL_DRAFT_ID, "原草案标题", "原草案内容", "原交付物产物",
-                        "运行 X 命令输出预期 Y", List.of()));
+    /** 带位置身份的草案（27 参 canonical；`TD-16d-2` regenerate 暂存区同步用例用）。 */
+    private SubTaskView draftWithCodeTD9(long id, String title, String content, String deliverable,
+                                         String acceptance, List<Long> dependsOn, String code) {
+        return new SubTaskView(id, TASK_ID, SubTaskStatus.PENDING, null, null, title, content, deliverable, acceptance, null, null, null, List.of(), dependsOn, null, "MEDIUM", null, List.of(), null, null, null, null, null, null, null, code);
+    }
+
+    @Test
+    @DisplayName("深度分档表：四个原型按设计取值，DATA/OPERATE 与 null 走显式 default")
+    void shouldMapDepthLimitByArchetype() {
+        var limits = plannerDecomposeProperties.getMaxExpandDepth();
+        assertThat(limits.limitOf(com.helloai.common.constant.TaskArchetype.BUILD)).isEqualTo(2);
+        assertThat(limits.limitOf(com.helloai.common.constant.TaskArchetype.DOCUMENT)).isEqualTo(2);
+        assertThat(limits.limitOf(com.helloai.common.constant.TaskArchetype.RESEARCH)).isEqualTo(2);
+        assertThat(limits.limitOf(com.helloai.common.constant.TaskArchetype.DECIDE)).isEqualTo(1);
+        assertThat(limits.limitOf(com.helloai.common.constant.TaskArchetype.DATA)).isEqualTo(2);
+        assertThat(limits.limitOf(com.helloai.common.constant.TaskArchetype.OPERATE)).isEqualTo(2);
+        // null 与上游 TaskArchetype.parse 同口径：回落 BUILD（AD-6 起上限 2），不是回落 default
+        assertThat(limits.limitOf(null)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("AD-5a-3b-2b：暂存区草案重生成——四要素直接写暂存区，时间线不带伪造 subTaskId")
+    void shouldRegenerateStagedDraft() {
+        PlanDraftView staged = stagedDraftView(9L, "202611080003", "原标题", "原内容",
+                "原交付物产物", "原验收判据内容");
+        PlanDraftView updated = stagedDraftView(9L, "202611080003", "原标题", "新内容",
+                "新交付物产物完整清单", "不少于 5 章完整内容且章节编号连续");
+        when(planDraftService.getByCode(TASK_ID, "202611080003")).thenReturn(staged, updated);
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
-        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
-                .thenReturn(AgentResult.success(llmOutput, "stop", "llm", 100));
-        // 技能目录空（renderSkillCatalog 降级文案）；快照渲染默认 null（renderSnapshotSafely 降级）
-        when(agentSkillSpecService.listPackages()).thenReturn(List.of());
-    }
-
-    @Test
-    @DisplayName("TD-9 expand：组内依赖 Kahn 通过、新增落库、依赖回写、原草案逻辑删")
-    void shouldExpandDraftWithInGroupDependencies() {
-        stubExpandContext("""
-                [
-                  {"title":"子步骤A","content":"先准备","deliverable":"准备产物完整清单","acceptance":"运行 X 命令输出预期 Y","dependsOn":[]},
-                  {"title":"子步骤B","content":"后执行","deliverable":"执行产物完整清单","acceptance":"运行 X 命令输出预期 Y","dependsOn":[1]}
-                ]
-                """);
-        // saveDrafts 返回新增（带真实 id）；重加载同样返回这两条（原草案随后逻辑删）
-        SubTaskView new1 = draftFullTD9(81L, "子步骤A", "先准备", "准备产物完整清单",
-                "运行 X 命令输出预期 Y", null);
-        SubTaskView new2 = draftFullTD9(82L, "子步骤B", "后执行", "执行产物完整清单",
-                "运行 X 命令输出预期 Y", null);
-        when(subTaskService.saveDrafts(any())).thenReturn(List.of(new1, new2));
-        when(subTaskService.listDraftsInInsertOrder(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW))
-                .thenReturn(List.of(new1, new2));
-        // 幽灵依赖防御：依赖回写前校验目标真实存在（new1 存在）
-        when(subTaskService.listViewsByIds(List.of(81L))).thenReturn(List.of(new1));
-
-        List<SubTaskView> created = asyncService.expandById(ORIGINAL_DRAFT_ID);
-
-        // ① 新增落库（PENDING_PLAN_REVIEW，FINE 粒度由实现固定）
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
-        verify(subTaskService).saveDrafts(captor.capture());
-        assertThat(captor.getValue()).hasSize(2)
-                .allSatisfy(d -> assertThat(d.status()).isEqualTo(SubTaskStatus.PENDING_PLAN_REVIEW));
-        // ② 组内依赖回写：第 2 条依赖第 1 条真实 id
-        verify(subTaskService).updateDependsOn(82L, List.of(81L));
-        // ③ 原草案逻辑删（审计保留）
-        verify(subTaskService).removeById(ORIGINAL_DRAFT_ID);
-        // ④ 返回新增两条
-        assertThat(created).extracting(SubTaskView::id).containsExactly(81L, 82L);
-        // ⑤ timeline 记录展开事件
-        verify(taskTimelineService).recordEvent(
-                eq(TASK_ID), eq(ORIGINAL_DRAFT_ID), eq("task_plan_draft_expanded"),
-                eq(AgentRole.PLANNER), eq(9L), anyMap());
-    }
-
-    @Test
-    @DisplayName("TD-13 S4 / P1-A：expand 被门禁阻断时审计走独立事务入口（外层回滚不清除 gateFindings）")
-    void shouldAuditInNewTxWhenExpandBlocked() {
-        stubExpandContext("""
-                [
-                  {"title":"子步骤A","content":"先准备","deliverable":"准备产物完整清单","acceptance":"运行 X 命令输出预期 Y"},
-                  {"title":"子步骤B","content":"后执行","deliverable":"执行产物完整清单","acceptance":"   "}
-                ]
-                """);
-
-        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining(PlanBatchGateChecker.G2_BLANK);
-
-        // 业务回滚：不落任何草案
-        verify(subTaskService, never()).saveDrafts(any());
-        // 审计保留：必须走 REQUIRES_NEW 入口，不能走共享事务版本
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> contextCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(taskService).updateContextInNewTx(eq(TASK_ID), contextCaptor.capture());
-        assertThat(contextCaptor.getValue()).containsKey(SubTaskContextKeys.GATE_FINDINGS);
-        verify(taskService, never()).updateContext(anyLong(), any());
-        verify(taskTimelineService).recordEventInNewTx(
-                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
-                eq(AgentRole.PLANNER), eq(9L), anyMap());
-    }
-
-    @Test
-    @DisplayName("TD-9 expand：被其他草案依赖 → 拒绝展开（幽灵依赖 fail-close），不调 LLM")
-    void shouldRejectExpandWhenReferencedByOtherDraft() {
-        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
-                draftFullTD9(ORIGINAL_DRAFT_ID, "原草案", "内容", "交付物产物完整清单",
-                        "运行 X 命令输出预期 Y", List.of()));
-        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
-        // 兄弟草案 dependsOn 含原草案 id
-        when(subTaskService.listDraftsInInsertOrder(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW))
-                .thenReturn(List.of(draftFullTD9(99L, "兄弟草案", "内容", "交付物产物完整清单",
-                        "运行 X 命令输出预期 Y", List.of(ORIGINAL_DRAFT_ID))));
-
-        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("被其他草案依赖");
-
-        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
-        verify(subTaskService, never()).saveDrafts(any());
-        verify(subTaskService, never()).removeById(anyLong());
-    }
-
-    @Test
-    @DisplayName("TD-9 expand：非 PENDING_PLAN_REVIEW 状态 → 拒绝，不调 LLM")
-    void shouldRejectExpandWhenNotDraftStatus() {
-        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
-                new SubTaskView(ORIGINAL_DRAFT_ID, TASK_ID, SubTaskStatus.ASSIGNED, null, null,
-                        "已转正", "内容", "交付物产物完整清单", "运行 X 命令输出预期 Y",
-                        null, null, null, List.of(), null, null, "MEDIUM", null, List.of(),
-                        null, null, null, null, null, null, null));
-
-        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("仅草案待审状态可展开");
-
-        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
-        verify(subTaskService, never()).removeById(anyLong());
-    }
-
-    @Test
-    @DisplayName("TD-9 expand：LLM 调用失败 → 事务不落库、原草案不被破坏（removeById 绝不调用）")
-    void shouldNotTouchOriginalWhenExpandLlmFails() {
-        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
-                draftFullTD9(ORIGINAL_DRAFT_ID, "原草案标题", "原草案内容", "原交付物产物",
-                        "运行 X 命令输出预期 Y", List.of()));
-        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
-        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
-        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
-                .thenReturn(AgentResult.failure("provider timeout", "error", "llm"));
-
-        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("Planner LLM 调用失败");
-
-        verify(subTaskService, never()).saveDrafts(any());
-        verify(subTaskService, never()).removeById(anyLong());
-        verify(subTaskService, never()).updateDependsOn(anyLong(), any());
-    }
-
-    @Test
-    @DisplayName("TD-9 regenerate：title/id/dependsOn 不变量白名单——LLM 改了也忽略，四要素落库")
-    void shouldRegenerateOnlyFourElements() {
-        SubTaskView original = draftFullTD9(ORIGINAL_DRAFT_ID, "原标题", "原内容", "原交付物产物",
-                "原验收判据内容", List.of(20L));
-        SubTaskView updated = draftFullTD9(ORIGINAL_DRAFT_ID, "原标题", "新内容", "新交付物产物完整清单",
-                "不少于 5 章完整内容且章节编号连续", List.of(20L));
-        // 第 1 次 getView 取原草案，第 2 次（落库后）取更新后的草案
-        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(original, updated);
-        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
-        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
-        // LLM 恶意改 title / dependsOn / priority —— 服务端必须忽略，只取四要素
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("""
                         {"title":"LLM 想改标题","content":"新内容","deliverable":"新交付物产物完整清单",
-                         "acceptance":"不少于 5 章完整内容且章节编号连续","acceptanceKind":"STRUCTURAL",
-                         "priority":"LOW","dependsOn":[999]}
+                         "acceptance":"不少于 5 章完整内容且章节编号连续","acceptanceKind":"STRUCTURAL"}
                         """, "stop", "llm", 100));
         when(agentSkillSpecService.listPackages()).thenReturn(List.of());
 
-        SubTaskView result = asyncService.regenerateById(ORIGINAL_DRAFT_ID);
+        SubTaskView result = asyncService.regenerateStaged(TASK_ID, "202611080003");
 
-        // ① updateDraftContent 只收到四要素：content/deliverable/acceptance/acceptanceKind
-        verify(subTaskService).updateDraftContent(eq(ORIGINAL_DRAFT_ID),
-                eq("新内容"), eq("新交付物产物完整清单"), eq("不少于 5 章完整内容且章节编号连续"), eq("STRUCTURAL"));
-        // ② 不变量：返回快照 title / id / dependsOn 保持原值
-        assertThat(result.id()).isEqualTo(ORIGINAL_DRAFT_ID);
+        verify(planDraftService).updateByCode(TASK_ID, "202611080003", "新内容",
+                "新交付物产物完整清单", "不少于 5 章完整内容且章节编号连续",
+                null, null, null, "STRUCTURAL");
+        assertThat(result.id()).isEqualTo(9L);
         assertThat(result.title()).isEqualTo("原标题");
-        assertThat(result.dependsOn()).containsExactly(20L);
-        // ③ timeline 记录重生成事件
-        verify(taskTimelineService).recordEvent(
-                eq(TASK_ID), eq(ORIGINAL_DRAFT_ID), eq("task_plan_draft_regenerated"),
-                eq(AgentRole.PLANNER), eq(9L), anyMap());
-    }
-
-    @Test
-    @DisplayName("TD-9 regenerate / P1-A：缺字段失败时审计走独立事务入口（不被业务回滚清除）")
-    void regenerateMissingFieldShouldAuditInNewTx() {
-        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
-                draftFullTD9(ORIGINAL_DRAFT_ID, "原标题", "原内容", "原交付物产物",
-                        "原验收判据内容", List.of()));
-        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
-        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
-        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
-                .thenReturn(AgentResult.success("""
-                        {"title":"标题","content":"内容","deliverable":"交付物产物完整清单"}
-                        """, "stop", "llm", 100));
-        when(agentSkillSpecService.listPackages()).thenReturn(List.of());
-
-        assertThatThrownBy(() -> asyncService.regenerateById(ORIGINAL_DRAFT_ID))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("缺少 acceptance");
-
-        verify(subTaskService, never()).updateDraftContent(anyLong(), any(), any(), any(), any());
-        verify(taskTimelineService).recordEventInNewTx(
-                eq(TASK_ID), isNull(), eq("task_plan_draft_field_missing"),
-                eq(AgentRole.PLANNER), eq(9L),
-                argThat(payload -> "acceptance".equals(payload.get("field"))));
+        verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
+                eq("task_plan_draft_regenerated"), eq(AgentRole.PLANNER), eq(9L), anyMap());
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -1457,79 +1673,7 @@ class PlannerDecomposeAsyncServiceImplTest {
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("s4-5 expand：acceptance 低于下限 → 抛错并走独立事务留痕（G2_LEN_MIN）")
-    void shouldAuditGateBlockedWhenExpandAcceptanceTooShort() {
-        // acceptance=3 字符 < 10：批量路径由门 2 判定（此前只验过 G2_BLANK 的审计）
-        stubExpandContext("""
-                [{"title":"跑个命令","content":"执行命令","deliverable":"输出回执","acceptance":"跑一下"}]
-                """);
-
-        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("验收判据过短");
-
-        verify(subTaskService, never()).saveDrafts(any());
-        verify(taskService, never()).updateContext(anyLong(), any());
-        verify(taskTimelineService).recordEventInNewTx(
-                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
-                eq(AgentRole.PLANNER), eq(9L),
-                argThat(payload -> String.valueOf(payload.get("findings"))
-                        .contains(PlanBatchGateChecker.G2_LEN_MIN)));
-    }
-
-    @Test
-    @DisplayName("s4-5 expand：显式 AUTOMATED 但验收是空话 → 抛错并走独立事务留痕（G2_KIND_FORM_CONFLICT）")
-    void shouldAuditGateBlockedWhenExpandKindMismatch() {
-        // 各字段非空且 acceptance 够长 → 门 2 放行，由 TD-5 的写法校验 fail-close
-        stubExpandContext("""
-                [{"title":"写文档","content":"撰写交付文档","deliverable":"交付文档成品",
-                  "acceptance":"质量良好且表达清晰通顺","acceptanceKind":"AUTOMATED"}]
-                """);
-
-        assertThatThrownBy(() -> asyncService.expandById(ORIGINAL_DRAFT_ID))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("与写法不匹配");
-
-        verify(subTaskService, never()).saveDrafts(any());
-        // 审计必须走独立事务：expandById 带事务，共享事务会被随后的抛出回滚
-        verify(taskService, never()).updateContext(anyLong(), any());
-        verify(taskTimelineService).recordEventInNewTx(
-                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
-                eq(AgentRole.PLANNER), eq(9L),
-                argThat(payload -> String.valueOf(payload.get("findings"))
-                        .contains(PlanBatchGateChecker.G2_KIND_FORM_CONFLICT)));
-    }
-
-    @Test
-    @DisplayName("s4-5 regenerate：acceptance 低于下限 → 抛错并走独立事务留痕（G2_LEN_MIN）")
-    void shouldAuditGateBlockedWhenRegenerateAcceptanceTooShort() {
-        when(subTaskService.getView(ORIGINAL_DRAFT_ID)).thenReturn(
-                draftFullTD9(ORIGINAL_DRAFT_ID, "原标题", "原内容", "原交付物产物",
-                        "原验收判据内容", List.of()));
-        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
-        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
-        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
-                AgentResult.success("""
-                        {"title":"原标题","content":"新内容","deliverable":"新交付物",
-                         "acceptance":"跑一下"}
-                        """, "stop", "llm", 100));
-        when(agentSkillSpecService.listPackages()).thenReturn(List.of());
-
-        assertThatThrownBy(() -> asyncService.regenerateById(ORIGINAL_DRAFT_ID))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("验收判据过短");
-
-        verify(subTaskService, never()).updateDraftContent(anyLong(), any(), any(), any(), any());
-        verify(taskService, never()).updateContext(anyLong(), any());
-        verify(taskTimelineService).recordEventInNewTx(
-                eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
-                eq(AgentRole.PLANNER), eq(9L),
-                argThat(payload -> String.valueOf(payload.get("findings"))
-                        .contains(PlanBatchGateChecker.G2_LEN_MIN)));
-    }
-
-    @Test
-    @DisplayName("s4-5 成功拆解：清空上一次残留的 gateFindings（写空列表 + clearedAt）")
+    @DisplayName("s4-5 成功拆解：清空各草案残留的 gateFindings（写空列表 + clearedAt）")
     void shouldClearGateFindingsAfterSuccessfulDecompose() {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
@@ -1538,23 +1682,269 @@ class PlannerDecomposeAsyncServiceImplTest {
                         [{"title":"产出报告","content":"c","deliverable":"研究报告成品文档",
                           "acceptance":"不少于 5 章完整内容","acceptanceKind":"STRUCTURAL"}]
                         """, "stop", "llm", 100));
-        when(subTaskService.listDraftsInInsertOrder(anyLong(), any())).thenReturn(List.of(draft(11L)));
+        staged(draft(11L));
 
         asyncService.executeDecompose(TASK_ID);
 
-        verify(subTaskService).saveDrafts(any());
-        // 成功路径必须清掉历史阻断记录，否则 S5 门 3a 会把上一轮的 findings 当成「当前未解」
-        verify(taskService).updateContextInNewTx(eq(TASK_ID),
-                argThat(ctx -> {
-                    Object gate = ctx.get(SubTaskContextKeys.GATE_FINDINGS);
-                    return gate instanceof Map<?, ?> m
-                            && m.get("findings") instanceof List<?> l && l.isEmpty()
-                            && m.get("clearedAt") != null;
-                }));
+        verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
+        // 成功路径必须清掉历史阻断记录，否则确认侧会把上一轮的 findings 当成「当前未解」
+        Object clearGate = findingsContext(11L).get(SubTaskContextKeys.GATE_FINDINGS);
+        assertThat(clearGate).isInstanceOfSatisfying(Map.class, m -> {
+            assertThat(m.get("findings")).isInstanceOfSatisfying(List.class, List::isEmpty);
+            assertThat(m.get("clearedAt")).isNotNull();
+        });
         // 成功路径不得产生阻断审计
         verify(taskTimelineService, never()).recordEventInNewTx(
                 eq(TASK_ID), isNull(), eq("task_plan_gate_blocked"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  V146：租约 / 幂等键 / 状态推进分流
+    // ══════════════════════════════════════════════════════════════
+
+    /** 一份能过门禁的最小 LLM 输出（结构合法 + 四要素齐全）。 */
+    private AgentResult validLlmOutput() {
+        return AgentResult.success("""
+                [{"title":"产出报告","content":"c","deliverable":"研究报告成品文档",
+                  "acceptance":"不少于 5 章完整内容","acceptanceKind":"STRUCTURAL"}]
+                """, "stop", "llm", 100);
+    }
+
+    @Test
+    @DisplayName("V146：PLANNING 任务缺少 attemptId → 直接跳过，不擅自补 UUID（补了幂等键就失效）")
+    void shouldSkipWhenAttemptIdMissing() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(taskService.currentDecomposeAttempt(TASK_ID)).thenReturn(null);
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
+        verify(planDraftRoundService, never()).writeDrafts(anyLong(), anyString(), any(), any());
+        // 不擅自回退：让租约巡检按统一判据处理，避免出现第三套判活逻辑
+        verify(taskService, never()).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
+    }
+
+    @Test
+    @DisplayName("V146：落库命中幂等唯一索引 → 判定为「已消费」，不回退 PENDING，并收敛到待确认")
+    void shouldTreatDuplicateKeyAsIdempotentHit() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(validLlmOutput());
+        when(planDraftRoundService.writeDrafts(anyLong(), anyString(), any(), any()))
+                .thenThrow(new DuplicateKeyException("uk_plan_draft_code"));
+        when(planDraftMapper.countByBatchKeyIncludeDeleted("attempt-test")).thenReturn(3L);
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 关键：绝不能走 rollbackToPending——那会把上一次已成功的拆解打成
+        // 「草案在库 + task=PENDING」的死结（confirm 与重拆双向拒绝）
+        verify(taskService, never()).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"), any(), any(), anyMap());
+        // 收敛：草案已在库，把仍停在 PLANNING 的任务推到待确认
+        verify(taskService).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.AWAITING_PLAN_CONFIRM, "attempt-test");
+    }
+
+    @Test
+    @DisplayName("唯一索引冲突但库中无草案 ⇒ 不是幂等命中，必须回退 PENDING（否则任务永卡 PLANNING）")
+    void shouldRollbackWhenDuplicateKeyIsNotIdempotentHit() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(validLlmOutput());
+        when(planDraftRoundService.writeDrafts(anyLong(), anyString(), any(), any()))
+                // 典型场景：上一轮 reject 后暂存区没作废，本轮 code 与残留 ACTIVE 行同号
+                .thenThrow(new DuplicateKeyException("uk_plan_draft_code"));
+        // 本批一行都没落 ⇒ 冲突**不是**「本批已落过」
+        when(planDraftMapper.countByBatchKeyIncludeDeleted("attempt-test")).thenReturn(0L);
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 必须回退：修正前这里走「不改状态」，任务永久停在 PLANNING，
+        // 等租约超时才被巡检捡回，且用户完全看不到错误（2026-11-08 23:13 真机复现）
+        verify(taskService).casStatusForAttempt(
+                TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"), any(), any(), anyMap());
+        // 绝不能推到待确认——那等于告诉用户「拆解成功了」却一条草案都没有
+        verify(taskService, never()).casStatusForAttempt(
+                TASK_ID, TaskStatus.PLANNING, TaskStatus.AWAITING_PLAN_CONFIRM, "attempt-test");
+    }
+
+    @Test
+    @DisplayName("TD-16e-2：本批暂存区少 4 行（期望 7 落 3）⇒ 判残缺，回退 PENDING 并作废本批")
+    void shouldDiscardIncompleteBatchAndRollback() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(validLlmOutput());
+        // 期望 7 条，实际只有 3 条落了暂存区
+        when(planAttemptService.findLatestByBatchKey("attempt-test"))
+                .thenReturn(java.util.Optional.of(attemptWithExpectedCount(7)));
+        when(planDraftRoundService.writeDrafts(anyLong(), anyString(), any(), any()))
+                .thenThrow(new DuplicateKeyException("uk_plan_draft_code"));
+        when(planDraftMapper.countByBatchKeyIncludeDeleted("attempt-test")).thenReturn(3L);
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 残缺批次绝不能当已消费：那会让用户看到 3 条当全部，一确认就把残缺批转正
+        verify(taskService).casStatusForAttempt(
+                TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
+        verify(taskService, never()).casStatusForAttempt(
+                TASK_ID, TaskStatus.PLANNING, TaskStatus.AWAITING_PLAN_CONFIRM, "attempt-test");
+        // 判定与清理必须成对，否则残留草案仍会被列表读出来
+        verify(planDraftRoundService).discardBatch("attempt-test");
+    }
+
+    @Test
+    @DisplayName("TD-16e-2：expected_count 为 null（V146 前的存量尝试）⇒ 判不了完整，回落存在性并放行")
+    void shouldFallbackToExistenceWhenExpectedCountMissing() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(validLlmOutput());
+        when(planAttemptService.findLatestByBatchKey("attempt-test"))
+                .thenReturn(java.util.Optional.of(attemptWithExpectedCount(null)));
+        when(planDraftRoundService.writeDrafts(anyLong(), anyString(), any(), any()))
+                .thenThrow(new DuplicateKeyException("uk_plan_draft_code"));
+        when(planDraftMapper.countByBatchKeyIncludeDeleted("attempt-test")).thenReturn(3L);
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 升级当天所有在途任务都是这种形态：判不到位就全判残缺会一次性砖化一批任务
+        verify(taskService).casStatusForAttempt(
+                TASK_ID, TaskStatus.PLANNING, TaskStatus.AWAITING_PLAN_CONFIRM, "attempt-test");
+        verify(planDraftRoundService, never()).discardBatch(anyString());
+    }
+
+    @Test
+    @DisplayName("TD-16e-2：暂存区 0 行 ⇒ 本批没落过，判失败回退并作废该批")
+    void shouldTreatStagingRowsZeroAsNotConsumed() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(validLlmOutput());
+        when(planAttemptService.findLatestByBatchKey("attempt-test"))
+                .thenReturn(java.util.Optional.of(attemptWithExpectedCount(7)));
+        when(planDraftRoundService.writeDrafts(anyLong(), anyString(), any(), any()))
+                .thenThrow(new DuplicateKeyException("uk_plan_draft_code"));
+        when(planDraftMapper.countByBatchKeyIncludeDeleted("attempt-test")).thenReturn(0L);
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 暂存区是唯一事实源：0 行 = 本批确实没落过，不能当已消费
+        verify(taskService).casStatusForAttempt(
+                TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
+        verify(planDraftRoundService).discardBatch("attempt-test");
+    }
+
+    @Test
+    @DisplayName("TD-16e-2：落库前写期望条数（= 本批草案数），且早于暂存区写入")
+    void shouldRecordExpectedCountBeforeSavingDrafts() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(validLlmOutput());
+        when(planAttemptService.findLatestByBatchKey("attempt-test"))
+                .thenReturn(java.util.Optional.of(attemptWithExpectedCount(null)));
+        when(planAttemptService.recordExpectedCount(anyLong(), anyInt(), anyInt()))
+                .thenReturn(true);
+        staged(draft(11L));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 1 条 LLM 产出 ⇒ 期望 1 条。写在暂存区落库之前是硬要求：
+        // 写在后面，崩溃窗口里 expected_count 恒为 null，残缺批次永远识别不出来。
+        verify(planAttemptService).recordExpectedCount(eq(7L), eq(1), eq(1));
+        InOrder order = inOrder(planAttemptService, planDraftRoundService);
+        order.verify(planAttemptService).recordExpectedCount(eq(7L), eq(1), eq(1));
+        order.verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
+    }
+
+    private PlanAttempt attemptWithExpectedCount(Integer expectedCount) {
+        PlanAttempt a = new PlanAttempt();
+        a.setId(7L);
+        a.setTaskId(TASK_ID);
+        a.setBatchKey("attempt-test");
+        // 直接给 RUNNING：跳过 claim 分支，用例聚焦「撞键恢复的判据」
+        a.setStatus(PlanAttemptStatus.RUNNING);
+        a.setAttemptNo(1);
+        a.setExpectedCount(expectedCount);
+        return a;
+    }
+
+    @Test
+    @DisplayName("V146 竞态分流：任务被租约巡检回收成 PENDING → 草案完整，推回待确认而不是报废")
+    void shouldPushBackToAwaitingConfirmWhenReclaimedAsPending() {
+        when(taskService.getView(TASK_ID))
+                .thenReturn(planningTask())                      // executeDecompose 入口
+                .thenReturn(taskView(TaskStatus.PENDING, null)); // 分流时读到已被回收
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(validLlmOutput());
+        staged(draft(11L));
+        when(taskService.casStatusForAttempt(eq(TASK_ID),
+                eq(TaskStatus.PLANNING), eq(TaskStatus.AWAITING_PLAN_CONFIRM), anyString())).thenReturn(false);
+        when(taskService.casStatusForAttempt(eq(TASK_ID),
+                eq(TaskStatus.PENDING), eq(TaskStatus.AWAITING_PLAN_CONFIRM), anyString())).thenReturn(true);
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 纠正回待确认：用户等了十几分钟，AI 成果不该因为一次误杀白扔
+        verify(taskService).casStatusForAttempt(TASK_ID, TaskStatus.PENDING, TaskStatus.AWAITING_PLAN_CONFIRM, "attempt-test");
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"), any(), any(), anyMap());
+    }
+
+    @Test
+    @DisplayName("V146 竞态分流：拆解完成时任务已被用户取消 → 抛错回滚草案，不留孤儿行")
+    void shouldRollbackWhenTaskCancelledDuringDecompose() {
+        when(taskService.getView(TASK_ID))
+                .thenReturn(planningTask())
+                .thenReturn(taskView(TaskStatus.CANCELLED, null));
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(validLlmOutput());
+        staged(draft(11L));
+        when(taskService.casStatusForAttempt(eq(TASK_ID),
+                eq(TaskStatus.PLANNING), eq(TaskStatus.AWAITING_PLAN_CONFIRM), anyString())).thenReturn(false);
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 用户已取消：草案不该留在库里（整个落库事务回滚），且必须留失败审计
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"), any(), any(), anyMap());
+    }
+
+    @Test
+    @DisplayName("V146 跨 attempt 竞态：本轮已被新一轮拆解取代（状态仍 PLANNING）→ 抛错回滚，不与新一轮草案混存")
+    void shouldRollbackWhenAttemptSupersededByNewDecompose() {
+        // 时序：本轮跑超租约 → 巡检推回 PENDING → 用户重新拆解（attempt 变了，状态又回 PLANNING）
+        // → 本轮才苏醒并走到状态推进。三参 CAS 会命中新一轮的 PLANNING，
+        // 四参 CAS（带 attemptId）不会。
+        when(taskService.getView(TASK_ID))
+                .thenReturn(planningTask())
+                .thenReturn(taskView(TaskStatus.PLANNING, null));
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(validLlmOutput());
+        staged(draft(11L));
+        when(taskService.casStatusForAttempt(eq(TASK_ID),
+                eq(TaskStatus.PLANNING), eq(TaskStatus.AWAITING_PLAN_CONFIRM), anyString())).thenReturn(false);
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 必须留失败审计（草案随事务回滚，没有 task_plan_generated）
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"), any(), any(), anyMap());
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_generated"), any(), any(), anyMap());
+        // 失败回退用的是四参 CAS：真实实现里因 attemptId 已被新一轮覆盖而 0 行更新，
+        // 所以不会把新一轮的 PLANNING 推回 PENDING（这正是加 attemptId 的目的）
+        verify(taskService).casStatusForAttempt(
+                TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
     }
 }
 

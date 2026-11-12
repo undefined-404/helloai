@@ -1,6 +1,5 @@
 package com.helloai.core.planner.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -8,6 +7,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.PlanAttemptStatus;
 import com.helloai.common.constant.SubTaskContextKeys;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskArchetype;
@@ -23,19 +23,31 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
+import com.helloai.core.planner.entity.PlanAttempt;
+import com.helloai.core.planner.mapper.PlanDraftMapper;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.port.PlanDraftView;
 import com.helloai.core.planner.context.ArchetypeDimensionsSection;
 import com.helloai.core.planner.context.DecomposeContextSnapshotRenderer;
-import com.helloai.core.planner.policy.AcceptanceKindValidator;
+import com.helloai.common.util.DraftGateChecker;
+import com.helloai.common.util.ExecutionEnv;
+import com.helloai.core.planner.support.DraftCode;
+import com.helloai.core.planner.support.PlanNodeId;
 import com.helloai.core.planner.policy.AcceptanceSatisfiabilityChecker;
-import com.helloai.core.planner.policy.PlanBatchGateChecker;
 import com.helloai.core.planner.policy.PlannerGranularity;
 import com.helloai.core.planner.policy.PlannerGranularityResolver;
 import com.helloai.core.planner.policy.RequirementPackage;
 import com.helloai.core.planner.policy.RequirementPackageParser;
 import com.helloai.core.planner.policy.TaskContextKeys;
 import com.helloai.core.planner.service.PlannerAnalysisService.PlanDraftItem;
+import com.helloai.core.planner.service.PlanAttemptService;
+import com.helloai.core.planner.service.PlanDraftRoundService;
+import com.helloai.core.planner.service.PlanDraftService;
 import com.helloai.core.planner.service.PlannerDecomposeAsyncService;
+import com.helloai.core.planner.support.ContractSlotNormalizer;
+import com.helloai.core.planner.support.PlanDraftFindingsStore;
+import com.helloai.core.planner.support.PlanDraftViewMapper;
+import com.helloai.core.planner.support.PlanGateRunner;
 import com.helloai.core.task.port.SubTaskDraft;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.port.TaskView;
@@ -47,16 +59,23 @@ import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import jakarta.annotation.PostConstruct;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -66,7 +85,7 @@ import java.util.stream.Collectors;
  * Planner 任务拆解异步执行服务实现。
  *
  * <p>承接拆解异步化改造前的 LLM 拆解段：选平台内 API_KEY_LLM Planner → 渲染 Prompt →
- * {@code executeSync} 调 LLM → 解析校验草案 → 批量落库 {@code PENDING_PLAN_REVIEW} →
+ * {@code executeSync} 调 LLM → 解析校验草案 → 写入暂存区 {@code task_plan_draft} →
  * 依赖序号回写真实 id → 记录 {@code task_plan_generated}。</p>
  *
  * <p>运行于专用线程池 {@code plannerDecomposeExecutor}（{@code @Async} 跨类代理生效，
@@ -93,23 +112,93 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
 
     private static final String PROMPT_TEMPLATE_PATH = "prompts/planner-decompose.md";
 
-    /** `TD-9` expand：单条草案 FINE 粒度细拆专用模板（不复用整任务模板，避免重拆整任务）。 */
-    private static final String EXPAND_PROMPT_TEMPLATE_PATH = "prompts/planner-expand.md";
-
     /** `TD-9` regenerate：单条草案同粒度重写专用模板。 */
     private static final String REGENERATE_PROMPT_TEMPLATE_PATH = "prompts/planner-regenerate.md";
+
+    /**
+     * 「执行环境未声明」的渲染标记。
+     *
+     * <p>措辞只说**缺什么**，不说**该怎么办**——处置口径唯一写在提示词第 12 条，
+     * 两处都写会在下次改判据时只改一处（判据 4：同一事实双写必分叉）。</p>
+     */
+    private static final String ENV_UNDECLARED_MARKER =
+            "- （未声明执行环境：代码仓库 / 运行时 / 数据源均未提供）";
 
     private static final Set<String> VALID_PRIORITIES = Set.of("HIGH", "MEDIUM", "LOW");
 
     private final TaskService taskService;
     private final SubTaskService subTaskService;
     private final PlannerAgentPicker plannerAgentPicker;
+    private final PlanGateRunner planGateRunner;
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final TaskTimelineService taskTimelineService;
     private final AgentService agentService;
     private final AgentSkillSpecService agentSkillSpecService;
     private final DecomposeContextSnapshotRenderer contextSnapshotRenderer;
     private final ObjectMapper objectMapper;
+    private final PlatformTransactionManager transactionManager;
+
+    /**
+     * 拆解尝试栅栏（`TD-16b`）：抢占 / 收尾 / 判悬挂。
+     *
+     * <p><b>它的所有调用都必须包 try-catch</b>：attempt 是**旁挂的可靠性设施**，
+     * 它自己出错（表不存在、锁冲突、字段超长）绝不能把拆解主流程拖垮——
+     * 主流程有它自己的回退与时间线，比 attempt 记录重要得多。</p>
+     */
+    private final PlanAttemptService planAttemptService;
+
+    /**
+     * 本次尝试的租约时长（分钟）。**必须小于 {@code planning-timeout-minutes}（默认 10）**——
+     * 否则任务级巡检先动手回退，派发器的自愈永远轮不到。与 {@code PlanAttemptDispatcherImpl}
+     * 用同一个配置键，两处默认值必须一致。
+     */
+    @Value("${helloai.planner.attempt-lease-minutes:7}")
+    private int attemptLeaseMinutes;
+
+    /** 拆解产出按 `code` 写入暂存区，为读侧切换做准备。 */
+    private final PlanDraftRoundService planDraftRoundService;
+
+    /** `TD-16d` `B4`：根层 code 的序号要取任务内已用过的最大值（跨轮不重置）。 */
+    private final PlanDraftMapper planDraftMapper;
+
+    /** `AD-5a-3b-2b`：暂存区是拆解产出的唯一落点，落库段直接读写它（不再写 `sub_task` 副本）。 */
+    private final PlanDraftService planDraftService;
+
+    /** 暂存区门禁结论写点（替代仅服务执行表的 `SubTaskGateFindingsStore`）。 */
+    private final PlanDraftFindingsStore planDraftFindingsStore;
+
+    /**
+     * 拆解落库段的显式事务边界。
+     *
+     * <p><b>为什么用 {@link TransactionTemplate} 而不是 {@code @Transactional}</b>：
+     * {@code @Transactional} 加在 {@code doDecompose} 上会把 LLM 调用的十几分钟也圈进事务，
+     * 长时间占用连接；拆成独立方法又会因同类自调用绕过代理而不生效。模板在这里是最直接的
+     * 表达——「只把落库到状态推进这一段包起来」，边界写在代码里，不依赖 AOP 语义。</p>
+     *
+     * <p>与 {@code AssistantChatServiceImpl} 同构（那边也是「LLM 调用在事务外、
+     * 会话落库在事务内」）。</p>
+     */
+    private TransactionTemplate transactionTemplate;
+
+    @PostConstruct
+    void initTransactionTemplate() {
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+    }
+
+    /**
+     * 取事务模板，未初始化时就地构造。
+     *
+     * <p>{@code @PostConstruct} 在生产环境一定会执行；这里的兜底是给**直接 new 的单元测试**
+     * 用的（没有容器就没有生命周期回调）。两条路径构造的是同一种对象，不存在行为分叉。</p>
+     */
+    private TransactionTemplate txTemplate() {
+        TransactionTemplate template = this.transactionTemplate;
+        if (template == null) {
+            template = new TransactionTemplate(transactionManager);
+            this.transactionTemplate = template;
+        }
+        return template;
+    }
 
     /**
      * 异步执行拆解（运行于 plannerDecomposeExecutor）。
@@ -126,129 +215,325 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                     taskId, task != null ? task.status() : null);
             return;
         }
+        // attemptId 由拆解入口（beginDecompose）生成并落库，异步段只读不造。
+        // 在这里现生成 UUID 等于「每次执行都是一件新事」，草案唯一索引永远不冲突，幂等失效。
+        String attemptId = taskService.currentDecomposeAttempt(taskId);
+        if (attemptId == null || attemptId.isBlank()) {
+            // 入口必然写入 attemptId，走到这里说明是升级前的在途拆解或数据异常。
+            // 不擅自补 UUID（会让幂等键失效），交给租约巡检回收后由用户重拆。
+            log.warn("拆解跳过：PLANNING 任务缺少 attemptId，交由租约巡检回收: taskId={}", taskId);
+            return;
+        }
+        // `TD-16b`：抢占本次尝试（Outbox 的执行侧）。旁挂设施，任何异常都不影响主流程。
+        PlanAttempt attempt = claimAttemptQuietly(taskId, attemptId);
+
         try {
-            doDecompose(task);
+            doDecompose(task, attemptId, attempt);
+            markAttemptSucceededQuietly(attempt, "decompose completed");
+        } catch (DuplicateKeyException e) {
+            // 唯一索引兜底命中 = 这批草案已经落过（响应丢失后重投 / 补偿重跑 / 多节点并发）。
+            // 这是**幂等语义的正常分支，不是失败**：绝不能走 rollbackToPending，否则会把
+            // 那次已经成功的拆解回退成 PENDING，制造「草案在库 + task=PENDING」的死结。
+            // 命中唯一索引**不等于**幂等命中。两种情形必须分开处置：
+            //   ① 本批草案真的已落过（响应丢失后重投）⇒ 收敛状态，算成功；
+            //   ② 冲突来自别处（暂存区残留行占位 / 上一轮未作废）⇒ **真实失败**，
+            //      必须回退 PENDING 让用户能重试。
+            // 原来①②一律走「不改状态」⇒ 任务永久停在 PLANNING，且用户看不到任何错误
+            // （2026-11-08 23:13 真机复现：reject 后重拆，第一轮 9 条 ACTIVE 行占着
+            //  `uk_plan_draft_code`，第二轮插入即冲突，任务卡死）。
+            boolean idempotentHit = recoverAfterIdempotentHit(taskId, attemptId);
+            if (!idempotentHit) {
+                rollbackToPending(taskId, attemptId);
+                // `TD-16e-2`：判定「不完整」之后必须清理，否则残留的那几条仍会被草案列表读出来，
+                // 用户看到 3 条就以为这是全部（实际应有 7 条），一确认就把残缺批转正了。
+                discardIncompleteBatch(taskId, attemptId);
+                taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_FAILED.code(),
+                        AgentRole.PLANNER, null, Map.of("error", "唯一索引冲突但非幂等命中（草案未落库）"));
+                log.error("拆解落库冲突但库中无本批草案，判定为失败并回退 PENDING: taskId={}, attemptId={}",
+                        taskId, attemptId, e);
+                markAttemptFailedQuietly(attempt, e);
+                return;
+            }
+            log.warn("拆解落库命中幂等唯一索引，判定为已落过（不视为失败）: taskId={}, attemptId={}",
+                    taskId, attemptId);
+            // 幂等命中 ⇒ 内容已在库里 ⇒ 本次尝试实质成功，不能标失败。
+            markAttemptSucceededQuietly(attempt, "idempotent hit: drafts already persisted");
         } catch (Exception e) {
-            rollbackToPending(taskId);
+            rollbackToPending(taskId, attemptId);
             taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_FAILED.code(),
                     AgentRole.PLANNER, null,
                     Map.of("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
-            log.error("任务拆解失败，已回退 PENDING: taskId={}", taskId, e);
+            log.error("任务拆解失败，已回退 PENDING: taskId={}, attemptId={}", taskId, attemptId, e);
+            markAttemptFailedQuietly(attempt, e);
         }
     }
 
-    // ══════════════════════════════════════════════════════════════
-    //  `TD-9` 单条草案 expand / regenerate（同步，用户等待结果）
-    // ══════════════════════════════════════════════════════════════
+    // ── `TD-16b` 尝试栅栏的旁挂操作（全部静默失败，不干扰主流程）──────────────
+
+    /** 单条 attempt 的自动重试上限：到顶转终态，否则稳定坏掉的 provider 会被无限重试白烧额度。 */
+    private static final int MAX_ATTEMPT_NO = 3;
 
     /**
-     * `TD-9` 单条草案细拆：一条草案 → N 条 FINE 粒度子草案（同步）。
+     * 抢占本次尝试。返回 {@code null} 表示「没有可用的 attempt 记录」——
+     * 升级前的在途拆解就是这种形态，此时跳过栅栏、由既有租约巡检兜底。
      *
-     * <p>门禁复用 {@code updateDraft} 口径（仅 PENDING_PLAN_REVIEW）；被其他草案依赖的
-     * 草案拒绝展开（删除后引用成幽灵依赖，fail-close）。事务内完成：LLM/校验失败回滚，
-     * 原草案不被破坏。</p>
+     * <p>**不补造记录**：补造会让「当前有效尝试」与真实执行脱节（补出来的行没人 claim，
+     * 派发器会以为有一份活没人干，重复触发）。</p>
+     */
+    private PlanAttempt claimAttemptQuietly(Long taskId, String attemptId) {
+        try {
+            PlanAttempt a = planAttemptService.findLatestByBatchKey(attemptId).orElse(null);
+            if (a == null) {
+                log.debug("拆解尝试记录不存在（升级前在途或旁挂失败），跳过栅栏: taskId={}, attemptId={}",
+                        taskId, attemptId);
+                return null;
+            }
+            if (a.getStatus() == PlanAttemptStatus.PENDING) {
+                boolean claimed = planAttemptService.claim(a.getId(), PlanNodeId.current(),
+                        OffsetDateTime.now().plusMinutes(attemptLeaseMinutes));
+                if (!claimed) {
+                    // 已被派发器或另一节点抢走：本次执行仍然继续（草案落库有唯一索引兜底），
+                    // 但收尾时会因 attempt_no 不匹配而 CAS 落空 —— 正是设计要的效果。
+                    log.warn("拆解尝试已被他处抢占，本次仍继续但收尾将被栅栏拦截: taskId={}, attemptId={}",
+                            taskId, attemptId);
+                    return a;
+                }
+                a.setStatus(PlanAttemptStatus.RUNNING);
+            }
+            return a;
+        } catch (Exception e) {
+            log.warn("拆解尝试抢占异常（不影响主流程）: taskId={}, attemptId={}, err={}",
+                    taskId, attemptId, e.getMessage());
+            return null;
+        }
+    }
+
+    private void markAttemptSucceededQuietly(PlanAttempt attempt, String note) {
+        if (attempt == null || attempt.getAttemptNo() == null) {
+            return;
+        }
+        try {
+            if (!planAttemptService.succeed(attempt.getId(), attempt.getAttemptNo(), null, note)) {
+                log.warn("拆解尝试收尾 CAS 落空（本次尝试先前已被判失效/被接管）: attemptId={}, attemptNo={}",
+                        attempt.getId(), attempt.getAttemptNo());
+            }
+        } catch (Exception e) {
+            log.warn("拆解尝试成功收尾异常（不影响主流程）: attemptId={}, err={}",
+                    attempt.getId(), e.getMessage());
+        }
+    }
+
+    private void markAttemptFailedQuietly(PlanAttempt attempt, Exception cause) {
+        if (attempt == null || attempt.getAttemptNo() == null) {
+            return;
+        }
+        try {
+            String reason = cause.getClass().getSimpleName()
+                    + (cause.getMessage() == null ? "" : ": " + cause.getMessage());
+            if (reason.length() > 400) {
+                reason = reason.substring(0, 400);
+            }
+            if (attempt.getAttemptNo() >= MAX_ATTEMPT_NO) {
+                planAttemptService.failTerminal(attempt.getId(), attempt.getAttemptNo(),
+                        "重试已达上限(" + MAX_ATTEMPT_NO + "): " + reason);
+            } else {
+                // 默认判可重试：解析失败与网络抖动在异常类型上常常长得一样，
+                // 判错方向的代价不对称——多试一次只是多花钱，少试一次是任务永久卡住。
+                // 由 MAX_ATTEMPT_NO 兜住「稳定失败」的无限重试。
+                planAttemptService.failRetryable(attempt.getId(), attempt.getAttemptNo(),
+                        OffsetDateTime.now(), reason);
+            }
+        } catch (Exception e) {
+            log.warn("拆解尝试失败收尾异常（不影响主流程）: attemptId={}, err={}",
+                    attempt.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * 幂等命中后的状态收敛：把「草案已在库但仍 PLANNING」推回待确认。
+     *
+     * <p>草案已经落过，说明上一次执行跑到了落库段之后，只是响应/状态推进没走完。
+     * 此时唯一正确的动作是补一次状态推进，而不是重跑——重跑会再落一批草案（被唯一索引挡），
+     * 或者在新 attempt 下再落一批（重复内容）。</p>
+     */
+    private boolean recoverAfterIdempotentHit(Long taskId, String attemptId) {
+        try {
+            // 粗筛按**本批**数：撞唯一索引证明的是「本批有行」，而任务内可能还躺着
+            // 上一轮残留（别的 batchKey）。按任务数会把「本批一条没落、但上一轮有行」
+            // 读成「本批已落过」（`TD-16e-2` 修）。
+            long drafts = planDraftMapper.countByBatchKeyIncludeDeleted(attemptId);
+            if (drafts <= 0) {
+                // 冲突来自别处（暂存区残留 / 展开撞号等）⇒ **不是**幂等命中，
+                // 调用方必须按失败处置。这里只判定，不替调用方改状态。
+                log.warn("唯一索引冲突但库中无待确认草案 ⇒ 不是幂等命中: taskId={}, attemptId={}",
+                        taskId, attemptId);
+                return false;
+            }
+            // `TD-16e-2`：从「存在」升级为「完整」。有草案只证明落了东西，不证明落全了；
+            // 判据是「已消费的充分条件是内容完整，不是存在」（设计 §5.6）。
+            String incomplete = describeIncompleteBatch(attemptId);
+            if (incomplete != null) {
+                log.warn("唯一索引冲突且本批草案不完整 ⇒ 判失败（残缺批次不得当成已消费）: "
+                        + "taskId={}, attemptId={}, {}", taskId, attemptId, incomplete);
+                return false;
+            }
+            boolean advanced = taskService.casStatusForAttempt(taskId, TaskStatus.PLANNING,
+                    TaskStatus.AWAITING_PLAN_CONFIRM, attemptId);
+            log.info("幂等命中已收敛状态: taskId={}, attemptId={}, draftCount={}, advanced={}",
+                    taskId, attemptId, drafts, advanced);
+            if (advanced) {
+                taskTimelineService.recordEvent(taskId, null,
+                        TimelineEventCode.TASK_PLAN_GENERATED.code(),
+                        AgentRole.PLANNER, null,
+                        Map.of("draftCount", drafts, "idempotentHit", true, "attemptId", attemptId));
+            }
+            return true;
+        } catch (Exception e) {
+            // 判不出来就按失败处置：让用户能重试，好过静默停在 PLANNING
+            log.error("幂等命中后收敛状态失败，按失败处置: taskId={}, attemptId={}",
+                    taskId, attemptId, e);
+            return false;
+        }
+    }
+
+    /**
+     * 判定「本批草案是否落全」（`TD-16e-2`，设计 §5.6）。
+     *
+     * <p><b>判据</b>：暂存区里该 {@code batch_key} 的行数 == {@code attempt.expected_count}。</p>
+     *
+     * <p><b>为什么数「含软删」而不是只数 {@code deleted=0}</b>：设计 §5.6 的伪代码写的是
+     * {@code deleted=0}，那是按「撞键只可能发生在落库瞬间」写的。实际恢复路径还包含
+     * 「落库成功 → 状态推进丢失 → 重投」这条序列，其间批次可能已被确认（{@code CONFIRMED}
+     * + {@code deleted=1}）。只数存活行会把「落全了但已推进」读成残缺 ⇒ 反过来制造砖化，
+     * 与判据的目的正好相反。故此处口径订正为**该事件累计写了几行**
+     * （{@code countByBatchKeyIncludeDeleted}），与 {@code expected_count} 同维度。</p>
+     *
+     * <p><b>两处 fail-open</b>（判不了就放行，维持升级前的存在性语义）：</p>
+     * <ol>
+     *   <li>{@code expected_count} 为 {@code null}：V146 加列前登记的尝试行。升级当天所有
+     *       在途任务都是这种形态，判不到位就把它们全判残缺会一次性砖化一批任务。</li>
+     *   <li>暂存区行数为 0：V147 之前落库的批次未写暂存区。此时「暂存区 0 行」只能说明没写，
+     *       不能说明没落库——拿它当判据会把每一个存量批次判成残缺。</li>
+     * </ol>
+     *
+     * @return {@code null} = 完整或判不了（放行）；非 {@code null} = 残缺说明（调用方据此判失败）
+     */
+    private String describeIncompleteBatch(String batchKey) {
+        Integer expected = planAttemptService.findLatestByBatchKey(batchKey)
+                .map(PlanAttempt::getExpectedCount)
+                .orElse(null);
+        if (expected == null || expected <= 0) {
+            log.debug("本批无期望条数（V146 前的存量尝试 / 本次未写入），完整性判据退回存在性: batchKey={}",
+                    batchKey);
+            return null;
+        }
+        long mirrored = planDraftMapper.countByBatchKeyIncludeDeleted(batchKey);
+        if (mirrored <= 0) {
+            log.debug("本批暂存区为空（V147 前落库，未写暂存区），完整性判据退回存在性: batchKey={}", batchKey);
+            return null;
+        }
+        if (mirrored == expected) {
+            return null;
+        }
+        return "expectedCount=" + expected + ", mirroredCount=" + mirrored;
+    }
+
+    /**
+     * 落库前记录本批期望条数（`TD-16e-2`）。任何异常都不影响主流程。
+     *
+     * <p>写在事务内、{@code saveDrafts} 之前：异常回滚时它与草案一起消失，不会留下
+     * 「记了 7 条、一条没落」的错判依据。</p>
+     */
+    private void recordExpectedCountQuietly(PlanAttempt attempt, int expectedCount) {
+        if (attempt == null || attempt.getId() == null || attempt.getAttemptNo() == null) {
+            // 升级前的在途拆解没有 attempt 行：完整性判据本就会退回存在性，无需造记录。
+            // 不补造行的理由同 {@link #claimAttemptQuietly}——补出来的行没人 claim。
+            return;
+        }
+        try {
+            if (!planAttemptService.recordExpectedCount(attempt.getId(), attempt.getAttemptNo(), expectedCount)) {
+                log.warn("拆解期望条数未写入（本次尝试的 attempt_no 已失效，收尾将被栅栏拦截）: "
+                                + "attemptId={}, attemptNo={}, expectedCount={}",
+                        attempt.getId(), attempt.getAttemptNo(), expectedCount);
+            }
+        } catch (Exception e) {
+            log.warn("拆解期望条数写入异常（不影响主流程，完整性判据退回存在性）: attemptId={}, err={}",
+                    attempt.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * 作废某次尝试可能落下的残缺草案（`TD-16e-2`）。
+     *
+     * <p>`AD-5a-3b-2b` 起草案只存在暂存区，清理即「本批 {@code DISCARDED} + 软删」。</p>
+     *
+     * <p><b>失败只记 ERROR 不抛</b>：调用点已在失败分支（任务即将退回 {@code PENDING}），
+     * 清理失败不该把「任务可重拆」这个更好的结果也弄丢。残留行不会挡住下一次拆解——
+     * 根层 {@code code} 的序号取「任务内已用最大值 + 1」，会自然跳号。</p>
+     */
+    private void discardIncompleteBatch(Long taskId, String attemptId) {
+        try {
+            txTemplate().executeWithoutResult(status -> {
+                int discarded = planDraftRoundService.discardBatch(attemptId);
+                log.warn("已作废残缺草案批次: taskId={}, attemptId={}, discarded={}",
+                        taskId, attemptId, discarded);
+            });
+        } catch (Exception e) {
+            log.error("作废残缺草案批次失败（残留行不挡下次拆解，根层 code 会跳号）: "
+                    + "taskId={}, attemptId={}", taskId, attemptId, e);
+        }
+    }
+
+
+    /**
+     * `AD-5a-3b-2b` 暂存区版重生成：草案没有 {@code sub_task} 副本时，四要素直接写暂存区。
+     *
+     * <p>与 {@link #regenerateById} 共用 LLM 段（{@link #generateRegenerated}），差异只在
+     * 落点：这里调 {@code PlanDraftService.updateByCode}，写前跑同一条单草案门禁。</p>
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public List<SubTaskView> expandById(Long subTaskId) {
-        SubTaskView draft = subTaskService.getView(subTaskId);
-        if (draft == null) {
-            throw new BizException("草案不存在: " + subTaskId);
+    public SubTaskView regenerateStaged(Long taskId, String code) {
+        PlanDraftView staged = planDraftService.getByCode(taskId, code);
+        if (staged == null) {
+            throw new BizException(400, "草案不存在或已确认: taskId=" + taskId + ", code=" + code);
         }
-        if (draft.status() != SubTaskStatus.PENDING_PLAN_REVIEW) {
-            throw new BizException("仅草案待审状态可展开，当前状态: " + draft.status());
-        }
-        Long taskId = draft.taskId();
         TaskView task = taskService.getView(taskId);
         if (task == null) {
-            throw new BizException("草案所属任务不存在: " + taskId);
+            throw new BizException(400, "草案所属任务不存在: " + taskId);
         }
-        // 幽灵依赖预防：其他草案 dependsOn 含本草案 → 拒绝（本草案删除会让引用悬空）
-        List<Long> referencing = referencingDrafts(taskId, subTaskId);
-        if (!referencing.isEmpty()) {
-            throw new BizException("该草案被其他草案依赖（ids=" + referencing
-                    + "），无法展开；请先处理依赖关系");
-        }
-        log.info("单条草案展开开始: subTaskId={}, taskId={}, title={}",
-                subTaskId, taskId, draft.title());
+        SubTaskView draft = PlanDraftViewMapper.toSubTaskViews(List.of(staged)).get(0);
+        log.info("暂存区草案重生成开始: taskId={}, code={}, title={}", taskId, code, draft.title());
         PlannerAgentRef planner = plannerAgentPicker.pickForTask(taskId);
-        String prompt = renderExpandPrompt(task, draft, planner);
-        AgentResult result = executeLlmForSingleDraft(planner, prompt, taskId, "planner_expand");
-        List<PlanDraftItem> items = parseDraftItems(taskId, planner, result.getOutput());
-        // FINE 粒度固定：expand 语义就是细拆，不随任务粒度决策漂移
-        PlannerGranularityResolver.GranularityDecision decision =
-                new PlannerGranularityResolver.GranularityDecision(PlannerGranularity.FINE, "单条展开（FINE）");
-        List<SubTaskDraft> drafts = buildDrafts(task, items, planner, decision);
-        List<SubTaskView> persisted = subTaskService.saveDrafts(drafts);
-        // 依赖序号回写真实 id（组内）；重加载顺序与 items 一致
-        List<SubTaskView> reloaded = subTaskService.listDraftsInInsertOrder(
-                taskId, SubTaskStatus.PENDING_PLAN_REVIEW);
-        List<SubTaskView> newlyCreated = reloaded.stream()
-                .filter(v -> v.createTime() != null && persisted.stream()
-                        .anyMatch(p -> p.id() != null && p.id().equals(v.id())))
-                .toList();
-        // 用「新增的 N 条」做依赖回写：从 reloaded 里按 persisted id 定位
-        applyDependsOn(reloaded.stream()
-                .filter(v -> persisted.stream().anyMatch(p -> p.id() != null && p.id().equals(v.id())))
-                .toList(), items);
-        // 删除原草案（逻辑删，审计保留）
-        subTaskService.removeById(subTaskId);
-        taskTimelineService.recordEvent(taskId, subTaskId, TimelineEventCode.TASK_PLAN_DRAFT_EXPANDED.code(),
+        Regenerated regenerated = generateRegenerated(task, draft, planner);
+        planDraftService.updateByCode(taskId, code, regenerated.content(), regenerated.deliverable(),
+                regenerated.acceptance(), null, null, null, regenerated.acceptanceKind());
+        PlanDraftView updated = planDraftService.getByCode(taskId, code);
+        taskTimelineService.recordEvent(taskId, null,
+                TimelineEventCode.TASK_PLAN_DRAFT_REGENERATED.code(),
                 AgentRole.PLANNER, planner.id(),
-                Map.of("originalSubTaskId", subTaskId, "draftCount", items.size(),
-                        "newSubTaskIds", newlyCreated.stream().map(SubTaskView::id).toList()));
-        log.info("单条草案展开完成: subTaskId={}, taskId={}, newCount={}",
-                subTaskId, taskId, items.size());
-        return newlyCreated;
+                Map.of("draftCode", code, "title", draft.title()));
+        log.info("暂存区草案重生成完成: taskId={}, code={}, title={}", taskId, code, draft.title());
+        return PlanDraftViewMapper.toSubTaskViews(List.of(updated)).get(0);
     }
 
-    /**
-     * `TD-9` 单条草案重生成：同粒度重写四要素（同步），title/id/dependsOn 不变量白名单。
-     *
-     * <p>LLM 输出单条对象；服务端只取 {@code content} / {@code deliverable} /
-     * {@code acceptance} / {@code acceptanceKind} 四字段落库（走 {@code updateDraftContent}），
-     * 其余字段（title/priority/skills/constraints/dependsOn/contract）一律保持原值。</p>
-     */
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public SubTaskView regenerateById(Long subTaskId) {
-        SubTaskView draft = subTaskService.getView(subTaskId);
-        if (draft == null) {
-            throw new BizException("草案不存在: " + subTaskId);
-        }
-        if (draft.status() != SubTaskStatus.PENDING_PLAN_REVIEW) {
-            throw new BizException("仅草案待审状态可重生成，当前状态: " + draft.status());
-        }
-        Long taskId = draft.taskId();
-        TaskView task = taskService.getView(taskId);
-        if (task == null) {
-            throw new BizException("草案所属任务不存在: " + taskId);
-        }
-        log.info("单条草案重生成开始: subTaskId={}, taskId={}, title={}",
-                subTaskId, taskId, draft.title());
-        PlannerAgentRef planner = plannerAgentPicker.pickForTask(taskId);
+    /** 重生成的 LLM 段（两个落点共用）：渲染 → 调用 → 解析 → 不变量白名单。 */
+    private Regenerated generateRegenerated(TaskView task, SubTaskView draft, PlannerAgentRef planner) {
         String prompt = renderRegeneratePrompt(task, draft, planner);
-        AgentResult result = executeLlmForSingleDraft(planner, prompt, taskId, "planner_regenerate");
+        AgentResult result = executeLlmForSingleDraft(planner, prompt, draft.taskId(), "planner_regenerate");
         // 输出为单条 JSON 对象（非数组），解析为单条 PlanDraftItem
-        PlanDraftItem item = parseSingleRegenerateOutput(taskId, planner, result.getOutput());
+        PlanDraftItem item = parseSingleRegenerateOutput(draft.taskId(), planner, result.getOutput());
         // 不变量白名单：只取四要素；title / dependsOn 用原草案值（LLM 输出被忽略）
-        String newAcceptance = requireChanged(item.getAcceptance(), draft.acceptance(), "acceptance");
-        subTaskService.updateDraftContent(subTaskId,
+        return new Regenerated(
                 requireChanged(item.getContent(), draft.content(), "content"),
                 requireChanged(item.getDeliverable(), draft.deliverable(), "deliverable"),
-                newAcceptance,
+                requireChanged(item.getAcceptance(), draft.acceptance(), "acceptance"),
                 item.getAcceptanceKind());
-        // TD-11：验收文本被改写 ⇒ 旧标注（按旧文本算出来的）必须清掉，不能留着。
-        // 留着 = 拿过期证据去放宽核验，比「没标注」更危险（计划 §6 风险 8「解析不到即不豁免」）。
-        // 未改写则保留——重写正文/交付物不动判定依据，重算只会白烧一次判定。
-        clearStaleAcceptancePreconditions(subTaskId, draft, newAcceptance);
-        SubTaskView updated = subTaskService.getView(subTaskId);
-        taskTimelineService.recordEvent(taskId, subTaskId, TimelineEventCode.TASK_PLAN_DRAFT_REGENERATED.code(),
-                AgentRole.PLANNER, planner.id(),
-                Map.of("subTaskId", subTaskId, "title", draft.title()));
-        log.info("单条草案重生成完成: subTaskId={}, taskId={}, title={}",
-                subTaskId, taskId, draft.title());
-        return updated;
+    }
+
+    /** 重生成的四要素（不变量白名单之外一律不取）。 */
+    private record Regenerated(String content, String deliverable, String acceptance,
+                               String acceptanceKind) {
     }
 
     /**
@@ -285,62 +570,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         return llmValue != null && !llmValue.isBlank() ? llmValue : original;
     }
 
-    /** 查找 dependsOn 列表中含指定 id 的其他草案（expand 幽灵依赖预防）。 */
-    private List<Long> referencingDrafts(Long taskId, Long subTaskId) {
-        List<SubTaskView> siblings = subTaskService.listDraftsInInsertOrder(
-                taskId, SubTaskStatus.PENDING_PLAN_REVIEW);
-        List<Long> referencing = new ArrayList<>();
-        for (SubTaskView v : siblings) {
-            if (v.id() != null && v.id().equals(subTaskId)) {
-                continue; // 自己
-            }
-            if (v.dependsOn() != null && v.dependsOn().contains(subTaskId)) {
-                referencing.add(v.id());
-            }
-        }
-        return referencing;
-    }
-
-    /** 渲染 expand 提示词（单条草案四要素 + 任务快照 + 技能目录 + 需求包）。 */
-    private String renderExpandPrompt(TaskView task, SubTaskView draft, PlannerAgentRef planner) {
-        ClassPathResource resource = new ClassPathResource(EXPAND_PROMPT_TEMPLATE_PATH);
-        if (!resource.exists()) {
-            throw new BizException("未找到展开 Prompt 模板: " + EXPAND_PROMPT_TEMPLATE_PATH);
-        }
-        String template;
-        try (InputStream in = resource.getInputStream()) {
-            template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            throw new BizException("读取展开 Prompt 模板失败: " + e.getMessage());
-        }
-        TaskArchetype archetype = task.taskArchetype() != null
-                ? task.taskArchetype() : TaskArchetype.DEFAULT();
-        String skills = draft.requiredSkills() != null && !draft.requiredSkills().isEmpty()
-                ? String.join(", ", draft.requiredSkills()) : "（草案未指派技能）";
-        String constraints = draft.constraints() != null && !draft.constraints().isBlank()
-                ? draft.constraints() : "（草案无约束）";
-        return template
-                .replace("{{TASK_TITLE}}", task.title() != null ? task.title() : "")
-                .replace("{{TASK_ARCHETYPE}}", archetype.name())
-                .replace("{{TASK_DESCRIPTION}}",
-                        task.description() != null && !task.description().isBlank()
-                                ? task.description() : "（无补充描述）")
-                .replace("{{DRAFT_TITLE}}", draft.title() != null ? draft.title() : "")
-                .replace("{{DRAFT_CONTENT}}", draft.content() != null ? draft.content() : "")
-                .replace("{{DRAFT_DELIVERABLE}}", draft.deliverable() != null ? draft.deliverable() : "")
-                .replace("{{DRAFT_ACCEPTANCE}}", draft.acceptance() != null ? draft.acceptance() : "")
-                .replace("{{DRAFT_ACCEPTANCE_KIND}}",
-                        draft.acceptanceKind() != null ? draft.acceptanceKind().name() : "AUTOMATED")
-                .replace("{{DRAFT_PRIORITY}}", draft.priority() != null ? draft.priority() : "MEDIUM")
-                .replace("{{DRAFT_SKILLS}}", skills)
-                .replace("{{DRAFT_CONSTRAINTS}}", constraints)
-                .replace("{{SKILL_CATALOG}}", renderSkillCatalog())
-                .replace("{{TASK_CONTEXT_SNAPSHOT}}", renderSnapshotSafely(task))
-                .replace("{{REQUIREMENT_PACKAGE}}", renderRequirementPackage(task))
-                .replace("{{SUBTASK_COUNT_RULE}}", renderSubtaskCountRule(task));
-    }
-
-    /** 渲染 regenerate 提示词（同 expand 基础 + 重写语义）。 */
+    /** 渲染 regenerate 提示词。 */
     private String renderRegeneratePrompt(TaskView task, SubTaskView draft, PlannerAgentRef planner) {
         ClassPathResource resource = new ClassPathResource(REGENERATE_PROMPT_TEMPLATE_PATH);
         if (!resource.exists()) {
@@ -375,10 +605,11 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                 .replace("{{DRAFT_CONSTRAINTS}}", constraints)
                 .replace("{{SKILL_CATALOG}}", renderSkillCatalog())
                 .replace("{{TASK_CONTEXT_SNAPSHOT}}", renderSnapshotSafely(task))
-                .replace("{{REQUIREMENT_PACKAGE}}", renderRequirementPackage(task));
+                .replace("{{REQUIREMENT_PACKAGE}}", renderRequirementPackage(task))
+                .replace("{{EXECUTION_ENV}}", renderExecutionEnv(task));
     }
 
-    /** 单条草案 LLM 调用（expand/regenerate 共用；不记 TASK_PLAN_LLM_CALL_START 事件，用轻量日志）。 */
+    /** 单条草案 LLM 调用（regenerate 专用；不记 TASK_PLAN_LLM_CALL_START 事件，用轻量日志）。 */
     private AgentResult executeLlmForSingleDraft(PlannerAgentRef planner, String prompt, Long taskId,
                                                  String scene) {
         AgentTask agentTask = AgentTask.builder()
@@ -439,14 +670,23 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             throw new BizException("重生成结果缺少 " + missing + " 字段; 原始输出摘要: "
                     + summarize(rawOutput));
         }
-        // acceptanceKind 校验（单条）：显式声明走 fail-close
-        validateAcceptanceKinds(taskId, planner, List.of(item));
-        validateAcceptanceLength(taskId, planner, List.of(item));
+        // acceptanceKind / 字符下限不再在此单独判定：写入走 updateDraftContent，
+        // 那里用同一份 DraftGateChecker 判定（kind + 长度 + 空白），失败即回滚。
         return item;
     }
 
-    /** LLM 拆解主流程（从同步 decompose 迁出，行为不变）。 */
-    private void doDecompose(TaskView task) {
+    /**
+     * LLM 拆解主流程。**模型调用在事务外，落库到状态推进在同一事务内。**
+     *
+     * <p>为什么要这条边界：改前 {@code saveDrafts} 之后的五步（重加载 / 依赖回写 / 契约归一 /
+     * 门禁落结论 / 状态推进）各自独立，任何一步抛异常都会留下「半批草案」——而失败分支只回退
+     * 状态、不清草案，确定性地产出「草案在库 + task=PENDING」的死结（confirm 与 re-decompose
+     * 双向拒绝）。事务化之后，「一半」这种状态在库里不可能存在，重跑因此天然安全。</p>
+     *
+     * <p>为什么不用 {@code @Transactional}：那会把上面十几分钟的模型调用也圈进事务。
+     * 见 {@link #transactionTemplate} 字段注释。</p>
+     */
+    private void doDecompose(TaskView task, String attemptId, PlanAttempt attempt) {
         Long taskId = task.id();
         PlannerAgentRef planner = plannerAgentPicker.pickForTask(taskId);
         // G-010：粒度判定提前到主流程，renderPrompt 渲染与 buildDrafts 的 COARSE 校验共用一次判定
@@ -473,30 +713,165 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         }
 
         List<PlanDraftItem> items = parseDraftItems(taskId, planner, result.getOutput());
-        List<SubTaskDraft> drafts = buildDrafts(task, items, planner, decision);
-        subTaskService.saveDrafts(drafts);
-        // 防御：ServiceImpl.saveBatch 的 @Transactional 边界可能导致实体 ID 未回填，
-        // 从 DB 重加载保证 applyDependsOn 拿到的是持久化后的真实 ID（Snowflake 精度）。
-        // 关键：必须按 buildDrafts/add 顺序（即 items 顺序）加载，不能 orderByAsc(SubTask::getId)，
-        // 因为 dependsOn 序号指向“本批草案中的第 N 条”而不是“按 id 排后的第 N 条”。
-        // 采用 getCreateTime asc + 同毫秒按 id asc 的二级序，与 saveBatch 顺序一致。
-        List<SubTaskView> persisted = subTaskService.listDraftsInInsertOrder(
-                taskId, SubTaskStatus.PENDING_PLAN_REVIEW);
-        log.info("Planner 重加载草案: taskId={}, expectedCount={}, actualCount={}",
-                taskId, items.size(), persisted.size());
-        applyDependsOn(persisted, items);
-        // 成功路径清掉上一次的阻断记录：gateFindings 只写不清会让 S5 门 3a 把历史阻断
-        // 当成「当前未解」（重拆成功但 context 还挂着上一轮的 findings）。
-        clearTaskGateFindings(taskId);
+        // `B4`：根层 code 的序号从「任务内已用过的最大根段序号 + 1」起，跨轮不重置。
+        // 每轮从 0001 重起会与上一轮（reject/废除后可能仍软删在库）的行同号——
+        // 撞 `uk_plan_draft_code`，且冲突会被上层误判成幂等命中。
+        int rootSeqStart = planDraftMapper.findMaxRootSeq(taskId) + 1;
+        List<SubTaskDraft> drafts = buildDrafts(task, items, planner, decision, attemptId, rootSeqStart);
+
+        // ══ 事务边界：从这里到状态推进，要么全成功要么全回滚 ══
+        PersistOutcome outcome = txTemplate().execute(
+                status -> persistPlan(taskId, attemptId, items, drafts, planner, task.createTime(),
+                        attempt, task.taskArchetype()));
+        if (outcome == null) {
+            throw new BizException("拆解落库事务未返回结果（不应发生）: taskId=" + taskId);
+        }
+
+        // 以下是**审计与日志**：不参与事务。timeline 走 REQUIRES_NEW，放在事务内会额外占用一条
+        // 连接（长事务 + 独立事务嵌套是连接池的常见打满方式）。
+        if (!outcome.demotedCodes().isEmpty()) {
+            taskTimelineService.recordEvent(taskId, null,
+                    TimelineEventCode.TASK_PLAN_CONTRACT_SLOT_NORMALIZED.code(),
+                    AgentRole.PLANNER, planner.id(), Map.of("demotedDraftCodes", outcome.demotedCodes()));
+        }
+        planGateRunner.recordTimeline(taskId, planner.id(), "decompose", outcome.drafts(), outcome.gate());
+        if (outcome.gate().hasBlocking()) {
+            log.warn("拆解草案已落库但未通过门禁（不报废，待修正后确认）: taskId={}, block={}, warn={}",
+                    taskId, outcome.gate().blocking().size(), outcome.gate().warnings().size());
+        }
 
         taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_GENERATED.code(),
                 AgentRole.PLANNER, planner.id(),
                 Map.of("agentId", planner.id(),
                         "agentName", planner.name(),
-                        "draftCount", persisted.size(),
+                        "draftCount", outcome.drafts().size(),
+                        "gateBlockCount", outcome.gate().blocking().size(),
+                        "attemptId", attemptId,
                         "rawOutputSummary", summarize(result.getOutput())));
-        log.info("任务拆解草案生成: taskId={}, plannerAgentId={}, draftCount={}",
-                taskId, planner.id(), persisted.size());
+        log.info("任务拆解草案生成: taskId={}, plannerAgentId={}, draftCount={}, gateBlock={}, attemptId={}",
+                taskId, planner.id(), outcome.drafts().size(),
+                outcome.gate().blocking().size(), attemptId);
+    }
+
+    /** 落库段产出（事务内算完、事务外只读，避免上下文外读取延迟加载）。 */
+    private record PersistOutcome(List<SubTaskView> drafts,
+                                  DraftGateChecker.Result gate,
+                                  List<String> demotedCodes) {
+    }
+
+    /**
+     * 事务体内的全部写动作：暂存区落库 → 依赖回写 → 契约归一 → 门禁结论 → 状态推进。
+     *
+     * <p><b>`AD-5a-3b-2b` 起不再写 `sub_task` 草案副本</b>：草案的唯一事实源是
+     * `task_plan_draft`，门禁/依赖/契约归一全部作用在暂存区行上，执行行只在确认时
+     * 由 `materializeFromStaging` 物化。这样「草案」与「执行任务」在库里彻底分开，
+     * 确认前不再存在两套可能漂移的 id/内容。</p>
+     *
+     * <p><b>状态推进必须在事务内</b>：草案与「任务已进入待确认」是同一个事实的两面。
+     * 分开提交就会出现「草案在库但任务仍 PLANNING」（用户看不到入口）或反过来
+     * （任务待确认但草案没落成），两者都是死结。</p>
+     */
+    private PersistOutcome persistPlan(Long taskId, String attemptId, List<PlanDraftItem> items,
+                                       List<SubTaskDraft> drafts, PlannerAgentRef planner,
+                                       OffsetDateTime taskCreateTime, PlanAttempt attempt,
+                                       TaskArchetype archetype) {
+        // `TD-16e-2`：期望条数必须在**任何草案行写入之前**落库，且与草案同一事务
+        // （回滚时一起消失，不会留下「记了 7 条、一条没落」的错判依据）。
+        recordExpectedCountQuietly(attempt, drafts.size());
+        planDraftRoundService.writeDrafts(taskId, attemptId, taskCreateTime, drafts);
+        List<PlanDraftView> staged = planDraftService.listByTask(taskId);
+        // 幂等重投时 writeDrafts 整批跳过，这里读到的是同一批已落行；条数必须一致，
+        // 否则说明「本轮暂存区混入了别的批次」，带着错位输入跑门禁比失败更危险。
+        if (staged.size() != drafts.size()) {
+            throw new BizException("拆解草案落库条数不符: expected=" + drafts.size()
+                    + ", actual=" + staged.size() + ", taskId=" + taskId);
+        }
+        List<DraftGateChecker.Finding> depAnomalies = applyDependsOn(taskId, staged, items);
+        staged = planDraftService.listByTask(taskId);
+        List<String> demotedCodes = normalizeContractSlots(taskId, staged);
+        staged = planDraftService.listByTask(taskId);
+        List<SubTaskView> views = PlanDraftViewMapper.toSubTaskViews(staged);
+        DraftGateChecker.Result gate = planGateRunner.merge(
+                planGateRunner.evaluate(views, archetype), depAnomalies);
+        planDraftFindingsStore.persist(taskId, staged, gate);
+        advanceAfterDecompose(taskId, attemptId);
+        return new PersistOutcome(views, gate, demotedCodes);
+    }
+
+    /**
+     * 拆解完成后的状态推进，含**竞态分流**。
+     *
+     * <p>CAS 失败有四种现实原因，处置各不相同：</p>
+     * <ul>
+     *   <li><b>已被租约巡检回收成 PENDING</b>（模型跑得比租约久）⇒ 草案完整可用，
+     *       纠正回待确认。<b>不能作废</b>——用户等了十几分钟，AI 成果不该白扔；</li>
+     *   <li><b>已被新一轮拆解取代</b>（attemptId 变了，状态仍是 PLANNING）⇒ 抛异常回滚，
+     *       否则本批草案会与新一轮那批同时入库；</li>
+     *   <li><b>用户点了停止任务 → CANCELLED</b> ⇒ 抛异常让整批草案回滚（用户已放弃）；</li>
+     *   <li><b>已经是待确认</b>（重投/并发）⇒ 幂等返回。</li>
+     * </ul>
+     *
+     * <p><b>两次 CAS 都带 attemptId 比对</b>（{@link TaskService#casStatusForAttempt}）：
+     * 只比状态时，上一轮拆解苏醒后的推进能命中下一轮写的 PLANNING。唯一索引管不到跨 attempt，
+     * 这一步是唯一闸门。</p>
+     *
+     * <p>抛异常 = 回滚整个事务 = 草案一条不剩，这是刻意的：宁可让用户重拆，也不留下
+     * 「任务已取消/已被取代但草案还在」的孤儿数据。</p>
+     */
+    private void advanceAfterDecompose(Long taskId, String attemptId) {
+        if (taskService.casStatusForAttempt(taskId, TaskStatus.PLANNING,
+                TaskStatus.AWAITING_PLAN_CONFIRM, attemptId)) {
+            return;
+        }
+        TaskView now = taskService.getView(taskId);
+        if (now == null) {
+            throw new BizException("拆解完成但任务不存在，回滚本批草案: taskId=" + taskId);
+        }
+        switch (now.status()) {
+            case AWAITING_PLAN_CONFIRM -> {
+                // 幂等：另一个执行者已经推进过
+            }
+            case PENDING -> {
+                if (!taskService.casStatusForAttempt(taskId, TaskStatus.PENDING,
+                        TaskStatus.AWAITING_PLAN_CONFIRM, attemptId)) {
+                    throw new BizException("拆解完成但任务状态并发变化，回滚本批草案: taskId=" + taskId);
+                }
+                log.warn("拆解完成时任务已被回收为 PENDING，草案完整 ⇒ 推回待确认（不报废 AI 成果）: taskId={}",
+                        taskId);
+            }
+            case CANCELLED -> throw new BizException("任务已取消，本批拆解草案作废: taskId=" + taskId);
+            case PLANNING -> throw new BizException("本轮拆解已被新一轮拆解取代（attemptId="
+                    + attemptId + "），回滚本批草案: taskId=" + taskId);
+            default -> throw new BizException("拆解完成但任务处于非预期状态 " + now.status()
+                    + "，回滚本批草案: taskId=" + taskId);
+        }
+    }
+
+    /**
+     * 契约位确定性归一：同一任务至多 1 条（判据见 {@link ContractSlotNormalizer}）。
+     *
+     * <p>放在门禁之前：契约位不是质量问题的候选，而是数据不变量；先归一，门禁看到的才是
+     * 最终形态。返回被降级的 id 供**事务外**写时间线——归一本身在事务内，时间线在事务外，
+     * 避免长事务里再开独立连接。</p>
+     */
+    private List<String> normalizeContractSlots(Long taskId, List<PlanDraftView> staged) {
+        List<SubTaskView> views = PlanDraftViewMapper.toSubTaskViews(staged);
+        List<Long> demotedIds = ContractSlotNormalizer.demotions(views);
+        if (demotedIds.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, String> idToCode = new HashMap<>();
+        for (PlanDraftView d : staged) {
+            if (d.id() != null && d.code() != null) {
+                idToCode.put(d.id(), d.code());
+            }
+        }
+        List<String> demotedCodes = demotedIds.stream()
+                .map(idToCode::get).filter(java.util.Objects::nonNull).toList();
+        planDraftService.demoteContracts(taskId, demotedCodes);
+        log.warn("契约位归一：任务契约是单值资源，保留拓扑最前一条，其余降级: taskId={}, demoted={}",
+                taskId, demotedCodes);
+        return demotedCodes;
     }
 
     /** 记录 LLM 调用结束事件（耗时毫秒、finishReason、tokenUsage），补齐可观测缺口。 */
@@ -553,6 +928,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                 .replace("{{GRANULARITY}}", decision.granularity().name())
                 .replace("{{REQUIREMENT_PACKAGE}}", renderRequirementPackage(task))
                 .replace("{{TASK_CONTEXT_SNAPSHOT}}", renderSnapshotSafely(task))
+                .replace("{{EXECUTION_ENV}}", renderExecutionEnv(task))
                 .replace("{{SUBTASK_COUNT_RULE}}", renderSubtaskCountRule(task));
         // TD-3：六个拆分维度块全在模板内，此处只保留当前原型那一块（缺块即抛，不静默降级）
         return ArchetypeDimensionsSection.select(rendered, archetype);
@@ -563,6 +939,31 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     private String renderRequirementPackage(TaskView task) {
         return RequirementPackageParser.render(
                 RequirementPackageParser.fromContext(task.context()));
+    }
+
+    /**
+     * 执行环境段渲染（占位符 {@code {{EXECUTION_ENV}}}）：
+     * {@code task.context.executionEnv} 经 {@link ExecutionEnv} 防御式解析后渲染为 Markdown 列表。
+     *
+     * <p><b>未声明时渲染「标记」而不是空串</b>：提示词第 12 条要靠这一段判断「该不该申报环境缺口」。
+     * 渲染成空串会让模型看到「这一节下面什么都没有」，既不申报也不追问；给出显式标记
+     * 「未声明」才是可判定的信号。</p>
+     *
+     * <p><b>异常降级为「未声明」</b>：与 {@link #renderSnapshotSafely} 同策略——附加价值不该有
+     * 否决权，取不到只是拆得糙一点；但降级方向必须是「当作没有」而不是「当作有」，
+     * 否则一句解析异常就会让模型把不存在的路径当事实写进 content。</p>
+     */
+    private String renderExecutionEnv(TaskView task) {
+        try {
+            ExecutionEnv env = ExecutionEnv.parse(
+                    task.context() == null ? null : task.context().get(TaskContextKeys.EXECUTION_ENV));
+            String rendered = env.render();
+            return rendered.isBlank() ? ENV_UNDECLARED_MARKER : rendered;
+        } catch (Exception e) {
+            log.warn("执行环境段渲染失败，已降级为「未声明」（不阻断拆解）: taskId={}, err={}",
+                    task.id(), e.getMessage());
+            return ENV_UNDECLARED_MARKER;
+        }
     }
 
     /**
@@ -706,180 +1107,26 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         if (items.size() > MAX_DRAFT_COUNT) {
             throw new BizException("拆解结果超过数量上限 " + MAX_DRAFT_COUNT + ": 实际 " + items.size());
         }
-        // TD-13 S4：门 1（依赖结构）/ 门 2（字段空白、字符下限）统一由纯函数检查器判定，
-        // 阻断时在此处抛出——此刻草案行尚未落库，整批不产生任何 sub_task 写入。
-        runBatchGate(taskId, planner, items, rawOutput);
-        // TD-5：验收判据按 kind 分流校验（设计 §4.2）。显式声明的 kind 与文本写法不匹配
-        // → fail-close（挡在落库前）；kind 缺失回落 AUTOMATED 但文本写法不符 → WARN 放行
-        // （存量零新失败，见 LOG-20261024-039 观察项与计划 §6 风险 2）
-        validateAcceptanceKinds(taskId, planner, items);
+        // 2026-11-08：此方法只做「能不能解析成草案」——结构/字段/kind 三类判据统一由
+        // DraftGateChecker 在**落库之后**判定，结论写进每条草案的 context.gateFindings。
+        // 不再在解析期抛异常：一条草案的写法问题不该让整批草案拿不到（那正是「重试必复现」的来源）。
         return items;
     }
 
     /**
-     * `TD-13 S4`：门 1/2 落点——{@code parseDraftItems} 之后、{@code saveDrafts} 之前，纯内存判定。
+     * 显式声明的 acceptanceKind 原文（合法枚举才返回）：缺失/非法值一律返回 {@code null}。
      *
-     * <p>阻断时此刻**尚无 sub_task 行**，故 findings 只能落 {@code task.context.gateFindings}
-     * 与时间线 {@code task_plan_gate_blocked}；{@code G2_BLANK} 同时补记既有的
-     * {@code task_plan_draft_field_missing} 事件（保持历史排障口径不变）。</p>
-     *
-     * <p><b>审计写点必须独立事务</b>：{@code expandById} 带 {@code @Transactional}，若审计与业务
-     * 共用事务，抛 {@code BizException} 时 findings 与事件会被一并回滚，用户只看到错误消息、
-     * 库里不留排障线索（批量路径无外层事务，所以同一段代码此前出现两种行为）。</p>
+     * <p>判据同 `LOG-20261024-040` 的踩坑结论——「是否显式声明」必须看原始字符串，
+     * 不能用 {@link AcceptanceKind#parse} 的结果（它对 null/非法值回落 {@code AUTOMATED}）。</p>
      */
-    private void runBatchGate(Long taskId, PlannerAgentRef planner, List<PlanDraftItem> items, String rawOutput) {
-        PlanBatchGateChecker.Result gate = PlanBatchGateChecker.check(items);
-        if (!gate.warnings().isEmpty()) {
-            // 告警不阻断、不进 timeline（避免噪音）；S5 门 3a 起接入 findings 消费面
-            log.debug("门 1/2 告警项（不阻断）: taskId={}, findings={}", taskId, gate.warnings());
+    private static String explicitAcceptanceKind(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
         }
-        if (!gate.hasBlocking()) {
-            return;
-        }
-        for (PlanBatchGateChecker.Finding f : gate.blocking()) {
-            if (PlanBatchGateChecker.G2_BLANK.equals(f.ruleId())) {
-                int seq = f.draftRef() == null ? 0 : f.draftRef();
-                PlanDraftItem item = seq >= 1 && seq <= items.size() ? items.get(seq - 1) : null;
-                taskTimelineService.recordEventInNewTx(taskId, null,
-                        TimelineEventCode.TASK_PLAN_DRAFT_FIELD_MISSING.code(),
-                        AgentRole.PLANNER, planner.id(),
-                        Map.of("draftSeq", seq, "field", f.subject(),
-                                "title", item != null && item.getTitle() != null ? item.getTitle() : "",
-                                "rawOutputSummary", summarize(rawOutput)));
-            }
-        }
-        auditGateBlocked(taskId, planner, gate.blocking());
-        // 原始输出摘要与既有拆解失败口径一致：前端排障需要看到模型实际吐了什么
-        throw new BizException(gate.blockMessage() + "; 原始输出摘要: " + summarize(rawOutput));
-    }
-
-    /**
-     * 门禁类阻断的**统一留痕**：时间线 {@code task_plan_gate_blocked} + {@code task.context.gateFindings}。
-     *
-     * <p>三个阻断点共用（门 1/2 批次检查、单条长度的 {@code G2_LEN_MIN}、{@code TD-5} 的
-     * {@code G2_KIND_FORM_CONFLICT}），避免同一语义在三处各写一份、留痕口径分叉。</p>
-     *
-     * <p><b>必须独立事务</b>：{@code expandById} / {@code regenerateById} 都带
-     * {@code @Transactional(rollbackFor = Exception.class)}，若审计与业务共用事务，紧接着抛出的
-     * {@code BizException} 会把两笔审计一并回滚——用户只看到错误消息，库里不留排障线索。</p>
-     */
-    private void auditGateBlocked(Long taskId, PlannerAgentRef planner,
-                                  List<PlanBatchGateChecker.Finding> findings) {
-        Map<String, Object> findingsPayload = Map.of(
-                "findings", findings,
-                "ruleVersion", PlanBatchGateChecker.RULE_VERSION);
-        taskTimelineService.recordEventInNewTx(taskId, null, TimelineEventCode.TASK_PLAN_GATE_BLOCKED.code(),
-                AgentRole.PLANNER, planner.id(), findingsPayload);
-        persistTaskGateFindings(taskId, findingsPayload);
-    }
-
-    /**
-     * 成功拆解后清空 {@code task.context.gateFindings}。
-     *
-     * <p>该 key 此前只写不清——重拆成功后仍挂着上一轮的阻断记录。现在它是零消费方所以无害，
-     * 但 `S5` 门 3a 一旦读它，会把历史阻断当成「当前未解」并继续标注已修好的草案。写空列表 +
-     * {@code clearedAt} 保留结构，消费方可统一按「findings 为空 = 无阻断」解析。</p>
-     */
-    private void clearTaskGateFindings(Long taskId) {
         try {
-            taskService.updateContextInNewTx(taskId, Map.of(SubTaskContextKeys.GATE_FINDINGS, Map.of(
-                    "findings", List.of(),
-                    "ruleVersion", PlanBatchGateChecker.RULE_VERSION,
-                    "clearedAt", OffsetDateTime.now().toString())));
-        } catch (Exception e) {
-            // 清理失败不阻断拆解：最坏情况是残留一条过期记录，由 S5 消费方按 clearedAt 判断
-            log.warn("清理 task.context.gateFindings 失败（不阻断拆解）: taskId={}, err={}",
-                    taskId, e.getMessage());
-        }
-    }
-
-    /** 阻断类 findings 的持久落点：{@code task.context.gateFindings}（不新增表、不加迁移）。
-     * 只传要写的 key——{@code updateContext} 已按键合并，无需在此读-改-写；独立事务保证不被业务回滚。 */
-    private void persistTaskGateFindings(Long taskId, Map<String, Object> findingsPayload) {
-        try {
-            taskService.updateContextInNewTx(taskId, Map.of(SubTaskContextKeys.GATE_FINDINGS, findingsPayload));
-        } catch (Exception e) {
-            // 审计写失败不改变结论：阻断语义由抛出的 BizException 保证
-            log.warn("落 task.context.gateFindings 失败（不改变阻断结论）: taskId={}, err={}",
-                    taskId, e.getMessage());
-        }
-    }
-
-    /**
-     * `TD-5`：acceptance 字符下限校验（单条重生成路径沿用门 2 同一阈值）。
-     *
-     * <p>阈值与 {@link PlanBatchGateChecker} 共用，避免两处口径漂移；批次路径已由门 2
-     * 统一判定，本方法只服务 {@code parseSingleDraftItem}。`deliverable` 不判长度——它回答
-     * 「交付什么」，天然可以极短（见检查器类注释 `s4-4`）。</p>
-     */
-    private void validateAcceptanceLength(Long taskId, PlannerAgentRef planner, List<PlanDraftItem> items) {
-        for (int i = 0; i < items.size(); i++) {
-            PlanDraftItem item = items.get(i);
-            String acceptance = item.getAcceptance() == null ? "" : item.getAcceptance().trim();
-            if (acceptance.length() < PlanBatchGateChecker.ACCEPTANCE_MIN_LENGTH) {
-                String evidence = "验收判据过短（acceptance=" + acceptance.length()
-                        + " 字符 < " + PlanBatchGateChecker.ACCEPTANCE_MIN_LENGTH
-                        + "）——空话型子任务，落库前拒绝";
-                // 「阻断必留痕」：本方法在 expandById / regenerateById 的事务内抛出，须走独立事务
-                auditGateBlocked(taskId, planner, List.of(PlanBatchGateChecker.finding(
-                        PlanBatchGateChecker.GATE_QUALITY, PlanBatchGateChecker.G2_LEN_MIN,
-                        PlanBatchGateChecker.SEVERITY_BLOCK, i + 1, "acceptance", evidence,
-                        PlanBatchGateChecker.FIX_A)));
-                throw new BizException("拆解结果第 " + (i + 1) + " 条" + evidence);
-            }
-        }
-    }
-
-    /**
-     * TD-5：逐条校验 acceptanceKind ↔ acceptance 文本写法匹配。
-     *
-     * <p>显式声明（LLM 给了结构化字段）走 fail-close：不匹配即整批拒绝（拆解失败回退
-     * PENDING 可重拆）；kind 缺失（回落 {@code AUTOMATED}）但文本写法不符走 WARN：
-     * timeline 记录 hint，不阻断落库——首期以观测为主，避免大面积误伤存量与 flash 产物。</p>
-     */
-    private void validateAcceptanceKinds(Long taskId, PlannerAgentRef planner, List<PlanDraftItem> items) {
-        for (int i = 0; i < items.size(); i++) {
-            PlanDraftItem item = items.get(i);
-            // ★显式声明判定必须基于原始字符串，不能用 parse() 结果：
-            // parse(null/非法值) 回落 AUTOMATED（非 null），直接拿来判断会把「缺失/非法值」
-            // 误判成「显式声明 AUTOMATED」→ 普通文本触发 Fail 误伤存量（LOG-20261024-040 踩坑）。
-            // 只有「非空且是合法枚举」才算显式声明；缺失/非法值按未声明处理（Warn 放行）。
-            String rawKind = item.getAcceptanceKind();
-            AcceptanceKind declared = null;
-            if (rawKind != null && !rawKind.isBlank()) {
-                try {
-                    declared = AcceptanceKind.valueOf(rawKind.trim().toUpperCase());
-                } catch (IllegalArgumentException e) {
-                    // 非法值：不视为显式声明（模型乱填，按未声明 Warn 放行，避免误伤）
-                }
-            }
-            AcceptanceKindValidator.Result result =
-                    AcceptanceKindValidator.validate(declared, item.getAcceptance());
-            String title = item.getTitle() != null ? item.getTitle() : "";
-            String acceptance = item.getAcceptance() != null ? item.getAcceptance() : "";
-            // Java 17 兼容：instanceof 模式匹配，避免 switch patterns（需 21+ preview）
-            if (result instanceof AcceptanceKindValidator.Result.Fail f) {
-                // ★携带 acceptance 摘要：fail-close 抛错时把原文带进错误信息，排障可直接定位
-                // （2026-10-25 事故 LOG-20261024-049：只有 title 无原文，翻日志才能猜命中词）
-                String evidence = "验收判据与写法不匹配: " + f.reason();
-                // 「阻断必留痕」：本方法在 expandById / regenerateById 的事务内抛出，须走独立事务
-                auditGateBlocked(taskId, planner, List.of(PlanBatchGateChecker.finding(
-                        PlanBatchGateChecker.GATE_QUALITY, PlanBatchGateChecker.G2_KIND_FORM_CONFLICT,
-                        PlanBatchGateChecker.SEVERITY_BLOCK, i + 1, "acceptance",
-                        evidence + "（title=" + title + "）",
-                        PlanBatchGateChecker.FIX_A)));
-                throw new BizException("拆解结果第 " + (i + 1) + " 条验收判据与写法不匹配: "
-                        + f.reason() + "（title=" + title + "; acceptance=" + acceptance + "）");
-            } else if (result instanceof AcceptanceKindValidator.Result.Warn w) {
-                taskTimelineService.recordEvent(taskId, null,
-                        TimelineEventCode.TASK_PLAN_ACCEPTANCE_KIND_MISMATCH.code(),
-                        AgentRole.PLANNER, planner.id(),
-                        Map.of("draftSeq", i + 1, "title", title,
-                                "kind", w.kind(), "hint", w.hint()));
-                log.warn("拆解草案 acceptance 写法与 kind 疑似错配（放行）: draftSeq={}, title={}, hint={}",
-                        i + 1, title, w.hint());
-            }
-            // Pass：无需处理
+            return AcceptanceKind.valueOf(raw.trim().toUpperCase()).name();
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
 
@@ -929,12 +1176,16 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         return cleaned;
     }
 
-    /** 草案实体装配：status=PENDING_PLAN_REVIEW，context 记录拆解来源审计信息。
+    /** 草案实体装配：status=PENDING（执行行；草案本身只落暂存区），context 记录拆解来源审计信息。
      * G-011：uncertainties 落库（kind 降级审计）+ COARSE constraints 缺失 WARN（G-010 缺口④清偿）
      * + D5 兜底审计（openQuestions 无 UNCONFIRMED 继承 WARN）。 */
     private List<SubTaskDraft> buildDrafts(TaskView task, List<PlanDraftItem> items, PlannerAgentRef planner,
-                                           PlannerGranularityResolver.GranularityDecision decision) {
+                                           PlannerGranularityResolver.GranularityDecision decision,
+                                           String attemptId, int rootSeqStart) {
         Long taskId = task.id();
+        // `ADR-008` §19.2：位置身份在**这一处**算出来（单段 <日期><任务内序号>），
+        // 写进 SubTaskDraft，由 task 域原样落库。派生已改为独立 Task，不再产生子段编号。
+        LocalDate taskDate = DraftCode.dateOf(task.createTime());
         List<SubTaskDraft> drafts = new ArrayList<>(items.size());
         String generatedAt = OffsetDateTime.now().toString();
         // G-022 拆解侧前置校验：在岗 Agent 技能集合只查一次（避免逐草案 N+1）
@@ -942,7 +1193,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         for (int idx = 0; idx < items.size(); idx++) {
             PlanDraftItem item = items.get(idx);
             List<UncertaintyDraft> uncertainties =
-                    normalizeUncertainties(taskId, resolveUncertainties(item), planner);
+                    normalizeUncertainties(taskId, resolveUncertainties(item), idx + 1, items.size(), planner);
             // G-010 缺口④清偿：COARSE 粒度 constraints 缺失记 timeline WARN（不阻断落库）
             if (decision.granularity() == PlannerGranularity.COARSE
                     && (item.getConstraints() == null || item.getConstraints().isBlank())) {
@@ -957,10 +1208,16 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             context.put("plannerAgentId", planner.id());
             context.put("plannerAgentName", planner.name());
             context.put("planGeneratedAt", generatedAt);
+            // 显式声明的 kind 原文必须随草案保存：acceptance_kind 列经 parse 后无法区分
+            // 「显式声明 AUTOMATED」与「未声明」，而门禁对两者的处置不同（block vs warn）。
+            String declaredKind = explicitAcceptanceKind(item.getAcceptanceKind());
+            if (declaredKind != null) {
+                context.put(SubTaskContextKeys.ACCEPTANCE_KIND_DECLARED, declaredKind);
+            }
             // TD-11：验收契约可满足性标注（**只标注，不改任何既有字段、不阻断落库**）。
-            // 挂在此处 = 「validateAcceptanceKinds 之后、落库之前」——那时 uncertainties 已归一化、
-            // dependsOn 已可解析。TD-5 的校验器物理上看不到 uncertainties（签名里就没有），
-            // 所以「验收要求取回外部实证」× 「该外部事实仍未确认」这个死锁只能在这一层发现。
+            // 挂在此处 = 「uncertainties 已归一化、dependsOn 已可解析」的时点。TD-5 的校验器
+            // 物理上看不到 uncertainties（签名里就没有），所以「验收要求取回外部实证」×
+            // 「该外部事实仍未确认」这个死锁只能在这一层发现。
             AcceptanceSatisfiabilityChecker.Result satisfiability =
                     checkAcceptanceSatisfiability(taskId, planner, items, idx, item, uncertainties);
             if (satisfiability.unmet()) {
@@ -982,9 +1239,18 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                     resolveSubTaskPriority(item.getPriority(), task.priority()),
                     Boolean.TRUE.equals(item.getContract()) ? 1 : 0,
                     keptSkills,
-                    item.getConstraints(), SubTaskStatus.PENDING_PLAN_REVIEW, context, uncertainties,
+                    item.getConstraints(), SubTaskStatus.PENDING, context, uncertainties,
                     // TD-3 / TD-2：LLM 未给或给了非法值一律回落 AUTOMATED（= 改造前唯一语义）
-                    AcceptanceKind.parse(item.getAcceptanceKind())));
+                    AcceptanceKind.parse(item.getAcceptanceKind()),
+                    // V146 幂等键：attemptId 来自入口（不是这里现生成），draftSeq 即 dependsOn 用的序号。
+                    // **draftSeq 永远是批内 1..N**——`dependsOn` 里的整数引用它，
+                    // `uk_sub_task_decompose_attempt` 也用它区分同批草案，不能改成全局号。
+                    idx + 1,
+                    // 位置身份：<日期><任务内全局序号>
+                    //
+                    // 根层的 seq 用 `rootSeqStart + idx` 而**不是** `idx + 1`：code 是「任务内位置」，
+                    // 设计 §3.1 定死「跨轮不重置」，否则第二轮从 0001 起会与第一轮残留行同号。
+                    DraftCode.root(taskDate, rootSeqStart + idx).value()));
         }
         // D5 兜底审计：任务 openQuestions 非空但拆解产物无任何 UNCONFIRMED 继承 → WARN（不阻断）
         auditOpenQuestionsInheritance(task, drafts, planner);
@@ -1029,7 +1295,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
      * 取该条草案 {@code dependsOn} 指向的草案标题 + 正文（供判「缺输入是否已由 DAG 表达」）。
      *
      * <p>{@code dependsOn} 存的是**本批草案的 1-based 序号**（不是 id），越界序号直接跳过——
-     * 越界本身由 `TD-13` 门 1（{@code PlanBatchGateChecker}）另行 fail-close，这里不重复报错。</p>
+     * 越界属于解析期问题，由 {@link #applyDependsOn} 在「序号 → id」映射时兜底并留痕。</p>
      */
     private static List<String> upstreamTexts(List<PlanDraftItem> items, PlanDraftItem item) {
         if (item.getDependsOn() == null || item.getDependsOn().isEmpty()) {
@@ -1071,10 +1337,20 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
      * TO_DERIVE 的值降级 UNCONFIRMED（不丢弃：降级到更严语义符合 fail-close，与 G-010 幻觉标签
      * 丢弃模式差异理由见设计 D3）；note 空白条目丢弃（无信息量，消费侧无法使用）。
      *
+     * <p>`TD-13 S2`：同时归一 {@code blockedBy}（越界 / 自引用 / 重复），见
+     * {@link #normalizeBlockedBy}。</p>
+     *
      * <p>每批 uncertainties 只归一化一次（`TD-13 S1` 删除了任务级汇总的第二次归一化）——
-     * 降级审计是副作用，重复归一化会把 {@code task_plan_uncertainty_degraded} 记两次。</p>
+     * 降级审计是副作用，重复归一化会把 {@code task_plan_uncertainty_degraded} 记两次。
+     * `S2` 的 {@code blockedBy} 校验也**只能挂在这唯一一次归一化里**：另立一个入口各跑一遍，
+     * 就是 `LOG-20261026-025` 的双重归一化事故（当年两个入口各补一次 ref，编号互相覆盖）。</p>
+     *
+     * @param ownSeq    当前草案的 1-based 序号（判 `blockedBy` 自引用）
+     * @param batchSize 本批草案总数（判 `blockedBy` 越界）
      */
-    private List<UncertaintyDraft> normalizeUncertainties(Long taskId, List<UncertaintyDraft> raw, PlannerAgentRef planner) {
+    private List<UncertaintyDraft> normalizeUncertainties(Long taskId, List<UncertaintyDraft> raw,
+                                                          int ownSeq, int batchSize,
+                                                          PlannerAgentRef planner) {
         if (raw == null || raw.isEmpty()) {
             return List.of();
         }
@@ -1092,11 +1368,70 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                                 "degradedTo", UncertaintyDraft.KIND_UNCONFIRMED));
                 kind = UncertaintyDraft.KIND_UNCONFIRMED;
             }
-            kept.add(new UncertaintyDraft(kind, u.note()));
+            List<Integer> blockedBy = normalizeBlockedBy(taskId, ownSeq, batchSize, u, planner);
+            // ref 原样透传：`ensureRefs` 的契约是「模型给了非空且未重复的 ref ⇒ 原样保留」，
+            // 这里先丢掉再让 ensureRefs 重编号，等于把「模型可以起有语义的标签」这条能力作废。
+            kept.add(new UncertaintyDraft(kind, u.note(), u.ref(), blockedBy));
         }
         // TD-11：ref 补齐走 `AcceptanceSatisfiabilityChecker#ensureRefs`（全项目唯一实现，
         // 判据侧读 ref 用的也是它——两处各写一份编号逻辑必然分叉）
         return AcceptanceSatisfiabilityChecker.ensureRefs(kept);
+    }
+
+    /**
+     * `TD-13 S2`：缺口影响面归一——越界序号丢弃、自引用丢弃、重复去重，各记一条 WARN。
+     *
+     * <p><b>为什么必须归到 {@code 1..batchSize}</b>：{@code blockedBy} 存的是本批 1-based 草案序号，
+     * 与 {@code dependsOn} 同一坐标系（落库时 {@code applyDependsOn} 才把它换成真实 id）。
+     * 越界序号若不丢，消费侧按序号取草案就会拿到 {@code null} 或错位——静默错位比丢弃更难查。</p>
+     *
+     * <p><b>为什么自引用要丢</b>：一条草案的缺口卡住它自己，等于「这条草案因为自己而未确认」，
+     * 是循环论证，不是信息。这也不是执行顺序（{@code dependsOn} 明确禁止自引用），
+     * 故不能靠「反正 dependsOn 会校验」兜住。</p>
+     *
+     * <p><b>一条事件而不是一条一事件</b>：同一草案的 {@code blockedBy} 被丢 3 项就记 3 条事件，
+     * 10 条草案能刷出 30 条噪音（`s4-2` 的 {@code task_plan_gate_warned} 踩过同一坑）。
+     * 故按「本条 uncertainty」聚合，payload 里带 {@code dropped} 明细。</p>
+     *
+     * @return 归一后的序号列表；{@code null} = 模型未申报（与「申报为空」语义不同，不得合并）
+     */
+    private List<Integer> normalizeBlockedBy(Long taskId, int ownSeq, int batchSize,
+                                             UncertaintyDraft u, PlannerAgentRef planner) {
+        List<Integer> raw = u.blockedBy();
+        if (raw == null) {
+            return null;
+        }
+        List<Integer> kept = new ArrayList<>(raw.size());
+        List<Map<String, Object>> dropped = new ArrayList<>();
+        for (Integer seq : raw) {
+            if (seq == null) {
+                continue;
+            }
+            String reason = null;
+            if (seq == ownSeq) {
+                reason = "self";
+            } else if (seq < 1 || seq > batchSize) {
+                reason = "out_of_range";
+            } else if (kept.contains(seq)) {
+                reason = "duplicate";
+            }
+            if (reason == null) {
+                kept.add(seq);
+            } else {
+                dropped.add(Map.of("seq", seq, "reason", reason));
+            }
+        }
+        if (!dropped.isEmpty()) {
+            taskTimelineService.recordEvent(taskId, null,
+                    TimelineEventCode.TASK_PLAN_UNCERTAINTY_BLOCKED_BY_NORMALIZED.code(),
+                    AgentRole.PLANNER, planner.id(),
+                    Map.of("draftSeq", ownSeq,
+                            "ref", String.valueOf(u.ref()),
+                            "rawBlockedBy", raw,
+                            "keptBlockedBy", kept,
+                            "dropped", dropped));
+        }
+        return List.copyOf(kept);
     }
 
     /**
@@ -1202,74 +1537,67 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     }
 
     /**
-     * 序号→真实 id 映射回写：saveBatch 后草案 id 已由 assign_id 预填，
-     * 把 dependsOn 序号换成同批草案的真实 sub_task id 写入 depends_on 列，
-     * 并同步回填实体字段（返回给调用方的草案列表携带依赖信息）。
+     * 序号 → 位置身份（code）映射回写：`dependsOnCodes` 落暂存区。
      *
-     * <p>防御门门：drafts.size() 必须与 items.size() 一致，否则可能重加载顺序与
-     * items 顺序错位（依赖序号拿错 id），甚至漏掉某些 draft；该不变量一旦破坏，
-     * 后续 ready 守卫会把有依赖节点误判为就绪，必须报错并清表回退，不能静默写错位依赖。</p>
+     * <p>暂存区行按 {@code code} 升序返回，与 LLM 输出顺序一一对应（`writeDrafts`
+     * 按同一顺序插入）。序号越界不整批报废：丢掉该边并记一条 block finding，
+     * 用户在草案页改完即可确认——与门 1 同口径。</p>
+     *
+     * <p>不再做「依赖 id 是否真实存在」的二次查询：边引用的是同一批暂存区行的 code，
+     * 由构造保证存在；确认物化时再按 code → 新执行行 id 翻译。</p>
      */
-    private void applyDependsOn(List<SubTaskView> drafts, List<PlanDraftItem> items) {
-        if (drafts.size() != items.size()) {
-            // 详细记下两者映射，避免后续排错看不到现场
-            StringBuilder sb = new StringBuilder();
-            sb.append("applyDependsOn 计数不匹配: drafts=").append(drafts.size())
-              .append(" items=").append(items.size()).append("; draftsIds=");
-            for (int k = 0; k < drafts.size(); k++) {
-                if (k > 0) sb.append(',');
-                sb.append(drafts.get(k).id());
-            }
-            log.error(sb.toString());
-            throw new BizException("拆解草案重加载数量与 LLM 输出不一致: drafts=" + drafts.size()
-                    + " items=" + items.size() + "；需取消现有草案后重新拆解");
+    private List<DraftGateChecker.Finding> applyDependsOn(Long taskId, List<PlanDraftView> staged,
+                                                          List<PlanDraftItem> items) {
+        if (staged.size() != items.size()) {
+            throw new BizException("拆解草案数量与 LLM 输出不一致: drafts=" + staged.size()
+                    + " items=" + items.size() + ", taskId=" + taskId + "；需取消现有草案后重新拆解");
         }
+        List<DraftGateChecker.Finding> anomalies = new ArrayList<>();
+        Map<String, List<String>> edits = new LinkedHashMap<>();
         for (int i = 0; i < items.size(); i++) {
             List<Integer> deps = items.get(i).getDependsOn();
             if (deps == null || deps.isEmpty()) {
                 continue;
             }
-            List<Long> depIds = new ArrayList<>(deps.size());
+            PlanDraftView draft = staged.get(i);
+            if (draft.code() == null || draft.code().isBlank()) {
+                throw new BizException("拆解结果第 " + (i + 1) + " 条缺少位置编号（code），请重试拆解");
+            }
+            List<String> depCodes = new ArrayList<>(deps.size());
             for (Integer dep : deps) {
-                Long depId = drafts.get(dep - 1).id();
-                if (depId == null) {
-                    throw new BizException("拆解结果第 " + (i + 1) + " 条依赖指向的草案 id 为空"
-                            + "（序号=" + dep + "）；重加载可能漏取，请重试拆解");
+                if (dep == null || dep < 1 || dep > staged.size()) {
+                    anomalies.add(DraftGateChecker.finding(
+                            DraftGateChecker.GATE_STRUCTURE, DraftGateChecker.G1_DEP_OUT_OF_RANGE,
+                            DraftGateChecker.SEVERITY_BLOCK, draft.code(), "dependsOn",
+                            "依赖序号非法: " + dep + "（合法范围 1~" + staged.size() + "）",
+                            DraftGateChecker.FIX_A));
+                    continue;
                 }
-                depIds.add(depId);
+                depCodes.add(staged.get(dep - 1).code());
             }
-            // §6.100 幽灵依赖防御：写入前校验所有依赖 ID 真实存在于 sub_task 表。
-            // 历史出现过依赖回写引用“未落库 ID”（内存预分配/重加载错位），
-            // 静默写库后 isReady 对不存在依赖恒判未就绪，PENDING 子任务永久卡死。
-            // 注意：depIds 允许重复（LLM 可输出 [2,2,3] 重复引用同一前置），须去重后比对。
-            List<Long> distinctDeps = depIds.stream().distinct().toList();
-            List<SubTaskView> existingDeps = subTaskService.listViewsByIds(distinctDeps);
-            if (existingDeps.size() != distinctDeps.size()) {
-                Set<Long> found = existingDeps.stream()
-                        .map(SubTaskView::id).collect(Collectors.toSet());
-                List<Long> missing = distinctDeps.stream()
-                        .filter(depId -> !found.contains(depId)).toList();
-                log.error("applyDependsOn 依赖存在性校验失败: draftSeq={}, draftId={}, missing={}",
-                        (i + 1), drafts.get(i).id(), missing);
-                throw new BizException("拆解结果第 " + (i + 1) + " 条依赖指向不存在的草案 ID: "
-                        + missing + "；需取消现有草案后重新拆解");
+            if (depCodes.isEmpty()) {
+                continue;
             }
-            SubTaskView draft = drafts.get(i);
-            if (draft.id() == null) {
-                throw new BizException("拆解结果第 " + (i + 1) + " 条自身 id 为空；重加载可能漏取，请重试拆解");
-            }
-            log.info("applyDependsOn: taskId={}, draftSeq={}, draftId={}, seqDeps={}, realDeps={}",
-                    draft.taskId(), (i + 1), draft.id(), deps, depIds);
-            subTaskService.updateDependsOn(draft.id(), depIds);
+            edits.put(draft.code(), depCodes.stream().distinct().toList());
+            log.info("applyDependsOn: taskId={}, code={}, seqDeps={}, depCodes={}",
+                    taskId, draft.code(), deps, depCodes);
         }
+        planDraftService.applyDependencies(taskId, edits);
+        return anomalies;
     }
 
-    /** 失败回退：仅当 Task 仍处 PLANNING 时回退 PENDING（避免覆盖并发确认结果）。 */
-    private void rollbackToPending(Long taskId) {
+    /**
+     * 失败回退：仅当 Task 仍处<b>本轮</b>拆解（状态 PLANNING 且 attemptId 未被新一轮取代）时
+     * 回退 PENDING。
+     *
+     * <p>带 attemptId 而不只带状态：本轮拆解跑超租约被巡检回收、用户重新拆解后，本轮才失败返回，
+     * 只比状态的 CAS 会把<b>新一轮</b>的 PLANNING 推回 PENDING，让新一轮白跑。</p>
+     */
+    private void rollbackToPending(Long taskId, String attemptId) {
         try {
-            taskService.casStatus(taskId, TaskStatus.PLANNING, TaskStatus.PENDING);
+            taskService.casStatusForAttempt(taskId, TaskStatus.PLANNING, TaskStatus.PENDING, attemptId);
         } catch (Exception e) {
-            log.error("任务拆解失败后回退 PENDING 异常: taskId={}", taskId, e);
+            log.error("任务拆解失败后回退 PENDING 异常: taskId={}, attemptId={}", taskId, attemptId, e);
         }
     }
 

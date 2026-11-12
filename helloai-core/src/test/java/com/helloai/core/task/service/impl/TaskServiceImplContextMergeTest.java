@@ -28,7 +28,7 @@ class TaskServiceImplContextMergeTest {
 
     private TaskServiceImpl serviceWith(Task row) {
         TaskServiceImpl impl = spy(new TaskServiceImpl(
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
         doReturn(row).when(impl).getById(any());
         doReturn(true).when(impl).updateById(any());
         return impl;

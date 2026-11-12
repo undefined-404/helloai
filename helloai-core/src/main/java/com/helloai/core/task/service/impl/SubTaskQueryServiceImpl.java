@@ -429,15 +429,6 @@ public class SubTaskQueryServiceImpl implements SubTaskQueryService {
                 .map(SubTaskProjection::toView).toList();
     }
 
-    /** 待审草案的只读快照，按 <b>createTime asc + id asc</b>（与批量插入序一致，供依赖序号回写）。 */
-    @Override
-    public List<SubTaskView> listDraftsInInsertOrder(Long taskId, SubTaskStatus status) {
-        return subTaskMapper.selectList(new LambdaQueryWrapper<SubTask>()
-                        .eq(SubTask::getTaskId, taskId)
-                        .eq(SubTask::getStatus, status)
-                        .orderByAsc(SubTask::getCreateTime, SubTask::getId))
-                .stream().map(SubTaskProjection::toView).toList();
-    }
 
     /** 按 id 集合查询只读快照（顺序与 {@code selectBatchIds} 一致）。 */
     @Override

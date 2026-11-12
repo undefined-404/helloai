@@ -7,6 +7,7 @@ import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.common.constant.AttachmentVisibility;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.system.storage.ArtifactStorage;
+import com.helloai.core.system.storage.StoredArtifact;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.port.AttachmentView;
 import com.helloai.core.task.entity.SubTask;
@@ -101,6 +102,41 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
             throw new BizException(400, "产物对象不存在，拒绝注册附件（请先上传文件内容）: " + storageUrl);
         }
 
+        Attachment attachment = persistAttachment(subTaskId, agentId, fileName, mimeType, fileSize,
+                detectBucketName(storageUrl), detectObjectKey(storageUrl, subTaskId, fileName), storageUrl);
+        log.info("附件注册: id={}, subTaskId={}, fileName={}", attachment.getId(), subTaskId, fileName);
+        return attachment;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public Attachment registerSystem(Long subTaskId, String fileName, String mimeType,
+                                     byte[] content, String ownerName) {
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null) {
+            throw new BizException("子任务不存在: " + subTaskId);
+        }
+        if (content == null || content.length == 0) {
+            throw new BizException(400, "附件内容为空: subTaskId=" + subTaskId);
+        }
+        if (fileName == null || fileName.isBlank()) {
+            throw new BizException(400, "文件名不能为空: subTaskId=" + subTaskId);
+        }
+        StoredArtifact stored = artifactStorage.store(
+                ownerName == null || ownerName.isBlank() ? "system" : ownerName,
+                subTask.getTaskId(), subTaskId, fileName, content);
+        String resolvedMime = mimeType == null || mimeType.isBlank() ? "text/markdown" : mimeType;
+        Attachment attachment = persistAttachment(subTaskId, null, fileName, resolvedMime, stored.fileSize(),
+                stored.bucketName(), stored.objectKey(), stored.storageUrl());
+        log.info("平台附件写入: id={}, subTaskId={}, fileName={}, owner={}",
+                attachment.getId(), subTaskId, fileName, ownerName);
+        return attachment;
+    }
+
+    /** 同名去活 + 落库（Agent 通道与平台通道共用；归属校验留在各自入口）。 */
+    private Attachment persistAttachment(Long subTaskId, Long uploaderAgentId, String fileName,
+                                         String mimeType, Long fileSize, String bucketName,
+                                         String objectKey, String storageUrl) {
         // 同子任务同名 ACTIVE 旧版批量去活（含历史多版本），新注册版本成为唯一有效版
         boolean superseded = lambdaUpdate()
                 .eq(Attachment::getSubTaskId, subTaskId)
@@ -118,19 +154,15 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
         attachment.setFileType(detectFileType(fileName));
         attachment.setMimeType(mimeType != null ? mimeType : "application/octet-stream");
         attachment.setFileSize(fileSize != null ? fileSize : 0L);
-        attachment.setBucketName(detectBucketName(storageUrl));
-        attachment.setObjectKey(detectObjectKey(storageUrl, subTaskId, fileName));
+        attachment.setBucketName(bucketName);
+        attachment.setObjectKey(objectKey);
         attachment.setStorageUrl(storageUrl);
         attachment.setStatus(AttachmentStatus.ACTIVE);
         // Task-Team 可见性（V99/V100）：上传者身份 + 默认可见范围。
-        // 上传者用 register 的 agentId（上方已强校验 agentId == subTask.assignedAgentId）；
-        // 默认 TASK（上传者 + 所属根任务团队），与 DB 列 DEFAULT 'TASK' 同口径。
-        // 平台侧/人工上传（非本方法）无 agentId ⇒ uploaderAgentId 为空，PERSONAL 语义下仅平台可见。
-        attachment.setUploaderAgentId(agentId);
+        // Agent 通道 = 强校验过的 agentId；平台通道 = null（非 Agent 上传，PERSONAL 语义下仅平台可见）。
+        attachment.setUploaderAgentId(uploaderAgentId);
         attachment.setVisibility(AttachmentVisibility.TASK);
         save(attachment);
-
-        log.info("附件注册: id={}, subTaskId={}, fileName={}", attachment.getId(), subTaskId, fileName);
         return attachment;
     }
 

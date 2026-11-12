@@ -15,6 +15,7 @@ import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.service.TaskAgentMemberService;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskLeaseServiceImpl;
@@ -77,6 +78,8 @@ class SubTaskServiceLeaseReclaimTest {
     /** G-006：外部执行 attempt 收口（状态退出时懒取；mock 默认返回 null ⇒ 静默跳过）。 */
     @Mock private ObjectProvider<AgentExecutionRecordService> agentExecutionRecordServiceProvider;
     @Mock private SubTaskMapper subTaskMapper;
+    // G-031：成员表实时入队（回收不换人，用例不触达写入）
+    @Mock private TaskAgentMemberService taskAgentMemberService;
     @Mock private AgentSessionService agentSessionService;
 
     private SubTaskServiceImpl subTaskService;
@@ -92,11 +95,14 @@ class SubTaskServiceLeaseReclaimTest {
                 concurrencyQuotaService, new AgentDispatchProperties(), new WatchdogProperties(),
                 taskTimelineService, agentServiceProvider, attachmentServiceProvider,
                 agentEventRecorder, implicitScoreCalculator, rewardService, reviewPort,
-                applicationEventPublisher, agentExecutionRecordServiceProvider);
+                applicationEventPublisher, agentExecutionRecordServiceProvider,
+                taskAgentMemberService);
         SubTaskLeaseService leaseService = new SubTaskLeaseServiceImpl(
                 subTaskMapper, taskTimelineService, agentSessionService, stateMachineService);
         subTaskService = new SubTaskServiceImpl(
-                subTaskMapper, queryService, stateMachineService, leaseService);
+                subTaskMapper, queryService, stateMachineService, leaseService,
+                org.mockito.Mockito.mock(TaskDerivationService.class),
+                org.mockito.Mockito.mock(RuntimeContractGateService.class));
     }
 
     private SubTask expiredSubTask() {

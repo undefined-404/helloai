@@ -1,33 +1,45 @@
 package com.helloai.core.task.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AcceptanceKind;
+import com.helloai.common.constant.SubTaskContextKeys;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TaskStatus;
 import com.helloai.common.constant.UncertaintyKind;
+import com.helloai.common.util.DraftGateChecker;
+import com.helloai.common.util.RuntimeContractGate;
 import com.helloai.core.agent.port.SubTaskClaimConstraint;
+import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.SubTaskDraft;
 import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.projection.SubTaskProjection;
+import com.helloai.core.task.service.RuntimeContractGateService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.SubTaskLeaseService;
 import com.helloai.core.task.service.SubTaskNotificationService;
 import com.helloai.core.task.service.SubTaskQueryService;
 import com.helloai.core.task.service.SubTaskStateMachineService;
+import com.helloai.core.task.service.TaskDerivationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -39,10 +51,12 @@ import java.util.Set;
  * <b>零改动</b>，本笔可<b>单笔 revert</b>。类内只剩两类内容：</p>
  * <ol>
  *     <li><b>领域写入原语</b>（{@code updateDraft} / {@code create} / {@code updateDependsOn} /
- *         {@code createBatch} / {@code updateContext} / {@code updateDeadline} / {@code saveDrafts}
- *         / {@code unlinkByAssignedAgent} / {@code physicalDeleteByTaskId}）—— 均为
+ *         {@code createBatch} / {@code confirmDrafts} / {@code updateContext}
+ *         / {@code saveDrafts} / {@code unlinkByAssignedAgent} / {@code physicalDeleteByTaskId}）—— 均为
  *         「单实体单次原子写 + 无状态迁移语义」，属 §4.3.2 门面行所定的「MyBatis-Plus 基类能力 +
- *         草稿/技能等配置面（低频写）」；</li>
+ *         草稿/技能等配置面（低频写）」；例外是 {@code createBatch} / {@code confirmDrafts}
+ *         两个<b>批</b>原语，其「全成或全败」由方法自身的事务保证（跨域编排不得逐条调用
+ *         代替它们，否则失败会留下不可恢复的半状态，见 {@code confirmDrafts} 注释）；</li>
  *     <li><b>逐方法委托</b>给 4 个职责类（零业务分支）。</li>
  * </ol>
  *
@@ -96,63 +110,99 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     private final SubTaskQueryService queryService;
     private final SubTaskStateMachineService stateMachineService;
     private final SubTaskLeaseService leaseService;
+    private final TaskDerivationService taskDerivationService;
+    private final RuntimeContractGateService runtimeContractGateService;
+
+    /** 显式枚举值解析：非法值返回 null（交给 {@link AcceptanceKind#parse} 做既有回落）。 */
+    private static AcceptanceKind parseExplicitKind(String raw) {
+        try {
+            return AcceptanceKind.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 记录「显式声明的 kind 原文」到 {@code context}（见 {@code SubTaskContextKeys.ACCEPTANCE_KIND_DECLARED}）。
+     *
+     * <p>为什么落库：{@code acceptance_kind} 列经 {@code parse} 后无法区分「显式声明 AUTOMATED」
+     * 与「未声明」，而门禁对两者的处置不同（前者写法不符是 block，后者只是 warn）。</p>
+     *
+     * @param raw 合法枚举名；{@code null} = 本次声明为「未声明」以外的非法值，保留原值不动
+     */
+    private static void putDeclaredKind(SubTask subTask, String raw) {
+        if (raw == null) {
+            return;
+        }
+        Map<String, Object> context = subTask.getContext() == null
+                ? new LinkedHashMap<>() : new LinkedHashMap<>(subTask.getContext());
+        context.put(SubTaskContextKeys.ACCEPTANCE_KIND_DECLARED, raw);
+        subTask.setContext(context);
+    }
+
 
     // ══════════════════════════════════════════════════════════════
-    //  门面自有：领域写入原语（单实体原子写，无状态迁移语义）
+    //  执行期重构（ADR-008 §11~§12）：入口 / 编辑 / 回链
     // ══════════════════════════════════════════════════════════════
+
+    /** 允许转入人工重构的入口状态：共同语义是「自动链路已停，必须人看一眼」。 */
+    private static final Set<SubTaskStatus> RESTRUCTURE_ENTRY_STATUSES = Set.of(
+            SubTaskStatus.BLOCKED, SubTaskStatus.DEAD_LETTER, SubTaskStatus.REWORK, SubTaskStatus.PAUSED);
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void updateDraft(Long id, List<String> requiredSkills, String constraints, List<Uncertainty> uncertainties,
-                            String acceptanceKind) {
-        SubTask subTask = getById(id);
+    public void enterRestructuring(Long subTaskId, String reason) {
+        SubTask subTask = subTaskMapper.selectById(subTaskId);
         if (subTask == null) {
-            throw new BizException("草案不存在: " + id);
+            throw new BizException("子任务不存在: " + subTaskId);
         }
-        // fail-close：仅草案态可编辑；已转正子任务走返工/改派链路，不得绕过状态机直改
-        if (subTask.getStatus() != SubTaskStatus.PENDING_PLAN_REVIEW) {
-            throw new BizException("仅草案待审状态可编辑，当前状态: " + subTask.getStatus());
+        if (!RESTRUCTURE_ENTRY_STATUSES.contains(subTask.getStatus())) {
+            throw new BizException("仅 BLOCKED / DEAD_LETTER / REWORK / PAUSED 可转入重构，当前状态: "
+                    + subTask.getStatus());
         }
-        if (requiredSkills != null) {
-            subTask.setRequiredSkills(requiredSkills);
+        Object rawRound = subTask.getContext() == null
+                ? null : subTask.getContext().get(SubTaskContextKeys.RESTRUCTURE_ROUND);
+        int round = asInt(rawRound) + 1;
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put(SubTaskContextKeys.RESTRUCTURE_ROUND, round);
+        patch.put(SubTaskContextKeys.RESTRUCTURE_ENTERED_AT, OffsetDateTime.now().toString());
+        if (reason != null && !reason.isBlank()) {
+            patch.put(SubTaskContextKeys.RESTRUCTURE_REASON, reason.trim());
         }
-        if (constraints != null) {
-            subTask.setConstraints(constraints);
-        }
-        if (uncertainties != null) {
-            // G-011 / TD-7：人工编辑为权威输入不做 kind 强校验，但落库侧保持数据不变量——
-            // 空白 note 条目丢弃（无信息量）、非法 kind 降级 UNCONFIRMED（D3 fail-close 同口径，
-            // 值域白名单单一来源 UncertaintyKind）
-            List<Uncertainty> normalized = new ArrayList<>();
-            for (Uncertainty u : uncertainties) {
-                if (u == null || u.getNote() == null || u.getNote().isBlank()) {
-                    continue;
-                }
-                if (!UncertaintyKind.isKnown(u.getKind())) {
-                    u.setKind(Uncertainty.KIND_UNCONFIRMED);
-                }
-                normalized.add(u);
-            }
-            subTask.setUncertainties(normalized);
-        }
-        if (acceptanceKind != null && !acceptanceKind.isBlank()) {
-            // TD-2：人工编辑为权威输入，不做强校验；非法值回落 AUTOMATED（AcceptanceKind.parse 收口）
-            subTask.setAcceptanceKind(AcceptanceKind.parse(acceptanceKind));
-        }
-        updateById(subTask);
+        stateMachineService.changeStatus(subTaskId, SubTaskStatus.RESTRUCTURING, null, patch);
+        log.info("子任务转入人工重构: id={}, round={}, from={}", subTaskId, round, subTask.getStatus());
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void updateDraftContent(Long id, String content, String deliverable, String acceptance,
-                                   String acceptanceKind) {
-        SubTask subTask = getById(id);
+    public SubTaskView updateRestructureContent(Long subTaskId, String title, String content, String deliverable,
+                                                String acceptance, String constraints, String acceptanceKind,
+                                                Long editorId) {
+        SubTask subTask = subTaskMapper.selectById(subTaskId);
         if (subTask == null) {
-            throw new BizException("草案不存在: " + id);
+            throw new BizException("子任务不存在: " + subTaskId);
         }
-        // fail-close：仅草案态可编辑（与 updateDraft 同口径，TD-9 门禁复用）
-        if (subTask.getStatus() != SubTaskStatus.PENDING_PLAN_REVIEW) {
-            throw new BizException("仅草案待审状态可编辑，当前状态: " + subTask.getStatus());
+        // fail-close：只有人工接管态可改要求；其余状态的执行者仍在跑，改要求会与在途产出冲突
+        if (subTask.getStatus() != SubTaskStatus.RESTRUCTURING) {
+            throw new BizException("仅重构中状态可编辑，当前状态: " + subTask.getStatus());
+        }
+        Map<String, Object> context = subTask.getContext() == null
+                ? new LinkedHashMap<>() : new LinkedHashMap<>(subTask.getContext());
+        List<Map<String, Object>> history = readRestructureHistory(
+                context.get(SubTaskContextKeys.RESTRUCTURE_HISTORY));
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("title", subTask.getTitle());
+        snapshot.put("content", subTask.getContent());
+        snapshot.put("deliverable", subTask.getDeliverable());
+        snapshot.put("acceptance", subTask.getAcceptance());
+        snapshot.put("constraints", subTask.getConstraints());
+        snapshot.put("editedAt", OffsetDateTime.now().toString());
+        snapshot.put("editorId", editorId);
+        history.add(snapshot);
+        context.put(SubTaskContextKeys.RESTRUCTURE_HISTORY, trimRestructureHistory(history));
+
+        if (title != null && !title.isBlank()) {
+            subTask.setTitle(title.trim());
         }
         if (content != null) {
             subTask.setContent(content);
@@ -163,12 +213,176 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         if (acceptance != null) {
             subTask.setAcceptance(acceptance);
         }
-        if (acceptanceKind != null && !acceptanceKind.isBlank()) {
-            // TD-2：人工/LLM 重生成产物为权威输入，非法值回落 AUTOMATED（AcceptanceKind.parse 收口）
-            subTask.setAcceptanceKind(AcceptanceKind.parse(acceptanceKind));
+        if (constraints != null) {
+            subTask.setConstraints(constraints);
         }
-        // title / id / dependsOn 不变量白名单：本方法不触碰这三项（regenerate 语义）
-        updateById(subTask);
+        subTask.setContext(context);
+        if (acceptanceKind != null && !acceptanceKind.isBlank()) {
+            AcceptanceKind declared = parseExplicitKind(acceptanceKind);
+            if (declared != null) {
+                subTask.setAcceptanceKind(declared);
+            } else {
+                subTask.setAcceptanceKind(AcceptanceKind.parse(acceptanceKind));
+            }
+            putDeclaredKind(subTask, declared == null ? null : declared.name());
+        }
+        subTaskMapper.updateById(subTask);
+        log.info("重构要求已修订: id={}, titleEdited={}, contentEdited={}, acceptanceEdited={}, editorId={}",
+                subTaskId, title != null, content != null || deliverable != null || acceptance != null,
+                acceptance != null, editorId);
+        return getView(subTaskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public SubTaskView applyRestructure(Long subTaskId) {
+        SubTask subTask = subTaskMapper.selectById(subTaskId);
+        if (subTask == null) {
+            throw new BizException("子任务不存在: " + subTaskId);
+        }
+        if (subTask.getStatus() != SubTaskStatus.RESTRUCTURING) {
+            throw new BizException("仅重构中状态可取回派发，当前状态: " + subTask.getStatus());
+        }
+        List<Map<String, Object>> history = readRestructureHistory(subTask.getContext() == null
+                ? null : subTask.getContext().get(SubTaskContextKeys.RESTRUCTURE_HISTORY));
+        // 首条 = 进入重构前的原始要求（下游当初依赖的产出基线）；无编辑记录时用当前值，等价「未改动」
+        Map<String, Object> baseline = history.isEmpty() ? null : history.get(0);
+        String oldDeliverable = baseline == null ? subTask.getDeliverable() : asString(baseline.get("deliverable"));
+        String oldAcceptance = baseline == null ? subTask.getAcceptance() : asString(baseline.get("acceptance"));
+        List<SubTask> siblings = loadSiblings(subTask);
+        RuntimeContractGate.Result gate = runtimeContractGateService.check(
+                oldDeliverable, oldAcceptance, subTask.getDeliverable(), subTask.getAcceptance(),
+                toDownstreams(subTask, siblings), toUpstreams(subTask, siblings),
+                plannerAgentIdOf(subTask));
+        if (gate.hasBlocking()) {
+            RuntimeContractGate.Finding first = gate.findings().stream()
+                    .filter(f -> "block".equals(f.severity()))
+                    .findFirst()
+                    .orElseThrow();
+            log.warn("整改未通过 G5 运行期契约校验: subTaskId={}, findings={}", subTaskId, gate.findings());
+            throw new BizException("整改未通过 G5 运行期契约校验：" + first.evidence()
+                    + "（" + first.ruleId() + "）");
+        }
+        String now = OffsetDateTime.now().toString();
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put(SubTaskContextKeys.RESTRUCTURE_GATE_FINDINGS, RuntimeContractGate.payload(gate, now));
+        patch.put(SubTaskContextKeys.RESTRUCTURE_APPLIED_AT, now);
+        stateMachineService.changeStatus(subTaskId, SubTaskStatus.PENDING, null, patch);
+        log.info("重构整改完成回派发: id={}, findings={}", subTaskId, gate.findings().size());
+        return getView(subTaskId);
+    }
+
+    /**
+     * 同任务下的其它子任务（含 `DONE`：上游产出正是从已完成行里取的）。
+     * 逻辑删除由 `@TableLogic` 自动过滤。
+     */
+    private List<SubTask> loadSiblings(SubTask current) {
+        return subTaskMapper.selectList(new LambdaQueryWrapper<SubTask>()
+                .eq(SubTask::getTaskId, current.getTaskId())
+                .ne(SubTask::getId, current.getId()));
+    }
+
+    /**
+     * 依赖本子任务且未终态的下游（`DONE` / `CANCELLED` 不参与：
+     * 下游已经交付或放弃，整改不再改变它的契约）。
+     */
+    private static List<RuntimeContractGate.Downstream> toDownstreams(SubTask current, List<SubTask> siblings) {
+        List<RuntimeContractGate.Downstream> downstreams = new ArrayList<>();
+        for (SubTask sibling : siblings) {
+            if (sibling.getStatus() == SubTaskStatus.DONE || sibling.getStatus() == SubTaskStatus.CANCELLED) {
+                continue;
+            }
+            List<Long> deps = sibling.dependsOnIdList();
+            if (deps == null || !deps.contains(current.getId())) {
+                continue;
+            }
+            downstreams.add(new RuntimeContractGate.Downstream(sibling.getId(), sibling.getTitle(),
+                    asString(sibling.getContent()) + "\n" + asString(sibling.getAcceptance())));
+        }
+        return downstreams;
+    }
+
+    /** 直接上游的产出与约束（语义层判断「新要求是否与上游已提供的事实冲突」）。 */
+    private static List<RuntimeContractGate.Upstream> toUpstreams(SubTask current, List<SubTask> siblings) {
+        List<Long> deps = current.dependsOnIdList();
+        if (deps == null || deps.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, SubTask> byId = new LinkedHashMap<>();
+        for (SubTask sibling : siblings) {
+            byId.put(sibling.getId(), sibling);
+        }
+        List<RuntimeContractGate.Upstream> upstreams = new ArrayList<>();
+        for (Long depId : deps) {
+            SubTask up = byId.get(depId);
+            if (up == null) {
+                continue;
+            }
+            String output = SubTaskOutputExtractor.extractExecutionOutput(up.getContext());
+            upstreams.add(new RuntimeContractGate.Upstream(up.getId(), up.getTitle(),
+                    asString(up.getContent()) + "\n" + asString(up.getAcceptance()) + "\n"
+                            + asString(up.getConstraints()) + "\n" + asString(output)));
+        }
+        return upstreams;
+    }
+
+    /** 语义门借 planner agent 调模型（拆解时写入 `context.plannerAgentId`）。 */
+    private static Long plannerAgentIdOf(SubTask subTask) {
+        Object raw = subTask.getContext() == null ? null : subTask.getContext().get("plannerAgentId");
+        if (raw instanceof Number number) {
+            return number.longValue();
+        }
+        if (raw instanceof String text && !text.isBlank()) {
+            try {
+                return Long.parseLong(text.trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static List<Map<String, Object>> readRestructureHistory(Object raw) {
+        List<Map<String, Object>> history = new ArrayList<>();
+        if (!(raw instanceof List<?> list)) {
+            return history;
+        }
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((k, v) -> copy.put(String.valueOf(k), v));
+            history.add(copy);
+        }
+        return history;
+    }
+
+    /** 超限时保留首条（原始基线）与最近条目——基线一丢，{@code G5} 就失去比较对象。 */
+    private static List<Map<String, Object>> trimRestructureHistory(List<Map<String, Object>> history) {
+        int limit = SubTaskContextKeys.RESTRUCTURE_HISTORY_LIMIT;
+        if (history.size() <= limit) {
+            return history;
+        }
+        List<Map<String, Object>> trimmed = new ArrayList<>(limit);
+        trimmed.add(history.get(0));
+        trimmed.addAll(history.subList(history.size() - (limit - 1), history.size()));
+        return trimmed;
+    }
+
+    private static int asInt(Object raw) {
+        if (raw instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return raw == null ? 0 : Integer.parseInt(String.valueOf(raw));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static String asString(Object raw) {
+        return raw == null ? "" : String.valueOf(raw);
     }
 
     @Override
@@ -246,116 +460,58 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         updateById(subTask);
     }
 
-    @Override
-    public boolean updateDeadline(Long subTaskId, OffsetDateTime deadline) {
-        SubTask subTask = getById(subTaskId);
-        if (subTask == null) {
-            return false;
+    /** 按键合并 context：先取最新行再逐键写入，避免旧快照整段覆盖第三方刚写的键。 */
+    private void mergeContext(Long subTaskId, Map<String, Object> patch) {
+        if (subTaskId == null || patch == null || patch.isEmpty()) {
+            return;
         }
-        subTask.setDeadline(deadline);
-        return updateById(subTask);
+        SubTask latest = getById(subTaskId);
+        if (latest == null) {
+            return;
+        }
+        Map<String, Object> context = new LinkedHashMap<>(
+                latest.getContext() != null ? latest.getContext() : Map.of());
+        context.putAll(patch);
+        latest.setContext(context);
+        if (!updateById(latest)) {
+            log.warn("子任务 context 合并未命中（并发删除？）: subTaskId={}", subTaskId);
+        }
     }
 
     /**
      * {@inheritDoc}
      *
-     * <p>RM9-b 归属说明：本方法含<b>批量插入</b>（{@code saveBatch}，MyBatis-Plus 基类能力），
-     * 属「写」而非「只读投影」，故留在门面（沿用 §4.3.2 门面行「保留 {@code extends ServiceImpl}
-     * 供 CRUD」的判据）；映射两半（{@code toEntity} / {@code toView}）统一在
-     * {@link SubTaskProjection}，避免与只读簇各持一份口径（RM9-b 微调①）。</p>
+     * <p>独立事务 + 按键合并。与 {@code TaskService#updateContextInNewTx} 同一手法：
+     * 先取最新行再逐键写入（{@code @Version} 只保护版本号、不保护内容，旧快照整段提交会
+     * 覆盖掉两次写入之间第三方改动的键）。{@code updateById} 返回 false 时告警留痕，不静默丢失。</p>
      */
     @Override
-    public List<SubTaskView> saveDrafts(List<SubTaskDraft> drafts) {
-        if (drafts == null || drafts.isEmpty()) {
-            return List.of();
-        }
-        List<SubTask> entities = drafts.stream().map(SubTaskProjection::toEntity).toList();
-        saveBatch(entities);
-        return entities.stream().map(SubTaskProjection::toView).toList();
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void updateContextInNewTx(Long subTaskId, Map<String, Object> patch) {
+        mergeContext(subTaskId, patch);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>合并逻辑与 {@link #updateContextInNewTx} 共用 {@link #mergeContext}，差别只在事务边界：
+     * 本方法<b>不加</b> {@code @Transactional}，跟随调用方事务（判据是「结论描述的主体还在不在」——
+     * 主体与结论同事务，才不会留下孤儿 findings）。</p>
+     */
+    @Override
+    public void mergeContextInTx(Long subTaskId, Map<String, Object> patch) {
+        mergeContext(subTaskId, patch);
+    }
+
+
+    @Override
+    public SubTaskView getView(Long subTaskId) {
+        return queryService.getView(subTaskId);
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void unlinkByAssignedAgent(Long agentId) {
-        subTaskMapper.update(null, new LambdaUpdateWrapper<SubTask>()
-                .eq(SubTask::getAssignedAgentId, agentId)
-                .set(SubTask::getAssignedAgentId, null));
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public int physicalDeleteByTaskId(Long taskId) {
-        // 同域 Mapper 直捅（CODE_STYLE §7.1：同域合规）
-        return subTaskMapper.physicalDeleteByTaskId(taskId);
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  委托：只读查询与视图投影 → SubTaskQueryService
-    // ══════════════════════════════════════════════════════════════
-
-    @Override
-    public List<String> requiredSkillsOf(Long taskId) {
-        return queryService.requiredSkillsOf(taskId);
-    }
-
-    @Override
-    public List<String> mergeSkills(SubTask subTask) {
-        return queryService.mergeSkills(subTask);
-    }
-
-    @Override
-    public List<String> mergeSkills(Long subTaskId) {
-        return queryService.mergeSkills(subTaskId);
-    }
-
-    @Override
-    public SubTaskClaimConstraint claimConstraint(Long subTaskId) {
-        return queryService.claimConstraint(subTaskId);
-    }
-
-    @Override
-    public IPage<SubTask> list(Long taskId, SubTaskStatus status, Long assignedAgentId, Integer page, int pageSize) {
-        return queryService.list(taskId, status, assignedAgentId, page, pageSize);
-    }
-
-    @Override
-    public List<SubTask> listAvailable() {
-        return queryService.listAvailable();
-    }
-
-    @Override
-    public List<SubTask> listMine(Long assignedAgentId) {
-        return queryService.listMine(assignedAgentId);
-    }
-
-    @Override
-    public List<SubTask> listRecentlyChanged(OffsetDateTime since, int limit) {
-        return queryService.listRecentlyChanged(since, limit);
-    }
-
-    @Override
-    public SubTask getByIdForUpdate(Long subTaskId) {
-        return queryService.getByIdForUpdate(subTaskId);
-    }
-
-    @Override
-    public boolean isReady(SubTask subTask) {
-        return queryService.isReady(subTask);
-    }
-
-    @Override
-    public Map<String, Integer> countByStatusForAgent(Long agentId) {
-        return queryService.countByStatusForAgent(agentId);
-    }
-
-    @Override
-    public long countByAssignedAgent(Long agentId) {
-        return queryService.countByAssignedAgent(agentId);
-    }
-
-    @Override
-    public long countReviewByReviewerAgent(Long agentId) {
-        return queryService.countReviewByReviewerAgent(agentId);
+    public List<SubTaskView> listViewsByTaskIdAndStatus(Long taskId, SubTaskStatus status) {
+        return queryService.listViewsByTaskIdAndStatus(taskId, status);
     }
 
     @Override
@@ -369,70 +525,200 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     @Override
-    public List<SubTask> selectInFlightByAgent(Long agentId, int limit) {
-        return queryService.selectInFlightByAgent(agentId, limit);
-    }
-
-    @Override
-    public int countInFlightByAgent(Long agentId) {
-        return queryService.countInFlightByAgent(agentId);
-    }
-
-    @Override
-    public int countInFlightAll() {
-        return queryService.countInFlightAll();
-    }
-
-    @Override
-    public boolean existsInFlightAssignedOrInProgress(Long agentId) {
-        return queryService.existsInFlightAssignedOrInProgress(agentId);
-    }
-
-    @Override
-    public List<SubTask> listInFlightAssignedOrInProgress(Long agentId) {
-        return queryService.listInFlightAssignedOrInProgress(agentId);
-    }
-
-    @Override
-    public List<Long> listPendingUnassignedWithoutActiveExecutionRecord(int limit) {
-        return queryService.listPendingUnassignedWithoutActiveExecutionRecord(limit);
-    }
-
-    @Override
-    public List<Long> listStalePendingWithoutExecutionRecord(OffsetDateTime cutoff, int limit) {
-        return queryService.listStalePendingWithoutExecutionRecord(cutoff, limit);
-    }
-
-    @Override
-    public List<Long> listStaleBlockedSubTaskIds(OffsetDateTime cutoff, int limit) {
-        return queryService.listStaleBlockedSubTaskIds(cutoff, limit);
-    }
-
-    @Override
-    public SubTaskView getView(Long subTaskId) {
-        return queryService.getView(subTaskId);
-    }
-
-    @Override
-    public List<SubTaskView> listViewsByTaskId(Long taskId) {
-        return queryService.listViewsByTaskId(taskId);
-    }
-
-    @Override
-    public List<SubTaskView> listViewsByTaskIdAndStatus(Long taskId, SubTaskStatus status) {
-        return queryService.listViewsByTaskIdAndStatus(taskId, status);
-    }
-
-    @Override
-    public List<SubTaskView> listDraftsInInsertOrder(Long taskId, SubTaskStatus status) {
-        return queryService.listDraftsInInsertOrder(taskId, status);
-    }
-
-    @Override
     public List<SubTaskView> listViewsByIds(Collection<Long> ids) {
         return queryService.listViewsByIds(ids);
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public List<SubTaskView> materializeFromStaging(Long taskId, List<SubTaskDraft> drafts,
+                                                    Map<String, List<String>> dependsOnCodes, Integer slaMinutes) {
+        if (taskId == null || drafts == null || drafts.isEmpty()) {
+            return List.of();
+        }
+        OffsetDateTime deadline = (slaMinutes != null && slaMinutes > 0)
+                ? OffsetDateTime.now().plusMinutes(slaMinutes)
+                : null;
+        String confirmedAt = OffsetDateTime.now().toString();
+
+        // 插入前定稿：状态 / deadline / 确认标记 / 派生锚一次算好，避免「先插待审再逐条转正」
+        // 的中间态与额外状态迁移事件（合并基线 V146 起 PENDING_PLAN_REVIEW 不再是合法落库状态）。
+        Map<String, DerivationTarget> targets = new LinkedHashMap<>();
+        List<SubTask> entities = new ArrayList<>(drafts.size());
+        for (SubTaskDraft draft : drafts) {
+            DerivationTarget target = resolveMaterializeTarget(taskId, draft.draftCode());
+            targets.put(draft.draftCode(), target);
+
+            SubTask entity = SubTaskProjection.toEntity(draft);
+            entity.setStatus(target.status());
+            if (target.status() == SubTaskStatus.PENDING && deadline != null) {
+                entity.setDeadline(deadline);
+            }
+            Map<String, Object> context = entity.getContext() == null
+                    ? new LinkedHashMap<>() : new LinkedHashMap<>(entity.getContext());
+            context.put("planConfirmedAt", confirmedAt);
+            if (target.derivedTaskId() != null) {
+                context.put("derivedTaskId", target.derivedTaskId());
+            }
+            entity.setContext(context);
+            entities.add(entity);
+        }
+        saveBatch(entities);
+
+        Map<String, Long> codeToId = new LinkedHashMap<>();
+        for (SubTask entity : entities) {
+            if (entity.getDraftCode() != null) {
+                codeToId.put(entity.getDraftCode(), entity.getId());
+            }
+        }
+        for (SubTask entity : entities) {
+            List<String> codes = dependsOnCodes == null ? null : dependsOnCodes.get(entity.getDraftCode());
+            if (codes == null) {
+                continue;
+            }
+            List<Long> ids = new ArrayList<>(codes.size());
+            for (String code : codes) {
+                Long depId = codeToId.get(code);
+                if (depId == null) {
+                    log.warn("物化依赖翻译失败，丢弃该边: taskId={}, code={}, depCode={}",
+                            taskId, entity.getDraftCode(), code);
+                    continue;
+                }
+                ids.add(depId);
+            }
+            updateDependsOn(entity.getId(), ids);
+        }
+
+        // 派生锚回填必须在插入拿到真实 id 之后（Y 的 parent_sub_task_id 指向本次物化行）
+        for (SubTask entity : entities) {
+            DerivationTarget target = targets.get(entity.getDraftCode());
+            if (target != null && target.derivedTaskId() != null) {
+                taskDerivationService.bindParentSubTask(target.derivedTaskId(), entity.getId());
+            }
+        }
+
+        log.info("暂存区物化完成（最终状态直插）: taskId={}, count={}", taskId, entities.size());
+        return listViewsByIds(entities.stream().map(SubTask::getId).toList());
+    }
+
+    /**
+     * 确认时的物化目标（`ADR-008` §19.3 S5）。
+     *
+     * <p>只在插入前按 `(taskId, draftCode)` 判定，不依赖已落库行：派生 Task 已完成 ⇒ `DONE`；
+     * 未完成 ⇒ `AWAITING_DERIVED`；未派生 ⇒ `PENDING`。派生锚在插入后由调用方回填。</p>
+     */
+    private DerivationTarget resolveMaterializeTarget(Long taskId, String code) {
+        if (code == null || code.isBlank()) {
+            return new DerivationTarget(SubTaskStatus.PENDING, null);
+        }
+        TaskView derived = taskDerivationService.findActivePlanDerivation(taskId, code);
+        if (derived == null) {
+            return new DerivationTarget(SubTaskStatus.PENDING, null);
+        }
+        SubTaskStatus target = derived.status() == TaskStatus.DONE
+                ? SubTaskStatus.DONE : SubTaskStatus.AWAITING_DERIVED;
+        log.info("草案确认物化：已派生草案不进入分发链: taskId={}, code={}, derivedTaskId={}, target={}",
+                taskId, code, derived.id(), target);
+        return new DerivationTarget(target, derived.id());
+    }
+
+    private record DerivationTarget(SubTaskStatus status, Long derivedTaskId) {
+    }
+
+    public void unlinkByAssignedAgent(Long agentId) {
+        subTaskMapper.update(null, new LambdaUpdateWrapper<SubTask>()
+                .eq(SubTask::getAssignedAgentId, agentId)
+                .set(SubTask::getAssignedAgentId, null));
+    }
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int physicalDeleteNeverExecutedCancelled(Long taskId) {
+        return subTaskMapper.physicalDeleteNeverExecutedCancelled(taskId);
+    }
+
+    public int physicalDeleteByTaskId(Long taskId) {
+        // 同域 Mapper 直捅（CODE_STYLE §7.1：同域合规）
+        return subTaskMapper.physicalDeleteByTaskId(taskId);
+    }
+    public List<String> requiredSkillsOf(Long taskId) {
+        return queryService.requiredSkillsOf(taskId);
+    }
+    @Override
+    public void demoteContractFlags(List<Long> subTaskIds) {
+        if (subTaskIds == null || subTaskIds.isEmpty()) {
+            return;
+        }
+        lambdaUpdate()
+                .in(SubTask::getId, subTaskIds)
+                .set(SubTask::getIsContract, 0)
+                .update();
+    }
+
+    @Override
+    public List<String> mergeSkills(SubTask subTask) {
+        return queryService.mergeSkills(subTask);
+    }
+
+    public List<String> mergeSkills(Long subTaskId) {
+        return queryService.mergeSkills(subTaskId);
+    }
+    public SubTaskClaimConstraint claimConstraint(Long subTaskId) {
+        return queryService.claimConstraint(subTaskId);
+    }
+    public IPage<SubTask> list(Long taskId, SubTaskStatus status, Long assignedAgentId, Integer page, int pageSize) {
+        return queryService.list(taskId, status, assignedAgentId, page, pageSize);
+    }
+    public List<SubTask> listAvailable() {
+        return queryService.listAvailable();
+    }
+    public List<SubTask> listMine(Long assignedAgentId) {
+        return queryService.listMine(assignedAgentId);
+    }
+    public List<SubTask> listRecentlyChanged(OffsetDateTime since, int limit) {
+        return queryService.listRecentlyChanged(since, limit);
+    }
+    public SubTask getByIdForUpdate(Long subTaskId) {
+        return queryService.getByIdForUpdate(subTaskId);
+    }
+    public boolean isReady(SubTask subTask) {
+        return queryService.isReady(subTask);
+    }
+    public Map<String, Integer> countByStatusForAgent(Long agentId) {
+        return queryService.countByStatusForAgent(agentId);
+    }
+    public long countByAssignedAgent(Long agentId) {
+        return queryService.countByAssignedAgent(agentId);
+    }
+    public long countReviewByReviewerAgent(Long agentId) {
+        return queryService.countReviewByReviewerAgent(agentId);
+    }
+    public List<SubTask> selectInFlightByAgent(Long agentId, int limit) {
+        return queryService.selectInFlightByAgent(agentId, limit);
+    }
+    public int countInFlightByAgent(Long agentId) {
+        return queryService.countInFlightByAgent(agentId);
+    }
+    public int countInFlightAll() {
+        return queryService.countInFlightAll();
+    }
+    public boolean existsInFlightAssignedOrInProgress(Long agentId) {
+        return queryService.existsInFlightAssignedOrInProgress(agentId);
+    }
+    public List<SubTask> listInFlightAssignedOrInProgress(Long agentId) {
+        return queryService.listInFlightAssignedOrInProgress(agentId);
+    }
+    public List<Long> listPendingUnassignedWithoutActiveExecutionRecord(int limit) {
+        return queryService.listPendingUnassignedWithoutActiveExecutionRecord(limit);
+    }
+    public List<Long> listStalePendingWithoutExecutionRecord(OffsetDateTime cutoff, int limit) {
+        return queryService.listStalePendingWithoutExecutionRecord(cutoff, limit);
+    }
+    public List<Long> listStaleBlockedSubTaskIds(OffsetDateTime cutoff, int limit) {
+        return queryService.listStaleBlockedSubTaskIds(cutoff, limit);
+    }
+    public List<SubTaskView> listViewsByTaskId(Long taskId) {
+        return queryService.listViewsByTaskId(taskId);
+    }
     // ══════════════════════════════════════════════════════════════
     //  委托：状态迁移唯一入口 → SubTaskStateMachineService
     // ══════════════════════════════════════════════════════════════

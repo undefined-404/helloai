@@ -34,16 +34,28 @@ export const paths = {
     generateFinalReport: (id: string | number) => `/tasks/generateFinalReportByTaskId/${enc(id)}`,
     rollbackFinalReport: (id: string | number) => `/tasks/rollbackFinalReportByTaskId/${enc(id)}`,
     iterations: (id: string | number) => `/tasks/findTaskIterationsByTaskId/${enc(id)}`,
-    backfillIterations: '/tasks/backfillTaskIterations'
+    backfillIterations: '/tasks/backfillTaskIterations',
+    // TD-16d-4 d-3b-2 草案写路径按位置编号定位：code 只在任务内唯一，必须带 taskId
+    updateDraftByCode: (taskId: string | number, code: string) =>
+      `/tasks/updateDraftByCode/${enc(taskId)}/${enc(code)}`,
+    // ADR-008 §5：草案派生为独立任务 Y（幂等；草案本身不变）
+    deriveDraftByCode: (taskId: string | number, code: string) =>
+      `/tasks/deriveDraftByCode/${enc(taskId)}/${enc(code)}`,
+    // ADR-008 §5 对话版：草案「拆出去」先开派生会话，终稿确认后才建 Y
+    draftDeriveSession: (taskId: string | number, code: string) =>
+      `/tasks/draftDeriveSession/${enc(taskId)}/${enc(code)}`,
+    regenerateDraftByCode: (taskId: string | number, code: string) =>
+      `/tasks/regenerateDraftByCode/${enc(taskId)}/${enc(code)}`
+  },
+  planDrafts: {
+    // AD-5a-3：暂存区草案列表（草案 id 空间与 sub_task 分离；空列表时调用方回落旧接口）
+    listByTask: (taskId: string | number) => `/plan-drafts/listByTaskId/${enc(taskId)}`
   },
   subTasks: {
     list: '/sub-tasks/list',
     getById: (id: string | number) => `/sub-tasks/getById/${enc(id)}`,
-    // G-010 草案人工修订：确认前编辑技能指派与执行约束（仅 PENDING_PLAN_REVIEW 可编辑）
-    updateDraft: (id: string | number) => `/sub-tasks/updateDraftById/${enc(id)}`,
-    // TD-9 单条草案细拆 / 重生成（同步等待 LLM，原草案不被破坏）
-    expandDraft: (id: string | number) => `/sub-tasks/expandDraftById/${enc(id)}`,
-    regenerateDraft: (id: string | number) => `/sub-tasks/regenerateDraftById/${enc(id)}`,
+    // G-010 草案人工修订：确认前编辑技能指派与执行约束（仅暂存区草案可编辑）
+    // TD-9 单条草案重生成（同步等待 LLM，原草案不被破坏）
     create: '/sub-tasks',
     batch: '/sub-tasks/batch',
     timeline: (id: string | number) => `/sub-tasks/listTimelineBySubTaskId/${enc(id)}`,
@@ -59,7 +71,13 @@ export const paths = {
     mine: '/sub-tasks/listMine',
     available: '/sub-tasks/listAvailable',
     pause: (id: string | number) => `/sub-tasks/pauseById/${enc(id)}`,
-    resume: (id: string | number) => `/sub-tasks/resumeById/${enc(id)}`
+    resume: (id: string | number) => `/sub-tasks/resumeById/${enc(id)}`,
+    // ADR-008 §12 执行期重构：入口 / 四要素编辑 / 回派发（回派发前跑确定性 G5）
+    enterRestructuring: (id: string | number) => `/sub-tasks/enterRestructuringById/${enc(id)}`,
+    updateRestructure: (id: string | number) => `/sub-tasks/updateRestructureById/${enc(id)}`,
+    applyRestructure: (id: string | number) => `/sub-tasks/applyRestructureById/${enc(id)}`,
+    // ADR-008 §13 执行期「拆出去当主任务」：开派生会话（四段上下文），定稿即建 Y
+    restructureSession: (id: string | number) => `/sub-tasks/restructureSessionById/${enc(id)}`
   },
   // G-006：agent_event 读侧端点（Replay 轨迹 / Audit 分页），Controller: AgentEventController
   agentEvents: {

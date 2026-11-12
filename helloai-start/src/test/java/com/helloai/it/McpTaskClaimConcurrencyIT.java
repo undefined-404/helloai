@@ -107,6 +107,12 @@ class McpTaskClaimConcurrencyIT extends AbstractItTestBase {
             String status = jdbcTemplate.queryForObject(
                     "SELECT status FROM sub_task WHERE id = ?", String.class, SUB_TASK_ID);
             assertEquals("ASSIGNED", status, "赢家认领后状态应为 ASSIGNED（随后门面内 start 推 IN_PROGRESS 亦合法）");
+
+            // G-031：认领成功必须实时入队（同一事务），来源=CLAIMED
+            String joinSource = jdbcTemplate.queryForObject(
+                    "SELECT join_source FROM task_agent_member WHERE task_id = ? AND agent_id = ?",
+                    String.class, TASK_ID, winnerId);
+            assertEquals("CLAIMED", joinSource, "外部 Agent 认领成功必须在同事务写入成员行（G-031）");
         } finally {
             pool.shutdownNow();
         }
@@ -114,8 +120,9 @@ class McpTaskClaimConcurrencyIT extends AbstractItTestBase {
 
     @AfterEach
     void cleanup() {
-        // 按 FK 依赖顺序清场（子 → 父）：agent_execution_record → sub_task → agent → task
+        // 按 FK 依赖顺序清场（子 → 父）：agent_execution_record / task_agent_member → sub_task → agent → task
         jdbcTemplate.update("DELETE FROM agent_execution_record WHERE sub_task_id = ?", SUB_TASK_ID);
+        jdbcTemplate.update("DELETE FROM task_agent_member WHERE task_id = ?", TASK_ID);
         jdbcTemplate.update("DELETE FROM sub_task WHERE id = ?", SUB_TASK_ID);
         jdbcTemplate.update("DELETE FROM agent WHERE id = ?", AGENT_A);
         jdbcTemplate.update("DELETE FROM agent WHERE id = ?", AGENT_B);

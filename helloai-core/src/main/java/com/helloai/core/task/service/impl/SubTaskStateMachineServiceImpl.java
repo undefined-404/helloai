@@ -9,6 +9,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.RetryPolicy;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TaskMemberJoinSource;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.common.util.HostNameUtils;
 import com.helloai.core.agent.event.AgentEventContextResolver;
@@ -30,6 +31,7 @@ import com.helloai.core.task.projection.SubTaskSnapshotProjection;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.score.ImplicitScoreCalculator.ScoreResult;
 import com.helloai.core.task.service.AttachmentService;
+import com.helloai.core.task.service.TaskAgentMemberService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.statemachine.SubTaskStateMachine;
 import com.helloai.core.task.service.SubTaskLeaseService;
@@ -104,6 +106,8 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
     private final ApplicationEventPublisher applicationEventPublisher;
     /** G-006：外部执行 attempt 收口（懒解析，审计旁路，不得参与状态机构造依赖图）。 */
     private final ObjectProvider<AgentExecutionRecordService> agentExecutionRecordServiceProvider;
+    /** Task-Team 成员表实时派生（G-031）：归属落库与入队同事务，失败即整体回滚。 */
+    private final TaskAgentMemberService taskAgentMemberService;
 
     // ══════════════════════════════════════════════════════════════
     //  状态迁移唯一入口
@@ -116,6 +120,20 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
 
     @Transactional(rollbackFor = Exception.class)
     public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId, Map<String, Object> contextPatch) {
+        // 默认来源 = 平台派发/分配；改派与外部认领在本类内部显式传更精确的来源
+        changeStatus(subTaskId, newStatus, agentId, contextPatch, TaskMemberJoinSource.ASSIGNED);
+    }
+
+    /**
+     * 状态迁移 + 成员表实时派生（G-031）。
+     *
+     * <p><b>为什么成员登记挂在状态机而不是各派发入口</b>：{@code assigned_agent_id} 的全部写入
+     * 已经收敛到本类（RM9-b 切分线），在这里登记只需一处，且天然覆盖 claim / assignNext /
+     * reassign / 死信重派等所有平台自动派发路径，不会随新增入口再漏。登记与归属同事务：
+     * 成员行写不进去就整体回滚，不会出现「已派发但不算成员」的半态。</p>
+     */
+    private void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId,
+                              Map<String, Object> contextPatch, TaskMemberJoinSource joinSource) {
         SubTask subTask = subTaskMapper.selectById(subTaskId);
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
@@ -154,6 +172,9 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
             throw new BizException("并发修改，请重试");
         }
 
+        // 成员表实时派生：归属一落库就入队（upsert 按 task+agent 去重，重复派发零副作用）
+        registerMember(subTask.getTaskId(), agentId, joinSource);
+
         // G-006：子任务离开「执行中」时收口外部执行 attempt（审计面，AFTER_COMMIT 执行、失败仅告警）。
         // 位置在落库成功后、事件序之前——收口属旁路审计，不参与 outbox/inbox/交接通知的事件序契约。
         closeExternalAttemptOnExit(subTaskId, newStatus);
@@ -170,8 +191,29 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
             heartbeatService.active(subTask.getAssignedAgentId());
         }
 
+        // DONE 是「交付完成」的唯一状态事实：派生完成态传播、死信人工验收都会经本方法直接落
+        // DONE，而它们不会经过 complete()。统一在这里发布完成事件，下游解锁与 Task 收尾才有
+        // 单一触发点（AFTER_COMMIT 监听，与 complete 同口径）。
+        if (newStatus == SubTaskStatus.DONE) {
+            applicationEventPublisher.publishEvent(new SubTaskCompletedEvent(subTaskId, subTask.getTaskId()));
+        }
+
         log.info("子任务状态变更: subTaskId={}, from={}, to={}, agentId={}",
                 subTaskId, oldStatus, newStatus, agentId);
+    }
+
+    /**
+     * Task-Team 成员表实时入队（G-031）。
+     *
+     * <p>{@code agentId == null} 表示本次迁移没有换人（如 start/submit/block），无需登记；
+     * 归一到权威源（{@code sub_task.assigned_agent_id}）的动作本身已在上方落库。
+     * 显式异常上抛见 {@link #changeStatus(Long, SubTaskStatus, Long, Map, TaskMemberJoinSource)}。</p>
+     */
+    private void registerMember(Long taskId, Long agentId, TaskMemberJoinSource joinSource) {
+        if (taskId == null || agentId == null || joinSource == null) {
+            return;
+        }
+        taskAgentMemberService.register(taskId, agentId, joinSource);
     }
 
     /**
@@ -302,7 +344,14 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
      */
     @Transactional(rollbackFor = Exception.class)
     public boolean claimAtomic(Long subTaskId, Long agentId) {
-        return subTaskMapper.claimAtomic(subTaskId, agentId) > 0;
+        if (subTaskMapper.claimAtomic(subTaskId, agentId) <= 0) {
+            return false;
+        }
+        // 外部 Agent 认领成功即入队（MCP claimSubTask 的唯一写入路径）
+        SubTask claimed = subTaskMapper.selectById(subTaskId);
+        registerMember(claimed != null ? claimed.getTaskId() : null, agentId,
+                TaskMemberJoinSource.CLAIMED);
+        return true;
     }
 
     /**
@@ -380,7 +429,7 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
     @Transactional(rollbackFor = Exception.class)
     public void reassign(Long subTaskId, Long newAgentId) {
         resetToPendingForDispatch(subTaskId, Set.of(SubTaskStatus.BLOCKED));
-        changeStatus(subTaskId, SubTaskStatus.ASSIGNED, newAgentId);
+        changeStatus(subTaskId, SubTaskStatus.ASSIGNED, newAgentId, null, TaskMemberJoinSource.REASSIGNED);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -519,6 +568,8 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
             subTask.setAssignedAgentId(reworkAgentId);
         }
         subTaskMapper.updateById(subTask);
+        // 返工换人同样实时入队（null = 原执行者继续，无需新增成员行）
+        registerMember(subTask.getTaskId(), reworkAgentId, TaskMemberJoinSource.REASSIGNED);
         // 执行者变更（换人/回收）时告知旧执行者
         notificationService.notifyAgentHandover(subTask, oldAgentId);
         // 驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工 reworkById 共用本入口），
@@ -567,6 +618,8 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
             subTask.setContext(ctx);
         }
         subTaskMapper.updateById(subTask);
+        // 人工驳回改派同样实时入队（null = 原执行者继续，无需新增成员行）
+        registerMember(subTask.getTaskId(), reworkAgentId, TaskMemberJoinSource.REASSIGNED);
         // 执行者变更（换人/回收）时告知旧执行者
         notificationService.notifyAgentHandover(subTask, oldAgentId);
         // 人工驳回同样补发收件箱通知（携带 review 摘要，无历史时回退默认文案）

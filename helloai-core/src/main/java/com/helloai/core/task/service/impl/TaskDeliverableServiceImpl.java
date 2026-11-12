@@ -67,8 +67,7 @@ public class TaskDeliverableServiceImpl implements TaskDeliverableService {
         // 草案与已取消不属于交付范围
         List<SubTask> visible = new ArrayList<>();
         for (SubTask st : subTasks != null ? subTasks : List.<SubTask>of()) {
-            if (st.getStatus() != SubTaskStatus.PENDING_PLAN_REVIEW
-                    && st.getStatus() != SubTaskStatus.CANCELLED) {
+            if (st.getStatus() != SubTaskStatus.CANCELLED) {
                 visible.add(st);
             }
         }

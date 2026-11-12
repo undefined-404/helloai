@@ -3,7 +3,9 @@ package com.helloai.core.planner.service;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import lombok.Data;
 
@@ -17,13 +19,13 @@ import java.util.List;
  *     <li>{@link #decompose(Long)}：同步守卫（校验 + CAS 推进 Task → PLANNING）后提交
  *         {@link PlannerDecomposeAsyncService} 异步执行 LLM 拆解，立即返回空列表；
  *         草案产出与失败回退均由异步段收敛，卡死任务由 PlanningTimeoutTask 兜底回收。</li>
- *     <li>{@link #listDrafts(Long)}：查看草案列表。</li>
+ *     <li>{@link #listDraftsFromStaging(Long)}：查看草案列表（暂存区唯一读路）。</li>
  *     <li>{@link #confirmPlan(Long)}：草案批量转正（→ PENDING），Task → IN_PROGRESS，
  *         按 {@code autoAssignOnCreate} 配置触发既有自动分发链（与手工创建子任务同构）。</li>
  *     <li>{@link #rejectPlan(Long)}：草案翻 CANCELLED（保留审计），Task 回退 PENDING 可重新拆解。</li>
  * </ul>
  *
- * <p>草案态 {@code PENDING_PLAN_REVIEW} 对 claim/assignNext/自动重派/补偿定时任务全部不可见
+ * <p>草案只存在于 {@code task_plan_draft}，对 claim/assignNext/自动重派/补偿定时任务天然不可见
  * （它们只认 PENDING 等状态），无需额外隔离逻辑。</p>
  *
  * <p>confirm/reject 刻意不加类级事务：逐条 changeStatus 各自独立事务（与既有风格一致），
@@ -40,15 +42,20 @@ public interface PlannerAnalysisService {
      * HTTP 线程不再等待 LLM）。异步段通过 timeline 收敛结果，前端轮询草案；
      * 卡死任务由 PlanningTimeoutTask 兜底回收。</p>
      *
-     * @return 恒为空列表（API 契约保持不变，草案经 {@link #listDrafts(Long)} 轮询获取）
+     * @return 恒为空列表（API 契约保持不变，草案经 {@link #listDraftsFromStaging(Long)} 轮询获取）
      */
     List<SubTaskView> decompose(Long taskId);
 
-    /** 查看指定任务的草案列表（PENDING_PLAN_REVIEW），按依赖拓扑排序为正序（根在前）。 */
-    List<SubTaskView> listDrafts(Long taskId);
+    /**
+     * `TD-16d-4` 读侧换源：从暂存区 `task_plan_draft` 读当前轮草案列表。
+     *
+     * <p>`AD-5a-4` 存量迁入后 `sub_task` 不再承载草案，本方法是**唯一读路**（无当前轮时返回空
+     * 列表，不再回落执行表）。返回视图的 {@code id} 为暂存区行 id，写路径统一按 {@code code} 定位。</p>
+     */
+    List<SubTaskView> listDraftsFromStaging(Long taskId);
 
     /**
-     * 确认草案：全部 PENDING_PLAN_REVIEW → PENDING，Task → IN_PROGRESS。
+     * 确认草案：暂存区当前轮物化为执行行（PENDING/AWAITING_DERIVED/DONE），Task → IN_PROGRESS。
      *
      * <p>随后按 {@code helloai.dispatch.auto-assign-on-create} 配置决定是否
      * 逐条走 {@link SubTaskDispatchService#dispatchPendingSubTaskAuto} 自动分配，
@@ -59,33 +66,49 @@ public interface PlannerAnalysisService {
     List<SubTaskView> confirmPlan(Long taskId);
 
     /**
-     * 拒绝草案：全部 PENDING_PLAN_REVIEW → CANCELLED（保留审计），Task 回退 PENDING 可重新拆解。
+     * 拒绝草案：作废暂存区整轮（DISCARDED），Task 回退 PENDING 可重新拆解。
      *
      * @return 被取消的草案数量
      */
     int rejectPlan(Long taskId);
 
-    /**
-     * `TD-9` 单条草案细拆（expand）：一条草案 → N 条 FINE 粒度子草案（同步，用户等待）。
-     *
-     * <p>委托 {@link PlannerDecomposeAsyncService#expandById}；被其他草案依赖的草案拒绝展开
-     * （幽灵依赖 fail-close），LLM/校验失败事务回滚、原草案不被破坏。</p>
-     *
-     * @param subTaskId 草案子任务 ID（须 PENDING_PLAN_REVIEW）
-     * @return 展开后的子草案列表（含落库回填的真实 id）
-     */
-    List<SubTaskView> expandDraft(Long subTaskId);
+    // ══════════════════════════════════════════════════════════════
+    //  `TD-16d-4` 切片 `d-3b-2`：草案端点身份由行 id 换成位置编号 code
+    // ══════════════════════════════════════════════════════════════
 
     /**
-     * `TD-9` 单条草案重生成（regenerate）：同粒度重写四要素（同步，用户等待）。
+     * 按位置编号定位草案（`d-3b-2` 的唯一定位口径）。
      *
-     * <p>委托 {@link PlannerDecomposeAsyncService#regenerateById}；title / id / dependsOn
-     * 不变量白名单，LLM 输出中的这些字段被忽略。</p>
+     * <p><b>为什么换 code</b>：{@code sub_task.id} 是行身份，确认后行仍在但语义已变；
+     * 页面上的草案在「同一个位置」上必须始终能用同一个编号定位。
+     * {@code code}（单段定宽 {@code 202611080002}，`ADR-008` §19.2）是位置身份。</p>
      *
-     * @param subTaskId 草案子任务 ID（须 PENDING_PLAN_REVIEW）
-     * @return 重生成后的草案快照
+     * <p><b>为什么必须带 taskId</b>：code 只在任务内唯一，不同任务同日拆解必然同码
+     * （实测 {@code 202611080001} 在 3 个任务里同时存在）。只按 code 定位会串任务。</p>
+     *
+     * <p><b>fail-close</b>：参数缺失 / 无匹配（已转正离开草案态、存量 V147 前无 code）
+     * 一律抛 {@code BizException} → 400，不静默降级到「按 id 猜」。</p>
      */
-    SubTaskView regenerateDraft(Long subTaskId);
+    void updateDraftByCode(Long taskId, String code, List<String> requiredSkills, String constraints,
+                          List<Uncertainty> uncertainties, String acceptanceKind);
+
+    /**
+     * 草案期派生（`ADR-008` §19.3 S3）：把一条 `ACTIVE` 草案「拆出去」为独立 Task `Y`。
+     *
+     * <p><b>不改本条草案的状态</b>（仍 `ACTIVE` 待确认）：确认时由
+     * {@code SubTaskService#materializeFromStaging} 物化为 `AWAITING_DERIVED`（`Y` 已完成则直接
+     * `DONE`）。因此兄弟草案对它的依赖不会悬空，`G1` 门禁天然不需要补锚点。</p>
+     *
+     * <p>`Y` 立即落库（父锚 `(parent_task_id, parent_draft_code)`、`depth+1`、继承
+     * archetype），随后触发 `Y` 的拆解。幂等：同一条草案重复调用返回同一派生任务，
+     * 若它仍停在 `PENDING` 会补触发拆解。</p>
+     *
+     * @return 派生 Task 快照（id / status 供前端提示）
+     */
+    TaskView deriveDraftByCode(Long taskId, String code);
+
+    /** 同上按 code 定位的重生成（`d-3b-2`）。 */
+    SubTaskView regenerateDraftByCode(Long taskId, String code);
 
     /** LLM 结构化输出条目（未知字段容忍，避免 LLM 多给字段导致整批失败）。 */
     @Data

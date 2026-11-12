@@ -93,7 +93,8 @@ class TaskServiceImplTest {
                 taskRunningSpecMapper, taskExecutionRecordMapper, taskAgentMemberMapper,
                 taskIterationMapper, workflowInstanceMapper,
                 reviewPort, timelineMapper, attachmentMapper, attachmentObjectPurgeSupport,
-                agentInboxService, agentService, subTaskService, teamService));
+                agentInboxService, agentService, subTaskService, teamService,
+                mock(com.helloai.core.task.port.TaskPlanDraftPort.class)));
         ReflectionTestUtils.setField(service, "baseMapper", taskMapper);
     }
 

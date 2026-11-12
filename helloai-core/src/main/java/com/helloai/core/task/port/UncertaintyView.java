@@ -1,5 +1,7 @@
 package com.helloai.core.task.port;
 
+import java.util.List;
+
 /**
  * 不确定项只读快照（task 域对外契约，RM5 批 4）。
  *
@@ -13,16 +15,27 @@ package com.helloai.core.task.port;
  * <p><b>`TD-11` 增列 {@code ref}</b>：核验侧要按 {@code context.acceptancePreconditions}
  * 里的标签（{@code U1}/{@code U2}）定位到具体缺口原文，才能把「这条验收卡在哪」写进驳回理由。
  * 与 {@code UncertaintyDraft#ref()} / {@code Uncertainty#ref} 同名同形。</p>
+ *
+ * <p><b>`TD-13 S2` 增列 {@code blockedBy}</b>：只读消费方（review 记录 / 任务详情页）要能展示
+ * 「这个缺口卡住哪几条草案」。与 {@code UncertaintyDraft#blockedBy()} / {@code Uncertainty#blockedBy}
+ * 同名同形；存量行为 {@code null}（= 未申报影响面，与「申报为空数组」语义不同）。</p>
  */
 public record UncertaintyView(
         String kind,
         String note,
         /** 缺口引用标签（`TD-11`，形如 {@code U1}；存量行可能为 {@code null}）。 */
-        String ref
+        String ref,
+        /** 该缺口卡住本批哪几条草案（`TD-13 S2`，1-based 草案序号；存量行可能为 {@code null}）。 */
+        List<Integer> blockedBy
 ) {
 
-    /** 兼容构造：`TD-11` 之前的读取方与测试沿用（无 ref）。 */
+    /** 兼容构造：`TD-11` 之前的读取方与测试沿用（无 ref、无 blockedBy）。 */
     public UncertaintyView(String kind, String note) {
-        this(kind, note, null);
+        this(kind, note, null, null);
+    }
+
+    /** 兼容构造：`TD-13 S2` 之前的读取方与测试沿用（无 blockedBy）。 */
+    public UncertaintyView(String kind, String note, String ref) {
+        this(kind, note, ref, null);
     }
 }

@@ -96,6 +96,17 @@ public class SubTask extends BaseEntity {
     private Integer isContract;
 
     /**
+     * 草案的**位置身份**（`TD-16d` / `V147`）：{@code <yyyyMMdd><seq:04d>[-<seq:03d>…]}。
+     *
+     * <p>与 {@code task_plan_draft.code} 同值，只在确认物化时写入。用途只有一个：转正后
+     * 追溯「这条执行任务原本是哪条草案」。草案期编辑 / 重生成 / 展开的定位都直接作用在
+     * 暂存区按 {@code code} 的行上，执行表不参与，因此也不再承担定位职责。</p>
+     *
+     * <p>人工创建为 {@code null}。唯一性由 {@code task_plan_draft} 保证，执行表不再加索引。</p>
+     */
+    private String draftCode;
+
+    /**
      * N11 阈值回退：当前子任务已发生的"外部→LLM"回退次数。
      *
      * <p>每次 ExternalAgentFallbackTask 触发对当前子任务的重新分发，

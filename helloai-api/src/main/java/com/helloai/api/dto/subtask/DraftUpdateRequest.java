@@ -10,7 +10,7 @@ import java.util.List;
  * G-011 扩展不确定性申报逐条增删改）。
  *
  * <p>仅允许编辑 requiredSkills / constraints / uncertainties / acceptanceKind 四字段（可选编辑，
- * 空值放行——null 表示不修改该字段，便于局部更新）。仅 PENDING_PLAN_REVIEW 状态可编辑。</p>
+ * 空值放行——null 表示不修改该字段，便于局部更新）。仅暂存区当前 ACTIVE 草案可编辑。</p>
  */
 @Data
 public class DraftUpdateRequest {

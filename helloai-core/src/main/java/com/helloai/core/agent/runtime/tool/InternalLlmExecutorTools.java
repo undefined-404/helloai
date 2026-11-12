@@ -2,8 +2,10 @@ package com.helloai.core.agent.runtime.tool;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.ManualInterventionReasons;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
 import com.helloai.core.agent.runtime.sandbox.SandboxArtifact;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
@@ -87,6 +89,8 @@ public class InternalLlmExecutorTools {
     private final SkillExecutionSupport skillExecutionSupport;
     /** 产物落地（`SKX-11`）：{@code internal_export_artifact} 的「沙箱字节 → 对象存储 → 附件登记」。 */
     private final SkillArtifactExportService skillArtifactExportService;
+    /** 对话流写入（LOG-20261112）：自报阻塞后在执行对话流补一条结论，避免执行轮只挂请求、无结论。 */
+    private final ConversationService conversationService;
 
     /** 自报阻塞前置：必须先读过子任务详情（知情拒绝闸门，见 {@code internal_report_blocked}）。 */
     private static final String TOOL_GET_SUB_TASK_DETAIL = "internal_get_sub_task_detail";
@@ -270,6 +274,16 @@ public class InternalLlmExecutorTools {
         extra.put("reason", trimmed);
         extra.put("agentId", ids.agentId());
         subTaskCommandPort.markManualIntervention(ids.subTaskId(), BLOCKED_REASON_CODE, extra);
+        // LOG-20261112：补对话结论（sub_task_execute_blocked）。阻塞后状态非 IN_PROGRESS，
+        // 循环结束的 INTERNAL 回写会被 ExecutionResultHandler 在 status 守卫处丢弃、不再写对话；
+        // 故结论在此自报出口补写，避免执行轮只挂请求行悬空。best-effort + REQUIRES_NEW，失败不阻断。
+        try {
+            conversationService.addMessage(ids.subTaskId(), ids.agentId(), "assistant", "agent",
+                    "执行阻塞（需人工介入）：" + trimmed, TimelineEventCode.SUB_TASK_EXECUTE_BLOCKED.code());
+        } catch (Exception e) {
+            log.warn("自报阻塞对话结论写入失败（不阻断阻塞主链路）: subTaskId={}, err={}",
+                    ids.subTaskId(), e.getMessage());
+        }
         log.info("内部执行者自报阻塞: agentId={}, subTaskId={}, reason={}",
                 ids.agentId(), ids.subTaskId(), trimmed);
         return Map.of("subTaskId", ids.subTaskId(), "status", "BLOCKED", "manualIntervention", true,

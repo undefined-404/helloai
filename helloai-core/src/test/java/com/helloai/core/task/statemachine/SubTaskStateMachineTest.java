@@ -10,7 +10,8 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * SubTaskStateMachine 状态流转单元测试（补充 DEAD_LETTER 死信态；补充 PENDING_PLAN_REVIEW 草案态）。
+ * SubTaskStateMachine 状态流转单元测试（补充 DEAD_LETTER 死信态；
+ * 补充 ADR-008 的 AWAITING_DERIVED / RESTRUCTURING 派生态）。
  */
 @DisplayName("SubTaskStateMachine")
 class SubTaskStateMachineTest {
@@ -82,43 +83,6 @@ class SubTaskStateMachineTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  规划草案态：PENDING_PLAN_REVIEW
-    // ══════════════════════════════════════════════════════════════
-
-    @Test
-    @DisplayName("PENDING_PLAN_REVIEW 仅允许转向 PENDING（确认转正）或 CANCELLED（拒绝草案）")
-    void shouldOnlyAllowConfirmOrRejectFromPlanReview() {
-        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.PENDING)).isTrue();
-        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.CANCELLED)).isTrue();
-
-        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.ASSIGNED)).isFalse();
-        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.IN_PROGRESS)).isFalse();
-        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.DONE)).isFalse();
-        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.DEAD_LETTER)).isFalse();
-    }
-
-    @Test
-    @DisplayName("任何状态都不允许转入 PENDING_PLAN_REVIEW（草案态只能由拆解落库产生）")
-    void shouldRejectAnyTransitionIntoPlanReview() {
-        for (SubTaskStatus from : SubTaskStatus.values()) {
-            assertThat(SubTaskStateMachine.canTransition(from, SubTaskStatus.PENDING_PLAN_REVIEW))
-                    .as("from=%s", from)
-                    .isFalse();
-        }
-    }
-
-    @Test
-    @DisplayName("草案态非法流转 validate 抛 BizException")
-    void shouldThrowOnIllegalPlanReviewTransition() {
-        assertThatThrownBy(() -> SubTaskStateMachine.validate(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.ASSIGNED))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("非法状态转换");
-        assertThatThrownBy(() -> SubTaskStateMachine.validate(SubTaskStatus.PENDING, SubTaskStatus.PENDING_PLAN_REVIEW))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("非法状态转换");
-    }
-
-    // ══════════════════════════════════════════════════════════════
     //  租约回收态：IN_PROGRESS → PENDING
     // ══════════════════════════════════════════════════════════════
 
@@ -143,6 +107,63 @@ class SubTaskStateMachineTest {
     void shouldValidateLeaseReclaimTransition() {
         assertThatCode(() -> SubTaskStateMachine.validate(SubTaskStatus.IN_PROGRESS, SubTaskStatus.PENDING))
                 .doesNotThrowAnyException();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  派生态：AWAITING_DERIVED / RESTRUCTURING（ADR-008）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("RESTRUCTURING 只接受人工接管触发态：BLOCKED / DEAD_LETTER / REWORK / PAUSED")
+    void shouldOnlyEnterRestructuringFromTakeoverStates() {
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.BLOCKED, SubTaskStatus.RESTRUCTURING)).isTrue();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.DEAD_LETTER, SubTaskStatus.RESTRUCTURING)).isTrue();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.REWORK, SubTaskStatus.RESTRUCTURING)).isTrue();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PAUSED, SubTaskStatus.RESTRUCTURING)).isTrue();
+
+        // 正常在途状态不得直接跳重构：重构的前提是「已判定卡住/返工失败」
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING, SubTaskStatus.RESTRUCTURING)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.ASSIGNED, SubTaskStatus.RESTRUCTURING)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.IN_PROGRESS, SubTaskStatus.RESTRUCTURING)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.REVIEW, SubTaskStatus.RESTRUCTURING)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.DONE, SubTaskStatus.RESTRUCTURING)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.CANCELLED, SubTaskStatus.RESTRUCTURING)).isFalse();
+    }
+
+    @Test
+    @DisplayName("AWAITING_DERIVED 只允许 DONE / RESTRUCTURING / CANCELLED，不可退回分发链")
+    void shouldOnlyAllowDerivedExits() {
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.AWAITING_DERIVED, SubTaskStatus.DONE)).isTrue();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.AWAITING_DERIVED, SubTaskStatus.RESTRUCTURING)).isTrue();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.AWAITING_DERIVED, SubTaskStatus.CANCELLED)).isTrue();
+
+        // 工作已整体移交派生 Task，退回分发链会重复执行
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.AWAITING_DERIVED, SubTaskStatus.PENDING)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.AWAITING_DERIVED, SubTaskStatus.ASSIGNED)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.AWAITING_DERIVED, SubTaskStatus.IN_PROGRESS)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.AWAITING_DERIVED, SubTaskStatus.REVIEW)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.AWAITING_DERIVED, SubTaskStatus.DEAD_LETTER)).isFalse();
+    }
+
+    @Test
+    @DisplayName("RESTRUCTURING 出边：PENDING（放弃重构退回重派）/ AWAITING_DERIVED（重新派生）/ CANCELLED")
+    void shouldOnlyAllowRestructuringExits() {
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.RESTRUCTURING, SubTaskStatus.PENDING)).isTrue();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.RESTRUCTURING, SubTaskStatus.AWAITING_DERIVED)).isTrue();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.RESTRUCTURING, SubTaskStatus.CANCELLED)).isTrue();
+
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.RESTRUCTURING, SubTaskStatus.ASSIGNED)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.RESTRUCTURING, SubTaskStatus.IN_PROGRESS)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.RESTRUCTURING, SubTaskStatus.REVIEW)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.RESTRUCTURING, SubTaskStatus.DONE)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.RESTRUCTURING, SubTaskStatus.DEAD_LETTER)).isFalse();
+    }
+
+    @Test
+    @DisplayName("派生态仍是可流转态：AWAITING_DERIVED / RESTRUCTURING 均不是终态")
+    void shouldTreatDerivedStatesAsNonTerminal() {
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.AWAITING_DERIVED, SubTaskStatus.DONE)).isTrue();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.RESTRUCTURING, SubTaskStatus.CANCELLED)).isTrue();
     }
 
     @Test

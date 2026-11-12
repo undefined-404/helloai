@@ -131,7 +131,7 @@ class TaskDeliverableServiceTest {
         when(taskService.getById(1L)).thenReturn(task());
         SubTask done = subTask(11L, "架构梳理", SubTaskStatus.DONE, "# 架构梳理产出");
         SubTask blocked = subTask(12L, "受阻项", SubTaskStatus.BLOCKED, "不应收录");
-        SubTask draft = subTask(13L, "草案项", SubTaskStatus.PENDING_PLAN_REVIEW, null);
+        SubTask draft = subTask(13L, "草案项", SubTaskStatus.CANCELLED, null);
         when(subTaskChain.list()).thenReturn(List.of(done, blocked, draft));
         // §6.146：审查结论/评分经 ReviewPort 摘要收口（概览表展示口径）
         when(reviewPort.latestReviewSummary(anyLong())).thenReturn(

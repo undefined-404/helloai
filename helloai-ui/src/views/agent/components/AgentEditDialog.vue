@@ -46,12 +46,6 @@
           v-model="form.accessType"
           style="width:100%"
         >
-          <!-- 浏览器 AI（WEB_BROWSER）当前环境不可用，仅保留枚举通道 -->
-          <el-option
-            label="浏览器 AI（暂未启用）"
-            value="WEB_BROWSER"
-            disabled
-          />
           <el-option
             label="内部 LLM（API Key）"
             value="API_KEY_LLM"
@@ -188,7 +182,7 @@ const formRef = ref()
 const form = reactive({ name: '', role: 'EXECUTOR', remark: '', apiKey: '', modelType: '', accessType: '', skills: [] as string[] })
 const rules = { name: [{ required: true, message: '请输入名称', trigger: 'blur' }] }
 
-/** 内部 LLM Agent 才展示模型字段（外部 CLI / 浏览器 Agent 无法管理，不展示）。 */
+/** 内部 LLM Agent 才展示模型字段（外部 CLI Agent 无法管理，不展示）。 */
 const isInternalLlm = computed(() => form.accessType === 'API_KEY_LLM' || !!form.modelType)
 
 watch(() => props.agent, (a) => {

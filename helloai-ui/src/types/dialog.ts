@@ -23,12 +23,15 @@ export const SUB_TASK_STATUS_MAP: Record<SubTaskStatus, { label: string; type: '
   BLOCKED:     { label: '阻塞',     type: 'danger' },
   CANCELLED:   { label: '已取消',   type: 'info' },
   DEAD_LETTER: { label: '死信待人工', type: 'danger' },
-  PENDING_PLAN_REVIEW: { label: '草案待审', type: 'warning' }
+  AWAITING_DERIVED:   { label: '等待派生', type: 'primary' },
+  RESTRUCTURING:      { label: '重构中',   type: 'warning' }
 }
 
 export const TASK_STATUS_MAP: Record<TaskStatus, { label: string; type: '' | 'success' | 'warning' | 'danger' | 'info' | 'primary' }> = {
   PENDING:     { label: '待规划',   type: 'info' },
   PLANNING:    { label: '拆解中',   type: 'warning' },
+  // 拆解已完成、草案等用户确认。与「拆解中」分开，是因为前者不该被超时回收、后者应该
+  AWAITING_PLAN_CONFIRM: { label: '待确认草案', type: 'warning' },
   IN_PROGRESS: { label: '进行中',   type: 'primary' },
   DONE:        { label: '已完成',   type: 'success' },
   CANCELLED:   { label: '已取消',   type: 'info' }

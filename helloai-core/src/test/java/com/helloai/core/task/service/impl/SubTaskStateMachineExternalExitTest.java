@@ -51,7 +51,6 @@ class SubTaskStateMachineExternalExitTest {
         assertThat(SubTaskStateMachineServiceImpl.externalExitStatus(SubTaskStatus.PAUSED)).isNull();
         assertThat(SubTaskStateMachineServiceImpl.externalExitStatus(SubTaskStatus.ASSIGNED)).isNull();
         assertThat(SubTaskStateMachineServiceImpl.externalExitStatus(SubTaskStatus.REWORK)).isNull();
-        assertThat(SubTaskStateMachineServiceImpl.externalExitStatus(SubTaskStatus.PENDING_PLAN_REVIEW)).isNull();
         assertThat(SubTaskStateMachineServiceImpl.externalExitStatus(null)).isNull();
     }
 }

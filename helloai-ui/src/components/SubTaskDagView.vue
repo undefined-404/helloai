@@ -58,7 +58,8 @@ const STATUS_COLOR: Record<SubTask['status'], string> = {
   BLOCKED:     '#f56c6c', // 阻塞：红
   CANCELLED:   '#73767a', // 已取消：暗灰
   DEAD_LETTER: '#c45656', // 死信待人工：深红
-  PENDING_PLAN_REVIEW: '#ebb563' // 草案待审：浅橙
+  AWAITING_DERIVED:   '#a0cfff', // 等待派生：浅蓝
+  RESTRUCTURING:      '#e6a23c'  // 重构中：橙
 }
 
 // 活跃态：其入边渲染为流动虚线，提示「上游 → 该任务」的链路正在推进

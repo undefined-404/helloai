@@ -4,11 +4,11 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.shared.event.SubTaskCompletedEvent;
 import com.helloai.core.task.entity.Attachment;
-import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.TaskMapper;
+import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskLifecycleService;
 import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.DisplayName;
@@ -53,9 +53,6 @@ class SubTaskCompletionListenerContractTest {
     private SubTaskDispatchService subTaskDispatchService;
 
     @Mock
-    private TaskMapper taskMapper;
-
-    @Mock
     private TaskTimelineService taskTimelineService;
 
     @Mock
@@ -66,6 +63,9 @@ class SubTaskCompletionListenerContractTest {
 
     @Mock
     private AttachmentService attachmentService;
+
+    @Mock
+    private TaskLifecycleService taskLifecycleService;
 
     @InjectMocks
     private SubTaskCompletionListener listener;
@@ -79,10 +79,9 @@ class SubTaskCompletionListenerContractTest {
         return subTask;
     }
 
-    /** 完成事件的公共 stub：unlockDownstream/tryCloseTask 在无 PENDING 子任务时静默返回。 */
+    /** 完成事件的公共 stub：解锁下游在无 PENDING 子任务时静默返回。 */
     private void stubCompletionChain() {
         when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of());
-        when(taskMapper.selectById(TASK_ID)).thenReturn(null);
     }
 
     @Test

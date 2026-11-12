@@ -28,7 +28,7 @@ public class SubTaskResponse {
      * 验收判据（`TD-2`）：AUTOMATED / STRUCTURAL / REVIEWED / ATTESTED，默认 AUTOMATED。
      *
      * <p>「谁来判、怎么判」的显式声明。落库前按本值分流校验文本写法（`TD-5`）；
-     * 前端只在草案态展示与可编辑（{@code PENDING_PLAN_REVIEW}）。</p>
+     * 前端只在暂存区草案视图展示与编辑。</p>
      */
     private AcceptanceKind acceptanceKind;
     private String priority;

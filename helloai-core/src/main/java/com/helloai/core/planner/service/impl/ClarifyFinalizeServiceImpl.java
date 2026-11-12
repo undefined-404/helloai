@@ -16,13 +16,16 @@ import com.helloai.core.planner.memory.service.LongTermMemoryService;
 import com.helloai.core.planner.policy.RequirementPackageParser;
 import com.helloai.core.planner.policy.TaskArchetypeResolver;
 import com.helloai.core.planner.policy.TaskContextKeys;
+import com.helloai.core.planner.port.PlanDraftView;
 import com.helloai.core.planner.service.ClarifyCommandSearchService;
 import com.helloai.core.planner.service.ClarifyFinalizeService;
+import com.helloai.core.planner.service.PlanDraftService;
 import com.helloai.core.planner.service.RequirementClarifyService;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
 import com.helloai.core.task.port.TaskDraft;
 import com.helloai.core.task.port.TaskView;
+import com.helloai.core.task.service.TaskDerivationService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
@@ -59,6 +62,12 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
     /** 显式技能（2026-10-26）：建任务时把用户选中的产出型技能包写进 required_skills。 */
     private final SkillDirective skillDirective;
 
+    /** 执行期重构派生（`ADR-008` §13，AD-4）：会话带 sourceSubTaskId 时建 Y 而非普通任务。 */
+    private final TaskDerivationService taskDerivationService;
+
+    /** 草案期派生的草案存在性校验（`ADR-008` §5）：草案在 planner 域，task 域不能反查。 */
+    private final PlanDraftService planDraftService;
+
     @Override
     public TaskView finalize(Long conversationId) {
         return finalizeAfterDraft(commandSearch.requireActive(conversationId),
@@ -71,9 +80,17 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
         if (conversation.getFinalTitle() == null || conversation.getFinalTitle().isBlank()) {
             throw new BizException("会话尚无终稿，请先对话至 LLM 产出终稿: conversationId=" + conversationId);
         }
-        // 幂等防御：已关联存活任务则拒绝重复创建（防竞态脏数据 / 重复点击造成双任务）
-        if (conversation.getTaskId() != null && taskService.getView(conversation.getTaskId()) != null) {
+        // 幂等防御：已关联存活任务则拒绝重复创建（防竞态脏数据 / 重复点击造成双任务）。
+        // 派生会话（sourceSubTaskId / sourceDraftCode 非空）的 task_id 预挂父任务 X
+        // （ADR-008 §13.1 / §5），不是「已建任务」的信号；重复定稿由下方 CAS 兜底。
+        if (!isDerivationConversation(conversation)
+                && conversation.getTaskId() != null && taskService.getView(conversation.getTaskId()) != null) {
             throw new BizException("会话已创建关联任务，请勿重复创建: taskId=" + conversation.getTaskId());
+        }
+        // 草案期会话在建任务前先确认草案还在——放在 CAS 之前，避免「会话已终稿但没建出任务」
+        // 的悬挂态（CAS 是立即提交的定点更新，回滚不了）。并发窗口由 buildTaskFromDraft 再查一次兜底。
+        if (conversation.getSourceDraftCode() != null) {
+            assertDraftStillStaged(conversation);
         }
         // CAS 推进 ACTIVE → FINALIZED：失败即并发已推进，拒绝建任务避免重复
         if (!casFinalize(conversationId)) {
@@ -117,7 +134,11 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
         if (conversation.getFinalTitle() == null || conversation.getFinalTitle().isBlank()) {
             throw new BizException("会话缺少终稿，无法重新生成: conversationId=" + conversationId);
         }
-        Long oldTaskId = conversation.getTaskId();
+        // 判「原任务是否还在」要用产出指针：派生会话的 task_id 是父任务 X，
+        // 拿它判存在会恒真——派生任务被删后仍拒绝重新生成，等于没有重生成入口。
+        Long oldTaskId = conversation.getDerivedTaskId() != null
+                ? conversation.getDerivedTaskId()
+                : conversation.getTaskId();
         if (oldTaskId != null && taskService.getView(oldTaskId) != null) {
             throw new BizException("原任务仍然存在（taskId=" + oldTaskId
                     + "），请先在任务管理中删除后再重新生成");
@@ -259,6 +280,16 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
             context.put(RequirementPackageParser.CONTEXT_KEY_REQUIREMENT_PACKAGE,
                     conversation.getFinalPackage());
         }
+        // 执行环境（2026-11-12）：终稿里**人工**声明了 executionEnv 时原样搬进 task.context，
+        // 拆解链据此注入 {{EXECUTION_ENV}}（解析/渲染唯一实现在 common 的 ExecutionEnv）。
+        // 刻意不让模型产出这个字段：requirement-finalize.md 的输出契约里没有它——路径与连接串
+        // 一旦由模型编造，执行者会照着一条不存在的路径去找，比「未声明」更糟。
+        if (conversation.getFinalPackage() != null) {
+            Object executionEnv = conversation.getFinalPackage().get(TaskContextKeys.EXECUTION_ENV);
+            if (executionEnv instanceof Map<?, ?> envMap && !envMap.isEmpty()) {
+                context.put(TaskContextKeys.EXECUTION_ENV, executionEnv);
+            }
+        }
         // TD-4 / B3：终稿 package.archetype（六值）→ task.task_archetype；判不出 / 未给 / 非法
         // 一律回落 BUILD（与改造前语义一致，不做猜测性判定）。B3 只补「回落必须可见」。
         TaskArchetypeResolver.Decision archetypeDecision =
@@ -274,11 +305,43 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
                     + "conversationId={}, skills={}", conversationId, requiredSkills);
             effectiveSkills = List.of();
         }
-        TaskView task = taskService.createFromDraft(new TaskDraft(conversation.getFinalTitle(),
+        TaskDraft draft = new TaskDraft(conversation.getFinalTitle(),
                 describeWithSkill(conversation.getFinalDescription(), requiredSkills),
                 TaskStatus.PENDING, context, archetype, effectiveSkills,
                 // PA-1：任务 owner 继承澄清会话 owner（宽松并入）
-                conversation.getOwnerId()));
+                conversation.getOwnerId());
+        // ADR-008 §13（AD-4）：带 sourceSubTaskId 的会话是「执行期重构派生」——
+        // 定稿即建 Y（父锚 parent_sub_task_id），并在同一事务把 A2 置 AWAITING_DERIVED；
+        // 普通需求会话仍走原建任务路径。
+        // 解耦方向一：二次拆分的会话「重新生成任务和子任务」不应被上级任务硬卡死——
+        // 仅当来源 SubTask 已被级联删除（存在性判断，见 restructureViable）时才回退普通任务创建，
+        // 而不是撞 createRestructureTask 的 400「父 SubTask 不存在」。
+        // 状态非 RESTRUCTURING / 层级超限均不由探针吞掉：交给下方 createRestructureTask 的 400，
+        // 让用户看到原因（避免静默建成独立任务导致血缘/层级上限被绕过）。
+        // 故意不写库清 source_sub_task_id：回退后 task_id 已回填指向新任务，前端 taskExists 转真、
+        // 按钮自动变「查看任务」；下次删任务再降级一次也幂等安全。清除会改会话语义，得不偿失。
+        boolean derivedRestructure = conversation.getSourceSubTaskId() != null
+                && taskDerivationService.restructureViable(conversation.getSourceSubTaskId());
+        // 「本次是否真的建成了派生任务」——决定 task_id 要不要回填。
+        // 草案期分支只会建派生或抛 400，走到 task 赋值就一定是派生，故可提前合并判定。
+        boolean builtDerived = derivedRestructure || conversation.getSourceDraftCode() != null;
+        TaskView task;
+        if (derivedRestructure) {
+            task = taskDerivationService.createRestructureTask(draft, conversation.getSourceSubTaskId());
+            log.info("执行期重构派生任务已创建: conversationId={}, sourceSubTaskId={}, derivedTaskId={}",
+                    conversationId, conversation.getSourceSubTaskId(), task.id());
+        } else if (conversation.getSourceDraftCode() != null) {
+            // 草案期派生（ADR-008 §5）：草案尚未物化，父锚是 (parent_task_id, parent_draft_code)
+            task = createFromDraftAnchor(conversation, draft);
+        } else {
+            task = taskService.createFromDraft(draft);
+        }
+        if (!derivedRestructure && conversation.getSourceSubTaskId() != null) {
+            // 父锚存在性断裂是数据级异常，降级必须留痕排障
+            log.warn("解耦方向一：重构来源子任务已不存在，降级为独立任务: "
+                            + "conversationId={}, sourceSubTaskId={}, taskId={}",
+                    conversationId, conversation.getSourceSubTaskId(), task.id());
+        }
         log.info("澄清终稿建任务: conversationId={}, taskId={}, title={}, event={}, archetype={}, fallback={}",
                 conversationId, task.id(), task.title(), timelineEvent, archetype,
                 archetypeDecision.fallbackReason());
@@ -301,19 +364,82 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
             log.warn("澄清建任务后通知 PLANNER 失败: taskId={}", task.id(), e);
         }
 
-        conversation.setTaskId(task.id());
-        // 定点更新只写 task_id：全字段 updateById 会用加载期陈旧快照覆盖并发澄清轮
-        // 已落库的终稿字段 / 轮数（丢失更新竞态），只写本路径负责的状态字段
-        conversationService.lambdaUpdate()
-                .eq(RequirementConversation::getId, conversationId)
-                .set(RequirementConversation::getTaskId, task.id())
-                .update();
+        // 会话两个指针各司其职（V150）：
+        //   task_id         = 会话挂在哪个任务下（派生会话保持父任务 X，ADR-008 §13.1）
+        //   derived_task_id = 本会话派生出的产出任务 Y
+        // 读侧一律「derived_task_id 优先，回退 task_id」。（2026-11-12 真机：此前只有
+        // task_id，派生会话的「查看任务」跳到 X，用户在 X 上点拒绝重拆，整条链被重置。）
+        // 解耦方向一的回退不算派生：父锚缺失时新任务已是独立任务，task_id 指向它。
+        Long producedTaskId = task.id();
+        var pointerUpdate = conversationService.lambdaUpdate()
+                .eq(RequirementConversation::getId, conversationId);
+        if (builtDerived) {
+            conversation.setDerivedTaskId(producedTaskId);
+            pointerUpdate.set(RequirementConversation::getDerivedTaskId, producedTaskId);
+        } else {
+            conversation.setTaskId(producedTaskId);
+            // 降级成独立任务后旧的产出指针已失实（可能指向已删的 Y），一并清掉，
+            // 否则 taskExists 会按悬挂的 derived_task_id 判假、把「重新生成」入口一直留着
+            conversation.setDerivedTaskId(null);
+            pointerUpdate.set(RequirementConversation::getTaskId, producedTaskId)
+                    .set(RequirementConversation::getDerivedTaskId, null);
+        }
+        // 定点更新只写这两个指针：全字段 updateById 会用加载期陈旧快照覆盖并发澄清轮
+        // 已落库的终稿字段 / 轮数（丢失更新竞态）
+        pointerUpdate.update();
 
         taskTimelineService.recordEvent(task.id(), null, timelineEvent,
                 AgentRole.PLANNER, null, Map.of("conversationId", conversationId));
         // 会话摘要归档（N-009，C5-S2）：finalize 建任务后 best-effort 归档，失败不阻断
         archiveSessionMemory(conversationId);
         return task;
+    }
+
+    /**
+     * 本会话是否「派生会话」——终稿建的是派生任务 Y，而不是普通任务。
+     *
+     * <p>两个锚互斥：{@code sourceSubTaskId}（执行期，子任务已物化）与
+     * {@code sourceDraftCode}（草案期，子任务尚未物化）。任一非空即派生。
+     * 派生会话的 {@code task_id} 预挂父任务 X，不能当作「已建任务」的证据。</p>
+     */
+    private static boolean isDerivationConversation(RequirementConversation conversation) {
+        return conversation.getSourceSubTaskId() != null || conversation.getSourceDraftCode() != null;
+    }
+
+    /**
+     * 草案期派生（`ADR-008` §5 对话版）：会话终稿 → 派生任务 `Y`。
+     *
+     * <p><b>定稿前必须再确认草案还在</b>：会话可能开了很久，这期间用户可能已经确认了
+     * 原方案（草案物化后被清出暂存区）、删掉了草案、或整批作废。此时建 Y 会得到一个
+     * 没有有效父锚的任务——血缘断在无提示处，后续「这条派生任务是从哪条草案来的」
+     * 再也查不回来。宁可 400 让用户回草案页重来。</p>
+     */
+    private TaskView createFromDraftAnchor(RequirementConversation conversation, TaskDraft draft) {
+        assertDraftStillStaged(conversation);
+        Long parentTaskId = conversation.getTaskId();
+        String draftCode = conversation.getSourceDraftCode();
+        TaskView derived = taskDerivationService.createDraftDeriveTask(draft, parentTaskId, draftCode);
+        log.info("草案期派生任务已创建（对话定稿）: conversationId={}, parentTaskId={}, code={}, derivedTaskId={}",
+                conversation.getId(), parentTaskId, draftCode, derived.id());
+        return derived;
+    }
+
+    /**
+     * 校验草案期会话的来源草案仍在暂存区（`ADR-008` §5）。
+     *
+     * <p>两处调用：① 定稿 CAS 之前——避免「会话已 FINALIZED 但没有任务」的悬挂；
+     * ② 建 Y 之前——覆盖①与建任务之间的并发窗口（用户在这几百毫秒里点了确认方案）。</p>
+     */
+    private void assertDraftStillStaged(RequirementConversation conversation) {
+        Long parentTaskId = conversation.getTaskId();
+        String draftCode = conversation.getSourceDraftCode();
+        PlanDraftView staged = parentTaskId == null
+                ? null : planDraftService.getByCode(parentTaskId, draftCode);
+        if (staged == null) {
+            throw new BizException(400, "来源草案已不在暂存区（方案可能已确认物化成子任务，"
+                    + "或草案已删除/作废）。请回任务查看当前子任务；若要重新拆，请先重新拆解再「拆出去」: "
+                    + "parentTaskId=" + parentTaskId + ", draftCode=" + draftCode);
+        }
     }
 
     /**

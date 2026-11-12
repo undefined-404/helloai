@@ -51,15 +51,15 @@ public class PlanningTimeoutTask {
     @SchedulerLock(name = "planningTimeout", lockAtMostFor = "PT60S")
     public void scan() {
         try {
-            OffsetDateTime deadline = OffsetDateTime.now()
-                    .minusMinutes(plannerDecomposeProperties.getPlanningTimeoutMinutes());
-            List<Task> timedOut = taskService.listTimedOutPlanning(deadline, BATCH_LIMIT);
+            // 判据是「租约过期」，不再用 update_time 心跳（2026-11-08，`V146`）：
+            // 拆解线程调模型的十几分钟里一次库都不写，它没有能力用 update_time 证明自己活着。
+            List<Task> timedOut = taskService.listTimedOutPlanning(OffsetDateTime.now(), BATCH_LIMIT);
 
             if (timedOut.isEmpty()) {
                 return;
             }
 
-            log.info("PLANNING超时巡检: 发现 {} 个超时卡死任务", timedOut.size());
+            log.info("拆解租约巡检: 发现 {} 个租约过期任务", timedOut.size());
 
             int recovered = 0;
             int failed = 0;
@@ -70,11 +70,11 @@ public class PlanningTimeoutTask {
                     }
                 } catch (Exception e) {
                     failed++;
-                    log.error("PLANNING超时回收失败: taskId={}", task.getId(), e);
+                    log.error("拆解租约回收失败: taskId={}", task.getId(), e);
                 }
             }
 
-            log.info("PLANNING超时巡检完成: 扫描={}, 回收={}, 失败={}",
+            log.info("拆解租约巡检完成: 扫描={}, 回收={}, 失败={}",
                     timedOut.size(), recovered, failed);
 
         } catch (Exception e) {
@@ -83,24 +83,25 @@ public class PlanningTimeoutTask {
     }
 
     /**
-     * 单条回收：CAS 回退 PENDING + 记录 timeline。
+     * 单条回收：CAS 离开 PLANNING + 记录 timeline。
      *
-     * @return true=已回收；false=状态已变化（异步段迟到完成/用户已确认）跳过
+     * <p>落到哪个状态由 {@code taskService.recoverTimedOutDecompose} 决定：正常是 PENDING
+     * （可重拆）；若库中竟有草案（数据异常），推到待确认让用户仍能继续，而不是回退成死结。</p>
+     *
+     * @return true=已回收；false=状态已变化（拆解已成功推进/用户已取消）跳过
      */
     private boolean recover(Task task) {
-        boolean cas = taskService.lambdaUpdate()
-                .eq(Task::getId, task.getId())
-                .eq(Task::getStatus, TaskStatus.PLANNING)
-                .set(Task::getStatus, TaskStatus.PENDING)
-                .update();
-        if (!cas) {
-            log.info("PLANNING超时回收跳过（状态已变化）: taskId={}", task.getId());
+        TaskStatus recoveredTo = taskService.recoverTimedOutDecompose(task.getId());
+        if (recoveredTo == null) {
+            log.info("拆解租约回收跳过（状态已变化）: taskId={}", task.getId());
             return false;
         }
-        taskTimelineService.recordEvent(task.getId(), null, TimelineEventCode.TASK_PLAN_TIMEOUT_RECOVERED.code(),
+        taskTimelineService.recordEvent(task.getId(), null,
+                TimelineEventCode.TASK_PLAN_TIMEOUT_RECOVERED.code(),
                 AgentRole.PLANNER, null,
-                Map.of("planningTimeoutMinutes", plannerDecomposeProperties.getPlanningTimeoutMinutes()));
-        log.info("PLANNING超时已回退 PENDING: taskId={}", task.getId());
+                Map.of("leaseMinutes", plannerDecomposeProperties.getPlanningTimeoutMinutes(),
+                        "recoveredTo", recoveredTo.name()));
+        log.info("拆解租约过期已回收: taskId={}, to={}", task.getId(), recoveredTo);
         return true;
     }
 }

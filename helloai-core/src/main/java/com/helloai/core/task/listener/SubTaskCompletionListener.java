@@ -3,23 +3,19 @@ package com.helloai.core.task.listener;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.common.constant.TaskStatus;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.shared.event.SubTaskCompletedEvent;
-import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.entity.Task;
-import com.helloai.core.task.mapper.TaskMapper;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskLifecycleService;
 import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
@@ -57,11 +53,10 @@ public class SubTaskCompletionListener {
 
     private final SubTaskService subTaskService;
     private final SubTaskDispatchService subTaskDispatchService;
-    private final TaskMapper taskMapper;
     private final TaskTimelineService taskTimelineService;
-    private final ApplicationEventPublisher applicationEventPublisher;
     private final TaskRunningSpecService taskRunningSpecService;
     private final AttachmentService attachmentService;
+    private final TaskLifecycleService taskLifecycleService;
 
     @Async("appEventExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -77,7 +72,7 @@ public class SubTaskCompletionListener {
             log.warn("解锁下游依赖节点异常: subTaskId={}, err={}", event.getSubTaskId(), e.getMessage());
         }
         try {
-            tryCloseTask(event.getTaskId());
+            taskLifecycleService.tryCloseTask(event.getTaskId());
         } catch (Exception e) {
             log.warn("Task 自动收尾异常: taskId={}, err={}", event.getTaskId(), e.getMessage());
         }
@@ -218,46 +213,4 @@ public class SubTaskCompletionListener {
         }
     }
 
-    /** Task 自动收尾：全部有效子任务均 DONE/CANCELLED 时幂等推进 Task→DONE。 */
-    private void tryCloseTask(Long taskId) {
-        if (taskId == null) {
-            return;
-        }
-        Task task = taskMapper.selectById(taskId);
-        if (task == null || task.getStatus() == TaskStatus.DONE || task.getStatus() == TaskStatus.CANCELLED) {
-            return;
-        }
-        List<SubTask> all = subTaskService.list(new LambdaQueryWrapper<SubTask>()
-                .eq(SubTask::getTaskId, taskId));
-        if (all == null || all.isEmpty()) {
-            return;
-        }
-        // 草案态子任务（PENDING_PLAN_REVIEW）不参与收尾判定：仅统计已确认进入生命周期的子任务
-        long effective = 0;
-        for (SubTask st : all) {
-            if (st.getStatus() == SubTaskStatus.PENDING_PLAN_REVIEW) {
-                continue;
-            }
-            effective++;
-            if (st.getStatus() != SubTaskStatus.DONE && st.getStatus() != SubTaskStatus.CANCELLED) {
-                return; // 尚有未收尾子任务
-            }
-        }
-        if (effective == 0) {
-            return;
-        }
-        // 幂等 CAS：仅当当前状态仍非 DONE 时推进，避免并发重复收尾
-        int updated = taskMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<Task>()
-                .eq(Task::getId, taskId)
-                .ne(Task::getStatus, TaskStatus.DONE)
-                .set(Task::getStatus, TaskStatus.DONE));
-        if (updated > 0) {
-            taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_AUTO_COMPLETED.code(),
-                    AgentRole.SYSTEM, null, Map.of("trigger", "all_sub_tasks_done"));
-            log.info("Task 自动收尾完成: taskId={}", taskId);
-            // CAS 赢家唯一，恰好保证整合报告只被触发一次。此处已无事务上下文，
-            // 消费方（TaskFinalReportService）用普通 @EventListener + @Async 承接。
-            applicationEventPublisher.publishEvent(new TaskAutoCompletedEvent(taskId));
-        }
-    }
 }

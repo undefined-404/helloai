@@ -23,6 +23,25 @@ public interface AttachmentService extends IService<Attachment> {
                         String storageUrl);
 
     /**
+     * 平台主体写入附件（`ADR-008` §15「报告回挂」专用）。
+     *
+     * <p>与 {@link #register} 的差别只有两点：<b>不校验 agent 归属</b>（平台以系统身份写），
+     * {@code uploaderAgentId} 留空表示非 Agent 上传；其余（同名旧版去活、可见性默认 {@code TASK}、
+     * 存储地址校验）完全同口径。内容由本方法落存储，调用方只传字节。</p>
+     *
+     * <p>为什么不复用 {@code register}：它的归属校验是 Agent 通道的安全边界，
+     * 平台侧没有 agentId 可传；把校验拆成可选参数会让两个通道共用一条弱判据。</p>
+     *
+     * @param subTaskId 目标子任务（回挂时为父 SubTask）
+     * @param fileName  文件名（同名 ACTIVE 旧版会被去活）
+     * @param mimeType  媒体类型（null 回落 text/markdown）
+     * @param content   文件内容
+     * @param ownerName 存储归属目录名（null/空白回落 {@code system}）
+     */
+    Attachment registerSystem(Long subTaskId, String fileName, String mimeType,
+                              byte[] content, String ownerName);
+
+    /**
      * 按子任务 ID 查询附件列表（按创建时间倒序）。
      *
      * <p>{@code subTaskId} 为空时返回所有附件；逻辑删除由 {@code @TableLogic}

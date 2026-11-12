@@ -28,6 +28,7 @@ import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskRunningSpecPort;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.port.UncertaintySnapshot;
+import com.helloai.core.agent.support.AgentChatModelResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -119,7 +120,8 @@ class AgentRuntimeContextAssemblerTest {
         properties = new AgentExecutionProperties();
         properties.setMockMode(true);
         properties.setProvider("mock");
-        assembler = new AgentRuntimeContextAssembler(properties, agentChatClientService, agentLlmCredentialResolver,
+        assembler = new AgentRuntimeContextAssembler(properties,
+                new AgentChatModelResolver(agentChatClientService, agentLlmCredentialResolver, properties),
                 taskTimelinePort, taskRunningSpecPort, agentSkillSpecService, agentQualityProfileService,
                 agentSessionService, conversationService, attachmentPort, subTaskQueryPort,
                 agentEventRecorder, agentEventQueryService);

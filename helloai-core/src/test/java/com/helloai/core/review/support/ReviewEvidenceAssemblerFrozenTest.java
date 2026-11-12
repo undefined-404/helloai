@@ -40,9 +40,7 @@ class ReviewEvidenceAssemblerFrozenTest {
     }
 
     private SubTaskView subTask() {
-        return new SubTaskView(1L, 2L, SubTaskStatus.REVIEW, null, 0,
-                "标题", "内容", "交付物", "验收", null,
-                Map.of("lastExecution", Map.of("output", "原始产出")), List.of());
+        return new SubTaskView(1L, 2L, SubTaskStatus.REVIEW, null, 0, "标题", "内容", "交付物", "验收", null, Map.of("lastExecution", Map.of("output", "原始产出")), List.of());
     }
 
     private ReviewEvidenceView evidence(String tag) {

@@ -3,6 +3,7 @@ package com.helloai.api.controller;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
+import com.helloai.api.dto.subtask.DraftUpdateRequest;
 import com.helloai.api.dto.task.CreateTaskRequest;
 import com.helloai.api.dto.task.TaskFinalReportResponse;
 import com.helloai.api.dto.task.TaskMemberView;
@@ -14,6 +15,8 @@ import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.planner.service.PlannerAnalysisService;
+import com.helloai.core.planner.service.RestructureSessionService;
+import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.TaskIteration;
@@ -45,6 +48,8 @@ import java.util.Map;
 public class TaskController {
 
     private final TaskService taskService;
+    /** ADR-008 §5：草案期「拆出去」开派生会话（对话确认终稿后再建 Y）。 */
+    private final RestructureSessionService restructureSessionService;
     /** 任务实际参与成员（详情页成员区，2026-10-18）。 */
     private final TaskAgentMemberService taskAgentMemberService;
     private final AgentService agentService;
@@ -185,7 +190,9 @@ public class TaskController {
 
     @GetMapping("/findPlanByTaskId/{id}")
     public R<List<SubTaskView>> listPlanDrafts(@PathVariable("id") Long id) {
-        return R.ok(plannerAnalysisService.listDrafts(id));
+        // `TD-16d-4` 读侧换源：草案列表从暂存区取；镜像无当前轮 ACTIVE 行时
+        // 服务内部回落 sub_task（存量未双写草案），对外契约不变。
+        return R.ok(plannerAnalysisService.listDraftsFromStaging(id));
     }
 
     @SaCheckPermission("task:confirm-plan")
@@ -199,6 +206,72 @@ public class TaskController {
     public R<Map<String, Object>> rejectPlan(@PathVariable("id") Long id) {
         int cancelled = plannerAnalysisService.rejectPlan(id);
         return R.ok(Map.of("taskId", id, "cancelledCount", cancelled));
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  `d-3b-2`：草案写路径按位置编号 code 定位（取代 /sub-tasks/*DraftById/{id}）
+    //
+    //  为什么必须带 taskId：code 只在任务内唯一，不同任务同日拆解必然同码。
+    // ══════════════════════════════════════════════════════════════
+
+    /** 草案人工修订（按 code）：技能指派 / 执行约束 / 不确定性 / 验收判据，null = 不修改。 */
+    @SaCheckPermission("subtask:edit")
+    @PutMapping("/updateDraftByCode/{taskId}/{code}")
+    public R<Void> updateDraftByCode(@PathVariable("taskId") Long taskId,
+                                     @PathVariable("code") String code,
+                                     @Valid @RequestBody DraftUpdateRequest req) {
+        plannerAnalysisService.updateDraftByCode(taskId, code, req.getRequiredSkills(),
+                req.getConstraints(), req.getUncertainties(), req.getAcceptanceKind());
+        log.info("草案修订（按 code）: taskId={}, code={}", taskId, code);
+        return R.ok();
+    }
+
+    /**
+     * 单条草案派生（按 code，ADR-008 §5）：一条草案 → 独立任务 `Y` 并触发 `Y` 的拆解。
+     *
+     * <p>幂等：同一草案重复调用返回同一个 `Y`，仅在其仍未开始拆解时补触发。草案本身
+     * 不被修改（`node_state` 保持 `ACTIVE`），确认时才物化为 `AWAITING_DERIVED` / `DONE`。</p>
+     */
+    @SaCheckPermission("task:plan")
+    @PostMapping("/deriveDraftByCode/{taskId}/{code}")
+    public R<TaskView> deriveDraftByCode(@PathVariable("taskId") Long taskId,
+                                         @PathVariable("code") String code) {
+        TaskView derived = plannerAnalysisService.deriveDraftByCode(taskId, code);
+        log.info("草案派生（按 code）: taskId={}, code={}, derivedTaskId={}",
+                taskId, code, derived == null ? null : derived.id());
+        return R.ok(derived);
+    }
+
+    /**
+     * 单条草案派生**会话**（按 code，ADR-008 §5 对话版，2026-11-12）：
+     * 先开一条 ACTIVE 需求会话，把草案四要素 / 上下游草案 / 已声明的执行环境写进首条用户
+     * 消息，让用户与 Planner 把「仓库在哪、运行时有什么、数据源是哪种」问清楚；定稿时由
+     * {@code ClarifyFinalizeServiceImpl} 建派生任务 `Y`。
+     *
+     * <p><b>为什么不再直接派生</b>：直接派生时 Y 立刻自拆，拆解提示词看不到任何执行前提，
+     * 子任务只能写「仓库中」这类无指代表述，执行侧必然因缺仓库检出而人工介入。</p>
+     *
+     * <p>幂等：同一草案已有 ACTIVE 派生会话时返回同一个 id。</p>
+     */
+    @SaCheckPermission("task:plan")
+    @PostMapping("/draftDeriveSession/{taskId}/{code}")
+    public R<Long> startDraftDeriveSession(@PathVariable("taskId") Long taskId,
+                                           @PathVariable("code") String code,
+                                           @RequestParam(value = "plannerAgentId", required = false)
+                                           Long plannerAgentId) {
+        Long conversationId = restructureSessionService.startDraftSession(taskId, code, plannerAgentId);
+        log.info("草案派生会话已就绪: taskId={}, code={}, conversationId={}", taskId, code, conversationId);
+        return R.ok(conversationId);
+    }
+
+    /** 单条草案重生成（按 code）：同粒度重写四要素（title / dependsOn 不变量）。 */
+    @SaCheckPermission("subtask:edit")
+    @PostMapping("/regenerateDraftByCode/{taskId}/{code}")
+    public R<SubTaskView> regenerateDraftByCode(@PathVariable("taskId") Long taskId,
+                                                @PathVariable("code") String code) {
+        SubTaskView updated = plannerAnalysisService.regenerateDraftByCode(taskId, code);
+        log.info("草案重生成（按 code）: taskId={}, code={}", taskId, code);
+        return R.ok(updated);
     }
 
     // ══════════════════════════════════════════════════════════

@@ -233,7 +233,6 @@ public class FinalReportFenceHook implements LoopHook {
      */
     private static final Set<String> BUSINESS_SCENES_EXCLUDED_FROM_FENCE = Set.of(
             "planner_decompose",
-            "planner_expand",
             "planner_regenerate",
             "subtask_review",
             "task_final_report",

@@ -18,6 +18,7 @@ import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.service.TaskAgentMemberService;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.port.ReviewSummary;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
@@ -94,6 +95,8 @@ class SubTaskServiceHandoverTest {
     @Mock private ObjectProvider<AgentExecutionRecordService> agentExecutionRecordServiceProvider;
     // 共享预算原子累加 mapper（rework 预算消费 / reworkFresh 清零）
     @Mock private SubTaskMapper subTaskMapper;
+    // G-031：成员表实时入队（换派用例断言不覆盖成员写，仅防 NPE）
+    @Mock private TaskAgentMemberService taskAgentMemberService;
     // 执行会话服务（换派用例不触达，仅防 NPE）
     @Mock private AgentSessionService agentSessionService;
 
@@ -113,10 +116,12 @@ class SubTaskServiceHandoverTest {
                 // 租约看门狗配置（changeStatus 进 IN_PROGRESS 时会读，默认值即可）
                 new WatchdogProperties(), taskTimelineService, agentServiceProvider,
                 attachmentServiceProvider, agentEventRecorder, implicitScoreCalculator,
-                rewardService, reviewPort, applicationEventPublisher, agentExecutionRecordServiceProvider);
+                rewardService, reviewPort, applicationEventPublisher, agentExecutionRecordServiceProvider,
+                taskAgentMemberService);
         SubTaskLeaseService leaseService = mock(SubTaskLeaseService.class);
         subTaskService = new SubTaskServiceImpl(
-                subTaskMapper, queryService, stateMachineService, leaseService);
+                subTaskMapper, queryService, stateMachineService, leaseService,
+                mock(TaskDerivationService.class), mock(RuntimeContractGateService.class));
         when(subTaskMapper.updateById(any(SubTask.class))).thenReturn(1);
         // §6.104 打回失效：让 ObjectProvider 返回 mock，便于断言 invalidateBySubTask 被调
         //（类级 @MockitoSettings(strictness = Strictness.LENIENT) 已开启，无需 Mockito.lenient()）

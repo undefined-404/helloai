@@ -1705,6 +1705,8 @@ function messageTime(createTime: string): string {
 const TASK_STATUS_COLOR: Record<string, string> = {
   PENDING: '#94A3B8',
   PLANNING: '#F59E0B',
+  // 待确认草案：同一暖色系但更浅，与「正在跑」区分开
+  AWAITING_PLAN_CONFIRM: '#FBBF24',
   IN_PROGRESS: '#0EA5E9',
   DONE: '#10B981',
   CANCELLED: '#CBD5E1'
@@ -1716,6 +1718,7 @@ function taskStatusLabel(status: string | null): string {
   const map: Record<string, string> = {
     PENDING: '待规划',
     PLANNING: '拆解中',
+    AWAITING_PLAN_CONFIRM: '待确认草案',
     IN_PROGRESS: '进行中',
     DONE: '已完成',
     CANCELLED: '已取消'

@@ -2,16 +2,36 @@
   <div class="page ha-entrance-up">
     <el-card class="chat-card">
       <template #header>
-        <div class="card-header chat-header">
-          <div class="header-actions">
-            <!-- 模式 chip + 操作组（刷新 / 分享 / 更多）；新建会话入口收敛在左栏顶部「新建对话」 -->
-            <el-tag
+        <div class="chat-header">
+          <!-- 标题区（设计图）：26×26 图标 + 17px 标题 + 状态徽标；副标题行跟随其下 -->
+          <div class="chat-head-main">
+            <div class="chat-head-title-row">
+              <span class="chat-head-icon">
+                <el-icon><MagicStick /></el-icon>
+              </span>
+              <h2
+                class="chat-head-title"
+                :title="headTitle"
+              >
+                {{ headTitle }}
+              </h2>
+              <span
+                v-if="conversation"
+                class="chat-head-badge"
+              >{{ statusLabel(conversation.status) }}</span>
+            </div>
+            <div
               v-if="conversation"
-              :type="isChatMode ? 'info' : 'warning'"
-              size="small"
+              class="chat-head-sub-row"
             >
-              {{ isChatMode ? '自由对话' : '方案澄清' }}
-            </el-tag>
+              <el-icon class="chat-head-sub-icon">
+                <Clock />
+              </el-icon>
+              <span class="chat-head-sub">{{ headSubtitle }}</span>
+            </div>
+          </div>
+          <div class="header-actions">
+            <!-- 操作组（设计图）：产物 / 刷新 / 分享 / 更多；模式与状态已上移到左侧标题区 -->
             <!-- 右栏开关：本会话产物。与用户上传附件（输入框上方胶囊条）严格分离。有产物时高亮 + 角标数字。 -->
             <button
               type="button"
@@ -47,6 +67,7 @@
               @command="handleMoreAction"
             >
               <el-button
+                class="head-more-btn"
                 size="small"
                 :icon="MoreFilled"
                 aria-label="更多操作"
@@ -146,7 +167,10 @@
                   }"
                   @click="selectConversation(String(conv.id))"
                 >
-                  <div class="conv-title" :title="conv.title || ''">
+                  <div
+                    class="conv-title"
+                    :title="conv.title || ''"
+                  >
                     {{ displayTitle(conv.title) || '(无标题)' }}
                   </div>
                   <div class="conv-meta">
@@ -223,7 +247,10 @@
             ref="streamEl"
             class="msg-stream"
           >
-            <div class="thread">
+            <div
+              class="thread"
+              :class="{ 'is-welcome': !detail }"
+            >
               <template v-if="detail">
                 <template
                   v-for="row in renderMessages"
@@ -334,7 +361,10 @@
                               @keydown.esc="cancelEdit"
                             />
                           </div>
-                          <span v-else class="msg-user-text">
+                          <span
+                            v-else
+                            class="msg-user-text"
+                          >
                             <span
                               v-if="row.skill"
                               class="msg-skill-chip"
@@ -488,14 +518,76 @@
                   </div>
                 </div>
               </template>
+              <!-- 新建对话空态（设计图）：品牌图标 + 主副标题 + 能力卡片 + 快捷指令。
+                   卡片全部映射到真实能力（pickSkill / pickFiles），不做无动作的假入口。 -->
               <div
                 v-else
-                class="chat-placeholder"
+                class="chat-welcome"
               >
-                <p>描述你想做的事情，或直接向 AI 助手提问——它会解答疑问、帮你梳理思路。</p>
-                <p class="placeholder-tip">
-                  说「整理成方案」可把讨论转成可落地方案；信息足够时可生成任务终稿并自动拆解。
-                </p>
+                <div class="cw-main">
+                  <div class="cw-hero">
+                    <span class="cw-hero-icon">
+                      <el-icon><MagicStick /></el-icon>
+                    </span>
+                    <h3 class="cw-hero-title">
+                      开始一段新对话
+                    </h3>
+                    <p class="cw-hero-desc">
+                      描述你想做的事，或直接向 AI 助手提问——它会解答疑问、帮你梳理思路。
+                    </p>
+                  </div>
+
+                  <div
+                    v-if="packageSkillsReady"
+                    class="cw-cards"
+                  >
+                    <button
+                      v-for="card in welcomeCards"
+                      :key="card.key"
+                      type="button"
+                      class="cw-card"
+                      :disabled="skillDisabled"
+                      @click="card.run()"
+                    >
+                      <span
+                        class="cw-card-icon"
+                        :class="`is-${card.tone}`"
+                      >
+                        <el-icon><component :is="card.icon" /></el-icon>
+                      </span>
+                      <span class="cw-card-title">{{ card.title }}</span>
+                      <span class="cw-card-desc">{{ card.desc }}</span>
+                    </button>
+                  </div>
+                  <!-- 技能清单未就绪：等量骨架占位，避免卡片数量先 3 后 4 的跳变 -->
+                  <div
+                    v-else
+                    class="cw-cards cw-cards-skeleton"
+                    aria-hidden="true"
+                  >
+                    <span
+                      v-for="i in 4"
+                      :key="i"
+                      class="cw-card-skeleton"
+                    />
+                  </div>
+                </div>
+
+                <div class="cw-cmds">
+                  <button
+                    v-for="cmd in welcomeCommands"
+                    :key="cmd.key"
+                    type="button"
+                    class="cw-cmd"
+                    :class="{ 'is-on': cmd.active() }"
+                    @click="cmd.run()"
+                  >
+                    <el-icon class="cw-cmd-icon">
+                      <component :is="cmd.icon" />
+                    </el-icon>
+                    <span>{{ cmd.label }}</span>
+                  </button>
+                </div>
               </div>
               <!-- 上轮 LLM 失败（最后一条是 user 消息）：重试条 -->
               <div
@@ -552,7 +644,10 @@
                       class="msg-thinking-head"
                       @click="currentStream.thinkingExpanded = !currentStream.thinkingExpanded"
                     >
-                      <el-icon class="is-loading" v-if="isProcessRunning">
+                      <el-icon
+                        v-if="isProcessRunning"
+                        class="is-loading"
+                      >
                         <Loading />
                       </el-icon>
                       <span>{{ processHeadline }}</span>
@@ -667,7 +762,7 @@
                       v-if="taskExists"
                       type="primary"
                       plain
-                      @click="router.push({ path: '/tasks', query: { review: String(conversation.taskId) } })"
+                      @click="router.push({ path: '/tasks', query: { review: String(producedTaskId) } })"
                     >
                       查看任务
                     </el-button>
@@ -842,7 +937,9 @@
                           </button>
                         </template>
                         <div class="plus-menu">
-                          <div class="plus-menu-group-title">技能</div>
+                          <div class="plus-menu-group-title">
+                            技能
+                          </div>
                           <button
                             type="button"
                             class="plus-menu-item"
@@ -902,7 +999,9 @@
                               <el-icon><Check /></el-icon>
                             </span>
                           </button>
-                          <div class="plus-menu-group-title">文件</div>
+                          <div class="plus-menu-group-title">
+                            文件
+                          </div>
                           <button
                             type="button"
                             class="plus-menu-item"
@@ -982,6 +1081,17 @@
                           {{ pinnedPlannerName }}
                         </el-tag>
                       </div>
+                      <!-- 放弃会话：会话级次要动作，收到左侧工具栏末尾，右侧只留输出类图标（对齐工作台） -->
+                      <button
+                        v-if="activeId && conversation?.status === 'ACTIVE'"
+                        v-auth="'conversation:abandon'"
+                        type="button"
+                        class="composer-text-btn is-danger"
+                        :disabled="activeSending || finalizing"
+                        @click="handleAbandon"
+                      >
+                        放弃会话
+                      </button>
                     </div>
                     <div class="input-actions-right">
                       <!-- PA-12 上下文窗口：圆形占用环置于输入框内；点击展开五项明细 + 手动压缩 -->
@@ -1046,15 +1156,34 @@
                             />
                           </div>
                           <template v-if="contextUsage">
-                            <div class="ctx-row"><span>系统提示词</span><span>{{ contextUsage.systemPromptTokens }}</span></div>
-                            <div class="ctx-row"><span>系统工具</span><span>{{ contextUsage.toolTokens }}</span></div>
-                            <div class="ctx-row"><span>Skill</span><span>{{ contextUsage.skillTokens }}</span></div>
-                            <div class="ctx-row"><span>消息</span><span>{{ contextUsage.messageTokens }}</span></div>
-                            <div class="ctx-row"><span>其他</span><span>{{ contextUsage.otherTokens }}</span></div>
-                            <div class="ctx-row ctx-total"><span>合计 / 窗口</span><span>{{ contextUsage.totalTokens }} / {{ contextUsage.contextSize }}</span></div>
-                            <div class="ctx-meta">已压缩到 seq {{ contextUsage.compactedUntilSeq }} · 摘要 v{{ contextUsage.summaryVersion }}</div>
+                            <div class="ctx-row">
+                              <span>系统提示词</span><span>{{ contextUsage.systemPromptTokens }}</span>
+                            </div>
+                            <div class="ctx-row">
+                              <span>系统工具</span><span>{{ contextUsage.toolTokens }}</span>
+                            </div>
+                            <div class="ctx-row">
+                              <span>Skill</span><span>{{ contextUsage.skillTokens }}</span>
+                            </div>
+                            <div class="ctx-row">
+                              <span>消息</span><span>{{ contextUsage.messageTokens }}</span>
+                            </div>
+                            <div class="ctx-row">
+                              <span>其他</span><span>{{ contextUsage.otherTokens }}</span>
+                            </div>
+                            <div class="ctx-row ctx-total">
+                              <span>合计 / 窗口</span><span>{{ contextUsage.totalTokens }} / {{ contextUsage.contextSize }}</span>
+                            </div>
+                            <div class="ctx-meta">
+                              已压缩到 seq {{ contextUsage.compactedUntilSeq }} · 摘要 v{{ contextUsage.summaryVersion }}
+                            </div>
                           </template>
-                          <div v-else class="ctx-empty">打开会话后可查看占用</div>
+                          <div
+                            v-else
+                            class="ctx-empty"
+                          >
+                            打开会话后可查看占用
+                          </div>
                           <el-button
                             size="small"
                             type="primary"
@@ -1063,57 +1192,65 @@
                             :loading="contextCompacting"
                             :disabled="!activeId"
                             @click="compactContext"
-                          >压缩上下文</el-button>
+                          >
+                            压缩上下文
+                          </el-button>
                         </div>
                       </el-popover>
-                      <!-- 输入优化：调 LLM 把当前输入改写为结构化表达（仅预览，不自动发送、不覆盖输入框） -->
-                      <el-button
-                        size="small"
-                        plain
-                        :loading="enhancing"
+                      <!-- 输入优化（工作台口径：28×28 图标按钮；调 LLM 改写为结构化表达，仅预览、不自动发送） -->
+                      <button
+                        type="button"
+                        class="composer-icon-btn"
+                        title="优化输出（把当前输入改写为更清晰的结构化表达，仅预览）"
                         :disabled="!input.trim() || activeSending || finalizing"
-                        title="调用 AI 把当前输入优化为更清晰的结构化表达（仅预览，不自动发送）"
                         @click="handleEnhanceInput"
                       >
-                        <el-icon v-if="!enhancing">
+                        <el-icon :class="{ 'is-loading': enhancing }">
                           <MagicStick />
                         </el-icon>
-                        优化输入
-                      </el-button>
-                      <el-button
-                        v-if="activeId && conversation?.status === 'ACTIVE'"
-                        v-auth="'conversation:abandon'"
-                        size="small"
-                        type="danger"
-                        plain
-                        :disabled="activeSending || finalizing"
-                        @click="handleAbandon"
+                      </button>
+                      <!-- 语音输入：与工作台一致，暂未开放，置灰不可点 -->
+                      <button
+                        type="button"
+                        class="composer-icon-btn is-mic"
+                        title="语音输入（暂未开放）"
+                        disabled
                       >
-                        放弃会话
-                      </el-button>
+                        <el-icon><Microphone /></el-icon>
+                      </button>
                       <!-- 发送 / 停止 复用同一按钮（DeepSeek/Kimi 风格，2026-10-19）：
-                           流式生成中按钮变红色「停止生成」态，点击中止生成；
-                           同步路径（/task 等）无法中止 → 显示「发送中」loading 态 -->
-                      <el-button
+                           流式生成中按钮变红色圆钮（停止生成），点击中止生成；
+                           同步路径（/task 等）无法中止 → 转圈禁用 -->
+                      <button
                         v-if="activeSending"
-                        :type="currentStream.streamAbort ? 'danger' : 'primary'"
-                        :loading="!currentStream.streamAbort"
-                        :disabled="finalizing"
-                        title="停止生成，当前回复将不会保存"
+                        type="button"
+                        class="composer-send-btn"
+                        :class="{ 'is-stop': currentStream.streamAbort, 'is-busy': !currentStream.streamAbort }"
+                        :title="currentStream.streamAbort ? '停止生成，当前回复将不会保存' : '发送中'"
+                        :disabled="!currentStream.streamAbort || finalizing"
                         @click="currentStream.streamAbort && stopGenerating()"
                       >
-                        <el-icon v-if="currentStream.streamAbort" style="margin-right: 4px"><CircleClose /></el-icon>
-                        {{ currentStream.streamAbort ? '停止生成' : '发送中' }}
-                      </el-button>
-                      <el-button
+                        <el-icon v-if="currentStream.streamAbort">
+                          <CircleClose />
+                        </el-icon>
+                        <el-icon
+                          v-else
+                          class="is-loading"
+                        >
+                          <Loading />
+                        </el-icon>
+                      </button>
+                      <button
                         v-else
                         v-auth="'conversation:send'"
-                        type="primary"
+                        type="button"
+                        class="composer-send-btn"
+                        title="发送"
                         :disabled="!input.trim() || finalizing"
                         @click="handleSend"
                       >
-                        发送
-                      </el-button>
+                        <el-icon><ArrowUp /></el-icon>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1154,56 +1291,56 @@
             </div>
             <div class="artifact-sidebar-body">
               <div class="artifact-list">
-                  <template v-if="conversationArtifacts.length">
-                    <button
-                      v-for="item in conversationArtifacts"
-                      :key="item.artifact.attachmentId"
-                      type="button"
-                      class="artifact-item"
-                      :class="{ 'is-current': artifactPreview?.fileName === item.artifact.fileName }"
-                      @click="previewArtifactInPanel(item)"
-                    >
-                      <span class="artifact-item-icon"><el-icon><Document /></el-icon></span>
-                      <span class="artifact-item-meta">
-                        <span class="artifact-item-name">{{ item.artifact.fileName }}</span>
-                        <span class="artifact-item-sub">
-                          {{ artifactSizeLabel(item.artifact.fileSize) }}<template v-if="item.artifact.chartType"> · {{ item.artifact.chartType }}</template>
-                          <span
-                            v-if="item.artifact.degraded"
-                            class="artifact-item-degraded"
-                            :title="item.artifact.degradeReason || '严格布局门未通过，已用兼容布局产出'"
-                          > · 兼容布局</span>
-                        </span>
+                <template v-if="conversationArtifacts.length">
+                  <button
+                    v-for="item in conversationArtifacts"
+                    :key="item.artifact.attachmentId"
+                    type="button"
+                    class="artifact-item"
+                    :class="{ 'is-current': artifactPreview?.fileName === item.artifact.fileName }"
+                    @click="previewArtifactInPanel(item)"
+                  >
+                    <span class="artifact-item-icon"><el-icon><Document /></el-icon></span>
+                    <span class="artifact-item-meta">
+                      <span class="artifact-item-name">{{ item.artifact.fileName }}</span>
+                      <span class="artifact-item-sub">
+                        {{ artifactSizeLabel(item.artifact.fileSize) }}<template v-if="item.artifact.chartType"> · {{ item.artifact.chartType }}</template>
+                        <span
+                          v-if="item.artifact.degraded"
+                          class="artifact-item-degraded"
+                          :title="item.artifact.degradeReason || '严格布局门未通过，已用兼容布局产出'"
+                        > · 兼容布局</span>
                       </span>
-                      <span class="artifact-item-actions">
-                        <!-- 2026-10-27：打开/下载必须走 blob 通道 —— 裸 <a href> 导航不带
+                    </span>
+                    <span class="artifact-item-actions">
+                      <!-- 2026-10-27：打开/下载必须走 blob 通道 —— 裸 <a href> 导航不带
                              X-Admin-Token 会被 401（浏览器导航请求无法携带自定义头）。
                              blob 经 request 拦截器补鉴权头，再 createObjectURL 交给新标签页 / 落盘。 -->
-                        <button
-                          type="button"
-                          class="artifact-item-btn"
-                          title="新标签页打开"
-                          @click.stop="openArtifactInNewTab(item)"
-                        >
-                          <el-icon><TopRight /></el-icon>
-                        </button>
-                        <button
-                          type="button"
-                          class="artifact-item-btn"
-                          title="下载"
-                          @click.stop="downloadArtifact(item)"
-                        >
-                          <el-icon><Download /></el-icon>
-                        </button>
-                      </span>
-                    </button>
-                  </template>
-                  <el-empty
-                    v-else
-                    description="暂无产物"
-                    :image-size="48"
-                  />
-                </div>
+                      <button
+                        type="button"
+                        class="artifact-item-btn"
+                        title="新标签页打开"
+                        @click.stop="openArtifactInNewTab(item)"
+                      >
+                        <el-icon><TopRight /></el-icon>
+                      </button>
+                      <button
+                        type="button"
+                        class="artifact-item-btn"
+                        title="下载"
+                        @click.stop="downloadArtifact(item)"
+                      >
+                        <el-icon><Download /></el-icon>
+                      </button>
+                    </span>
+                  </button>
+                </template>
+                <el-empty
+                  v-else
+                  description="暂无产物"
+                  :image-size="48"
+                />
+              </div>
             </div>
             <!-- 内嵌预览区：点击产物条目后在此渲染（图片/PDF 走 iframe blob，文本/源码走 pre） -->
             <div
@@ -1250,10 +1387,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled, Grid, TopRight, Histogram } from '@element-plus/icons-vue'
+import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled, Grid, TopRight, Histogram, Clock, Microphone, ArrowUp } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { promptEnhanceApi } from '@/api/promptEnhance'
 import { taskApi } from '@/api/task'
@@ -1274,11 +1411,28 @@ const conversations = ref<RequirementConversation[]>([])
 const activeId = ref<LongId | null>(null)
 const detail = ref<ClarifyConversationDetail | null>(null)
 const conversation = computed(() => detail.value?.conversation ?? null)
+/* 头部标题区（设计图）：标题 = 会话标题（去掉 [skill:xxx] 前缀），未选会话时回落「新对话」 */
+const headTitle = computed(() => {
+  const t = displayTitle(conversation.value?.title)
+  if (t) return t
+  return conversation.value ? '(无标题)' : '新建对话'
+})
+/* 头部副标题（设计图）：模式 · 轮次 · 创建时间；数据全部取自会话实体，不造字段 */
+const headSubtitle = computed(() => {
+  const c = conversation.value
+  if (!c) return ''
+  const mode = c.mode === 'CHAT' ? '自由对话' : '方案澄清'
+  const rounds = c.roundCount > 0 ? `第 ${c.roundCount} 轮` : '尚未开始'
+  return `${mode} · ${rounds} · 创建于 ${fmtTime(c.createTime)}`
+})
 // 设计图：左栏顶部 + 搜索框 + 状态 tabs
 const searchKeyword = ref('')
 const statusTab = ref<'all' | 'ACTIVE' | 'FINALIZED'>('all')
 // 会话关联任务是否仍存在（仅 detail 返回）；FINALIZED 且为 false 时展示「重新生成」
 const taskExists = computed(() => detail.value?.taskExists === true)
+// 本会话「产出的任务」：派生会话（草案/执行期派生）的 taskId 是父任务 X，产出任务在
+// derivedTaskId（V150）。统一走这里，「查看任务」才不会被带到父任务上。
+const producedTaskId = computed(() => conversation.value?.derivedTaskId ?? conversation.value?.taskId ?? null)
 
 // V39 双模式：CHAT 自由对话 / CLARIFY 方案澄清（mode 为 null 的老数据视为 CLARIFY）
 const isChatMode = computed(() => conversation.value?.mode === 'CHAT')
@@ -1487,6 +1641,14 @@ const composerRef = ref<any>(null)
  * <p>加载失败静默降级为空：菜单只剩两个流程技能，对话主链完全不受影响。</p>
  */
 const packageSkills = ref<ChatSkillOption[]>([])
+/**
+ * 技能清单是否已就绪（成功或静默失败都算就绪）。
+ *
+ * <p>空态能力卡片的数据源包含该清单：若未就绪就渲染成品卡，首屏会先画 3 张
+ * （内置两项 + 上传文件、末张横跨两列），请求回来再补成 4 张（2×2）——
+ * 用户看到的是「卡片数量凭空变了」。故未就绪时渲染等量骨架，就绪后一次成型。</p>
+ */
+const packageSkillsReady = ref(false)
 let packageSkillsLoading = false
 
 async function loadPackageSkills(): Promise<void> {
@@ -1498,6 +1660,7 @@ async function loadPackageSkills(): Promise<void> {
     // 静默：权限未开 / 网络失败时菜单不展示产出型技能，不打断用户
   } finally {
     packageSkillsLoading = false
+    packageSkillsReady.value = true
   }
 }
 
@@ -1509,6 +1672,100 @@ function shortSkillDesc(desc: string | null | undefined): string {
 /** 当前挂的是否为产出型技能（`pkg:name`）。 */
 const activePackageName = computed(() => (activeSkill.value?.startsWith('pkg:')
   ? activeSkill.value.slice(4) : null))
+
+/** 空态能力卡片 / 快捷指令的条目形状（tone 决定图标底色走哪个语义 token）。 */
+interface WelcomeCard {
+  key: string
+  icon: Component
+  tone: 'primary' | 'info' | 'success' | 'warning'
+  title: string
+  desc: string
+  run: () => void
+}
+
+/**
+ * 新建对话空态的能力卡片（设计图 2×2 栅格）。
+ *
+ * <p>每一项都映射到**已有真实能力**，不做无动作的装饰入口：两个内置技能走 {@code pickSkill}，
+ * 产出型技能与「＋」菜单同源（{@code packageSkills}），最后一项兜底文件上传。
+ * 设计稿里的「生成文档 / 指派 Agent」在本页没有对应实现，故不照抄文案。</p>
+ */
+const welcomeCards = computed<WelcomeCard[]>(() => {
+  const cards: WelcomeCard[] = [
+    {
+      key: 'planner',
+      icon: EditPen,
+      tone: 'primary',
+      title: '整理成方案',
+      desc: '逐轮问清边界与取舍，产出可落地方案',
+      run: () => pickSkill('planner')
+    },
+    {
+      key: 'task',
+      icon: MagicStick,
+      tone: 'info',
+      title: '直接拆解',
+      desc: '跳过澄清，直接出方案并建任务',
+      run: () => pickSkill('task')
+    }
+  ]
+  // 产出型技能（archify 出 HTML / biz-process-lifecycle 出状态机图等）：有几个列几个，最多 2 个
+  packageSkills.value.slice(0, 2).forEach((pkg) => {
+    cards.push({
+      key: `pkg:${pkg.name}`,
+      icon: Grid,
+      tone: 'success',
+      title: pkg.name,
+      desc: shortSkillDesc(pkg.description),
+      run: () => pickSkill(`pkg:${pkg.name}`)
+    })
+  })
+  cards.push({
+    key: 'files',
+    icon: Document,
+    tone: 'warning',
+    title: '上传文件',
+    desc: 'PDF / Word / 文本 / 代码，单次 5 个',
+    run: () => pickFiles()
+  })
+  return cards
+})
+
+/**
+ * 新建对话空态的快捷指令条（设计图底部 /planner /task /search 三枚）。
+ *
+ * <p>斜杠语法按产品既定口径不再外露（见「＋」菜单注释），故用技能中文名呈现；
+ * 第三枚对应联网搜索开关（设计稿的 /search），点击即切换，不做无实现的命令。</p>
+ */
+const welcomeCommands = computed<Array<{
+  key: string
+  icon: Component
+  label: string
+  active: () => boolean
+  run: () => void
+}>>(() => [
+  {
+    key: 'planner',
+    icon: EditPen,
+    label: '方案整理',
+    active: () => activeSkill.value === 'planner',
+    run: () => pickSkill('planner')
+  },
+  {
+    key: 'task',
+    icon: MagicStick,
+    label: '直接拆解',
+    active: () => activeSkill.value === 'task',
+    run: () => pickSkill('task')
+  },
+  {
+    key: 'web',
+    icon: Connection,
+    label: '联网搜索',
+    active: () => webSearchEnabled.value,
+    run: () => { webSearchEnabled.value = !webSearchEnabled.value }
+  }
+])
 
 const activeSkillLabel = computed(() => {
   if (activeSkill.value === 'planner') return '方案整理'
@@ -2366,6 +2623,8 @@ async function selectConversation(id: LongId) {
   try {
     detail.value = await clarifyApi.detail(sid)
     scrollToBottom()
+    // 种子会话（助理派生 / 执行期重构派生）从列表点进来同样没有 AI 首轮，一并补
+    autoRunSeedRound(detail.value)
     // A3：刷新/切回一个正在跑的会话时，把轮询与阶段接回来
     void resumeActiveSkillRun(sid)
   } catch { /* 拦截器已弹错 */ }
@@ -3175,22 +3434,44 @@ function handleMoreAction(cmd: string) {
   }
 }
 
+/**
+ * 种子会话进页面自动补跑第一轮。
+ *
+ * <p>「种子会话」= 由别处派生、只带一条 user 种子消息的会话，两个来源：
+ * {@code parentConversationId}（PA-11 助理对话派生任务）、{@code sourceSubTaskId}
+ * （`ADR-008` §19.6 执行期重构派生）。这类会话的种子是**后端直接落库**的，没走
+ * `send`，所以 LLM 从来没被调用过——不在这里补一轮，用户从「拆出去」跳进来只会
+ * 看到自己那段上下文，模型一个字都不回。</p>
+ *
+ * <p>判据只认这两个标记，不用「最后一条是 user」：真正 LLM 失败的普通会话也符合
+ * 后者，每次进页面都自动重跑会白烧 token，那种交给「回复失败 → 重试」按钮。</p>
+ */
+function autoRunSeedRound(d: ClarifyConversationDetail | null) {
+  if (d == null) return
+  const conversation = d.conversation
+  if (conversation == null) return
+  const seedConversation = conversation.parentConversationId != null
+    || conversation.sourceSubTaskId != null
+    || conversation.sourceDraftCode != null
+  if (!seedConversation) return
+  const msgs = d.messages ?? []
+  const last = msgs[msgs.length - 1]
+  if (last != null && last.role === 'user') void handleRetry()
+}
+
 onMounted(() => {
   loadList()
   loadPlannerOptions()
+  // 产出型技能清单必须**挂载即拉**：空态能力卡片（`welcomeCards`）与「＋」菜单同源，
+  // 若只等首次展开菜单才加载，首屏卡片会少一张、点「＋」后凭空多出一张（数量与布局双跳）。
+  void loadPackageSkills()
   // PA-11：从助理对话创建任务后跳转时按 query.id 打开目标需求会话
   const queryId = route.query.id
   if (typeof queryId === 'string' && queryId) {
     activeId.value = queryId
     void clarifyApi.detail(queryId).then(d => {
       detail.value = d
-      // 派生需求会话（有来源助理会话）只有种子用户消息、尚无助理回复：
-      // 自动进入澄清一轮，避免误显示「回复失败」。
-      const msgs = d.messages ?? []
-      const last = msgs[msgs.length - 1]
-      if (d.conversation.parentConversationId != null && last && last.role === 'user') {
-        void handleRetry()
-      }
+      autoRunSeedRound(d)
     }).catch(() => { /* 拦截器已弹错 */ })
   }
   // 附件清单：仅在已有会话时拉（新会话为空，等用户上传后才出现胶囊）
@@ -3244,26 +3525,117 @@ onBeforeUnmount(() => {
   padding: 0 !important;
 }
 
-.card-header { display: flex; align-items: center; justify-content: space-between; }
+/* ── 顶bar「对话头部」（设计图图层逐项还原）──
+   容器：白底 / padding 16 24 / gap 16 / align center / justify space-between
+   左：26×26 图标(r8 浅紫底) + 17px 标题 + 状态徽标(h20 r5 10px)
+       副标题行 padding-top 4 / gap 6 / 12px
+   右：操作组 gap 8，按钮 h30 / r8 / padding 0 11 / 12px；「更多」纯图标 30×30
+   注：全局 .el-card__header 的 padding 带 !important，此处必须同权清零后自绘 */
+:deep(.chat-card .el-card__header) {
+  flex: 0 0 auto;
+  padding: 0 !important;
+  border-bottom: 1px solid var(--ha-border-light) !important;
+  font-size: inherit;
+  font-weight: inherit;
+}
 .header-actions { display: flex; gap: 8px; }
 
-/* ── 顶bar（设计图）：左侧标题已移除，右侧操作按钮组右对齐 ── */
 .chat-header {
-  justify-content: flex-end;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
-  padding-top: 2px;
+  padding: 16px 24px;
+  background: var(--ha-surface);
 }
-/* 设计图：右组操作按钮紧凑 + 与左侧内容上下居中对齐 */
-.chat-header .header-actions {
-  padding-top: 0;
-  flex-shrink: 0;
+
+/* ---- 左侧标题区 ---- */
+.chat-head-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chat-head-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+/* 26×26 圆角 8 浅紫底 + 紫色图标（设计图 fill #F3EEFF / icon #7C3AED） */
+.chat-head-icon {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--ha-primary-light);
+  color: var(--ha-primary);
+  font-size: 14px;
+}
+.chat-head-title {
+  margin: 0;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--ha-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 状态徽标：h20 / padding 0 7 / r5 / 10px 灰字（设计图 fill #F5F3FC） */
+.chat-head-badge {
+  flex: none;
+  height: 20px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 5px;
+  background: var(--ha-surface-hover);
+  color: var(--ha-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+/* 副标题行：padding-top 4 / gap 6 / 12px */
+.chat-head-sub-row {
+  display: flex;
   align-items: center;
   gap: 6px;
+  padding-top: 4px;
+  min-width: 0;
 }
-/* 设计图：刷新 / 分享按钮 = 白底 + 边框（el-button 默认中性态） */
-.chat-header .header-actions .el-button:not(.el-button--primary) {
-  /* 与设计图标按钮同款：浅灰边 + 中性色 */
+.chat-head-sub-icon {
+  flex: none;
+  font-size: 14px;
+  color: var(--ha-muted);
+  opacity: 0.8;
+}
+.chat-head-sub {
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--ha-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- 右侧操作组 ---- */
+.chat-header .header-actions {
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+/* 设计图：按钮 h30 / 圆角 8 / padding 0 11 / 字号 12 / 白底浅边 */
+.chat-header .header-actions .el-button {
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-size: 12px;
   --el-button-bg-color: var(--ha-surface);
   --el-button-border-color: var(--ha-border-light);
   --el-button-text-color: var(--ha-ink-secondary);
@@ -3271,8 +3643,13 @@ onBeforeUnmount(() => {
   --el-button-hover-border-color: var(--ha-border);
   --el-button-hover-text-color: var(--ha-primary);
 }
-/* 设计图：自由对话 chip（info）放在新会话左侧；新会话 primary 在左组最右 */
-.chat-header .header-actions .el-tag { margin-right: 2px; }
+/* Element 相邻按钮默认 margin-left:12px，会与 gap 叠加撑空 ⇒ 归零交给 gap */
+.chat-header .header-actions .el-button + .el-button { margin-left: 0; }
+/* 「更多」= 纯图标 30×30（设计图 w30 h30） */
+.chat-header .header-actions .head-more-btn {
+  width: 30px;
+  padding: 0;
+}
 
 /* ── 主体三段式：左栏列表 / 右栏 chat main ── */
 .chat-layout {
@@ -3389,15 +3766,18 @@ onBeforeUnmount(() => {
 }
 
 /* ── 2026-10-27 产物侧栏（平台生成的附件，对齐 Kimi 右侧可收缩面板） ── */
-/* 顶部「产物」开关按钮（header-actions 内） */
+/* 顶部「产物」开关按钮（header-actions 内）
+   设计图规格：h30 / padding 0 11 / gap 6 / 圆角 8 / 12px / 1px 浅边
+   激活态：浅紫底(#F6F2FF) + 浅紫边(#DDD1FA) + 深紫字(#6D28D9) */
 .artifact-toggle-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
-  border: 1px solid var(--ha-border);
-  border-radius: var(--ha-radius-md);
-  background: var(--ha-surface-elevated);
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--ha-border-light);
+  border-radius: 8px;
+  background: var(--ha-surface);
   color: var(--ha-ink-secondary);
   font-size: 12px;
   cursor: pointer;
@@ -3407,13 +3787,13 @@ onBeforeUnmount(() => {
               background var(--ha-duration-fast) var(--ha-ease-out);
 }
 .artifact-toggle-btn:hover {
-  border-color: var(--ha-primary-light);
+  border-color: rgba(124, 58, 237, 0.28);
   color: var(--ha-primary);
 }
 .artifact-toggle-btn.is-active {
-  border-color: var(--ha-primary);
-  background: var(--ha-primary-muted);
-  color: var(--ha-primary);
+  border-color: rgba(124, 58, 237, 0.28);
+  background: var(--ha-primary-light);
+  color: var(--ha-primary-hover);
 }
 .artifact-toggle-btn.has-artifacts .artifact-toggle-label {
   color: var(--ha-primary);
@@ -3535,8 +3915,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -4164,21 +4544,177 @@ onBeforeUnmount(() => {
 .final-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .final-tip { font-size: 12px; color: var(--ha-muted); }
 
-/* 占位 */
-.chat-placeholder {
-  color: var(--ha-muted);
-  text-align: center;
-  padding: 80px 24px 0;
-  font-size: 14px;
-  line-height: 1.8;
+/* ── 新建对话空态（设计图）──
+   ① 品牌图标 48×48 圆角 14 紫色渐变 + 白色 sparkle
+   ② 主标题 22px / 副标题 14px 居中
+   ③ 能力卡片 2 列栅格（≤720px 降为 1 列），卡片 = 图标 + 标题 + 说明
+   ④ 底部快捷指令胶囊贴底，激活态跟随真实状态（技能挂载 / 联网开关）
+   结构：hero+cards 占满剩余高度并垂直居中，指令条 margin-top:auto 贴住 composer，
+   与设计图「内容居中 + 指令条贴底」的构图一致。 */
+.thread.is-welcome {
+  min-height: 100%;
 }
-.placeholder-tip { font-size: 12px; }
+.chat-welcome {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 24px 24px 10px;
+}
+.cw-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.cw-hero {
+  text-align: center;
+}
+.cw-hero-icon {
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%);
+  color: #fff;
+  font-size: 24px;
+  box-shadow: 0 8px 20px rgba(124, 58, 237, 0.28);
+}
+.cw-hero-title {
+  margin: 14px 0 0;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ha-ink);
+}
+.cw-hero-desc {
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ha-muted);
+}
 
-/* ── 输入区（composer） ──
-   设计图：composer 占右栏全宽，圆角白卡；不要居中、不要 max-width 限制 */
+.cw-cards {
+  margin: 24px auto 0;
+  max-width: 760px;
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+/* 技能清单加载中的等量骨架：尺寸与真实卡片一致（实测两行各 114 / gap 12 ⇒ 总高 240），
+   就绪后替换成成品卡时布局零位移 */
+.cw-card-skeleton {
+  min-height: 114px;
+  border: 1px solid var(--ha-border-light);
+  border-radius: 10px;
+  background: var(--ha-surface-hover);
+  opacity: 0.6;
+}
+.cw-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  text-align: left;
+  border: 1px solid var(--ha-border-light);
+  border-radius: 10px;
+  background: var(--ha-surface);
+  cursor: pointer;
+  transition: border-color var(--ha-duration-fast) var(--ha-ease-out),
+              box-shadow var(--ha-duration-fast) var(--ha-ease-out),
+              transform var(--ha-duration-fast) var(--ha-ease-out);
+}
+.cw-card:hover:not(:disabled) {
+  border-color: rgba(124, 58, 237, 0.28);
+  box-shadow: var(--ha-shadow-sm);
+  transform: translateY(-1px);
+}
+.cw-card:disabled { cursor: not-allowed; opacity: 0.55; }
+/* 卡片数为奇数时（本环境产出型技能可能为 0 个），末枚横跨两列，避免 2 列栅格留空洞 */
+.cw-card:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.cw-card-icon {
+  width: 26px;
+  height: 26px;
+  margin-bottom: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 14px;
+}
+/* 图标底色按语义分色（设计图四个卡片各不同色），全部走主题 token */
+.cw-card-icon.is-primary { background: var(--ha-primary-light); color: var(--ha-primary); }
+.cw-card-icon.is-info { background: var(--ha-info-bg); color: var(--ha-info-text); }
+.cw-card-icon.is-success { background: var(--ha-success-bg); color: var(--ha-success-text); }
+.cw-card-icon.is-warning { background: var(--ha-warning-bg); color: var(--ha-warning-text); }
+.cw-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ha-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cw-card-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ha-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cw-cmds {
+  margin-top: 20px;
+  padding-top: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cw-cmd {
+  height: 28px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--ha-border-light);
+  border-radius: 14px;
+  background: var(--ha-surface);
+  color: var(--ha-ink-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--ha-duration-fast) var(--ha-ease-out),
+              background var(--ha-duration-fast) var(--ha-ease-out),
+              color var(--ha-duration-fast) var(--ha-ease-out);
+}
+.cw-cmd:hover {
+  border-color: rgba(124, 58, 237, 0.28);
+  color: var(--ha-primary);
+}
+.cw-cmd.is-on {
+  border-color: rgba(124, 58, 237, 0.28);
+  background: var(--ha-primary-light);
+  color: var(--ha-primary-hover);
+}
+.cw-cmd-icon { font-size: 13px; }
+
+@media (max-width: 720px) {
+  .chat-welcome { padding: 28px 12px 8px; }
+  .cw-cards { grid-template-columns: minmax(0, 1fr); }
+  .cw-hero-title { font-size: 19px; }
+}
+
+/* ── 输入区（composer）
+   对齐个人工作台 `wb-composer`：胶囊式卡片（圆角 16 / 1px 淡边 / 轻阴影 / padding 14 16 12），
+   textarea 去边框融进卡片，工具栏在卡片内部贴底。 */
 .chat-input {
   flex: 0 0 auto;
-  border-top: 1px solid var(--ha-border-light);
   background: var(--ha-bg);
   padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
 }
@@ -4201,30 +4737,31 @@ onBeforeUnmount(() => {
 .enhance-panel-tip { font-size: 12px; color: var(--ha-muted); }
 .enhance-panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 
-/* textarea 容器：设计图用淡灰边 + 紫色 focus 光环 */
+/* 卡片本体（工作台口径）；focus 只做边框微沉，不加紫色光环——与工作台一致 */
 .composer-area {
   border: 1px solid var(--ha-border-light);
-  border-radius: var(--ha-radius-lg);
+  border-radius: var(--ha-radius-xl);
   background: var(--ha-surface);
-  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
+  padding: 14px 16px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  transition: border-color var(--ha-duration-fast) var(--ha-ease-out),
-              box-shadow var(--ha-duration-fast) var(--ha-ease-out);
+  transition: border-color var(--ha-duration-fast) var(--ha-ease-out);
 }
 .composer-area:focus-within {
-  border-color: var(--ha-primary);
-  box-shadow: 0 0 0 2px var(--ha-primary-muted);
+  border-color: var(--ha-border);
 }
 .composer-area :deep(.el-textarea__inner) {
   border: none !important;
   box-shadow: none !important;
-  padding: 0 !important;
+  padding: 0 4px 8px !important;
   background: transparent !important;
   resize: none;
   font-size: 14px;
   line-height: 1.6;
+  font-family: inherit;
+  color: var(--ha-ink);
 }
 
 /* 输入行：技能胶囊与正文同一行起点（对齐 WorkBuddy「技能 chip + 光标」），
@@ -4334,10 +4871,10 @@ onBeforeUnmount(() => {
 .attachment-input {
   display: none;
 }
-/* 拖拽落区高亮：让用户知道可以松手 */
+/* 拖拽落区高亮：让用户知道可以松手（不覆盖卡片本身的投影） */
 .composer-area.is-dragover {
   border-color: var(--ha-primary) !important;
-  box-shadow: 0 0 0 2px var(--ha-primary-light);
+  background: var(--ha-primary-light);
 }
 
 .composer-input-row {
@@ -4420,13 +4957,14 @@ onBeforeUnmount(() => {
   transform: translateX(-4px);
 }
 
-/* 「＋」能力入口（对齐 WorkBuddy：一个 + 收纳可选能力） */
+/* 「＋」能力入口（工作台口径：28×28 圆形描边按钮） */
 .plus-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
   padding: 0;
   border: 1px solid var(--ha-border-light);
   border-radius: 50%;
@@ -4434,13 +4972,11 @@ onBeforeUnmount(() => {
   color: var(--ha-muted);
   cursor: pointer;
   transition: border-color var(--ha-duration-fast) var(--ha-ease-out),
-              background var(--ha-duration-fast) var(--ha-ease-out),
               color var(--ha-duration-fast) var(--ha-ease-out);
 }
 .plus-btn:hover:not(:disabled) {
   border-color: var(--ha-primary);
-  background: var(--ha-primary-light);
-  color: var(--ha-primary);
+  color: var(--ha-ink);
 }
 .plus-btn:disabled {
   cursor: not-allowed;
@@ -4525,15 +5061,123 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
+/* 工具栏（工作台口径：卡片内贴底，左右分组，上留 10） */
 .input-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
+  padding-top: 10px;
   flex-wrap: wrap;
 }
-.input-actions-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.input-actions-right { display: flex; align-items: center; gap: 8px; }
+.input-actions-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+/* 右侧图标组收紧到 6px，与工作台一致 */
+.input-actions-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* 右侧图标按钮（工作台口径：28×28 / 圆角 8 / 无边框，hover 出浅底） */
+.composer-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ha-muted);
+  font-size: 15px;
+  cursor: pointer;
+  transition: background var(--ha-duration-fast) var(--ha-ease-out),
+              color var(--ha-duration-fast) var(--ha-ease-out);
+}
+.composer-icon-btn:hover:not(:disabled) {
+  background: var(--ha-surface-hover);
+  color: var(--ha-ink);
+}
+.composer-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* 麦克风：工作台给浅底，禁用态保持浅底只降字色（不整体变淡，避免像"坏了"） */
+.composer-icon-btn.is-mic {
+  background: var(--ha-surface-hover);
+}
+.composer-icon-btn.is-mic:disabled {
+  opacity: 1;
+  color: var(--ha-muted);
+}
+
+/* 发送按钮（工作台口径：28×28 / 圆角 10 / 主色实心 / 白图标 + 主色投影） */
+.composer-send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: var(--ha-primary);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(124, 58, 237, 0.28);
+  transition: opacity var(--ha-duration-fast) var(--ha-ease-out),
+              background var(--ha-duration-fast) var(--ha-ease-out);
+}
+.composer-send-btn:hover:not(:disabled) {
+  background: var(--ha-primary-hover);
+}
+.composer-send-btn:disabled {
+  opacity: 0.45;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+/* 生成中：红色 = 可中止；紫色转圈 = 同步路径不可中止 */
+.composer-send-btn.is-stop {
+  background: var(--ha-danger);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.28);
+}
+.composer-send-btn.is-busy {
+  cursor: default;
+}
+/* 不可中止的「发送中」：转圈本身就是状态信号，不能跟着 disabled 一起变淡 */
+.composer-send-btn.is-busy:disabled {
+  opacity: 1;
+}
+
+/* 文字型次要动作（放弃会话）：与 28px 图标按钮同高，不破坏工具栏基线 */
+.composer-text-btn {
+  height: 28px;
+  padding: 0 8px;
+  flex: none;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ha-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--ha-duration-fast) var(--ha-ease-out),
+              color var(--ha-duration-fast) var(--ha-ease-out);
+}
+.composer-text-btn.is-danger:hover:not(:disabled) {
+  background: var(--ha-danger-bg);
+  color: var(--ha-danger);
+}
+.composer-text-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 
 .chat-readonly-tip {
   color: var(--ha-muted);
@@ -4542,27 +5186,45 @@ onBeforeUnmount(() => {
   padding: 16px 8px;
 }
 
-/* V34 联网搜索开关 */
+/* 联网搜索开关（工作台口径：一体化胶囊，图标 + 文案 + 小开关） */
 .web-search-switch {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+  height: 28px;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--ha-border-light);
+  border-radius: 9999px;
+  background: var(--ha-surface-hover);
   flex-shrink: 0;
 }
 .web-search-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-size: 12px;
   color: var(--ha-muted);
   cursor: default;
   user-select: none;
 }
-.web-search-icon { font-size: 14px; }
+.web-search-icon { font-size: 13px; color: var(--ha-primary); }
 
-.planner-select { display: flex; align-items: center; gap: 8px; }
+/* 规划者选择（保留「只筛 planner」的既有逻辑，仅把下拉外观做成工作台的胶囊 chip） */
+.planner-select { display: flex; align-items: center; gap: 6px; }
 .planner-label { font-size: 12px; color: var(--ha-muted); flex-shrink: 0; }
-.planner-picker { width: 240px; max-width: 100%; }
+.planner-picker { width: 216px; max-width: 100%; }
+.planner-picker :deep(.el-select__wrapper) {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  background: var(--ha-surface-hover);
+  box-shadow: 0 0 0 1px var(--ha-border-light) inset;
+  font-size: 12px;
+}
+.planner-picker :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px var(--ha-primary) inset;
+}
 
 .msg-retry {
   display: flex;
@@ -4579,12 +5241,13 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
-/* 页脚 AI 生成声明 */
+/* 页脚 AI 生成声明（工作台口径：输入卡片正下方居中一行） */
 .chat-disclaimer {
   text-align: center;
   font-size: 12px;
+  line-height: 1.5;
   color: var(--ha-muted);
-  margin-top: 8px;
+  margin-top: 0;
 }
 
 /* ── 响应式 ── */

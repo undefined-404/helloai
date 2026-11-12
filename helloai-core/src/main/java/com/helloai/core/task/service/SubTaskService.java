@@ -50,43 +50,40 @@ public interface SubTaskService extends IService<SubTask> {
      */
     List<String> mergeSkills(SubTask subTask);
 
-    /**
-     * 草案人工修订（G-010 草案确认 UI）：仅更新技能指派、执行约束与不确定性申报。
-     *
-     * <p>fail-close：仅 PENDING_PLAN_REVIEW 状态允许编辑，其余状态抛业务异常
-     * （草案已转正后走返工/改派链路，不得绕过状态机直改）。</p>
-     *
-     * @param id             草案子任务 ID
-     * @param requiredSkills 技能标签；null=不修改，非 null（含空数组）=覆盖
-     * @param constraints    执行约束；null=不修改
-     * @param uncertainties  不确定性申报（G-011）；null=不修改，非 null（含空数组）=覆盖（空数组=清空）；
-     *                       空白 note 条目丢弃、非法 kind 降级 UNCONFIRMED（D3 fail-close 同口径）
-     * @param acceptanceKind 验收判据（`TD-2`）：AUTOMATED / STRUCTURAL / REVIEWED / ATTESTED；
-     *                       null / 空白=不修改，非法值回落 AUTOMATED（人工为权威输入，不做强校验）
-     */
-    void updateDraft(Long id, List<String> requiredSkills, String constraints, List<Uncertainty> uncertainties,
-                     String acceptanceKind);
+
+
 
     /**
-     * `TD-9` 单条草案重生成写命令（regenerateById 专用）：只改四要素
-     * {@code content} / {@code deliverable} / {@code acceptance} / {@code acceptanceKind}。
+     * 进入人工重构（{@code RESTRUCTURING}，`ADR-008` §11.2）。
      *
-     * <p><b>不变量白名单</b>：{@code title} / {@code id} / {@code dependsOn} 一律不动
-     * （改了审计线索就断了——外部引用、依赖图、时间线全对不上，参考实现 update-task.json
-     * 「NEVER change the title」「Maintain the same ID, status, and dependencies」）。
-     * 与 {@link #updateDraft} 分工：updateDraft 改技能/约束/不确定性/验收判据（G-010 草案
-     * 确认 UI）；本方法改内容四要素（LLM 重生成产物落库）。</p>
-     *
-     * <p>fail-close：仅 PENDING_PLAN_REVIEW 状态允许，其余状态抛业务异常。</p>
-     *
-     * @param id             草案子任务 ID
-     * @param content        目标内容（null=不修改，非 null=覆盖）
-     * @param deliverable    目标交付物（null=不修改，非 null=覆盖）
-     * @param acceptance     目标验收标准（null=不修改，非 null=覆盖）
-     * @param acceptanceKind 目标验收判据（null/空白=不修改，非法值回落 AUTOMATED）
+     * <p>入口只收 {@code BLOCKED} / {@code DEAD_LETTER} / {@code REWORK} / {@code PAUSED} 四态
+     * ——它们的共同语义是「自动链路已经停了，人必须看一眼」。进入时
+     * {@code context.restructureRound} 递增、记 {@code restructureEnteredAt}，
+     * <b>不清零 {@code reworkCount}</b>（驳回事实不因改需求而撤销）。</p>
      */
-    void updateDraftContent(Long id, String content, String deliverable, String acceptance,
-                            String acceptanceKind);
+    void enterRestructuring(Long subTaskId, String reason);
+
+    /**
+     * 执行期编辑四要素（仅 {@code RESTRUCTURING}）。
+     *
+     * <p>与暂存区草案编辑（{@code PlanDraftService#updateByCode}）的区别：{@code title} 也允许改（§12.1 的四要素含
+     * title），且每次改动前把**当前值**追加进 {@code context.restructureHistory}——
+     * 首条即进入重构前的原始要求，供 {@code G5} 与「为什么这次不一样」追溯。
+     * 传 {@code null} 表示不修改该字段（局部更新语义）。</p>
+     */
+    SubTaskView updateRestructureContent(Long subTaskId, String title, String content, String deliverable,
+                                         String acceptance, String constraints, String acceptanceKind,
+                                         Long editorId);
+
+    /**
+     * 整改完成回派发（{@code RESTRUCTURING → PENDING}）。
+     *
+     * <p>回链前跑 {@code G5_RUNTIME_CONTRACT_BREAK}（确定性文本匹配，零 LLM）：若下游引用了
+     * 整改前的产出标识而新要求不再产出，整笔拒绝并说明「哪条下游依赖哪个标识」——
+     * 这正是「人工改的要求让后面的任务无法执行」的机械可判形态。通过则落
+     * {@code context.restructureGateFindings} 并转 {@code PENDING} 重新派发。</p>
+     */
+    SubTaskView applyRestructure(Long subTaskId);
 
     @Transactional(rollbackFor = Exception.class)
     SubTask create(SubTask subTask, Long assignedAgentId);
@@ -463,6 +460,26 @@ public interface SubTaskService extends IService<SubTask> {
     @Transactional(rollbackFor = Exception.class)
     int physicalDeleteByTaskId(Long taskId);
 
+    /**
+     * 重新拆解前物理清理**从未执行过**的 CANCELLED 旧草案（§6.100）。
+     *
+     * <p><b>与 {@link #physicalDeleteByTaskId} 的区别</b>：后者无状态过滤（仅限任务级联删除），
+     * 靠调用方先确认「非 CANCELLED 计数为 0」；本方法把两条约束下沉进 SQL——</p>
+     * <ol>
+     *   <li>{@code status='CANCELLED'}：非取消态的行**任何调用方都删不掉**；</li>
+     *   <li>{@code NOT EXISTS agent_execution_record}：执行过再被取消的行保留（有执行痕迹）。</li>
+     * </ol>
+     *
+     * <p><b>为什么需要第 2 条</b>：§6.100 的删除前提「该场景草案从未执行」一直是**假设**。
+     * {@code task_timeline} / {@code review_record} 的 {@code sub_task_id} 无外键，删行只会留下
+     * 指向不存在子任务的孤儿引用，DB 不报错、也不回收。</p>
+     *
+     * @param taskId 任务 ID
+     * @return 实际删除行数；小于该任务 CANCELLED 行数说明有行被执行过而被保留
+     */
+    @Transactional(rollbackFor = Exception.class)
+    int physicalDeleteNeverExecutedCancelled(Long taskId);
+
     // ══════════════════════════════════════════════════════════════
     //  §7.1 helloai-job 去 Mapper 直连收口（巡检读写出口）
     // ══════════════════════════════════════════════════════════════
@@ -586,6 +603,46 @@ public interface SubTaskService extends IService<SubTask> {
      */
     void updateContext(Long subTaskId, Map<String, Object> context);
 
+    /**
+     * **按键合并**写入子任务 {@code context}，且**自带独立事务**（{@code REQUIRES_NEW}）。
+     *
+     * <p><b>为什么必须合并而不是覆写</b>：{@code context} 同时承载 {@code plannerAgentId} /
+     * {@code acceptancePreconditions} / {@code planGeneratedAt} 等多个写方的键；覆写会让两次
+     * 写入之间第三方加的键静默丢失。</p>
+     *
+     * <p><b>为什么独立事务</b>：审计写点（门禁 findings、阻断留痕）必须在外层业务回滚后仍然
+     * 可见——否则用户只看到错误消息、库里零排障线索。反过来，正常业务写入仍走
+     * {@link #updateContext}（无独立事务、与调用方同生共死）。</p>
+     */
+    void updateContextInNewTx(Long subTaskId, Map<String, Object> patch);
+
+    /**
+     * **按键合并**写入子任务 {@code context}，**跟随调用方事务**（不新开事务）。
+     *
+     * <p><b>与另两个方法的分工，按「写成败是否要与调用方同生共死」划</b>：</p>
+     * <ul>
+     *   <li>{@link #updateContext}：整段覆写，跟随调用方事务 —— 只给「我持有完整 context」的调用方；</li>
+     *   <li>{@link #updateContextInNewTx}：按键合并，独立事务 —— 给审计写点（要活过回滚）；</li>
+     *   <li>本方法：按键合并，跟随调用方事务 —— 给「只改其中几个键，且必须与业务同生共死」的写入方。</li>
+     * </ul>
+     *
+     * <p><b>为什么必须有它</b>：整批拆解的落库段已事务化（草案 / 依赖 / 归一 / 状态推进同生共死），
+     * 门禁结论不能走独立事务（外层回滚会留下指向不存在草案的孤儿 findings）；但它交出去的是
+     * **patch 而不是完整 context**。此时若借用 {@link #updateContext}，会把
+     * {@code plannerAgentId} / {@code planGeneratedAt} / {@code acceptancePreconditions} 一并抹掉——
+     * 2026-11-08 真机实测到的就是这个：草案落库后 {@code context} 只剩 {@code gateFindings}，
+     * 验收前置标注（`TD-11`）被自己人擦掉。</p>
+     */
+    void mergeContextInTx(Long subTaskId, Map<String, Object> patch);
+
+    /**
+     * 把指定草案的契约位（{@code is_contract}）降为 0。
+     *
+     * <p>用于「契约位至多 1 条」的确定性归一：模型可能给多条草案打契约位，而任务契约是
+     * 单值资源（{@code updateContract} 后完成者覆盖），多打一条就会让契约内容随完成顺序漂移。</p>
+     */
+    void demoteContractFlags(List<Long> subTaskIds);
+
     /** 技能并集（W6：跨域形参取 ID，由提供方自读实体）。 */
     List<String> mergeSkills(Long subTaskId);
 
@@ -606,22 +663,12 @@ public interface SubTaskService extends IService<SubTask> {
 
     // ── 写命令 / 视图变体（RM5 批 5a）：供 planner 域消费 ──
 
-    /**
-     * 批量创建子任务草案（<b>写命令</b>）。
-     *
-     * <p>消费方只交目标值（{@link SubTaskDraft}），行内状态由提供方落库；返回落库后的只读快照
-     * （含 MP 回填的 id）。原 planner 侧 {@code new SubTask()} + {@code saveBatch} 的等价收口。</p>
-     */
-    List<SubTaskView> saveDrafts(List<SubTaskDraft> drafts);
+
+
 
     /** 按 taskId + 状态查询只读快照（顺序与 {@link #list(Long, com.helloai.common.constant.SubTaskStatus, Long, Integer, int)} 一致）。 */
     List<SubTaskView> listViewsByTaskIdAndStatus(Long taskId, com.helloai.common.constant.SubTaskStatus status);
 
-    /** 覆写子任务 deadline（读改写回写不透明，W10；子任务不存在返回 false）。 */
-    boolean updateDeadline(Long subTaskId, OffsetDateTime deadline);
-
-    /** 待审草案快照（createTime asc + id asc，与插入序一致）。 */
-    List<SubTaskView> listDraftsInInsertOrder(Long taskId, com.helloai.common.constant.SubTaskStatus status);
 
     /** 统计排除指定状态的子任务数。 */
     long countByTaskIdExcludingStatus(Long taskId, com.helloai.common.constant.SubTaskStatus excluded);
@@ -631,4 +678,15 @@ public interface SubTaskService extends IService<SubTask> {
 
     /** 按 id 集合查询只读快照（顺序与 {@link #listByIds} 一致）。 */
     List<SubTaskView> listViewsByIds(java.util.Collection<Long> ids);
+
+    /**
+     * `AD-5a-3b-2`：从暂存区物化执行行并完成转正（`confirm` 专用，整笔事务）。
+     *
+     * <p>顺序：按暂存区内容**以最终状态直接插入**执行行（PENDING / AWAITING_DERIVED / DONE）→
+     * `depends_on_codes` 翻译成真实 id → 回填派生 Task 的 `parent_sub_task_id`。</p>
+     *
+     * <p>只在确认口调用；返回物化后的最新视图（id 为新行）。</p>
+     */
+    List<SubTaskView> materializeFromStaging(Long taskId, List<SubTaskDraft> drafts,
+                                             Map<String, List<String>> dependsOnCodes, Integer slaMinutes);
 }

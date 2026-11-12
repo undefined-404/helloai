@@ -134,4 +134,78 @@ public class Task extends BaseEntity {
 
     /** 归属用户 id（PA-1，V132）：建任务时继承澄清会话 owner，NULL 宽松并入。 */
     private Long ownerId;
+
+    /**
+     * 拆解租约到期时刻（`V146`）。
+     *
+     * <p><b>为什么不用 {@code update_time} 判活</b>：拆解线程调模型的十几分钟里一次库都不写，
+     * 它没有能力用「心跳」证明自己活着；用 {@code update_time} 判活等于「跑得比阈值久就判死」，
+     * 而 dev 环境的 provider 读超时（600000ms）与旧阈值（10 分钟）正好相等，误杀是必然的。</p>
+     *
+     * <p>改为「进入 PLANNING 时就写一个约定到期时刻」，巡检只扫「租约过期」。这与
+     * {@code OrderExpireTask} 扫 {@code expire_time}、{@code TccFreezeTimeoutTask} 扫
+     * {@code expire_time} 同构：<b>超时任务扫痕迹、不扫业务主体状态</b>。</p>
+     *
+     * <p>进入 {@code AWAITING_PLAN_CONFIRM} 后本字段无意义（巡检只看 PLANNING），不必清空。</p>
+     *
+     * <p><b>契约纪律</b>：与 {@code version} 同属持久层并发控制，不进入 {@code TaskView}
+     * 等跨域投影。</p>
+     */
+    private OffsetDateTime decomposeLeaseUntil;
+
+    /**
+     * 当前（或最近一次）拆解的 attemptId（`V146`）。
+     *
+     * <p><b>必须在入口生成</b>：幂等的本质是「同一件事有同一个名字」。若由异步段现生成，
+     * 每次执行都得到新 UUID，暂存区 {@code batch_key} 每次都是新值，幂等形同虚设。</p>
+     *
+     * <p>与 {@link #decomposeLeaseUntil} 在同一条 UPDATE 里写入，避免「已 PLANNING 但
+     * attemptId 为空」的窗口。</p>
+     */
+    private String decomposeAttemptId;
+
+    /**
+     * 执行期派生的父 SubTask id（`V148` / `ADR-008`）。
+     *
+     * <p><b>软引用、不建 FK</b>：派生链是可重派生的（失败后重新派生会换父锚），
+     * 强外键会让「清理一次失败派生」变成级联约束问题。父 SubTask 置 DONE 的依据
+     * 由派生 Task 完成态传播负责（见 {@code SubTaskCompletionListener}）。</p>
+     */
+    private Long parentSubTaskId;
+
+    /**
+     * 草案期派生的父 Task id（`V148` / `ADR-008`）。
+     *
+     * <p><b>为什么草案期不直接写 {@code parentSubTaskId}</b>：草案阶段父任务还没确认，
+     * 对应的 SubTask 尚不存在。此时用 {@code (parent_task_id, parent_draft_code)} 作为
+     * 父锚；父任务确认物化 SubTask 时回填 {@code parentSubTaskId} 并清空本列。</p>
+     */
+    private Long parentTaskId;
+
+    /** 草案期派生的父草案 code（`V148`）；确认物化后清空，转到 {@link #parentSubTaskId}。 */
+    private String parentDraftCode;
+
+    /**
+     * 根链 id（`V148`）：根任务 = 自身 id。
+     *
+     * <p><b>为什么冗余一列而不是靠递归查父</b>：看板与全链查询（报告聚合、成本归集、
+     * 级联取消）都要回答「这棵树有多大」，逐层递归在大表上是 N 次往返。回填成
+     * 「根 = 自身 id」后所有查询都能写成 {@code WHERE root_task_id = :id}，不再写
+     * {@code COALESCE}。</p>
+     */
+    private Long rootTaskId;
+
+    /**
+     * 派生层级（`V148`）：根 0，全局 ≤2（最多 3 级）。
+     *
+     * <p>层级由本列表达，<b>不再从草案 code 段数推导</b>——派生是独立 Task，
+     * 不存在「父 code 里嵌几段」这种结构信息。</p>
+     */
+    private Integer depth;
+
+    /** 派生原因（`V148`）：{@code PLAN} = 草案期派生；{@code RESTRUCTURE} = 执行期重构派生。 */
+    private String derivationReason;
+
+    /** 同一父的第几次派生（`V148`，从 1 起）：区分合法重复派生与 bug。 */
+    private Integer derivationRound;
 }

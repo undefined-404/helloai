@@ -46,8 +46,9 @@ public class EventReconciliationServiceImpl implements EventReconciliationServic
     /**
      * 业务状态 → 期望的末条事件类型集合（不可变；无 null，Map.of 安全）。
      *
-     * <p>不在映射中的状态（PENDING/PENDING_PLAN_REVIEW/PAUSED/BLOCKED/CANCELLED/DEAD_LETTER）
-     * 无事件语义，跳过校验（PENDING 为过渡态：回收/失败回退后事件不回退，无法用末条事件表达）。</p>
+     * <p>不在映射中的状态（PENDING/PAUSED/BLOCKED/CANCELLED/DEAD_LETTER/
+     * AWAITING_DERIVED/RESTRUCTURING）无事件语义，跳过校验（PENDING 为过渡态：回收/失败回退后
+     * 事件不回退，无法用末条事件表达；两个派生态由完成态传播与重构入口驱动，不是 Agent 事件出口）。</p>
      */
     private static final Map<SubTaskStatus, Set<String>> EXPECTED_LAST_EVENTS = Map.of(
             SubTaskStatus.ASSIGNED, Set.of(AgentEventType.TASK_ASSIGNED.code()),

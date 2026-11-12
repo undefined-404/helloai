@@ -6,17 +6,24 @@ import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * B1：Flyway 迁移全量 apply（审计建议 #5-1）。
  *
- * <p><b>被测事实</b>：helloai-start 是唯一携带 85 个 Flyway 迁移脚本的模块
- * （V1、V2、V13~V95，V3~V12 为历史缺号，见差距表 C-6）。B 级集成在空 PG 容器上
- * 从零执行完整迁移链，一次性暴露「只在新库上才炸」的脚本缺陷
- * （缺列 / 缺索引 / CHECK 约束冲突 / 幂等性缺失，CODE_STYLE §16）。</p>
+ * <p><b>被测事实</b>：helloai-start 是唯一携带 Flyway 迁移脚本的模块（V3~V12 为历史缺号，
+ * 见差距表 C-6）。B 级集成在空 PG 容器上从零执行完整迁移链，一次性暴露「只在新库上才炸」的
+ * 脚本缺陷（缺列 / 缺索引 / CHECK 约束冲突 / 幂等性缺失，CODE_STYLE §16）。脚本数量沿
+ * classpath 动态统计，不硬编码。</p>
  *
  * <p><b>断言口径</b>：</p>
  * <ul>
@@ -39,15 +46,20 @@ class FlywayMigrationIT extends AbstractItTestBase {
                 .getResources("classpath:db/migration/V*.sql");
         assertTrue(scripts.length > 0, "classpath 上应存在 Flyway 迁移脚本");
 
-        Integer applied = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM flyway_schema_history WHERE success = TRUE",
-                Integer.class);
+        Set<String> resolvedVersions = Arrays.stream(scripts)
+                .map(Resource::getFilename)
+                .map(name -> name.substring(1, name.indexOf("__")))
+                .collect(Collectors.toSet());
+        List<String> appliedVersions = jdbcTemplate.queryForList(
+                "SELECT version FROM flyway_schema_history WHERE success = TRUE AND version IS NOT NULL",
+                String.class);
         Integer failed = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM flyway_schema_history WHERE success = FALSE",
                 Integer.class);
 
-        assertEquals(scripts.length, applied,
-                "classpath 迁移文件数应等于成功 apply 数（新增迁移自动纳入比对）");
+        // 只比数量会漏掉「多一条幽灵记录 + 少一条真实记录」的漂移：总数不变，集合已错位
+        assertEquals(resolvedVersions, new HashSet<>(appliedVersions),
+                "classpath 迁移版本集合应与成功 apply 集合完全一致");
         assertEquals(0, failed, "不允许存在失败的迁移记录");
     }
 
@@ -74,6 +86,22 @@ class FlywayMigrationIT extends AbstractItTestBase {
         assertTrue(tableExists("event_consumption_log"), "V18: event_consumption_log 表应存在");
         // V65：Agent 事件表（TASK_ASSIGNED 埋点依赖）
         assertTrue(tableExists("agent_event"), "V65: agent_event 表应存在");
+
+        // 2026-11-11 收敛：基线直接为最终形态，必须有暂存区、且执行表不再有过渡列/旧状态值
+        assertTrue(tableExists("task_plan_draft"), "V147: 草案暂存区表应存在");
+        assertFalse(columnExists("sub_task", "decompose_attempt_id"),
+                "合并基线不应再建 sub_task.decompose_attempt_id");
+        assertFalse(columnExists("sub_task", "draft_seq"),
+                "合并基线不应再建 sub_task.draft_seq");
+        String subStatusCheck = jdbcTemplate.queryForObject(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'chk_sub_task_status'",
+                String.class);
+        assertNotNull(subStatusCheck, "chk_sub_task_status 必须存在");
+        assertFalse(subStatusCheck.contains("PENDING_PLAN_REVIEW"),
+                "最终 CHECK 不得再接受已退役的 PENDING_PLAN_REVIEW（V148 曾重复重建把它加回来）");
+        assertTrue(subStatusCheck.contains("AWAITING_DERIVED")
+                        && subStatusCheck.contains("RESTRUCTURING"),
+                "最终 CHECK 必须包含派生/重构两态");
     }
 
     @Test

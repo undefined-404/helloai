@@ -40,6 +40,7 @@ import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.ActivityLogService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
+import com.helloai.core.agent.service.ConversationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -114,6 +115,10 @@ class McpToolServiceTest {
     @Mock
     private SubmissionActivityRecorder submissionActivityRecorder;
 
+    /** 对话流写入（2026-11-12：自报阻塞补对话结论，构造器新增依赖）。 */
+    @Mock
+    private ConversationService conversationService;
+
     private McpToolService mcpToolService;
 
     @BeforeEach
@@ -126,6 +131,7 @@ class McpToolServiceTest {
                 agentService, heartbeatService, agentDutyLeaseService, attachmentPort,
                 executionResultHandler, activityLogService, submissionActivityRecorder,
                 subTaskQueryPort, subTaskCommandPort, agentExecutionRecordService,
+                conversationService,
                 skillPackageCatalog, llmProviderModelQueryService, agentInboxService);
         McpTaskClaimService taskClaimService = new McpTaskClaimServiceImpl(
                 agentService, agentInboxService, agentMcpServerService, subTaskQueryPort,

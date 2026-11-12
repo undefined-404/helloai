@@ -33,6 +33,16 @@ public class RequirementConversation extends BaseEntity {
     @JsonSerialize(using = ToStringSerializer.class)
     private Long taskId;
 
+    /**
+     * 执行期重构派生的来源子任务（`ADR-008` §19.6 / `AD-4`，`V148`）。
+     *
+     * <p>非空表示「这条会话是为了把某个 `RESTRUCTURING` 子任务拆成独立任务而开的」：
+     * 定稿建任务时据此把新任务挂成 {@code parent_sub_task_id = sourceSubTaskId}，
+     * 并把该子任务置 {@code AWAITING_DERIVED}。普通需求 / 助理会话为空。</p>
+     */
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long sourceSubTaskId;
+
     /** LLM 最近一次终稿的任务标题（等用户确认） */
     private String finalTitle;
 
@@ -134,4 +144,27 @@ public class RequirementConversation extends BaseEntity {
     /** 建任务血缘（PA-11，V135）：从哪条消息创建（软引用无 FK）。 */
     @JsonSerialize(using = ToStringSerializer.class)
     private Long forkedFromMessageId;
+
+    /**
+     * 草案期重构派生的来源草案编号（`ADR-008` §5，`V150`）。
+     *
+     * <p>与 {@link #sourceSubTaskId} 互斥：子任务已物化时用 SubTask 锚，尚未物化
+     * （草案审阅页「拆出去」）时用 {@code (task_id, source_draft_code)} 这个复合锚。
+     * 非空即表示「会话终稿要建派生任务 Y 而不是普通任务」。</p>
+     */
+    private String sourceDraftCode;
+
+    /**
+     * 派生会话产出的独立任务 `Y`（`V150`，软引用无 FK）。
+     *
+     * <p><b>为什么不复用 {@link #taskId}</b>：派生会话的 {@code task_id} 按 `ADR-008`
+     * §13.1 预挂父任务 `X`（草案期定稿还要拿它当父锚），若读侧拿它当「产出任务」，
+     * 「查看任务」会跳到 X 的方案审阅——2026-11-12 真机就是由此在 X 上点了「拒绝重拆」，
+     * 把整条链重置掉。故产出指针单独一列：非空 = 本会话已建出 Y。</p>
+     *
+     * <p>读取侧统一规则：{@code derivedTaskId != null ? derivedTaskId : taskId}。
+     * Y 被删除后本列保留悬挂值，由存在性判断决定能否「重新生成」。</p>
+     */
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long derivedTaskId;
 }

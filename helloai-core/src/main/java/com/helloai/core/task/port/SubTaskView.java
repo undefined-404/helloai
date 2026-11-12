@@ -58,7 +58,17 @@ public record SubTaskView(
         String scoreGrade,
         Integer timeoutCount,
         OffsetDateTime createTime,
-        OffsetDateTime updateTime
+        OffsetDateTime updateTime,
+        /**
+         * 草案的位置身份（`TD-16d` / `V147`），如 {@code 202611080002-001}。
+         *
+         * <p><b>为什么进契约</b>：派生/追溯以位置身份为锚；执行行转正后仍保留
+         * {@code draft_code}，不靠批内序号反推。</p>
+         *
+         * <p>存量草案（`V147` 之前产出、AD-5a 尚未迁移）为 {@code null}，
+         * 消费方须自行回落。</p>
+         */
+        String draftCode
 ) {
 
     /** 兼容构造：不含 planner 侧扩展字段（review 场景）。 */
@@ -67,7 +77,23 @@ public record SubTaskView(
                        Map<String, Object> context, List<UncertaintyView> uncertainties) {
         this(id, taskId, status, assignedAgentId, reworkCount, title, content, deliverable, acceptance,
                 null, constraints, context, uncertainties,
-                null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    /**
+     * 兼容构造：不含 {@code draftCode}（不关心位置身份的调用方与测试沿用）。
+     */
+    public SubTaskView(Long id, Long taskId, SubTaskStatus status, Long assignedAgentId, Integer reworkCount,
+                       String title, String content, String deliverable, String acceptance,
+                       AcceptanceKind acceptanceKind, String constraints, Map<String, Object> context,
+                       List<UncertaintyView> uncertainties, List<Long> dependsOn, OffsetDateTime deadline,
+                       String priority, Integer isContract, List<String> requiredSkills, Long moduleId,
+                       Map<String, Object> scoreFactors, Integer compositeScore, String scoreGrade,
+                       Integer timeoutCount, OffsetDateTime createTime, OffsetDateTime updateTime) {
+        this(id, taskId, status, assignedAgentId, reworkCount, title, content, deliverable, acceptance,
+                acceptanceKind, constraints, context, uncertainties, dependsOn, deadline, priority,
+                isContract, requiredSkills, moduleId, scoreFactors, compositeScore, scoreGrade,
+                timeoutCount, createTime, updateTime, null);
     }
 
     /**

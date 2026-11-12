@@ -38,6 +38,7 @@ import com.helloai.core.task.workflow.mapper.WorkflowInstanceMapper;
 import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.policy.TeamPolicyExpander;
 import com.helloai.core.task.port.ReviewPort;
+import com.helloai.core.task.port.TaskPlanDraftPort;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.statemachine.FinalReportStateMachine;
@@ -53,6 +54,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 任务核心服务实现。负责任务级联删除、关联统计、重新发布。
@@ -85,6 +87,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private final AgentService agentService;
     private final SubTaskService subTaskService;
     private final TeamService teamService;
+    private final TaskPlanDraftPort taskPlanDraftPort;
 
     // ══════════════════════════════════════════════════════════════
     //  基础 CRUD（§6.3 收口：条件构造与写操作归 Service）
@@ -182,7 +185,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         }
         int cap = limit <= 0 ? DEFAULT_RECENT_TASK_LIMIT : limit;
         return list(new LambdaQueryWrapper<Task>()
-                .in(Task::getStatus, TaskStatus.PLANNING, TaskStatus.IN_PROGRESS)
+                .in(Task::getStatus, TaskStatus.PLANNING, TaskStatus.AWAITING_PLAN_CONFIRM,
+                        TaskStatus.IN_PROGRESS)
                 // PA-1 宽松并入：仅当前用户可见「自己的」或「无归属（老数据/异步创建）」的任务
                 .and(w -> w.isNull(Task::getOwnerId)
                         .or().eq(Task::getOwnerId, ownerId))
@@ -198,7 +202,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         }
         int cap = limit <= 0 ? DEFAULT_RECENT_TASK_LIMIT : limit;
         return list(new LambdaQueryWrapper<Task>()
-                .in(Task::getStatus, TaskStatus.PLANNING, TaskStatus.IN_PROGRESS)
+                .in(Task::getStatus, TaskStatus.PLANNING, TaskStatus.AWAITING_PLAN_CONFIRM,
+                        TaskStatus.IN_PROGRESS)
                 .and(w -> w.isNull(Task::getOwnerId)
                         .or().eq(Task::getOwnerId, ownerId))
                 .orderByDesc(Task::getUpdateTime)
@@ -460,8 +465,24 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     }
 
     @Override
-    public List<Task> listTimedOutPlanning(OffsetDateTime deadline, int limit) {
-        return baseMapper.selectTimedOutPlanning(deadline, limit);
+    public List<Task> listTimedOutPlanning(OffsetDateTime now, int limit) {
+        return baseMapper.selectTimedOutPlanning(now, limit);
+    }
+
+    @Override
+    public TaskStatus recoverTimedOutDecompose(Long taskId) {
+        if (taskId == null) {
+            return null;
+        }
+        // 判活只看租约；暂存区是否有草案只决定「回收成什么状态」。
+        TaskStatus target = taskPlanDraftPort.hasActiveDrafts(taskId)
+                ? TaskStatus.AWAITING_PLAN_CONFIRM : TaskStatus.PENDING;
+        boolean updated = lambdaUpdate()
+                .eq(Task::getId, taskId)
+                .eq(Task::getStatus, TaskStatus.PLANNING)
+                .set(Task::getStatus, target)
+                .update();
+        return updated ? target : null;
     }
 
     // ── 只读快照（RM5 批 4）──
@@ -480,21 +501,65 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         return records == null ? List.of() : records.stream().map(TaskServiceImpl::toView).toList();
     }
 
-    /** 实体 → 只读快照（`getView` / `listRecentViews` 共用，防两处字段集漂移）。 */
-    private static TaskView toView(Task t) {
+    /** 实体 → 只读快照（`getView` / `listRecentViews` / `TaskDerivationServiceImpl` 共用，防字段集漂移）。 */
+    static TaskView toView(Task t) {
         return new TaskView(t.getId(), t.getTitle(), t.getDescription(), t.getFinalReport(),
                 t.getFinalReportStatus(), t.getFinalReportAgentId(), t.getFinalReportTime(),
                 t.getAgentPolicy(), t.getStatus(), t.getSlaMinutes(), t.getPriority(), t.getContext(),
-                t.getRequiredSkills(), t.getCreateTime(), t.getUpdateTime(), t.getTaskArchetype());
+                t.getRequiredSkills(), t.getCreateTime(), t.getUpdateTime(), t.getTaskArchetype(),
+                t.getDepth(), t.getRootTaskId());
     }
 
     // ── 写命令（RM5 批 5a）──
 
     @Override
-    public boolean casStatus(Long taskId, TaskStatus expect, TaskStatus target) {
+    public String beginDecompose(Long taskId, int leaseMinutes) {
+        if (taskId == null) {
+            return null;
+        }
+        // 状态 / 租约 / attemptId 必须同一条 UPDATE：分步写会留「已 PLANNING 但租约或
+        // attemptId 为空」的窗口——租约为空被巡检漏检（永久卡死），attemptId 为空让幂等键失效。
+        String attemptId = UUID.randomUUID().toString();
+        boolean updated = lambdaUpdate()
+                .eq(Task::getId, taskId)
+                .eq(Task::getStatus, TaskStatus.PENDING)
+                .set(Task::getStatus, TaskStatus.PLANNING)
+                .set(Task::getDecomposeLeaseUntil,
+                        OffsetDateTime.now().plusMinutes(Math.max(1, leaseMinutes)))
+                .set(Task::getDecomposeAttemptId, attemptId)
+                .update();
+        return updated ? attemptId : null;
+    }
+
+    @Override
+    public String currentDecomposeAttempt(Long taskId) {
+        if (taskId == null) {
+            return null;
+        }
+        // 只取单列：拆解入口不关心任务其它字段，也不需要走 getView 的视图投影
+        Task task = lambdaQuery()
+                .select(Task::getId, Task::getStatus, Task::getDecomposeAttemptId)
+                .eq(Task::getId, taskId)
+                .one();
+        if (task == null || task.getStatus() != TaskStatus.PLANNING) {
+            return null;
+        }
+        return task.getDecomposeAttemptId();
+    }
+
+    @Override
+    public boolean casStatusForAttempt(Long taskId, TaskStatus expect, TaskStatus target,
+                                       String attemptId) {
+        if (taskId == null || attemptId == null) {
+            return false;
+        }
+        // 比状态之外还要比 attemptId，原因见 TaskService#casStatusForAttempt 的时序说明：
+        // 只比状态时，上一轮拆解（A）苏醒后的 CAS 会命中下一轮拆解（B）写的 PLANNING，
+        // 两批草案同时入库。唯一索引只挡同 attempt，这一步是跨 attempt 的唯一闸门。
         return lambdaUpdate()
                 .eq(Task::getId, taskId)
                 .eq(Task::getStatus, expect)
+                .eq(Task::getDecomposeAttemptId, attemptId)
                 .set(Task::getStatus, target)
                 .update();
     }

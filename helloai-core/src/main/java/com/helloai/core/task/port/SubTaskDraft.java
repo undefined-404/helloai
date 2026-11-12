@@ -42,6 +42,36 @@ public record SubTaskDraft(
          * <p>{@code null} 由投影层原样落库，DB 默认值与 CHECK 约束兜底为 {@code AUTOMATED}
          * （= 改造前行为）。</p>
          */
-        AcceptanceKind acceptanceKind
+        AcceptanceKind acceptanceKind,
+
+        /** 本批拆解内的 1-based 序号（写入暂存区展示编号；执行表已不再存该列）。 */
+        Integer draftSeq,
+
+        /**
+         * 草案的位置身份（`TD-16d` / `V147`），如 {@code 202611080002-001}。
+         *
+         * <p><b>由谁算</b>：planner 侧（{@code PlannerDecomposeAsyncServiceImpl#buildDrafts}）
+         * 用 {@code DraftCode} 算好后放进本字段。task 域只负责原样落库，
+         * **不在落库侧再算一遍**——两处各算一次必然分叉，而分叉的后果是暂存区定位错位
+         * （同一草案出现两个 code）。</p>
+         *
+         * <p>非拆解路径（人工创建）为 {@code null}。</p>
+         */
+        String draftCode
 ) {
+
+    /**
+     * 兼容构造：不含 {@code draftCode}（`TD-16d` 之前的调用方与测试沿用）。
+     *
+     * <p>与 {@code SubTaskView} 的兼容构造器同理：全参数位置化构造加尾部字段会波及
+     * 多个调用点，而绝大多数调用方并不关心位置身份。</p>
+     */
+    public SubTaskDraft(Long taskId, String title, String content, String deliverable, String acceptance,
+                        String priority, Integer isContract, List<String> requiredSkills, String constraints,
+                        SubTaskStatus status, Map<String, Object> context,
+                        List<UncertaintyDraft> uncertainties, AcceptanceKind acceptanceKind,
+                        Integer draftSeq) {
+        this(taskId, title, content, deliverable, acceptance, priority, isContract, requiredSkills,
+                constraints, status, context, uncertainties, acceptanceKind, draftSeq, null);
+    }
 }

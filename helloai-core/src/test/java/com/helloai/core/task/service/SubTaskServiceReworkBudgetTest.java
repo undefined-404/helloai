@@ -15,6 +15,7 @@ import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.service.TaskAgentMemberService;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskNotificationServiceImpl;
@@ -88,6 +89,8 @@ class SubTaskServiceReworkBudgetTest {
     /** G-006：外部执行 attempt 收口（状态退出时懒取；mock 默认返回 null ⇒ 静默跳过）。 */
     @Mock private ObjectProvider<AgentExecutionRecordService> agentExecutionRecordServiceProvider;
     @Mock private SubTaskMapper subTaskMapper;
+    // G-031：成员表实时入队（rework 换人才写，本类断言不覆盖）
+    @Mock private TaskAgentMemberService taskAgentMemberService;
     // 执行会话服务（rework 用例不触达，仅防 NPE）
     @Mock private AgentSessionService agentSessionService;
 
@@ -106,10 +109,12 @@ class SubTaskServiceReworkBudgetTest {
                 subTaskMapper, notificationService, agentOutboxService, heartbeatService,
                 concurrencyQuotaService, dispatchProps, new WatchdogProperties(), taskTimelineService,
                 agentServiceProvider, attachmentServiceProvider, agentEventRecorder,
-                implicitScoreCalculator, rewardService, reviewPort, applicationEventPublisher, agentExecutionRecordServiceProvider));
+                implicitScoreCalculator, rewardService, reviewPort, applicationEventPublisher,
+                agentExecutionRecordServiceProvider, taskAgentMemberService));
         SubTaskLeaseService leaseService = mock(SubTaskLeaseService.class);
         subTaskService = new SubTaskServiceImpl(
-                subTaskMapper, queryService, stateMachineService, leaseService);
+                subTaskMapper, queryService, stateMachineService, leaseService,
+                mock(TaskDerivationService.class), mock(RuntimeContractGateService.class));
         when(subTaskMapper.updateById(any(SubTask.class))).thenReturn(1);
         // 懒解析 bean：附件失效 / 执行者通知路径触达时返回 mock，防 NPE
         when(attachmentServiceProvider.getIfAvailable()).thenReturn(mock(AttachmentService.class));

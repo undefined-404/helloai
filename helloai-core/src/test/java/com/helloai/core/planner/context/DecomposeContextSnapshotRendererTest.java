@@ -70,9 +70,7 @@ class DecomposeContextSnapshotRendererTest {
     }
 
     private SubTaskView subTask(Long id, Long taskId, String title) {
-        return new SubTaskView(id, taskId, null, null, null, title, null, null, null, null,
-                null, null, List.of(), null, null, null, null, null, null, null, null, null,
-                null, null, null);
+        return new SubTaskView(id, taskId, null, null, null, title, null, null, null, null, null, null, List.of(), null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private ChatAttachment attachment(String fileName, ChatAttachmentParseStatus status) {

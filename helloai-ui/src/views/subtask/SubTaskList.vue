@@ -347,6 +347,35 @@
                       >
                         重新调度
                       </el-dropdown-item>
+                      <!-- ADR-008 §12 执行期重构：自动链路已停的四态 → 人工接管 -->
+                      <el-dropdown-item
+                        v-if="RESTRUCTURE_ENTRY_STATUSES.includes(row.status) && auth.hasPermission('subtask:restructure')"
+                        command="restructure"
+                        divided
+                      >
+                        进入重构
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="row.status==='RESTRUCTURING' && auth.hasPermission('subtask:restructure')"
+                        command="restructureEdit"
+                      >
+                        编辑要求
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="row.status==='RESTRUCTURING' && auth.hasPermission('subtask:restructure')"
+                        command="restructureApply"
+                      >
+                        整改完成回派发
+                      </el-dropdown-item>
+                      <!-- AWAITING_DERIVED 不是死状态：派生任务被删/作废后，后端按事实
+                           判定并自愈回 RESTRUCTURING，用户从这里重新拆出去 -->
+                      <el-dropdown-item
+                        v-if="row.status==='AWAITING_DERIVED' && auth.hasPermission('subtask:derive')"
+                        command="rederive"
+                        divided
+                      >
+                        重新拆出去
+                      </el-dropdown-item>
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
@@ -495,6 +524,134 @@
         </template>
       </el-dialog>
 
+      <!-- ADR-008 §12 执行期重构：进入重构（只填原因）/ 重构中编辑四要素并回派发 -->
+      <el-dialog
+        v-model="restructureDialog.visible"
+        :title="restructureDialog.editing ? '重构要求' : '进入人工重构'"
+        width="640px"
+        top="6vh"
+        append-to-body
+      >
+        <el-alert
+          v-if="!restructureDialog.editing"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="进入重构后该子任务不再参与自动调度"
+          description="可修改要求后重新回派发；回派发前会做一次 G5 契约校验（下游引用了整改前产出标识时会被拒绝）。"
+          style="margin-bottom:12px"
+        />
+        <el-form label-width="96px">
+          <el-form-item
+            v-if="!restructureDialog.editing"
+            label="子任务"
+          >
+            <span>{{ restructureDialog.row?.title || '-' }}</span>
+          </el-form-item>
+          <el-form-item
+            v-if="!restructureDialog.editing"
+            label="原因"
+          >
+            <el-input
+              v-model="restructureDialog.reason"
+              maxlength="200"
+              placeholder="可选：为什么需要重构"
+            />
+          </el-form-item>
+          <template v-else>
+            <el-form-item label="标题">
+              <el-input
+                v-model="restructureDialog.form.title"
+                maxlength="200"
+              />
+            </el-form-item>
+            <el-form-item label="要求内容">
+              <el-input
+                v-model="restructureDialog.form.content"
+                type="textarea"
+                :rows="5"
+              />
+            </el-form-item>
+            <el-form-item label="交付物">
+              <el-input
+                v-model="restructureDialog.form.deliverable"
+                type="textarea"
+                :rows="3"
+              />
+            </el-form-item>
+            <el-form-item label="验收标准">
+              <el-input
+                v-model="restructureDialog.form.acceptance"
+                type="textarea"
+                :rows="4"
+              />
+            </el-form-item>
+            <el-form-item label="约束">
+              <el-input
+                v-model="restructureDialog.form.constraints"
+                type="textarea"
+                :rows="2"
+              />
+            </el-form-item>
+            <el-form-item label="验收判据">
+              <el-select
+                v-model="restructureDialog.form.acceptanceKind"
+                style="width:220px"
+              >
+                <el-option
+                  label="自动核验 AUTOMATED"
+                  value="AUTOMATED"
+                />
+                <el-option
+                  label="人工评估 REVIEWED"
+                  value="REVIEWED"
+                />
+                <el-option
+                  label="结构检查 STRUCTURAL"
+                  value="STRUCTURAL"
+                />
+              </el-select>
+            </el-form-item>
+          </template>
+        </el-form>
+        <template #footer>
+          <el-button @click="restructureDialog.visible = false">
+            取消
+          </el-button>
+          <el-button
+            v-if="!restructureDialog.editing"
+            type="primary"
+            :loading="restructureDialog.loading"
+            @click="doEnterRestructure"
+          >
+            进入重构
+          </el-button>
+          <template v-else>
+            <el-button
+              v-if="auth.hasPermission('subtask:derive')"
+              type="warning"
+              :loading="restructureDialog.loading"
+              @click="doDeriveRestructureSession"
+            >
+              拆出去当主任务
+            </el-button>
+            <el-button
+              :loading="restructureDialog.loading"
+              @click="doSaveRestructure"
+            >
+              保存
+            </el-button>
+            <el-button
+              type="primary"
+              :loading="restructureDialog.loading"
+              @click="doApplyRestructure"
+            >
+              保存并回派发
+            </el-button>
+          </template>
+        </template>
+      </el-dialog>
+
       <!-- M4.5: 快速派发对话框 -->
       <QuickDispatchDialog
         v-model="dispatchVisible"
@@ -515,7 +672,7 @@ import AgentSelect from '@/components/AgentSelect.vue'
 import QuickDispatchDialog from '@/components/QuickDispatchDialog.vue'
 import SubTaskDagView from '@/components/SubTaskDagView.vue'
 import TaskIterationView from '@/components/TaskIterationView.vue'
-import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
+import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP, type AcceptanceKind } from '@/types'
 import { fmtTime, splitDateTime } from '@/utils/tableConfig'
 import { orderByDependency } from '@/utils/subTaskDag'
 import { queryString } from '@/utils/queryParam'
@@ -730,7 +887,7 @@ watch(statusQuery, (v) => {
   const validStatuses: SubTaskStatus[] = [
     'PENDING', 'ASSIGNED', 'IN_PROGRESS', 'PAUSED', 'REVIEW',
     'DONE', 'REWORK', 'BLOCKED', 'CANCELLED', 'DEAD_LETTER',
-    'PENDING_PLAN_REVIEW'
+    'AWAITING_DERIVED', 'RESTRUCTURING'
   ]
   statusFilter.value = (validStatuses as string[]).includes(v) ? (v as SubTaskStatus) : ''
   load(1)
@@ -839,12 +996,147 @@ async function doReassign() {
   } finally { reassignDialog.loading = false }
 }
 
-// ── 更多下拉：状态操作统一分派（认领/暂停/恢复/换人/重新指派/重新调度） ──
+// ── ADR-008 §12 执行期重构：入口 / 编辑四要素 / 回派发（G5 由后端拒） ──
+const RESTRUCTURE_ENTRY_STATUSES: readonly SubTask['status'][] = ['BLOCKED', 'DEAD_LETTER', 'REWORK', 'PAUSED']
+const restructureDialog = reactive({
+  visible: false,
+  loading: false,
+  editing: false,
+  reason: '',
+  row: null as SubTask | null,
+  form: {
+    title: '',
+    content: '',
+    deliverable: '',
+    acceptance: '',
+    constraints: '',
+    acceptanceKind: 'AUTOMATED' as AcceptanceKind,
+  },
+})
+
+function handleRestructure(row: SubTask) {
+  restructureDialog.row = row
+  restructureDialog.editing = row.status === 'RESTRUCTURING'
+  restructureDialog.reason = ''
+  restructureDialog.form = {
+    title: row.title || '',
+    content: row.content || '',
+    deliverable: row.deliverable || '',
+    acceptance: row.acceptance || '',
+    constraints: row.constraints || '',
+    acceptanceKind: (row.acceptanceKind || 'AUTOMATED') as AcceptanceKind,
+  }
+  restructureDialog.visible = true
+}
+
+async function doEnterRestructure() {
+  if (!restructureDialog.row) return
+  restructureDialog.loading = true
+  try {
+    await subTaskApi.enterRestructuring(restructureDialog.row.id, restructureDialog.reason || undefined)
+    ElMessage.success('已进入人工重构')
+    restructureDialog.visible = false
+    load()
+  } finally {
+    restructureDialog.loading = false
+  }
+}
+
+async function saveRestructureForm() {
+  if (!restructureDialog.row) return
+  await subTaskApi.updateRestructure(restructureDialog.row.id, {
+    title: restructureDialog.form.title,
+    content: restructureDialog.form.content,
+    deliverable: restructureDialog.form.deliverable,
+    acceptance: restructureDialog.form.acceptance,
+    constraints: restructureDialog.form.constraints,
+    acceptanceKind: restructureDialog.form.acceptanceKind,
+  })
+}
+
+async function doSaveRestructure() {
+  restructureDialog.loading = true
+  try {
+    await saveRestructureForm()
+    ElMessage.success('要求已保存')
+    restructureDialog.visible = false
+    load()
+  } finally {
+    restructureDialog.loading = false
+  }
+}
+
+async function doApplyRestructure() {
+  restructureDialog.loading = true
+  try {
+    // 先落编辑再回派发：G5 判定读的是库里当前值，不保存就等于没改
+    await saveRestructureForm()
+    await subTaskApi.applyRestructure(restructureDialog.row!.id)
+    ElMessage.success('整改完成，已回到待派发')
+    restructureDialog.visible = false
+    load()
+  } catch {
+    // G5 拒绝 / 业务失败：全局拦截器已提示，保留弹窗让用户继续调整
+  } finally {
+    restructureDialog.loading = false
+  }
+}
+
+// ADR-008 §13：拆出去当主任务 —— 先落当前编辑，再开派生会话（四段上下文已由后端装配）
+async function doDeriveRestructureSession() {
+  if (!restructureDialog.row) return
+  restructureDialog.loading = true
+  try {
+    await saveRestructureForm()
+    const conversationId = await subTaskApi.startRestructureSession(restructureDialog.row.id)
+    restructureDialog.visible = false
+    ElMessage.success('已创建重构会话，请在对话中讨论并确认终稿')
+    router.push({ path: '/requirement-chat', query: { id: conversationId } })
+  } finally {
+    restructureDialog.loading = false
+  }
+}
+
+async function handleApplyRestructure(row: SubTask) {
+  try {
+    await ElMessageBox.confirm(
+      '整改完成并回到待派发？下游引用了整改前产出标识时会被 G5 拒绝。',
+      '确认回派发',
+      { type: 'warning' },
+    )
+    await subTaskApi.applyRestructure(row.id)
+    ElMessage.success('已回到待派发')
+    load()
+  } catch {}
+}
+
+/**
+ * AWAITING_DERIVED 状态下「重新拆出去」。
+ *
+ * <p>不在前端判「是否已拆分」——那是派生行的事实（`task.parent_sub_task_id` +
+ * 状态非 CANCELLED + 未删），只有后端查得准。直接调接口，由后端分支：
+ * 有活跃派生 ⇒ 400 并告知派生任务 id；无 ⇒ 自愈回 RESTRUCTURING 后建会话。</p>
+ */
+async function handleReDerive(row: SubTask) {
+  try {
+    const conversationId = await subTaskApi.startRestructureSession(row.id)
+    ElMessage.success('已重新进入拆分会话，请在对话中确认终稿')
+    router.push({ path: '/requirement-chat', query: { id: conversationId } })
+  } catch {
+    // 400 的具体原因（已完成拆分 / 状态不允许）由请求层统一提示，这里只刷新状态：
+    // 自愈会改状态，列表需要显示最新的 RESTRUCTURING。
+    load()
+  }
+}
+
+// ── 更多下拉：状态操作统一分派（认领/暂停/恢复/换人/重新指派/重新调度/重构） ──
 // 仅当当前状态存在可执行操作时展示「更多」（无操作状态只留「详情」）；
 // 下拉内每一项都是写动作（模板里各自 v-auth 门控），若角色一个动作码都没有
 // （如 GUEST），再展示「更多」只会得到一个点开为空的下拉，故一并按权限收口。
-const MORE_ACTION_STATUSES: readonly SubTask['status'][] = ['PENDING', 'ASSIGNED', 'IN_PROGRESS', 'PAUSED', 'BLOCKED', 'DEAD_LETTER']
-const MORE_ACTION_CODES = ['subtask:claim', 'subtask:pause', 'subtask:resume', 'subtask:reassign', 'subtask:redispatch'] as const
+// AWAITING_DERIVED 也列进来：它不是死状态——派生任务被删除或作废后，后端会按
+// 「是否还有活跃派生」这个事实判定并自愈回 RESTRUCTURING，用户需要从这里重新拆出去。
+const MORE_ACTION_STATUSES: readonly SubTask['status'][] = ['PENDING', 'ASSIGNED', 'IN_PROGRESS', 'PAUSED', 'BLOCKED', 'DEAD_LETTER', 'REWORK', 'RESTRUCTURING', 'AWAITING_DERIVED']
+const MORE_ACTION_CODES = ['subtask:claim', 'subtask:pause', 'subtask:resume', 'subtask:reassign', 'subtask:redispatch', 'subtask:status', 'subtask:edit', 'subtask:restructure', 'subtask:derive'] as const
 function hasMoreActions(row: SubTask) {
   if (!MORE_ACTION_STATUSES.includes(row.status)) return false
   return MORE_ACTION_CODES.some(code => auth.hasPermission(code))
@@ -856,6 +1148,9 @@ function handleCommand(command: string, row: SubTask) {
   else if (command === 'resume') handleResume(row)
   else if (command === 'reassign') handleReassign(row)
   else if (command === 'redispatch') handleRedispatch(row)
+  else if (command === 'restructure' || command === 'restructureEdit') handleRestructure(row)
+  else if (command === 'rederive') handleReDerive(row)
+  else if (command === 'restructureApply') handleApplyRestructure(row)
 }
 
 function getSubTaskStatusMeta(status: SubTask['status']) { return SUB_TASK_STATUS_MAP[status] }
@@ -879,7 +1174,7 @@ onMounted(() => {
   const validStatuses: SubTaskStatus[] = [
     'PENDING', 'ASSIGNED', 'IN_PROGRESS', 'PAUSED', 'REVIEW',
     'DONE', 'REWORK', 'BLOCKED', 'CANCELLED', 'DEAD_LETTER',
-    'PENDING_PLAN_REVIEW'
+    'AWAITING_DERIVED', 'RESTRUCTURING'
   ]
   statusFilter.value = (validStatuses as string[]).includes(initStatus) ? (initStatus as SubTaskStatus) : ''
   loadParentTask()

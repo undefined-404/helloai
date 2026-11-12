@@ -38,7 +38,11 @@ public record TaskView(
         List<String> requiredSkills,
         OffsetDateTime createTime,
         OffsetDateTime updateTime,
-        TaskArchetype taskArchetype
+        TaskArchetype taskArchetype,
+        /** 派生层级（`ADR-008`）：根 0，全局 ≤2；派生入口按它判深度。 */
+        Integer depth,
+        /** 根链 id（根任务 = 自身 id）。 */
+        Long rootTaskId
 ) {
 
     /** 兼容构造：不含 planner 侧扩展字段（review 场景）。 */
@@ -46,6 +50,18 @@ public record TaskView(
                     FinalReportStatus finalReportStatus, Long finalReportAgentId,
                     OffsetDateTime finalReportTime, Map<String, Object> agentPolicy) {
         this(id, title, description, finalReport, finalReportStatus, finalReportAgentId,
-                finalReportTime, agentPolicy, null, null, null, null, null, null, null, null);
+                finalReportTime, agentPolicy, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    /** 兼容构造：不含派生层级字段（存量调用方按 16 个字段构造）。 */
+    public TaskView(Long id, String title, String description, String finalReport,
+                    FinalReportStatus finalReportStatus, Long finalReportAgentId,
+                    OffsetDateTime finalReportTime, Map<String, Object> agentPolicy,
+                    TaskStatus status, Integer slaMinutes, String priority, Map<String, Object> context,
+                    List<String> requiredSkills, OffsetDateTime createTime, OffsetDateTime updateTime,
+                    TaskArchetype taskArchetype) {
+        this(id, title, description, finalReport, finalReportStatus, finalReportAgentId,
+                finalReportTime, agentPolicy, status, slaMinutes, priority, context, requiredSkills,
+                createTime, updateTime, taskArchetype, null, null);
     }
 }

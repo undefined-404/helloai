@@ -54,6 +54,7 @@ public final class SubTaskResponseMapper {
      *   <li>执行租约内部状态：{@code owner / leaseUntil}（Worker 崩溃恢复用，UI 无消费方）；</li>
      *   <li>重试与熔断计数：{@code externalFallbackCount / reassignAttemptCount / attemptTotal / lastAttemptTime}
      *       （调度侧决策依据，暴露会被误读成「进度」；{@code reassignAttemptCount} 已由 V64 停用仅留审计）；</li>
+     *   <li>草案期属性：{@code draftCode}（草案经暂存区通道读取，执行期通道无消费方）；</li>
      *   <li>其余暂不消费：{@code timeoutCount / isContract}（如需在 UI 展示契约定义子任务，改映射并补用例）。</li>
      * </ul>
      */
@@ -62,7 +63,8 @@ public final class SubTaskResponseMapper {
             "version",
             "owner", "leaseUntil",
             "externalFallbackCount", "reassignAttemptCount", "attemptTotal", "lastAttemptTime",
-            "timeoutCount", "isContract");
+            "timeoutCount", "isContract",
+            "draftCode");
 
     /**
      * 映射（纯函数，无副作用）。

@@ -1,8 +1,8 @@
 package com.helloai.core.planner;
 
 import com.helloai.common.constant.AcceptanceKind;
-import com.helloai.core.planner.policy.AcceptanceKindValidator;
-import com.helloai.core.planner.policy.AcceptanceKindValidator.Result;
+import com.helloai.common.util.AcceptanceKindValidator;
+import com.helloai.common.util.AcceptanceKindValidator.Result;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

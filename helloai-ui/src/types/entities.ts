@@ -145,8 +145,55 @@ export interface SubTask {
   deadline: string | null
   reworkCount: number
   timeoutCount: number
+  /**
+   * 本批拆解内的草案序号（1-based；仅拆解路径非空，展开/重生成/人工创建为 null）。
+   *
+   * 与 `Uncertainty.blockedBy` 是**同一套数字**：草案列表按依赖拓扑排序，行号不等于草案序号，
+   * 没有它就「卡住 #2」找不到对应行。注意它与幂等键 `decomposeAttemptId` 无关，后者不进视图契约。
+   */
+  draftSeq?: number | null
+  /**
+   * 草案位置编号（`TD-16d-4` d-3b-3）：根层 `yyyyMMdd+4位`、子层 `父code-3位`。
+   *
+   * 这是**位置身份**，`id` 只是行身份——展开会删父行重建，同一个位置可能换了一行，
+   * 但 code 不变。草案写路径（修订 / 展开 / 重生成）以它为定位口径，
+   * 行 key 也用它，避免展开后整表按 id 重挂导致展开态/编辑态错位。
+   *
+   * 存量草案（`V150` 之前拆解、从未双写暂存区）为 null，此时前端回落 `id` 与旧端点，
+   * 待 `V153` 存量迁入后该回落分支可删。
+   */
+  draftCode?: string | null
+  /** 暂存区草案的依赖 code 数组（AD-5a-3 读侧新契约；旧子任务行无此字段） */
+  dependsOnCodes?: string[] | null
   createTime: string
   updateTime: string
+}
+
+/**
+ * 草案暂存区视图（`AD-5a-3`，后端 `PlanDraftView`）。
+ *
+ * <p>草案 id 与执行任务 id 是两套空间；这里只描述草案。`code` 是稳定位置身份，
+ * 写路径（编辑/重生成/派生）优先用它。</p>
+ */
+export interface PlanDraft {
+  id: LongId
+  taskId: LongId
+  code: string
+  round?: number | null
+  draftSeq?: number | null
+  title: string
+  content?: string | null
+  deliverable?: string | null
+  acceptance?: string | null
+  acceptanceKind?: AcceptanceKind | null
+  priority?: string | null
+  contract?: number | null
+  requiredSkills?: string[] | null
+  constraints?: string | null
+  uncertainties?: Uncertainty[] | null
+  dependsOnCodes?: string[] | null
+  context?: Record<string, any> | null
+  updateTime?: string | null
 }
 
 // G-011 / TD-7 不确定性申报条目（对齐后端 Uncertainty 实体）：
@@ -158,6 +205,13 @@ export interface SubTask {
 export interface Uncertainty {
   kind: UncertaintyKind | string
   note: string
+  /** 缺口引用标签（TD-11，形如 U1）；存量行可能缺该键 */
+  ref?: string | null
+  /**
+   * 该缺口**除本草案外**还卡住哪几条草案（TD-13 S2，本批 1-based 序号）。
+   * 缺键 = 未申报影响面；空数组 = 明确申报「只卡自己」——两者展示措辞不同，不要合并。
+   */
+  blockedBy?: number[] | null
 }
 
 // G-011 / TD-7 不确定性类别（对齐后端 UncertaintyKind）
@@ -517,6 +571,17 @@ export interface RequirementConversation {
   // 建任务血缘（PA-11，V135）：来源助理会话 / 来源消息（软引用）
   parentConversationId?: LongId | null
   forkedFromMessageId?: LongId | null
+  // 执行期重构派生的来源子任务（ADR-008 §19.6，V148，软引用）：非空表示本会话是
+  // 「把某个 RESTRUCTURING 子任务拆成独立任务」而开的。与 parentConversationId 一样
+  // 属于「种子会话」标记——两者都只有一条 user 种子消息、LLM 从未跑到过。
+  sourceSubTaskId?: LongId | null
+  // 草案期重构派生的来源草案编号（ADR-008 §5，V150）：与 taskId 组成父锚，表示本会话是
+  // 「草案审阅页拆出去」开的。三个标记任一非空即种子会话。
+  sourceDraftCode?: string | null
+  // 派生会话产出的独立任务 Y（V150，软引用）：派生会话的 taskId 是父任务 X（ADR-008 §13.1
+  // 「会话挂在父任务下」），产出任务在这列。读侧统一「derivedTaskId 优先，回退 taskId」——
+  // 拿 taskId 当产出会让「查看任务」跳到父任务（2026-11-12 因此在 X 上误点拒绝重拆）。
+  derivedTaskId?: LongId | null
   createTime: string
   updateTime: string
 }

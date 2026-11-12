@@ -185,45 +185,33 @@ class SubTaskReviewServiceTest {
         //  证据检查：默认携带可读产出（非执行密集任务 output 即产出支撑）
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
-        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0,
-                "写接口文档", "整理 REST 接口清单", "接口文档", "覆盖全部端点", null, ctx, List.of());
+        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0, "写接口文档", "整理 REST 接口清单", "接口文档", "覆盖全部端点", null, ctx, List.of());
     }
 
     private static SubTaskView withStatus(SubTaskView base, SubTaskStatus status) {
-        return new SubTaskView(base.id(), base.taskId(), status, base.assignedAgentId(), base.reworkCount(),
-                base.title(), base.content(), base.deliverable(), base.acceptance(), base.constraints(),
-                base.context(), base.uncertainties());
+        return new SubTaskView(base.id(), base.taskId(), status, base.assignedAgentId(), base.reworkCount(), base.title(), base.content(), base.deliverable(), base.acceptance(), base.constraints(), base.context(), base.uncertainties());
     }
 
     private static SubTaskView withReworkCount(SubTaskView base, int reworkCount) {
-        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(), reworkCount,
-                base.title(), base.content(), base.deliverable(), base.acceptance(), base.constraints(),
-                base.context(), base.uncertainties());
+        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(), reworkCount, base.title(), base.content(), base.deliverable(), base.acceptance(), base.constraints(), base.context(), base.uncertainties());
     }
 
     private static SubTaskView withConstraints(SubTaskView base, String constraints) {
-        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(), base.reworkCount(),
-                base.title(), base.content(), base.deliverable(), base.acceptance(), constraints,
-                base.context(), base.uncertainties());
+        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(), base.reworkCount(), base.title(), base.content(), base.deliverable(), base.acceptance(), constraints, base.context(), base.uncertainties());
     }
 
     private static SubTaskView withUncertainties(SubTaskView base, List<UncertaintyView> uncertainties) {
-        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(), base.reworkCount(),
-                base.title(), base.content(), base.deliverable(), base.acceptance(), base.constraints(),
-                base.context(), uncertainties);
+        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(), base.reworkCount(), base.title(), base.content(), base.deliverable(), base.acceptance(), base.constraints(), base.context(), uncertainties);
     }
 
     /** 以给定 context 覆写快照（视图不可变，等价原 setContext 写法）。 */
     private static SubTaskView withContext(SubTaskView base, Map<String, Object> context) {
-        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(),
-                base.reworkCount(), base.title(), base.content(), base.deliverable(),
-                base.acceptance(), base.constraints(), context, base.uncertainties());
+        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(), base.reworkCount(), base.title(), base.content(), base.deliverable(), base.acceptance(), base.constraints(), context, base.uncertainties());
     }
 
     /** 执行密集子任务视图（内容/交付物含本机操作信号）。 */
     private SubTaskView denseView(String content, String deliverable, Map<String, Object> context) {
-        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0,
-                "写接口文档", content, deliverable, "覆盖全部端点", null, context, List.of());
+        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0, "写接口文档", content, deliverable, "覆盖全部端点", null, context, List.of());
     }
 
     /** 附件视图（等价原实体 setter 写法；contentLoadable 即原 isContentLoadable 桩值）。 */
@@ -341,10 +329,7 @@ class SubTaskReviewServiceTest {
         // REVIEWED kind 子任务（主构造器带 acceptanceKind）
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("lastExecution", Map.of("output", "方案已产出，含决策清单与取舍依据。"));
-        SubTaskView reviewed = new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0,
-                "输出差异化方案", "基于对比矩阵推导方案", "方案文档", "审查项（逐条独立判 pass/fail）",
-                AcceptanceKind.REVIEWED, null, ctx, List.of(),
-                null, null, null, null, null, null, null, null, null, null, null, null);
+        SubTaskView reviewed = new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0, "输出差异化方案", "基于对比矩阵推导方案", "方案文档", "审查项（逐条独立判 pass/fail）", AcceptanceKind.REVIEWED, null, ctx, List.of(), null, null, null, null, null, null, null, null, null, null, null, null, null);
         when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewed);
         // LLM 输出带 analysis（逐条对照验收标准的核验分析）
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
@@ -430,9 +415,7 @@ class SubTaskReviewServiceTest {
         // context 带 lastExecution.output：无证据会被「跳过核验」分支提前截走，到不了批评器
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
-        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(new SubTaskView(SUB_TASK_ID, TASK_ID,
-                SubTaskStatus.REVIEW, null, 0, "写接口文档", "整理 REST 接口清单", "接口文档",
-                "① 覆盖全部端点；② 标注请求参数", null, ctx, List.of()));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0, "写接口文档", "整理 REST 接口清单", "接口文档", "① 覆盖全部端点；② 标注请求参数", null, ctx, List.of()));
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("""
                         {"pass": true, "score": 4, "issues": "", "comment": "达标",

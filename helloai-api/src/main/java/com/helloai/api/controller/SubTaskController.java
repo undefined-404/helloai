@@ -1,13 +1,14 @@
 package com.helloai.api.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.stp.StpUtil;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.subtask.ConversationMessageItem;
 import com.helloai.api.dto.subtask.CreateSubTaskRequest;
-import com.helloai.api.dto.subtask.DraftUpdateRequest;
 import com.helloai.api.dto.subtask.ReassignRequest;
 import com.helloai.api.dto.subtask.ReworkRequest;
+import com.helloai.api.dto.subtask.RestructureUpdateRequest;
 import com.helloai.api.dto.subtask.SubTaskResponse;
 import com.helloai.api.dto.subtask.SubTaskResponseMapper;
 import com.helloai.api.dto.subtask.TaskTimelineItem;
@@ -28,6 +29,7 @@ import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.planner.service.PlannerAnalysisService;
+import com.helloai.core.planner.service.RestructureSessionService;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
@@ -66,8 +68,10 @@ public class SubTaskController {
     private final ConversationService conversationService;
     /** 子任务视图读权限收口（2026-10-10 统一判据：根任务 Task-Team 成员，与附件读侧同源）。 */
     private final SubTaskViewGuard subTaskViewGuard;
-    /** `TD-9` 单条草案 expand / regenerate 编排收口（core 层，Controller 只做薄转发）。 */
+    /** `TD-9` 单条草案 regenerate 编排收口（core 层，Controller 只做薄转发）。 */
     private final PlannerAnalysisService plannerAnalysisService;
+    /** ADR-008 §13：执行期重构派生会话（四段上下文 + 定稿建 Y）。 */
+    private final RestructureSessionService restructureSessionService;
 
     @SaCheckPermission("subtask:add")
     @PostMapping
@@ -256,53 +260,64 @@ public class SubTaskController {
         return R.ok(response);
     }
 
+    // ══════════════════════════════════════════════════════════
+    //  ADR-008 执行期重构：入口 / 编辑 / 回链
+    // ══════════════════════════════════════════════════════════
+
     /**
-     * 草案人工修订（G-010 草案确认 UI）：确认前编辑技能指派、执行约束、不确定性申报与验收判据。
-     *
-     * <p>仅 PENDING_PLAN_REVIEW 状态可编辑（fail-close 由 Service 层门禁校验）；
-     * requiredSkills/constraints/uncertainties/acceptanceKind 传 null 表示不修改该字段
-     * （局部更新语义）。人工指派的标签不做目录强校验（人工编辑为权威输入），执行侧 resolve
-     * 两层过滤兜底；uncertainties 非法 kind 由 Service 落库侧降级 UNCONFIRMED（D3 fail-close
-     * 同口径）；acceptanceKind 非法值回落 AUTOMATED（`TD-2`）。</p>
+     * 进入人工重构：{@code BLOCKED} / {@code DEAD_LETTER} / {@code REWORK} / {@code PAUSED}
+     * → {@code RESTRUCTURING}。守卫与轮次递增在 Service 内收口。
      */
-    @SaCheckPermission("subtask:edit")
-    @PutMapping("/updateDraftById/{id}")
-    public R<Void> updateDraft(@PathVariable("id") Long id,
-                               @Valid @RequestBody DraftUpdateRequest req) {
-        subTaskService.updateDraft(id, req.getRequiredSkills(), req.getConstraints(), req.getUncertainties(),
-                req.getAcceptanceKind());
-        log.info("草案修订: id={}, requiredSkills={}, constraintsEdited={}, uncertaintiesEdited={}, acceptanceKind={}",
-                id, req.getRequiredSkills(), req.getConstraints() != null, req.getUncertainties() != null,
-                req.getAcceptanceKind());
+    @SaCheckPermission("subtask:restructure")
+    @PostMapping("/enterRestructuringById/{id}")
+    public R<Void> enterRestructuring(@PathVariable("id") Long id,
+                                      @RequestParam(value = "reason", required = false) String reason) {
+        subTaskService.enterRestructuring(id, reason);
+        log.info("子任务进入人工重构: id={}, reason={}", id, reason);
         return R.ok();
     }
 
     /**
-     * `TD-9` 单条草案细拆（expand）：一条草案 → N 条 FINE 粒度子草案（同步）。
-     *
-     * <p>门禁 / 幽灵依赖拒绝 / 事务回滚均在 core 编排侧收敛；失败抛 BizException
-     * 由全局异常处理器转 400，前端可展示原因（原草案不被破坏）。</p>
+     * 执行期编辑四要素（仅 {@code RESTRUCTURING}）：改动前的值追加进
+     * {@code context.restructureHistory}，供回链时的 G5 与后续追溯使用。
      */
-    @SaCheckPermission("subtask:edit")
-    @PostMapping("/expandDraftById/{id}")
-    public R<List<SubTaskView>> expandDraft(@PathVariable("id") Long id) {
-        List<SubTaskView> created = plannerAnalysisService.expandDraft(id);
-        log.info("草案展开: subTaskId={}, newCount={}", id, created.size());
-        return R.ok(created);
+    @SaCheckPermission("subtask:restructure")
+    @PostMapping("/updateRestructureById/{id}")
+    public R<SubTaskView> updateRestructure(@PathVariable("id") Long id,
+                                            @RequestBody RestructureUpdateRequest req) {
+        Long editorId = StpUtil.isLogin() ? StpUtil.getLoginIdAsLong() : null;
+        SubTaskView updated = subTaskService.updateRestructureContent(id, req.getTitle(), req.getContent(),
+                req.getDeliverable(), req.getAcceptance(), req.getConstraints(), req.getAcceptanceKind(), editorId);
+        log.info("重构要求修订: id={}, editorId={}", id, editorId);
+        return R.ok(updated);
     }
 
     /**
-     * `TD-9` 单条草案重生成（regenerate）：同粒度重写四要素（同步）。
-     *
-     * <p>不变量白名单：title / id / dependsOn 一律不动（LLM 输出中这些字段被忽略）；
-     * 只更新 content / deliverable / acceptance / acceptanceKind。</p>
+     * 整改完成回派发（{@code RESTRUCTURING → PENDING}）：先跑确定性 G5
+     * （下游引用了整改前产出标识而新要求不再产出 → 拒绝并说明是哪条下游、哪个标识）。
      */
-    @SaCheckPermission("subtask:edit")
-    @PostMapping("/regenerateDraftById/{id}")
-    public R<SubTaskView> regenerateDraft(@PathVariable("id") Long id) {
-        SubTaskView updated = plannerAnalysisService.regenerateDraft(id);
-        log.info("草案重生成: subTaskId={}, title={}", id, updated != null ? updated.title() : null);
+    @SaCheckPermission("subtask:restructure")
+    @PostMapping("/applyRestructureById/{id}")
+    public R<SubTaskView> applyRestructure(@PathVariable("id") Long id) {
+        SubTaskView updated = subTaskService.applyRestructure(id);
+        log.info("重构整改完成回派发: id={}", id);
         return R.ok(updated);
+    }
+
+    /**
+     * 「拆出去当主任务」：为重构中的子任务开 ACTIVE 派生会话（幂等）。
+     *
+     * <p>四段上下文（原要求 / 失败轨迹 / 上游产出 / 下游期待）作为首条用户消息写入；
+     * 会话定稿后由 {@code ClarifyFinalizeServiceImpl} 建独立任务 `Y` 并把本子任务置
+     * `AWAITING_DERIVED`。</p>
+     */
+    @SaCheckPermission("subtask:derive")
+    @PostMapping("/restructureSessionById/{id}")
+    public R<Long> startRestructureSession(@PathVariable("id") Long id,
+                                           @RequestParam(value = "plannerAgentId", required = false) Long plannerAgentId) {
+        Long conversationId = restructureSessionService.startSession(id, plannerAgentId);
+        log.info("重构派生会话已就绪: subTaskId={}, conversationId={}", id, conversationId);
+        return R.ok(conversationId);
     }
 
     @SaCheckPermission("subtask:status")

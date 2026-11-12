@@ -8,6 +8,7 @@ import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.agent.runtime.sandbox.SkillInstallResult;
 import com.helloai.core.agent.runtime.sandbox.impl.SkillExecutionSupport;
 import com.helloai.core.agent.service.McpToolService;
+import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.agent.tool.ToolInvocationContext;
@@ -50,10 +51,11 @@ class InternalLlmExecutorToolsTest {
             mock(com.helloai.core.agent.runtime.sandbox.impl.SkillExecutionSupport.class);
     private final com.helloai.core.agent.service.SkillArtifactExportService skillArtifactExportService =
             mock(com.helloai.core.agent.service.SkillArtifactExportService.class);
+    private final ConversationService conversationService = mock(ConversationService.class);
     private final InternalLlmExecutorTools tools =
             new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService,
                     subTaskCommandPort, sandboxExecutionService, skillExecutionSupport,
-                    skillArtifactExportService);
+                    skillArtifactExportService, conversationService);
 
     /** REF-8.1 A1 强制闸门：本类工具仅可由内部执行链调用，单测需先绑定执行链上下文。 */
     @BeforeEach
@@ -250,6 +252,14 @@ class InternalLlmExecutorToolsTest {
                 org.mockito.ArgumentMatchers.eq(22L),
                 org.mockito.ArgumentMatchers.eq("executor_reported_blocked"),
                 org.mockito.ArgumentMatchers.anyMap());
+        // LOG-20261112：自报阻塞补对话结论，避免执行轮只挂请求行悬空。
+        verify(conversationService).addMessage(
+                org.mockito.ArgumentMatchers.eq(22L),
+                org.mockito.ArgumentMatchers.eq(11L),
+                org.mockito.ArgumentMatchers.eq("assistant"),
+                org.mockito.ArgumentMatchers.eq("agent"),
+                org.mockito.ArgumentMatchers.contains("执行阻塞"),
+                org.mockito.ArgumentMatchers.eq("sub_task_execute_blocked"));
         @SuppressWarnings("unchecked")
         Map<String, Object> map = (Map<String, Object>) result;
         assertThat(map).containsEntry("status", "BLOCKED").containsEntry("subTaskId", 22L);

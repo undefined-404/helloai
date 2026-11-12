@@ -7,6 +7,8 @@ import com.helloai.core.task.projection.OwnedTaskOverviewRow;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -19,6 +21,9 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
      * 返回 affected rows（1=认领成功，0=竞争失败）。
      */
     int claimAtomic(@Param("subTaskId") Long subTaskId, @Param("agentId") Long agentId);
+
+
+
 
     // ══════════════════════════════════════════════════════════════
     //  N11 阈值回退：外部回退次数 + 仍属于某 Agent 的在跑子任务
@@ -225,4 +230,35 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
     /** 物理删除某任务下全部子任务（含 DEAD_LETTER 死信行，仅供任务级联删除使用）。 */
     @Delete("DELETE FROM sub_task WHERE task_id = #{taskId}")
     int physicalDeleteByTaskId(@Param("taskId") Long taskId);
+
+    /**
+     * 重新拆解前物理清理**从未执行过**的 CANCELLED 旧草案（§6.100）。
+     *
+     * <p><b>为什么不用 {@link #physicalDeleteByTaskId}</b>：那个是 {@code DELETE ... WHERE task_id=?}
+     * ——<b>无状态过滤</b>，安全性完全依赖调用方「先确认非 CANCELLED 计数为 0」这个前置。
+     * 这是「规则存在 ≠ 全路径强制」：下一个人新增调用点忘了那句 count，就会把
+     * `IN_PROGRESS` / `DONE` 的行连执行痕迹一起抹掉。过滤下沉到 SQL 后，
+     * 这条约束对**任何**调用方都成立，不靠记性。</p>
+     *
+     * <p><b>为什么还要 {@code NOT EXISTS agent_execution_record}</b>：§6.100 的删除理由
+     * 自述「该场景草案从未执行，无关联执行记录」——这是个**假设**，不是约束。
+     * 子任务执行过再被取消（取消前已派发 / 已跑过一轮）时该假设不成立，
+     * 此时删行会留下指向不存在子任务的事件与审查记录（`task_timeline` / `review_record`
+     * 的 {@code sub_task_id} 是无外键的软引用，DB 不会拦）。故把假设写成 SQL 条件：
+     * 有执行记录的 CANCELLED 行**保留**，调用方按「删除数 &lt; CANCELLED 数」记 WARN。</p>
+     *
+     * <p><b>代价（如实记录）</b>：保留的行使 §6.100 要解决的「幽灵依赖」在新一轮里仍可能残留，
+     * 但那只影响新草案的依赖解析（可见、可重拆），而错删执行痕迹是**不可恢复**的。
+     * 两者不对称，故选保留。</p>
+     *
+     * @return 实际删除行数；正常情况等于该任务的 CANCELLED 行数
+     */
+    @Delete("""
+            DELETE FROM sub_task st
+             WHERE st.task_id = #{taskId}
+               AND st.status = 'CANCELLED'
+               AND NOT EXISTS (SELECT 1 FROM agent_execution_record r WHERE r.sub_task_id = st.id)
+            """)
+    int physicalDeleteNeverExecutedCancelled(@Param("taskId") Long taskId);
+
 }

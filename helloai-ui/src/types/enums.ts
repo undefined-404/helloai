@@ -5,11 +5,13 @@
 // --- 任务 / 子任务状态 ---
 export type SubTaskStatus = 'PENDING' | 'ASSIGNED' | 'IN_PROGRESS' | 'PAUSED'
   | 'REVIEW' | 'DONE' | 'REWORK' | 'BLOCKED' | 'CANCELLED' | 'DEAD_LETTER'
-  // V26 Planner 拆解草案态：确认后转 PENDING，拒绝后转 CANCELLED
-  | 'PENDING_PLAN_REVIEW'
+  // ADR-008 派生：工作整体移交独立派生 Task，完成/失败后由完成态传播推进
+  | 'AWAITING_DERIVED' | 'RESTRUCTURING'
 
-// PLANNING: V26 拆解草案已生成待审阅（confirm→IN_PROGRESS / reject→回 PENDING）
-export type TaskStatus = 'PENDING' | 'PLANNING' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
+// 任务主状态（2026-11-08 起 PLANNING 与 AWAITING_PLAN_CONFIRM 分开）：
+// PLANNING = 机器正在拆解（可按租约超时回收）；AWAITING_PLAN_CONFIRM = 草案已产出等用户处理（不回收）
+export type TaskStatus = 'PENDING' | 'PLANNING' | 'AWAITING_PLAN_CONFIRM'
+  | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
 
 // V41/V12.2: 任务最终整合报告生成状态（与 TaskStatus 解耦，报告生成是增值物；
 // REVIEWING = 已生成待自动审查收敛，审查链各出口收敛 DONE）

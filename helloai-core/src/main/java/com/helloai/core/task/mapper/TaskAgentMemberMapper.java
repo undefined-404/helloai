@@ -104,6 +104,19 @@ public interface TaskAgentMemberMapper extends BaseMapper<TaskAgentMember> {
     List<TaskAgentMember> selectAuthoritativeAssignments();
 
     /**
+     * 单任务权威源快照：该任务当前「子任务 → 执行者」对（成员展示懒回填用）。
+     *
+     * <p>与 {@link #selectAuthoritativeAssignments()} 同源，只是按任务过滤——详情页每次
+     * 拉成员时只查本任务，避免全表 DISTINCT。</p>
+     */
+    @Select("""
+            SELECT DISTINCT task_id, assigned_agent_id AS agent_id
+            FROM sub_task
+            WHERE task_id = #{taskId} AND deleted = 0 AND assigned_agent_id IS NOT NULL
+            """)
+    List<TaskAgentMember> selectAuthoritativeAssignmentsByTask(@Param("taskId") Long taskId);
+
+    /**
      * 物理删除某任务的全部成员行（任务级联删除时使用，先于 task 本体删除）。
      *
      * <p>{@code task_agent_member_task_id_fkey} 引用 {@code task.id}，不先清会撞外键（P2-4）。</p>

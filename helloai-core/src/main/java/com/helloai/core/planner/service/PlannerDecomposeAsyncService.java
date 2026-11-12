@@ -14,7 +14,7 @@ import java.util.List;
  * <p>失败路径由实现内部闭环（回退 PLANNING → PENDING + 记录 {@code task_plan_failed}），
  * 另由 helloai-job 的 {@code PlanningTimeoutTask} 兜底回收卡死在 PLANNING 的任务。</p>
  *
- * <p>`TD-9`：单条草案的 expand / regenerate 走<b>同步</b>执行（用户等待结果，不走
+ * <p>`TD-9`：单条草案的 regenerate 走<b>同步</b>执行（用户等待结果，不走
  * {@code plannerDecomposeExecutor}），复用本类全部私有能力（提示词渲染 / 技能过滤 /
  * Kahn 校验 / 依赖回写）。</p>
  */
@@ -31,31 +31,16 @@ public interface PlannerDecomposeAsyncService {
      */
     void executeDecompose(Long taskId);
 
-    /**
-     * `TD-9` 单条草案细拆（expand）：把一条草案按 FINE 粒度拆成 N 条子草案。
-     *
-     * <p>输入 = 该条草案四要素 + 任务上下文快照（{@code DecomposeContextSnapshotRenderer}）；
-     * LLM 产出 N 条（组内 1-based 依赖），Kahn 校验后落库并回写依赖，<b>原草案被删除</b>
-     * （逻辑删），由 N 条子草案替换。被其他草案引用（dependsOn 指向它）的草案
-     * <b>拒绝展开</b>（引用会成幽灵依赖，fail-close）。</p>
-     *
-     * @param subTaskId 草案子任务 ID（须 PENDING_PLAN_REVIEW）
-     * @return 展开后的子草案列表（含落库回填的真实 id）
-     * @throws BizException 非草案态 / 被引用 / LLM 失败 / 校验失败（原草案不被破坏）
-     */
-    List<SubTaskView> expandById(Long subTaskId);
 
     /**
-     * `TD-9` 单条草案重生成（regenerate）：同粒度重写一条草案的四要素。
+     * `AD-5a-3b-2b` 暂存区版重生成：草案只存在于 {@code task_plan_draft} 时按 {@code code} 重写四要素。
      *
-     * <p><b>不变量白名单</b>：只允许改 {@code content} / {@code deliverable} /
-     * {@code acceptance} / {@code acceptanceKind}；<b>{@code title} / {@code id} /
-     * {@code dependsOn} 一律不动</b>（改了审计线索就断了——外部引用、依赖图、时间线全对不上）。
-     * LLM 输出中的 title/dependsOn 被忽略，取原草案值。</p>
+     * <p>不变量与 {@link #regenerateById} 完全一致（title / code / dependsOn 不动），
+     * 差异只在落点：四要素直接写暂存区，写前跑同一条单草案门禁。</p>
      *
-     * @param subTaskId 草案子任务 ID（须 PENDING_PLAN_REVIEW）
-     * @return 重生成后的草案快照
-     * @throws BizException 非草案态 / LLM 失败 / 校验失败（原草案不被破坏）
+     * @param taskId 所属任务 ID
+     * @param code   草案位置身份
+     * @return 重生成后的草案快照（id 为暂存区 id）
      */
-    SubTaskView regenerateById(Long subTaskId);
+    SubTaskView regenerateStaged(Long taskId, String code);
 }

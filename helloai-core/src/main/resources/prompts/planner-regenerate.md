@@ -5,7 +5,7 @@
     {{TASK_TITLE}} / {{TASK_ARCHETYPE}} / {{TASK_DESCRIPTION}} /
     {{DRAFT_TITLE}} / {{DRAFT_CONTENT}} / {{DRAFT_DELIVERABLE}} / {{DRAFT_ACCEPTANCE}} /
     {{DRAFT_ACCEPTANCE_KIND}} / {{DRAFT_PRIORITY}} / {{DRAFT_SKILLS}} / {{DRAFT_CONSTRAINTS}} /
-    {{SKILL_CATALOG}} / {{TASK_CONTEXT_SNAPSHOT}} / {{REQUIREMENT_PACKAGE}}
+    {{SKILL_CATALOG}} / {{TASK_CONTEXT_SNAPSHOT}} / {{REQUIREMENT_PACKAGE}} / {{EXECUTION_ENV}}
   本模板只做「单条草案的同粒度重写」，不细拆、不改标题、不改依赖。
   输出契约与 planner-decompose.md 的单条条目一致（title/content/deliverable/acceptance/
   acceptanceKind/priority/dependsOn/contract/requiredSkills/constraints/uncertainties），
@@ -47,6 +47,15 @@
 {{TASK_CONTEXT_SNAPSHOT}}
 
 > 快照只告诉你「有什么」，不是「是什么」；**禁止**照抄历史产出。
+
+## 执行环境（在哪跑）
+
+{{EXECUTION_ENV}}
+
+> 重写 content 时，凡涉及仓库路径 / 运行时 / 数据库连接，必须引用上面的**具体值**（照抄），
+> **禁止**写成「仓库中」「数据库中」「运行脚本」这类无指代表述。
+> 若上面写着「未声明」而本次重写确实依赖它，就把该依赖明确写成待确认项
+> （如「先确认仓库本地路径与基线分支，再…」），**不要自己假设一个值**。
 
 ## 平台技能目录（可指派给子任务）
 

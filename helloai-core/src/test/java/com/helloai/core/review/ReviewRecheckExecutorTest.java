@@ -126,8 +126,7 @@ class ReviewRecheckExecutorTest {
     private SubTaskView reviewSubTask() {
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
-        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0,
-                "写接口文档", "整理 REST 接口清单", "接口文档", "覆盖全部端点", null, ctx, List.of());
+        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0, "写接口文档", "整理 REST 接口清单", "接口文档", "覆盖全部端点", null, ctx, List.of());
     }
 
     private AgentProfileSnapshot reviewer(long id) {

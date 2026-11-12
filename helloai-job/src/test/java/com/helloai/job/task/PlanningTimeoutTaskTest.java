@@ -64,11 +64,10 @@ class PlanningTimeoutTaskTest {
 
         // 超时阈值读配置，默认桩为 10 分钟
         lenient().when(plannerDecomposeProperties.getPlanningTimeoutMinutes()).thenReturn(10);
-        // CAS 回退链：默认成功
-        lenient().when(taskService.lambdaUpdate()).thenReturn(taskUpdateChain);
-        lenient().when(taskUpdateChain.eq(any(), any())).thenReturn(taskUpdateChain);
-        lenient().when(taskUpdateChain.set(any(), any())).thenReturn(taskUpdateChain);
-        lenient().when(taskUpdateChain.update()).thenReturn(true);
+        // 2026-11-08 订正：`recover()` 早已改走 `taskService.recoverTimedOutDecompose(id)`（`V146`），
+        // 不再用 lambdaUpdate 链。原测试仍 stub/verify 那条链，导致三条用例里两条恒失败
+        // （另一条 `shouldSkipWhenCasLost` 是「碰巧通过」—— mock 默认返回 null 恰好等于 CAS 落空）。
+        // 现按真实契约重写，详见各用例。
     }
 
     @Nested
@@ -98,10 +97,12 @@ class PlanningTimeoutTaskTest {
         void shouldRecoverSingleTimedOut() {
             when(taskService.listTimedOutPlanning(any(), anyInt()))
                     .thenReturn(List.of(planningTask(1L)));
+            // 契约：返回「被推到哪个状态」；null = CAS 落空（状态已变化）
+            when(taskService.recoverTimedOutDecompose(1L)).thenReturn(TaskStatus.PENDING);
 
             task.scan();
 
-            verify(taskUpdateChain).update();
+            verify(taskService).recoverTimedOutDecompose(1L);
             verify(taskTimelineService).recordEvent(
                     eq(1L), isNull(), eq("task_plan_timeout_recovered"),
                     eq(AgentRole.PLANNER), isNull(), anyMap());
@@ -112,7 +113,7 @@ class PlanningTimeoutTaskTest {
         void shouldSkipWhenCasLost() {
             when(taskService.listTimedOutPlanning(any(), anyInt()))
                     .thenReturn(List.of(planningTask(1L)));
-            when(taskUpdateChain.update()).thenReturn(false);
+            when(taskService.recoverTimedOutDecompose(1L)).thenReturn(null);
 
             task.scan();
 
@@ -125,13 +126,15 @@ class PlanningTimeoutTaskTest {
         void shouldContinueOnSingleFailure() {
             when(taskService.listTimedOutPlanning(any(), anyInt()))
                     .thenReturn(List.of(planningTask(1L), planningTask(2L)));
-            // 第一条 CAS 抛异常，第二条正常回收
-            when(taskUpdateChain.update())
-                    .thenThrow(new RuntimeException("synthetic failure"))
-                    .thenReturn(true);
+            // 第一条抛异常（模拟 DB 抖动），第二条正常回收
+            when(taskService.recoverTimedOutDecompose(1L))
+                    .thenThrow(new RuntimeException("synthetic failure"));
+            when(taskService.recoverTimedOutDecompose(2L)).thenReturn(TaskStatus.PENDING);
 
             task.scan();
 
+            // 第二条必须被处理 —— 单条失败不能中断同轮
+            verify(taskService).recoverTimedOutDecompose(2L);
             verify(taskTimelineService).recordEvent(
                     eq(2L), isNull(), eq("task_plan_timeout_recovered"),
                     eq(AgentRole.PLANNER), isNull(), anyMap());

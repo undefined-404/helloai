@@ -6,6 +6,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * 子任务不确定性申报（G-011 显式 JSONB 列 {@code sub_task.uncertainties} 的元素）。
  *
@@ -60,10 +62,23 @@ public class Uncertainty {
     private String ref;
 
     /**
+     * 该缺口**卡住本批哪几条草案**（`TD-13 S2`，本批 1-based 草案序号数组；可空 = 未申报）。
+     *
+     * <p>与 {@code task.port.UncertaintyDraft#blockedBy()} 同名同形（该 record 是写入物料，
+     * 本类是 JSONB 元素实体）。**纯 JSONB 键，零迁移**；{@code @JsonIgnoreProperties} 保证
+     * 读取存量行时不因缺键失败。</p>
+     *
+     * <p><b>为什么不能拿 {@code dependsOn} 代替</b>：{@code dependsOn} 是执行顺序（谁先跑），
+     * {@code blockedBy} 是信息缺口的影响范围（谁被卡）。一个缺口可以卡住 3 条彼此无依赖的草案，
+     * 一个草案也可以被 2 个不同缺口卡住。把 `blockedBy` 反写成依赖边会造出并不存在的执行顺序。</p>
+     */
+    private List<Integer> blockedBy;
+
+    /**
      * 不写 {@code ref} 的便捷构造（`TD-11` 之前的调用方沿用；{@code @AllArgsConstructor}
-     * 生成的三参构造与之并存，不冲突）。
+     * 生成的四参构造与之并存，不冲突）。
      */
     public Uncertainty(String kind, String note) {
-        this(kind, note, null);
+        this(kind, note, null, null);
     }
 }

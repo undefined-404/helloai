@@ -123,7 +123,7 @@ class EventReconciliationServiceTest {
     @Test
     @DisplayName("无事件语义状态跳过：不查事件、不报不一致")
     void shouldSkipStatusesWithoutEventSemantics() {
-        for (SubTaskStatus status : List.of(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.PENDING,
+        for (SubTaskStatus status : List.of(SubTaskStatus.PENDING, SubTaskStatus.PENDING,
                 SubTaskStatus.PAUSED, SubTaskStatus.BLOCKED, SubTaskStatus.CANCELLED, SubTaskStatus.DEAD_LETTER)) {
             when(subTaskQueryPort.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
                     .thenReturn(List.of(subTask(1L, status)));

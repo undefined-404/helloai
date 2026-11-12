@@ -80,7 +80,7 @@
         </el-table-column>
         <el-table-column
           label="状态"
-          width="110"
+          width="140"
         >
           <template #default="{ row }">
             <!-- V41/V12.2: 报告生成/审查中覆盖主状态显示（任务本体仍是 DONE） -->
@@ -98,6 +98,15 @@
             >
               {{ TASK_STATUS_MAP[row.status as TaskStatus]?.label || row.status }}
             </el-tag>
+            <!-- 待确认草案是「只进不出」的状态：不超时、不提醒就永远停在这。
+                 这里只做可见性（不自动作废草案——草案是 AI 成果，作废等于白烧十几分钟模型）。 -->
+            <div
+              v-if="waitingHint(row)"
+              class="waiting-hint"
+              :title="`进入待确认状态已 ${waitingHint(row)}；请尽快审阅，否则任务一直停在这一步`"
+            >
+              {{ waitingHint(row) }}
+            </div>
           </template>
         </el-table-column>
         <el-table-column
@@ -127,14 +136,15 @@
               >
                 AI 拆解
               </el-button>
+              <!-- 拆解中与待确认都要能进：前者看进度（弹窗内轮询），后者做审阅 -->
               <el-button
-                v-else-if="row.status === 'PLANNING'"
+                v-else-if="row.status === 'PLANNING' || row.status === 'AWAITING_PLAN_CONFIRM'"
                 v-auth="['task:confirm-plan', 'task:reject-plan']"
                 size="small"
                 type="warning"
                 @click="openPlanReview(row)"
               >
-                审阅草案
+                {{ row.status === 'PLANNING' ? '查看进度' : '审阅草案' }}
               </el-button>
               <el-button
                 v-else-if="row.status === 'DONE'"
@@ -386,6 +396,31 @@ const loading = ref(false)
 function reportInFlight(status?: string) {
   return status === 'GENERATING' || status === 'REVIEWING'
 }
+
+/**
+ * 「待确认草案」已等待时长（2026-11-08）。
+ *
+ * `AWAITING_PLAN_CONFIRM` 是**只进不出**的状态：无超时、无自动回收（设计如此——草案是
+ * 十几分钟模型调用的成果，自动作废等于白烧）。代价是「人一直不管」这件事**不可见**：
+ * 任务列表里它和刚拆完的看起来一模一样。这里补上可见性。
+ *
+ * 起点用 `updateTime`：进入该状态的 CAS 更新（`beginDecompose` / `advanceAfterDecompose`）
+ * 会刷新它，之后该行不再被写，故它等价于「进入待确认的时刻」。
+ *
+ * **只做展示，不做任何自动处置**——不做超时清退，也不改状态。
+ */
+function waitingHint(row: Task): string {
+  if (row.status !== 'AWAITING_PLAN_CONFIRM') return ''
+  const at = row.updateTime || row.createTime
+  if (!at) return ''
+  const ts = new Date(at).getTime()
+  if (!Number.isFinite(ts)) return ''
+  const minutes = Math.floor((Date.now() - ts) / 60000)
+  if (minutes < 60) return `已等待 ${Math.max(minutes, 0)} 分钟`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `已等待 ${hours} 小时`
+  return `已等待 ${Math.floor(hours / 24)} 天`
+}
 // 分页：前端按 pageSize 切片（任务量小，列表全量加载后再分页，避免每次翻页都重新拉接口）
 const pageSize = ref(20)
 const currentPage = ref(1)
@@ -556,7 +591,7 @@ function memberTip(m: TaskMemberView): string {
   return parts.join(' · ')
 }
 // V29 对话新建跳转带 ?review=taskId 时，按状态分流：
-// - PLANNING → 打开草案审阅（待用户确认/拒绝）
+// - AWAITING_PLAN_CONFIRM / PLANNING → 打开草案审阅（前者待确认，后者看进度）
 // - 其他状态 → 直接跳到主任务页（筛选展示该任务）
 onMounted(async () => {
   await load()
@@ -565,7 +600,7 @@ onMounted(async () => {
   if (review) {
     const row = list.value.find(t => sameId(t.id, review))
     if (row) {
-      if (row.status === 'PLANNING') {
+      if (row.status === 'PLANNING' || row.status === 'AWAITING_PLAN_CONFIRM') {
         openPlanReview(row)
       } else {
         router.push('/tasks?taskId=' + String(row.id))
@@ -734,6 +769,14 @@ async function handlePlan(row: Task) {
 <style scoped>
 /* 列表页通用外观（页头/卡片/表格/分页/单元格）由 design-system.css 的
    List Page Template 统一提供，本页只保留任务详情弹窗的专属排版。 */
+/* 待确认草案的等待时长：次要信息，压在状态标签下方，不抢主状态色 */
+.waiting-hint {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ha-muted);
+  white-space: nowrap;
+}
 /* 描述弹窗：标题仅保上方留白，去掉下方多余空行 */
 .desc-md :deep(h2),
 .desc-md :deep(h3),

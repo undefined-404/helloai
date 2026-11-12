@@ -109,9 +109,6 @@ public class TaskIterationServiceImpl extends ServiceImpl<TaskIterationMapper, T
             records.add(iter);
         }
 
-        // 逐条 save 而非 saveBatch：避免 MyBatis-Plus 生成多行 INSERT 时
-        // 把 jsonb 列的 JSON 字符串内联为 varchar 字面量，导致 PostgreSQL 报
-        // "column X is of type jsonb but expression is of type character varying"。
         for (TaskIteration record : records) {
             save(record);
         }

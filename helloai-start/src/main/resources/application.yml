@@ -13,7 +13,7 @@ spring:
     exclude: org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
   # === 默认激活 dev 环境（云服务器联调），本地 Docker 开发切换 local 使用 spring.profiles.active=local ===
   profiles:
-    active: dev
+    active: local
   # === 时区锁定：与 HelloAIApplication.main() 的 TimeZone.setDefault 一致 ===
   # Date / LocalDateTime 等不带时区偏移的类型也按北京时间序列化，避免 UTC 少 8 小时
   jackson:
@@ -155,6 +155,15 @@ helloai:
       # PLANNING 超时回收阈值（分钟）：PlanningTimeoutTask 按 update_time 扫描卡死任务回退 PENDING。
       # 最坏拆解耗时约 4 分钟（排队 60s + 连接 5s + 读取 180s），默认 10 分钟余量充足。
       planning-timeout-minutes: 10
+      # 展开深度分档（设计 §7，用户已拍板）：超限直接 400，提示回到需求梳理收敛范围。
+      # 闸门在 LLM 调用之前，不烧额度。default-depth 覆盖 DATA / OPERATE 与未来新增档位，
+      # 必须显式配置——靠代码魔法值会让 BUILD 漏配时静默降级成更宽的档位。
+      max-expand-depth:
+        default-depth: 2
+        build: 2
+        document: 2
+        research: 2
+        decide: 1
     # Planner Chat 输入优化（PromptEnhancer）：把用户当前输入改写为更清晰的结构化表达，
     # 独立辅助链路，不经过会话/任务执行编排（CODE_STYLE V2 §32）。
     prompt-enhance:

@@ -102,8 +102,7 @@ class ReviewServiceTest {
     }
 
     private SubTaskView reviewSubTask(int reworkCount, Map<String, Object> context) {
-        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, EXECUTOR_ID, reworkCount,
-                null, null, null, null, null, context, List.of());
+        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, EXECUTOR_ID, reworkCount, null, null, null, null, null, context, List.of());
     }
 
     private Map<String, Object> manualInterventionContext() {

@@ -1,10 +1,10 @@
 # Planner 任务拆解 Prompt 模板
 <!--
   由 PlannerDecomposeAsyncServiceImpl 加载渲染（classpath:prompts/planner-decompose.md）。
-  占位符（共 11 项，由服务端替换）：
+  占位符（共 12 项，由服务端替换）：
     {{TASK_TITLE}} / {{TASK_DESCRIPTION}} / {{TASK_ARCHETYPE}} / {{TASK_REQUIRED_SKILLS}} /
     {{SKILL_CATALOG}} / {{EXECUTOR_PROFILE}} / {{TASK_DIFFICULTY}} / {{GRANULARITY}} /
-    {{REQUIREMENT_PACKAGE}} / {{TASK_CONTEXT_SNAPSHOT}} / {{SUBTASK_COUNT_RULE}}
+    {{REQUIREMENT_PACKAGE}} / {{TASK_CONTEXT_SNAPSHOT}} / {{EXECUTION_ENV}} / {{SUBTASK_COUNT_RULE}}
   拆解四要素：目标 / 交付物 / 验收标准 / 优先级（见下文「拆解要求（四要素）」）。
 
   ★「拆解维度」小节内的六个块各用一对 HTML 注释标记包裹：起始标记写明原型名、结束标记固定
@@ -47,6 +47,16 @@
 > 材料不可读（解析中 / 解析失败 / 已跳过）时，视为「可能缺料」：如需依赖其内容，须在
 > uncertainties 里申报 `TO_LOOK_UP`，不要假装它可读。
 
+## 执行环境声明（在哪跑：仓库 / 运行时 / 数据源）
+
+{{EXECUTION_ENV}}
+
+> 这一段回答**「在哪跑」**，不是「做什么」。三件事：代码在哪（本地路径 / 远程仓库 / 环境内已有目录 /
+> 不需要代码）、跑得动吗（需要哪些运行时）、连什么库（数据库类型与地址，**不是平台自己的库**）。
+> 它可能写着「未声明」——那是**信息缺口本身**，不是让你猜。处理口径见下文第 12 条。
+> **禁止**把这里的值当成你可以随意改写的建议：路径与连接信息是事实，照抄，不要「优化」成
+> `./repo`、`localhost` 这类更通顺但更含糊的写法。
+
 ## 平台技能目录（可指派给子任务）
 
 {{SKILL_CATALOG}}
@@ -86,6 +96,10 @@
     把 `TO_LOOK_UP` / `TO_DERIVE` 写成 `UNCONFIRMED` 会导致执行者把本可自助解决的缺口全部上报阻塞——这是错误标注，不是保守。
     继承规则：需求包 assumptions 中与该子任务强相关的条目须继承（kind=ASSUMPTION）；需求包 openQuestions 中与该子任务相关的条目必须继承（**能判定为可查 / 可算的用 TO_LOOK_UP / TO_DERIVE，否则用 UNCONFIRMED**）。禁止把推断 silently 写进目标而不申报。
     每条 uncertainty 还必须带 `ref`（本子任务内唯一，形如 `U1` / `U2`；不要跨子任务复用编号）。它是给人看的标签：验收判据里若指向某个未确认缺口，平台会用这个 `ref` 标出「这条验收卡在哪」。
+    每条 uncertainty 还必须带 `blockedBy`（**整数数组**）：这个缺口**除本草案外**还卡住了哪几条草案（填本批草案序号，从 1 开始）。只卡住自己就填 `[]`，不要省略该键。
+    - **`blockedBy` 与 `dependsOn` 不是一回事**：`dependsOn` 是「谁先做」，`blockedBy` 是「谁因为这个缺口没法做」。一个缺口可以卡住 3 条彼此没有依赖关系的草案；一条草案也可能被 2 个不同缺口卡住。
+    - **为什么必须单独写**：`ref` 只管本草案内的编号，跨草案的影响面没有别的字段能表达。若只在「看起来最相关」的那条草案里申报缺口，被它卡住的其它草案在平台侧就是「没有任何阻塞」——执行者会照着不可满足的验收去硬做。
+    - 示例：草案 1（口径确认）申报「「竞品 A/B/C」对应哪三款真实产品未确认」，则 `blockedBy` 应含 2、3、4；草案 5 的验收只要求统计本系统内部数据，不依赖该缺口，就不要把 5 写进来。
 11. **验收判据（acceptanceKind，TD-2 / TD-3）**：声明「**谁来判、怎么判**」，只能取四值之一，且必须与第 3 条 acceptance 的**文本写法**一致：
 
     | acceptanceKind | 判定者 | 适用交付物 | acceptance 必须写成 |
@@ -98,6 +112,20 @@
     **铁律：kind 与文本写法必须匹配。** 标了 `AUTOMATED` 却写「文档质量良好」是自相矛盾；
     标了 `STRUCTURAL` 却写「运行 pytest」也是错配。选不出合适 kind 说明验收标准本身没想清楚，
     应重新界定该子任务的交付物，而不是随手挑一个 kind。
+12. **执行环境前置（env-first）**：写 content 之前先判断本子任务**能不能在给定环境里做完**——三问：
+    代码在哪 / 跑得动吗 / 连什么库（对应上文「执行环境声明」段）。
+
+    - **已声明时**：content 必须引用**具体值**——写「在 `E:/yhzx/1027/helloai` 下」「连
+      `PostgreSQL localhost:15432/helloai`」，**禁止**写「仓库中」「数据库中」「运行脚本」这类
+      无指代表述（执行者拿不到指代，只能靠猜）。对应项**不得**再申报 uncertainty。
+    - **未声明、而本子任务确实依赖它时**：必须在 uncertainties 中申报 `UNCONFIRMED`
+      ——**不是** `TO_LOOK_UP`。判据：`TO_LOOK_UP` 成立的前提是「**去哪查**是一个已确认可达的位置」；
+      仓库路径 / 运行时 / 数据源本身未确认时，这个前提不成立，标 `TO_LOOK_UP` 会让执行者
+      按「可自解」去硬做，做不到再上报阻塞，白跑一轮。note 写明缺的是哪一项
+      （如「仓库本地路径与基线分支未确认」「目标库类型与连接串未确认」），并让 `blockedBy`
+      带上同样依赖该环境的草案。
+    - **不需要时不要硬凑**：纯文档 / 纯分析 / 纯决策类子任务若确实不碰代码、不连库，就不申报
+      ——**不要为了合规给每条草案都塞一条环境缺口**，噪音会让真缺口失去可见性。
 
 ## 拆解原则（所有交付物类型通用）
 
@@ -204,10 +232,10 @@
     "contract": false,
     "requiredSkills": ["eng-doc-standard"],
     "constraints": "不得修改对外接口签名；失败时停止并上报，不得自动重试写操作",
-    "uncertainties": [{"kind": "UNCONFIRMED", "note": "该接口是否有存量调用方未确认", "ref": "U1"}]
+    "uncertainties": [{"kind": "UNCONFIRMED", "note": "该接口是否有存量调用方未确认", "ref": "U1", "blockedBy": [2, 3]}]
   }
 ]
 
-字段全部必填；acceptanceKind 只能取 AUTOMATED / STRUCTURAL / REVIEWED / ATTESTED，且必须与 acceptance 的写法一致（见第 11 条表格）；priority 只能取 HIGH / MEDIUM / LOW；dependsOn 是整数数组（前置子任务序号，无依赖填 []）；contract 只能取 true / false（契约定义子任务，全任务至多 1 个且必须排第 1 位；仅 BUILD 原型可为 true）；requiredSkills 只能取「平台技能目录」内已登记标签（无则填 []）；constraints 仅 COARSE 粒度必填、其余档位可空；uncertainties 可空数组（无不确定性时填 []，kind 只能取 ASSUMPTION / UNCONFIRMED / TO_LOOK_UP / TO_DERIVE，每条须带本子任务内唯一的 `ref`）。
+字段全部必填；acceptanceKind 只能取 AUTOMATED / STRUCTURAL / REVIEWED / ATTESTED，且必须与 acceptance 的写法一致（见第 11 条表格）；priority 只能取 HIGH / MEDIUM / LOW；dependsOn 是整数数组（前置子任务序号，无依赖填 []）；contract 只能取 true / false（契约定义子任务，全任务至多 1 个且必须排第 1 位；仅 BUILD 原型可为 true）；requiredSkills 只能取「平台技能目录」内已登记标签（无则填 []）；constraints 仅 COARSE 粒度必填、其余档位可空；uncertainties 可空数组（无不确定性时填 []，kind 只能取 ASSUMPTION / UNCONFIRMED / TO_LOOK_UP / TO_DERIVE，每条须带本子任务内唯一的 `ref` 与一个 `blockedBy` 整数数组——填该缺口除本草案外还卡住的草案序号，只卡自己就填 []，越界 / 自身序号会被平台丢弃）。
 
 **acceptanceKind 不是固定值**——它必须与每一条 acceptance 的文本写法**逐条对应**（AUTOMATED → 命令/断言；STRUCTURAL → 可数量词；REVIEWED → ≥2 条独立审查项；ATTESTED → 谁/何时/留痕），按上面第 11 条表格逐条判定后填写，**禁止全部填 AUTOMATED 或照抄示例**。示例：写「运行 pytest 输出含 3 passed」应标 `AUTOMATED`；写「报告必须含 ≥5 个章节且每章有结论」应标 `STRUCTURAL`；写「2 条审查项逐条 pass/fail」应标 `REVIEWED`；写「由产品负责人 10-25 前拍板，决策记录存 task_timeline」应标 `ATTESTED`。

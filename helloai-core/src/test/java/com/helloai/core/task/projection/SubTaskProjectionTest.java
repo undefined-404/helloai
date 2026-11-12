@@ -33,10 +33,12 @@ class SubTaskProjectionTest {
     private static SubTaskDraft draftWithRef(String ref) {
         return new SubTaskDraft(
                 1L, "竞品 A 事实采集", "content", "deliverable", "acceptance",
-                "MEDIUM", 0, List.of(), null, SubTaskStatus.PENDING_PLAN_REVIEW,
+                "MEDIUM", 0, List.of(), null, SubTaskStatus.PENDING,
                 Map.of(SubTaskContextKeys.ACCEPTANCE_PRECONDITIONS, List.of("U1")),
                 List.of(new UncertaintyDraft(UncertaintyDraft.KIND_UNCONFIRMED, "竞品 A 对应哪款真实产品待拍板", ref)),
-                AcceptanceKind.REVIEWED);
+                AcceptanceKind.REVIEWED,
+                // V146 幂等键：本用例不是拆解路径，attemptId / draftSeq 均为 null（不参与唯一索引）
+                null, null);
     }
 
     @Test
@@ -83,4 +85,42 @@ class SubTaskProjectionTest {
         assertThat(entity.getUncertainties().get(0).getRef()).isNull();
         assertThat(SubTaskProjection.toView(entity).uncertainties().get(0).ref()).isNull();
     }
+
+    /** `TD-13 S2`：缺口影响面（跨草案序号）——这是 `TD-11` 断点① 的落地字段。 */
+    private static SubTaskDraft draftWithBlockedBy(List<Integer> blockedBy) {
+        return new SubTaskDraft(
+                1L, "代号映射确认", "content", "deliverable", "acceptance",
+                "MEDIUM", 0, List.of(), null, SubTaskStatus.PENDING,
+                Map.of(),
+                List.of(new UncertaintyDraft(UncertaintyDraft.KIND_UNCONFIRMED,
+                        "A/B/C 对应哪三款真实产品待拍板", "U1", blockedBy)),
+                AcceptanceKind.REVIEWED, null, null);
+    }
+
+    @Test
+    @DisplayName("TD-13 S2：blockedBy 必须逐层保真（draft → entity → view）")
+    void shouldPreserveBlockedByRoundTrip() {
+        SubTaskView view = SubTaskProjection.toView(
+                SubTaskProjection.toEntity(draftWithBlockedBy(List.of(2, 3, 4))));
+
+        assertThat(view.uncertainties()).hasSize(1);
+        assertThat(view.uncertainties().get(0).ref()).isEqualTo("U1");
+        // 三条彼此无依赖的草案被同一个缺口卡住——这正是用 dependsOn 表达不了的那件事
+        assertThat(view.uncertainties().get(0).blockedBy()).containsExactly(2, 3, 4);
+    }
+
+    @Test
+    @DisplayName("TD-13 S2：blockedBy 为 null（未申报）与空数组（申报只卡自己）必须可区分")
+    void shouldDistinguishNullOrEmptyBlockedBy() {
+        SubTaskView nullCase = SubTaskProjection.toView(
+                SubTaskProjection.toEntity(draftWithBlockedBy(null)));
+        SubTaskView emptyCase = SubTaskProjection.toView(
+                SubTaskProjection.toEntity(draftWithBlockedBy(List.of())));
+
+        // 两者语义不同：null = 模型没写该键；[] = 模型明确声明「只影响本草案」
+        assertThat(nullCase.uncertainties().get(0).blockedBy()).isNull();
+        assertThat(emptyCase.uncertainties().get(0).blockedBy()).isEmpty();
+    }
+
+
 }

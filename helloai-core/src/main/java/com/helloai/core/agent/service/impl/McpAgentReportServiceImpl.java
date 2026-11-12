@@ -5,6 +5,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.common.constant.WorkMode;
 import com.helloai.core.agent.AgentSkillDeriver;
 import com.helloai.core.agent.SkillCapabilityRequirements;
@@ -24,6 +25,7 @@ import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ActivityLogService;
 import com.helloai.core.agent.service.HeartbeatService;
+import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.McpAgentReportService;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.service.McpToolService.CheckInResult;
@@ -87,6 +89,8 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
     private final SubTaskCommandPort subTaskCommandPort;
     /** G-006：外部执行 attempt 收口（agent_execution_record 外部路径对齐）。 */
     private final AgentExecutionRecordService agentExecutionRecordService;
+    /** 对话流写入（LOG-20261112）：外部 CLI 自报阻塞后补对话结论，与内部通道对齐，避免执行轮悬空。 */
+    private final ConversationService conversationService;
     /**
      * `QA-M9-03`（2026-10-15）：checkIn 自报技能的能力校验依赖。
      *
@@ -414,6 +418,16 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
         }
 
         subTaskCommandPort.block(subTaskId, reason, agentId);
+
+        // LOG-20261112：补对话结论（sub_task_execute_blocked），与内部 internal_report_blocked 对齐。
+        // best-effort + REQUIRES_NEW，失败不阻断阻塞主链路。
+        try {
+            conversationService.addMessage(subTaskId, agentId, "assistant", "agent",
+                    "执行阻塞（需人工介入）：" + reason, TimelineEventCode.SUB_TASK_EXECUTE_BLOCKED.code());
+        } catch (Exception e) {
+            log.warn("外部自报阻塞对话结论写入失败（不阻断阻塞主链路）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+        }
 
         ReportBlockedResult result = new ReportBlockedResult();
         result.setOk(true);

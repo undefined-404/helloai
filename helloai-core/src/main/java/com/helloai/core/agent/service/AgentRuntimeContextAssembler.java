@@ -7,10 +7,9 @@ import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.common.constant.UncertaintyKind;
-import com.helloai.core.agent.AgentLlmCredentialResolver;
-import com.helloai.core.agent.chat.AgentProviderResolver;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.support.AgentChatModelResolver;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventQueryService;
 import com.helloai.core.agent.event.AgentEventRecorder;
@@ -58,7 +57,7 @@ import java.util.stream.Collectors;
  *     <li>Prompt 装配：Task Running Spec 全局段 + 技能规范段 + 执行者历史画像段 + 依赖产出参考段
  *         + 重派恢复上下文（B3 Resume 起含事件流「已完成的事实」）+ 返工修正指引 + 产出回填要求
  *         （EXECUTION_RECORD / manifest 多文件协议）；</li>
- *     <li>底层模型：按 provider + API Key 经 {@link AgentChatClientService#buildChatModel} 构建
+ *     <li>底层模型：按 provider + API Key 经 {@link AgentChatModelResolver#resolve} 构建
  *         （mock 模式 MockChatModel；真实模式 Vault/Agent 级凭据解析，requireVault 校验同旧口径）；</li>
  *     <li>执行会话：LLM 调用前 {@code AgentSessionService.start}（step=2，中断点快照，best-effort），
  *         并装配循环进度回调（P0-C checkpoint：AgentLoop 每轮 merge snapshot.loop）；</li>
@@ -97,8 +96,7 @@ public class AgentRuntimeContextAssembler {
     // SubTaskExecutionService/Impl），属典型的口径漂移风险 —— 现统一引用单源。
 
     private final AgentExecutionProperties executionProperties;
-    private final AgentChatClientService agentChatClientService;
-    private final AgentLlmCredentialResolver agentLlmCredentialResolver;
+    private final AgentChatModelResolver agentChatModelResolver;
     private final TaskTimelinePort taskTimelinePort;
     /** 执行记录端口（原 {@code TaskRunningSpecService}；W11 端口化）。 */
     private final TaskRunningSpecPort taskRunningSpecPort;
@@ -243,17 +241,9 @@ public class AgentRuntimeContextAssembler {
                         "tokens", result != null ? result.getTokenUsage() : null));
     }
 
-    /** mock 模式返回 null；真实模式解析 Vault/Agent 级 API Key（requireVault 校验同旧口径）。 */
+    /** 模型构建逻辑已收进 {@link AgentChatModelResolver}（语义门 `TD-16e-3-2` 复用同一口径）。 */
     private ChatModel buildChatModel(Agent agent) {
-        String provider = AgentProviderResolver.resolveProvider(agent, executionProperties.getProvider());
-        String apiKey = null;
-        if (!executionProperties.isMockMode()) {
-            apiKey = agentLlmCredentialResolver.resolveApiKey(agent);
-            if (executionProperties.isRequireVault() && (apiKey == null || apiKey.isBlank())) {
-                throw new BizException("未配置可用的平台级或 Agent 级 API Key: agentId=" + agent.getId());
-            }
-        }
-        return agentChatClientService.buildChatModel(agent, provider, apiKey);
+        return agentChatModelResolver.resolve(agent);
     }
 
     // #region Prompt 装配（迁移自 SubTaskExecutionServiceImpl，行为等价）

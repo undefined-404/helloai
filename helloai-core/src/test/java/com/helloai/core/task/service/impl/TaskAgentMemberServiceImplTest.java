@@ -164,6 +164,55 @@ class TaskAgentMemberServiceImplTest {
         verifyNoInteractions(mapper);
     }
 
+    // ==================== listMembers（读时 derive-on-miss） ====================
+
+    @Test
+    @DisplayName("listMembers: 成员表缺行 -> 按权威源幂等回填（REBUILT）并返回刷新结果")
+    void listMembersShouldBackfillFromAuthoritative() {
+        when(mapper.selectList(any())).thenReturn(List.of(), List.of(pair(TASK_ID, AGENT_ID)));
+        when(mapper.selectAuthoritativeAssignmentsByTask(TASK_ID))
+                .thenReturn(List.of(pair(TASK_ID, AGENT_ID)));
+
+        List<TaskAgentMember> rows = service.listMembers(TASK_ID);
+
+        assertThat(rows).hasSize(1);
+        verify(mapper).upsert(anyLong(), eq(TASK_ID), eq(AGENT_ID), eq("REBUILT"), eq("system"));
+        // 回填后重查一次（第一次空表、第二次带新行）
+        verify(mapper, times(2)).selectList(any());
+    }
+
+    @Test
+    @DisplayName("listMembers: 表中已有该执行者 -> 不回填、只查一次")
+    void listMembersShouldNotBackfillWhenAlreadyPresent() {
+        when(mapper.selectList(any())).thenReturn(List.of(pair(TASK_ID, AGENT_ID)));
+        when(mapper.selectAuthoritativeAssignmentsByTask(TASK_ID))
+                .thenReturn(List.of(pair(TASK_ID, AGENT_ID)));
+
+        assertThat(service.listMembers(TASK_ID)).hasSize(1);
+
+        verify(mapper, never()).upsert(anyLong(), any(), any(), any(), any());
+        verify(mapper, times(1)).selectList(any());
+    }
+
+    @Test
+    @DisplayName("listMembers: 权威源为空 -> 不回填，保持现有表内容")
+    void listMembersShouldNotBackfillWhenNoAuthoritative() {
+        when(mapper.selectList(any())).thenReturn(List.of(pair(TASK_ID, AGENT_ID)));
+        when(mapper.selectAuthoritativeAssignmentsByTask(TASK_ID)).thenReturn(List.of());
+
+        assertThat(service.listMembers(TASK_ID)).hasSize(1);
+
+        verify(mapper, never()).upsert(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("listMembers: taskId 为 null -> 空列表，且不查库")
+    void listMembersShouldReturnEmptyWhenTaskIdNull() {
+        assertThat(service.listMembers(null)).isEmpty();
+
+        verifyNoInteractions(mapper);
+    }
+
     // ==================== rebuildFromAuthoritativeAssignments ====================
 
     @Test

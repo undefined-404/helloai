@@ -11,7 +11,8 @@ import java.util.regex.Pattern;
 /**
  * `TD-11`：验收契约**可满足性**标注（纯函数，无 IO、无 Spring、可单测）。
  *
- * <p><b>要解决的是什么</b>：`TD-5` 的 {@link AcceptanceKindValidator} 自述「只判文本写法，
+ * <p><b>要解决的是什么</b>：`TD-5` 的 {@code AcceptanceKindValidator}（`helloai-common`，
+ * 2026-11-07 迁出本包以供 task 域复用）自述「只判文本写法，
  * 不做内容质量判定」，于是它会把一份**物理上不可能满足**的验收判成合法并放行——2026-10-25
  * 的事故就是这样：{@code content} 要求「不要自行替换成其他产品」，{@code acceptance} 要求
  * 「≥15 条带真实 URL 的事实」，两条同时对一份「竞品 A/B/C 未确认」的契约成立 ⇒ 执行者无解，
@@ -88,7 +89,7 @@ public final class AcceptanceSatisfiabilityChecker {
             if (u == null) {
                 continue;
             }
-            out.add(new UncertaintyDraft(u.kind(), u.note(), resolveRef(u.ref(), i + 1, used)));
+            out.add(new UncertaintyDraft(u.kind(), u.note(), resolveRef(u.ref(), i + 1, used), u.blockedBy()));
         }
         return out;
     }

@@ -243,16 +243,38 @@ public interface TaskService extends IService<Task> {
     List<Task> listFinalReportReviewOrphans(int thresholdSeconds, int limit);
 
     /**
-     * 扫描 PLANNING 超时卡死任务（status=PLANNING 且 update_time &lt; deadline，按 update_time 升序，limit 上限）。
+     * 扫描拆解租约已过期的任务（status=PLANNING 且 {@code decompose_lease_until < now}，
+     * 按租约到期升序，limit 上限）。
      *
      * <p>承接 helloai-job {@code PlanningTimeoutTask} 直捅
-     * {@code TaskMapper.selectTimedOutPlanning}（拆解异步化改造兜底），SQL 语义不变。</p>
+     * {@code TaskMapper.selectTimedOutPlanning}（拆解异步化改造兜底）。</p>
      *
-     * @param deadline 超时截止时间（update_time &lt; deadline 视为超时）
-     * @param limit    单次最多返回条数
-     * @return 超时卡死任务列表（可能为空，绝不返回 null）
+     * <p><b>2026-11-08 判据变更（`V146`）</b>：改前是「{@code update_time < deadline}
+     * + {@code NOT EXISTS(草案)}」的心跳判活，会误杀正在调模型的拆解（拆解线程十几分钟
+     * 不写库，无法证明自己活着）；改后只扫租约过期。原 {@code NOT EXISTS} 补丁整体删除——
+     * 「草案在等确认」已是独立状态 {@code AWAITING_PLAN_CONFIRM}，不在本方法范围内。</p>
+     *
+     * @param now   当前时刻（租约 &lt; now 视为过期）
+     * @param limit 单次最多返回条数
+     * @return 租约过期任务列表（可能为空，绝不返回 null）
      */
-    List<Task> listTimedOutPlanning(OffsetDateTime deadline, int limit);
+    List<Task> listTimedOutPlanning(OffsetDateTime now, int limit);
+
+    /**
+     * 回收一个租约过期的拆解任务，并**按库中实际情况**决定落到哪个状态。
+     *
+     * <p>正常路径下草案与状态推进在同一事务里，所以「PLANNING 且有草案」不该出现；
+     * 该方法仍做分流，是为了让**数据异常**能自愈而不是恶化——把这种任务回退到 PENDING
+     * 会制造死结（re-decompose 报「已存在 N 个子任务」、confirm 报「不是待确认状态」），
+     * 而推进到待确认时用户至少能看到草案并继续。</p>
+     *
+     * <p><b>注意这不是判活判据</b>：判活只看租约（{@link #listTimedOutPlanning}）。
+     * 这里的草案存在性判断只决定「回收成什么状态」，不决定「要不要回收」——改前
+     * {@code NOT EXISTS} 补丁的错就在于把后者也交给了它。</p>
+     *
+     * @return 实际推进到的状态；{@code null} 表示 CAS 未命中（状态已变化）
+     */
+    TaskStatus recoverTimedOutDecompose(Long taskId);
 
     // ── 只读快照（RM5 批 4）：供 review 域消费，避免其 import task.entity ──
 
@@ -273,13 +295,47 @@ public interface TaskService extends IService<Task> {
 
     // ── 写命令（RM5 批 5a）：供 planner 域消费 ──
 
+    // 注：原三参 casStatus(id, expect, target) 已删除（2026-11-08）。拆解链路是它唯一调用方，
+    // 而「只比状态」正是跨 attempt 迟到写入的成因；留一个不会比 attemptId 的重载，
+    // 等于给下一个人留一条会走错的近路。状态推进统一走 casStatusForAttempt。
+
     /**
-     * 状态 CAS 推进（{@code WHERE id=? AND status=?} → 目标状态）。
+     * 进入拆解：一次原子写完成「{@code PENDING → PLANNING} 的 CAS + 拆解租约 + attemptId」。
      *
-     * <p>替代 planner 侧原 {@code taskService.lambdaUpdate().eq(Task::getStatus,…)} 直写，
-     * 返回是否命中一行（并发下未命中即 CAS 失败）。</p>
+     * <p><b>为什么合成一个方法</b>：三者必须同时生效。分步写会出现「已 PLANNING 但租约/attemptId
+     * 为空」的窗口——租约为空会被巡检漏检（永久卡死），attemptId 为空会让幂等键失效
+     * （异步段各自生成新 UUID，唯一索引永不冲突）。合成一条 UPDATE 后该窗口不存在。</p>
+     *
+     * <p><b>attemptId 为什么在入口生成而不在异步段生成</b>：幂等的本质是「同一件事有同一个名字」。
+     * 异步段每次执行都生成新 UUID，等于每次都是新的事，唯一索引形同虚设。放在入口后，
+     * 「已提交但响应丢失后重投」与「补偿任务重跑」拿到的都是同一个 attemptId。</p>
+     *
+     * @param leaseMinutes 本次拆解允许跑多久（租约 = now + 该值）
+     * @return 本次拆解的 attemptId；{@code null} 表示 CAS 未命中（状态已被他人改变）
      */
-    boolean casStatus(Long taskId, TaskStatus expect, TaskStatus target);
+    String beginDecompose(Long taskId, int leaseMinutes);
+
+    /**
+     * 读取当前 PLANNING 任务的拆解 attemptId（异步段据此落库与去重）。
+     *
+     * @return attemptId；任务不存在或非 PLANNING 时返回 {@code null}
+     */
+    String currentDecomposeAttempt(Long taskId);
+
+    /**
+     * 带<b>拆解归属校验</b>的状态 CAS：{@code WHERE id=? AND status=? AND decompose_attempt_id=?}。
+     *
+     * <p><b>为什么不复用三参 {@link #casStatus}</b>：三参版本只比状态，挡不住「跨 attempt 的
+     * 迟到写入」。真实时序——A 的拆解跑超租约被巡检推回 PENDING，用户重新拆解拿到
+     * attempt=B、状态又回到 PLANNING；此刻 A 的线程苏醒并成功落库，三参 CAS 会命中的是
+     * <b>B 的</b> PLANNING，于是 A、B 两批草案同时入库。唯一索引只约束「同 task + 同 attempt
+     * + 同序号」，跨 attempt 完全挡不住，必须在状态推进这一步把 attempt 一并比上：
+     * 校验失败 ⇒ 调用方抛异常回滚 ⇒ A 那批草案一条不剩。</p>
+     *
+     * @param attemptId 调用方自己的拆解标识；{@code null} 时直接返回 {@code false}（无归属可比即不放行）
+     * @return 是否命中一行（命中 = 本次拆解仍是该任务当前那次拆解）
+     */
+    boolean casStatusForAttempt(Long taskId, TaskStatus expect, TaskStatus target, String attemptId);
 
     /** 由创建物料建任务（写命令）并返回落库后的只读快照（RM5 批 5a）。 */
     TaskView createFromDraft(TaskDraft draft);

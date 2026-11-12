@@ -147,19 +147,11 @@
           <el-select
             v-model="form.accessType"
             style="width:100%"
-            @change="onAccessTypeChange"
           >
-            <!-- 网页版：网页版接入违反相关规定，现在已禁用 -->
-            <el-option
-              label="外部 AI Agent（BROWSER 接入）"
-              value="WEB_BROWSER"
-              disabled
-            />
             <el-option
               label="内部 LLM（API Key）"
               value="API_KEY_LLM"
             />
-
             <el-option
               label="外部 AI Agent"
               value="CLI_CLIENT"
@@ -374,8 +366,8 @@ const form = reactive({
   description: '',
   // §6.74: 专业化已移除；skills 注册即填写（A2 显式技能优先）
   // V49: 内部 LLM（API_KEY_LLM）注册可显式选择模型，留空走系统默认 provider+default-model
-  // 2026-08-26: 默认改为 WEB_BROWSER（GUI 接入）——CLI 接入暂未上线且 UI 已置灰
-  accessType: 'WEB_BROWSER',
+  // 浏览器 AI 接入违规且已停止开发，对外仅保留 外部 AI Agent / 内部 LLM
+  accessType: 'CLI_CLIENT',
   modelType: '',
   skills: [] as string[]
 })
@@ -427,13 +419,7 @@ function onRoleChange() {
     lastAutoName.value = autoNameFromModel(form.modelType, form.role)
     form.name = lastAutoName.value
   }
-  // 接入类型选项已对全角色开放，无需在切角色时强制回退默认项（CLI 仅置灰，不再回退）
-}
-
-function onAccessTypeChange(v: string) {
-  if (v === 'WEB_BROWSER') {
-    ElMessage.warning('网页版 Agent接入已禁用，请选择 外部 AI Agent或内部 LLM')
-  }
+  // 接入类型选项已对全角色开放，无需在切角色时强制回退默认项
 }
 
 // ── V52 技能区三段式：模型能力锁定 + 可选项白名单 + 降级提示 ──
@@ -500,10 +486,6 @@ const skillSelectOptions = computed(() => {
 })
 
 async function handleRegister() {
-  if (form.accessType === 'WEB_BROWSER') {
-    ElMessage.warning('网页版 Agent接入已禁用，请选择 外部 AI Agent或内部 LLM')
-    return
-  }
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
   registering.value = true
@@ -531,7 +513,7 @@ async function handleRegister() {
     // 重置表单
     form.name = ''
     form.description = ''
-    form.accessType = 'WEB_BROWSER'
+    form.accessType = 'CLI_CLIENT'
     form.modelType = ''
     form.skills = []
     lastAutoName.value = ''

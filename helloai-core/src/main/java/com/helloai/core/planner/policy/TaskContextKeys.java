@@ -30,6 +30,27 @@ public final class TaskContextKeys {
      */
     public static final String SUBTASK_COUNT = "subtaskCount";
 
+    /**
+     * 任务级执行环境声明（Map，可选）：仓库 / 运行时 / 数据源三问的结构化承载。
+     *
+     * <p><b>为什么进 {@code task.context} 而不是加表加列</b>：它是「整任务共享」的附加声明，不是
+     * 业务实体；{@code task.context} 本就是自由 JSONB，与 {@code requirementPackage} 同坑位。
+     * 结构见 {@link com.helloai.common.util.ExecutionEnv}（解析 / 渲染的唯一实现）。</p>
+     *
+     * <p><b>写入方</b>：① 澄清终稿 {@code final_package.executionEnv} 原样搬运
+     * （{@code ClarifyFinalizeServiceImpl#buildTaskFromDraft}）；② 运维直接改
+     * {@code task.context.executionEnv}。**不由拆解模型产出**——路径与连接信息一旦让模型编造，
+     * 后果比缺失更糟（执行者会照着一条不存在的路径去找）。</p>
+     *
+     * <p><b>读取方</b>：拆解期注入（{@code PlannerDecomposeAsyncServiceImpl} 渲染
+     * {@code {{EXECUTION_ENV}}}）；执行期重构会话种子（{@code RestructureSessionServiceImpl}
+     * 从父任务 X 读出来交给澄清模型）。缺键 = 未声明，渲染兜底文案，不报错。</p>
+     *
+     * <p><b>为什么值直接转发 {@link ExecutionEnv#CONTEXT_KEY}</b>：{@code task} 域（派生任务继承）
+     * 也要写这个键，若常量只在这里，{@code task → planner} 是反向依赖。见该常量的注释。</p>
+     */
+    public static final String EXECUTION_ENV = com.helloai.common.util.ExecutionEnv.CONTEXT_KEY;
+
     private TaskContextKeys() {
     }
 }

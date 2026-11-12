@@ -354,9 +354,14 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         }
         ClarifyConversationDetail view = new ClarifyConversationDetail(conversation,
                 messageService.listByConversation(conversationId));
-        // 供前端判断 FINALIZED 会话的原任务是否已被删除（悬挂软引用），从而决定能否重新生成
-        view.setTaskExists(conversation.getTaskId() != null
-                && taskService.getView(conversation.getTaskId()) != null);
+        // 供前端判断 FINALIZED 会话的原任务是否已被删除（悬挂软引用），从而决定能否重新生成。
+        // 派生会话的 task_id 是父任务 X，产出任务在 derived_task_id（V150）——取产出指针，
+        // 否则「查看任务」会跳到父任务，且 X 恒存在导致「重新生成」入口永不出现。
+        Long producedTaskId = conversation.getDerivedTaskId() != null
+                ? conversation.getDerivedTaskId()
+                : conversation.getTaskId();
+        view.setTaskExists(producedTaskId != null
+                && taskService.getView(producedTaskId) != null);
         return view;
     }
 }

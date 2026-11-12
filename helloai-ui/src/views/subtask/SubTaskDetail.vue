@@ -391,7 +391,7 @@
                   </el-tag>
                   <el-tag
                     size="small"
-                    :type="roundMeta(round).failed ? 'danger' : 'success'"
+                    :type="roundMeta(round).blocked ? 'warning' : (roundMeta(round).failed ? 'danger' : 'success')"
                   >
                     {{ roundMeta(round).statusLabel }}
                   </el-tag>
@@ -1233,6 +1233,7 @@ const CONV_TAG_MAP: Record<string, { label: string; type: 'success' | 'danger' |
   sub_task_execute_thinking: { label: '思考过程', type: 'info' },
   sub_task_execute: { label: '执行产出', type: 'success' },
   sub_task_execute_failed: { label: '执行失败', type: 'danger' },
+  sub_task_execute_blocked: { label: '阻塞结论', type: 'warning' },
   subtask_review_prompt: { label: '核验请求', type: 'info' },
   subtask_review_thinking: { label: '核验思考', type: 'info' },
   subtask_review_verdict: { label: '核验分析', type: 'warning' },
@@ -1291,7 +1292,7 @@ const convRounds = computed<ConvRound[]>(() => {
 
   for (const msg of conversation.value) {
     const tool = msg.toolName || ''
-    const isExecute = tool === 'sub_task_execute_user_prompt' || tool === 'sub_task_execute' || tool === 'sub_task_execute_failed'
+    const isExecute = tool === 'sub_task_execute_user_prompt' || tool === 'sub_task_execute' || tool === 'sub_task_execute_failed' || tool === 'sub_task_execute_blocked'
     // V58: 核验轮次识别含单审 / 双审 / 抽检三链路前缀
     const isReview = tool.startsWith('subtask_review') || tool.startsWith('subtask_dual_review') || tool.startsWith('subtask_recheck')
     const key = msg.senderId != null ? String(msg.senderId) : null
@@ -1337,7 +1338,7 @@ function convTagType(toolName: string | null, content: string | null | undefined
 function convItemClass(msg: ConversationMessageItem): Record<string, boolean> {
   const tool = msg.toolName || ''
   const isUser = tool === 'sub_task_execute_user_prompt'
-  const isExecute = tool === 'sub_task_execute' || tool === 'sub_task_execute_failed'
+  const isExecute = tool === 'sub_task_execute' || tool === 'sub_task_execute_failed' || tool === 'sub_task_execute_blocked'
   const isAnalysis = isAnalysisMsg(msg)
   // 核验类（subtask_(review|dual_review|recheck)_(verdict|result)）
   const isResult = /subtask_(review|dual_review|recheck)_(verdict|result)$/.test(tool)
@@ -1377,7 +1378,7 @@ function parseVerdictPass(content: string | null | undefined): boolean {
 function convAvatarText(msg: ConversationMessageItem): string {
   const tool = msg.toolName || ''
   if (tool === 'sub_task_execute_user_prompt') return 'U'
-  if (tool === 'sub_task_execute' || tool === 'sub_task_execute_failed') return 'AI'
+  if (tool === 'sub_task_execute' || tool === 'sub_task_execute_failed' || tool === 'sub_task_execute_blocked') return 'AI'
   // 核验类：审核（双审、抽检、单审均走核验视觉）
   if (tool.startsWith('subtask_review') || tool.startsWith('subtask_dual_review') || tool.startsWith('subtask_recheck')) return '审'
   // 思考类同走核验视觉（橙）
@@ -1455,12 +1456,14 @@ function roundAgentName(round: ConvRound): string {
   return item.value?.assignedAgentName || resolveAgentName(item.value?.assignedAgent ?? null) || '-'
 }
 
-function roundMeta(round: ConvRound): { statusLabel: string; failed: boolean; time: string } {
+function roundMeta(round: ConvRound): { statusLabel: string; failed: boolean; blocked: boolean; time: string } {
+  const blocked = round.messages.some(m => m.toolName === 'sub_task_execute_blocked')
   const failed = round.messages.some(m => m.toolName === 'sub_task_execute_failed')
   const last = round.messages[round.messages.length - 1]
   return {
-    statusLabel: failed ? '失败' : '已完成',
+    statusLabel: blocked ? '已阻塞' : (failed ? '失败' : '已完成'),
     failed,
+    blocked,
     time: last ? fmtTime(last.createTime) : ''
   }
 }

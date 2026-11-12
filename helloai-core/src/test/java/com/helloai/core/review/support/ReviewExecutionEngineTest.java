@@ -90,8 +90,7 @@ class ReviewExecutionEngineTest {
     }
 
     private SubTaskView subTask() {
-        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0,
-                "写接口文档", "整理 REST 接口清单", "接口文档", ACCEPTANCE, null, Map.of(), List.of());
+        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0, "写接口文档", "整理 REST 接口清单", "接口文档", ACCEPTANCE, null, Map.of(), List.of());
     }
 
     private AgentProfileSnapshot reviewer() {

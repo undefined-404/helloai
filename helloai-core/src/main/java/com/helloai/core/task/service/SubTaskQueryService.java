@@ -83,8 +83,6 @@ public interface SubTaskQueryService {
 
     List<SubTaskView> listViewsByTaskIdAndStatus(Long taskId, SubTaskStatus status);
 
-    List<SubTaskView> listDraftsInInsertOrder(Long taskId, SubTaskStatus status);
-
     List<SubTaskView> listViewsByIds(Collection<Long> ids);
 
 }

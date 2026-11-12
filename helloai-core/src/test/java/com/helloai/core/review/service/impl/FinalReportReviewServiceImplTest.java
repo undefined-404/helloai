@@ -648,8 +648,7 @@ class FinalReportReviewServiceImplTest {
     }
 
     private SubTaskView subTask(String title, String deliverable, String acceptance) {
-        return new SubTaskView(null, TASK_ID, SubTaskStatus.DONE, null, null,
-                title, null, deliverable, acceptance, null, null, List.of());
+        return new SubTaskView(null, TASK_ID, SubTaskStatus.DONE, null, null, title, null, deliverable, acceptance, null, null, List.of());
     }
 
     private static SubTaskReviewService.ReviewVerdict passedVerdict() {

@@ -40,6 +40,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -103,7 +104,8 @@ class TaskServiceTest {
                 taskRunningSpecMapper, taskExecutionRecordMapper, taskAgentMemberMapper,
                 taskIterationMapper, workflowInstanceMapper,
                 reviewPort, taskTimelineMapper, attachmentMapper, attachmentObjectPurgeSupport,
-                agentInboxService, agentService, subTaskService, teamService));
+                agentInboxService, agentService, subTaskService, teamService,
+                mock(com.helloai.core.task.port.TaskPlanDraftPort.class)));
     }
 
     private static Map<String, Object> policy() {

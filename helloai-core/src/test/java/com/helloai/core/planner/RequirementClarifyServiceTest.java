@@ -227,7 +227,10 @@ class RequirementClarifyServiceTest {
         finalizeService = new ClarifyFinalizeServiceImpl(
                 conversationService, messageService, taskService, agentService, agentInboxService,
                 taskTimelineService, longTermMemoryService, requirementConversationMapper,
-                new ObjectMapper(), commandSearch, skillDirective);
+                new ObjectMapper(), commandSearch, skillDirective,
+                mock(com.helloai.core.task.service.TaskDerivationService.class),
+                // 草案期派生的草案存在性校验（ADR-008 §5）：本类只跑主链，mock 即可
+                mock(com.helloai.core.planner.service.PlanDraftService.class));
         chatSkillRunService = mock(ChatSkillRunService.class);
         skillExecutionWorker = mock(SkillExecutionWorker.class);
         orchestrator = new ClarifyRoundOrchestratorServiceImpl(

@@ -44,14 +44,15 @@ public final class SubTaskProjection {
         List<UncertaintyView> uncertainties = st.getUncertainties() == null ? List.of()
                 : st.getUncertainties().stream()
                         .filter(u -> u != null)
-                        .map(u -> new UncertaintyView(u.getKind(), u.getNote(), u.getRef()))
+                        .map(u -> new UncertaintyView(u.getKind(), u.getNote(), u.getRef(), u.getBlockedBy()))
                         .toList();
         return new SubTaskView(st.getId(), st.getTaskId(), st.getStatus(), st.getAssignedAgentId(),
                 st.getReworkCount(), st.getTitle(), st.getContent(), st.getDeliverable(),
                 st.getAcceptance(), st.getAcceptanceKind(), st.getConstraints(), st.getContext(), uncertainties,
                 st.dependsOnIdList(), st.getDeadline(), st.getPriority(), st.getIsContract(),
                 st.getRequiredSkills(), st.getModuleId(), st.getScoreFactors(), st.getCompositeScore(),
-                st.getScoreGrade(), st.getTimeoutCount(), st.getCreateTime(), st.getUpdateTime());
+                st.getScoreGrade(), st.getTimeoutCount(), st.getCreateTime(), st.getUpdateTime(),
+                st.getDraftCode());
     }
 
     /** 写入物料 → 实体（提供方内部映射，消费方零实体依赖）；{@code uncertainties} 逐项投影、null 元素跳过。 */
@@ -66,6 +67,8 @@ public final class SubTaskProjection {
         st.setAcceptanceKind(d.acceptanceKind());
         st.setPriority(d.priority());
         st.setIsContract(d.isContract());
+        // TD-16d 位置身份：planner 侧算好后原样落库，落库侧不重算（两处各算一次必分叉）
+        st.setDraftCode(d.draftCode());
         st.setRequiredSkills(d.requiredSkills());
         st.setConstraints(d.constraints());
         st.setStatus(d.status());
@@ -80,6 +83,9 @@ public final class SubTaskProjection {
                     // 标签本身不落到 JSONB 里，核验侧就永远「解析不到引用 ⇒ 不豁免」，
                     // 等于把「fail-safe 保持严格」变成常态。2026-10-25 实测发生（`LOG-20261025-016`）。
                     entity.setRef(u.ref());
+                    // TD-13 S2：「这个缺口卡住哪几条草案」。纯 JSONB 键、零迁移；
+                    // 归一化（越界 / 自引用 / 去重）已在落库侧完成，这里只做逐字段投影。
+                    entity.setBlockedBy(u.blockedBy());
                     return entity;
                 })
                 .toList());

@@ -31,8 +31,7 @@ class SubTaskAttachmentReadSignalTest {
     }
 
     private static SubTaskView view(String content, String acceptance, String deliverable) {
-        return new SubTaskView(1L, 10L, null, null, null, "标题",
-                content, deliverable, acceptance, null, Map.of(), List.of());
+        return new SubTaskView(1L, 10L, null, null, null, "标题", content, deliverable, acceptance, null, Map.of(), List.of());
     }
 
     @Nested

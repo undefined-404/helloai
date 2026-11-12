@@ -35,6 +35,12 @@
         与 2026-09-10 那批「实体加列后自定义 SQL 未同步」缺陷同型。本次两处补齐。
         attempt_total 保持不写：A3 起由 incrementAttemptTotal 原子累加独占（坑点 3「单一权威」），
         不参与本 SQL 的全列覆盖，避免读改写竞态覆盖累计值。
+
+        此前未同步——实体的两列有值、projection 也赋了值，但 INSERT 不含列 ⇒ 落 DB 为 NULL，
+        永不满足 ⇒ 幂等形同虚设。与上面两批「实体加列后自定义 SQL 未同步」同型（第三次）。
+        **只补 insert，故意不补 updateById**：这两列是「哪一次拆解产出的」这一既成事实，
+        创建后不应被改写；而展开/重生成走 updateById 时 SubTaskDraft 的 attemptId 为 null，
+        若一并补进 updateById 反而会把历史草案的归属键清空。
     -->
     <insert id="insert" parameterType="com.helloai.core.task.entity.SubTask">
         INSERT INTO sub_task (
@@ -45,6 +51,7 @@
             version, timeout_count, external_fallback_count, reassign_attempt_count,
             depends_on, owner, lease_until, is_contract,
             required_skills, constraints, uncertainties,
+            draft_code,
             deleted, create_by, update_by, create_time, update_time, remark
         ) VALUES (
             #{id}, #{taskId}, #{moduleId}, #{title}, #{deliverable}, #{acceptance},
@@ -62,6 +69,7 @@
             COALESCE(#{requiredSkills,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb, '[]'::jsonb),
             #{constraints},
             COALESCE(#{uncertainties,typeHandler=com.helloai.core.task.entity.UncertaintyListTypeHandler}::jsonb, '[]'::jsonb),
+            #{draftCode,jdbcType=VARCHAR},
             COALESCE(#{deleted}, 0), COALESCE(#{createBy}, ''), COALESCE(#{updateBy}, ''),
             COALESCE(#{createTime}, CURRENT_TIMESTAMP), COALESCE(#{updateTime}, CURRENT_TIMESTAMP), #{remark}
         )
@@ -361,7 +369,8 @@
         个人工作台任务概况（PA-4 改版，2026-11-02）：按任务归属一次聚合。
 
         归属口径与 TaskService.pageTasks 一致（宽松并入）：owner_id = 当前用户 OR owner_id IS NULL。
-        「待人工」合并 BLOCKED（阻塞）与 DEAD_LETTER（人工死信池）——对用户是同一个动作面。
+        「待人工」合并 BLOCKED（阻塞）、DEAD_LETTER（人工死信池）与 RESTRUCTURING（执行期重构接管）
+        ——对用户是同一个动作面（ADR-008 引入 RESTRUCTURING 后补入）。
     -->
     <select id="selectOwnedOverview" resultType="com.helloai.core.task.projection.OwnedTaskOverviewRow">
         SELECT
@@ -371,7 +380,7 @@
                AND (t.owner_id = #{ownerId} OR t.owner_id IS NULL)) AS in_progress_tasks,
             COUNT(*) FILTER (WHERE st.status = 'PENDING') AS pending_dispatch,
             COUNT(*) FILTER (WHERE st.status = 'REVIEW') AS pending_review,
-            COUNT(*) FILTER (WHERE st.status IN ('BLOCKED', 'DEAD_LETTER')) AS pending_manual
+            COUNT(*) FILTER (WHERE st.status IN ('BLOCKED', 'DEAD_LETTER', 'RESTRUCTURING')) AS pending_manual
         FROM sub_task st
         JOIN task t ON t.id = st.task_id
         WHERE st.deleted = 0

@@ -53,7 +53,8 @@ class SubTaskServiceIsReadyTest {
         SubTaskLeaseService leaseService = new SubTaskLeaseServiceImpl(
                 subTaskMapper, taskTimelineService, agentSessionService, stateMachineService);
         subTaskService = new SubTaskServiceImpl(
-                subTaskMapper, queryService, stateMachineService, leaseService);
+                subTaskMapper, queryService, stateMachineService, leaseService,
+                mock(TaskDerivationService.class), mock(RuntimeContractGateService.class));
     }
 
     private SubTask withDeps(List<Long> deps) {
