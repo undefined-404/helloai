@@ -114,7 +114,7 @@ LLM 流的取消语义另有一套，强行打通会引入不可控路径。
 4. **三个超时量纲的澄清（`B1` 结案）**：`timeout-seconds` 这个名字在配置里出现三次，
    各管一段，**不可横向比较**：
    - `spec-presets.node.timeout-seconds: 900` ⇒ 沙箱**生命周期 TTL**
-     （`OpenSandboxExecutionService#resolveSandboxTimeoutSeconds` → `Sandbox.Builder.timeout`）；
+     （`SandboxFactory#resolveSandboxTimeoutSeconds` → `Sandbox.Builder.timeout`；`SL-9` 前在实现类）；
    - 单条沙箱命令的等待 ⇒ `resolveTimeoutSeconds`（缺省 30s、**硬钳 300s**），
      技能执行路径实际传 `ConversationSkillRunner.COMMAND_TIMEOUT_SECONDS = 180`；
    - 整次执行的服务端上限 ⇒ `helloai.skill-execution.timeout-seconds`（600s），

@@ -94,7 +94,9 @@ class TaskServiceImplTest {
                 taskIterationMapper, workflowInstanceMapper,
                 reviewPort, timelineMapper, attachmentMapper, attachmentObjectPurgeSupport,
                 agentInboxService, agentService, subTaskService, teamService,
-                mock(com.helloai.core.task.port.TaskPlanDraftPort.class)));
+                mock(com.helloai.core.task.port.TaskPlanDraftPort.class),
+                // SL-2：任务终态事件发布口（本类不校验发布行为，置 mock 即可）
+                mock(org.springframework.context.ApplicationEventPublisher.class)));
         ReflectionTestUtils.setField(service, "baseMapper", taskMapper);
     }
 

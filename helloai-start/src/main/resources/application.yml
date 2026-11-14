@@ -176,10 +176,29 @@ helloai:
   # （SKX-1：node v20.20.2 / 峰值 103.6MB / 512Mi 余量 4.7 倍，见 LOG-20261026-030）。
   # enabled / url / api-key 仍由各 profile 提供（local.yml / 环境变量），此处只声明规格。
   sandbox:
+    # 空闲回收节奏（毫秒，SL-7）：SandboxIdleReaperTask 按此周期销毁闲置槽。
+    # 槽池是进程内资源，故该任务不加 ShedLock（每实例各自回收自己的池）。
+    reap-interval-ms: 60000
     opensandbox:
+      # 沙箱复用作用域（SL-1）：task = 任务级共享；subtask = 旧版子任务级，供回滚 / 排障。
+      scope: task
       # 技能执行使用哪个规格（SKX-8，2026-10-26）：指向 spec-presets 的键名。
       # 技能执行的镜像由「技能需要什么运行时」决定（archify 要 node），与验算命令用的镜像无关。
       skill-spec-preset: node
+      # 容器寿命两段口径（SL-7，2026-11-13）：renew 是「绝对过期时刻」，不是增量。
+      # keep-alive-seconds = renew 的目标寿命（8h）；idle-ttl-seconds = 判定废弃的空闲上限
+      # （900s，仅用于 scope:{id} 槽与回收器判活；任务级槽按 keep-alive 判活，任务终态才释放）。
+      idle-ttl-seconds: 900
+      keep-alive-seconds: 28800
+      # /workspace 卷化（SL-10，2026-11-13）：默认关闭（回落容器可写层，零变化）。
+      # 开启后把 /workspace 从容器可写层移到共享卷：executor 挂 rw、reviewer 挂 ro（EROFS），
+      # 达成「审核隔离」——reviewer touch /workspace/x 被容器层拒，/tmp 仍可写。
+      # 本地形态用 host-path 指向宿主机目录（所有该任务实例共享）；服务器换 pvc / ossfs。
+      # 留空 host-path 且无 pvc/ossfs 时视同未启用卷。
+      volume-enabled: ${SANDBOX_VOLUME_ENABLED:false}
+      volume:
+        host-path: ${SANDBOX_VOLUME_HOST_PATH:}
+        mount-path: /workspace
       spec-presets:
         node:
           image: node:20-bookworm-slim

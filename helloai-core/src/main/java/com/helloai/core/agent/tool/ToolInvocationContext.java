@@ -46,6 +46,16 @@ public final class ToolInvocationContext {
 
     /** 平台注入字段名——须与 {@code InternalLlmExecutorTools} 的 {@code @ToolParam} 同名。 */
     private static final String PARAM_AGENT_ID = "agentId";
+
+    /**
+     * 平台注入字段名（{@code taskId}）——**预留通路，当前零消费方**（2026-11-14 审计确认）。
+     *
+     * <p>全仓无任何内部工具声明 {@code @ToolParam(…) Long taskId}，故正常路径下
+     * {@link #inject} 的 schema 门控恒为 false、本常量不被写入。保留理由与移除代价见
+     * {@link #inject} 方法体内的同点注释。</p>
+     */
+    private static final String PARAM_TASK_ID = "taskId";
+
     private static final String PARAM_SUB_TASK_ID = "subTaskId";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -66,17 +76,69 @@ public final class ToolInvocationContext {
     private ToolInvocationContext() {
     }
 
-    /** 本轮工具调用的执行者标识对；任一项可为 null（该字段则不注入）。 */
-    public record Ids(Long agentId, Long subTaskId) {
+    /**
+     * 本轮工具调用的执行者标识四元组 + 执行轮次；任一项可为 null（该字段则不注入）。
+     *
+     * <p>{@code taskId} 由 `SL-8` 透传（2026-11-13）：沙箱槽键是任务级的，执行链本来就知道
+     * 子任务属于哪个任务；把它一并绑定后，工具层构造任务级工作区句柄不再需要二次查库。</p>
+     *
+     * <p>{@code reviewer} 由 `SL-10` 注入（2026-11-13）：reviewer 走业务面
+     * （{@code subtask_review}/{@code task_final_report_review} 场景），其沙箱命令应选
+     * {@code SandboxCallOrigin.REVIEWER} 且工作区句柄只读挂载——只有 {@code bind} 时
+     * 按场景显式声明，不从 agent 角色反推（对齐 `SL-4` origin 显式声明纪律）。</p>
+     */
+    public record Ids(Long agentId, Long taskId, Long subTaskId, int round, boolean reviewer) {
     }
 
     /**
      * 绑定本轮执行链的真实标识（由 {@code RuntimeTurnExecutor} 在 {@code agentLoop.run()} 前调用）。
      * 与 {@link #unbind()} 严格成对，二次绑定覆盖旧值。
+     *
+     * @param taskId 子任务所属任务 ID（`SL-8`：任务级工作区句柄用；可为 null）
+     * @param round  执行轮次（`SL-4`：沙箱台账来源/轮次用；缺省 0）
+     * @param reviewer 是否审核角色（`SL-10`；reviewer 走只读挂载 + REVIEWER origin）
      */
-    public static void bind(Long agentId, Long subTaskId) {
-        CURRENT.set(new Ids(agentId, subTaskId));
+    public static void bind(Long agentId, Long taskId, Long subTaskId, int round, boolean reviewer) {
+        CURRENT.set(new Ids(agentId, taskId, subTaskId, Math.max(round, 0), reviewer));
         CALLED.remove();   // 二次绑定 = 新执行链，调用记录清零
+    }
+
+    /** 绑定标识（默认非 reviewer；任务子任务执行链使用，`SL-10`）。 */
+    public static void bind(Long agentId, Long taskId, Long subTaskId, int round) {
+        bind(agentId, taskId, subTaskId, round, false);
+    }
+
+    /** 绑定标识（不绑定 taskId；轮次显式；默认非 reviewer）。 */
+    public static void bind(Long agentId, Long subTaskId, int round) {
+        bind(agentId, null, subTaskId, round, false);
+    }
+
+    /** 绑定标识（轮次 0；业务面 / 无轮次语义的调用方使用；默认非 reviewer）。 */
+    public static void bind(Long agentId, Long subTaskId) {
+        bind(agentId, null, subTaskId, 0, false);
+    }
+
+    /** 当前执行轮次（未绑定返回 0）。 */
+    public static int currentRound() {
+        Ids ids = CURRENT.get();
+        return ids == null ? 0 : ids.round();
+    }
+
+    /** 当前绑定的任务 ID（未绑定 / 未透传返回 {@code null}；`SL-8`）。 */
+    public static Long currentTaskId() {
+        Ids ids = CURRENT.get();
+        return ids == null ? null : ids.taskId();
+    }
+
+    /**
+     * 当前是否审核角色（`SL-10`）；未绑定返回 {@code false}。
+     *
+     * <p>供 {@code SandboxRuntimeAdapter.toRef} / {@code InternalLlmExecutorTools} 决策
+     * 「只读挂载 + REVIEWER origin」。</p>
+     */
+    public static boolean currentReviewer() {
+        Ids ids = CURRENT.get();
+        return ids != null && ids.reviewer();
     }
 
     /** 解绑（{@code agentLoop.run()} 返回后必须调用，防线程复用串味）。 */
@@ -193,6 +255,11 @@ public final class ToolInvocationContext {
     /**
      * 把平台标识注入内部工具的调用参数（两道门控见类 javadoc）。
      *
+     * <p><b>三支的消费现状（2026-11-14 审计）</b>：{@code agentId} / {@code subTaskId} 各有多个
+     * 内部工具以 {@code @ToolParam} 声明，属<b>在用</b>；{@code taskId}<b>零消费方</b>，属<b>预留</b>
+     * ——它的实际去向是 {@link #currentTaskId()} 的 ThreadLocal 直读（任务级工作区句柄）。
+     * 保留该支的理由（而非删除）见方法体内同点注释，核心是「不为『ID 只能带外注入』开例外」。</p>
+     *
      * @param toolName      工具名（非 {@link #INTERNAL_TOOL_PREFIX} 前缀则<b>原样返回</b>）
      * @param inputSchema   工具自身的输入 schema（JSON 字符串，取自
      *                      {@code ToolCallback.getToolDefinition().inputSchema()}）；
@@ -209,6 +276,31 @@ public final class ToolInvocationContext {
         ObjectNode node = parseObject(argumentsJson);
         if (ids.agentId() != null && declares(inputSchema, PARAM_AGENT_ID)) {
             node.put(PARAM_AGENT_ID, ids.agentId());
+        }
+        // taskId：预留通路，当前零消费方（2026-11-14 审计确认）。
+        // 现状：没有任何内部工具声明 `@ToolParam(…) Long taskId`，且内部工具的 inputSchema
+        // 正常可达（取自 ToolCallback.getToolDefinition()），故 declares() 恒为 false，本分支
+        // 在正常路径上不生效（唯一的例外是 schema 取不到时的 fail-open 放行，此时多写的键
+        // 会被 spring-ai 按参数名取参忽略）。单测 ToolInvocationContextTest#taskIdShouldFollowSchemaGating
+        // 用**合成 schema** 覆盖本分支，不代表存在真实消费方。
+        //
+        // 为什么不删——taskId 的真实用途本就「不经参数」：
+        //   1) 绑定与读取自成一条通路：RuntimeTurnExecutor.bind(…, taskId, …) →
+        //      currentTaskId() → SandboxRuntimeAdapter#toRef 构造任务级工作区句柄
+        //      （`SL-8`：执行链已知道 taskId，就省掉热路径上每轮一次 SubTaskQueries 查库）。
+        //      本分支只是同一条契约在「工具参数面」上的出口，不是 taskId 的唯一去向。
+        //   2) 三支与 Ids 的三字段、bind(...) 的三个重载一一对应；只删一支，等于在
+        //      「ID 只能带外注入、不能由模型自报」上开一个例外，读者会据此认定「taskId 永不
+        //      作为工具参数」。将来新增任务级内部工具（如任务级产物清单 / 任务级台账汇总）
+        //      按既有惯例声明 `@ToolParam(required = false) Long taskId`（描述「平台自动注入，
+        //      无需填写」）时，模型只会传 null 或幻觉值，且是**静默失败**——正是本类要消除的
+        //      缺陷类型。而 fails-loud 在这里不成立：该惯例下参数本身就允许缺省。
+        //   3) 留存成本仅 3 行 + 1 常量，且 schema 门控保证「无声明即不写」，不会误伤任何工具。
+        //
+        // 反过来说，若将来确定 taskId 永不进入参数面，应连同 Ids#taskId() 与 currentTaskId()
+        // 一起收口，而不是只删这一段——只删注入会让「已绑定但不注入」变成无声的半套语义。
+        if (ids.taskId() != null && declares(inputSchema, PARAM_TASK_ID)) {
+            node.put(PARAM_TASK_ID, ids.taskId());
         }
         if (ids.subTaskId() != null && declares(inputSchema, PARAM_SUB_TASK_ID)) {
             node.put(PARAM_SUB_TASK_ID, ids.subTaskId());

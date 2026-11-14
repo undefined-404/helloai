@@ -93,6 +93,7 @@ CNT_G2B=${#NON_CORE_MODULES[@]}
 CNT_G3A=${#FORWARD_PKG_PAIRS[@]}
 CNT_G3B=$CNT_G1                                 # 顺序对
 CNT_G3C=${#NON_CORE_MODULES[@]}
+CNT_G4=2                                        # SL-8：impl 不得引用查库 / 作用域解析
 
 G1="组 1：§6 反向依赖（严格拦截；目标恒为 0）"
 G2A="组 2a：core 跨域直捅 Mapper，${CNT_G2A} 个有序域对全量（严格拦截；目标恒为 0）"
@@ -163,6 +164,22 @@ done
 for m in "${NON_CORE_MODULES[@]}"; do
   RULES+=("${m}->core.entity|helloai-${m}/src/main/java|re:^[[:space:]]*import[[:space:]]+(static[[:space:]]+)?com\\.helloai\\.core\\.[a-z]+\\.entity\\.|warn|${G3C}")
 done
+
+# ============================================================================
+# 组 4：沙箱运行时实现不得回退「查库 / 作用域猜测」（`SL-8`，2026-11-13）
+# ----------------------------------------------------------------------------
+# `SL-8` 把「ID → 作用域」的解析从运行时（`runtime/sandbox/impl`）整体上移到
+# `SandboxRuntimeAdapter`：运行时只认 `WorkspaceRef`，因此**不该**再出现
+#   ① `SubTaskQueryPort`（运行时要查库才知道 ID 是谁 ⇒ 句柄化没做到）；
+#   ② `SandboxScopes`（作用域解析器属适配层，运行时引用即回退到旧猜测模型）。
+# 这两条是「句柄化」的可执行判据：不拦的话，后续改动很容易顺手把查库塞回执行路径，
+# 而症状（每条命令多一次查询 / 作用域语义漂移）既不报错也很难在真机上察觉。
+# 严格拦截、目标恒为 0。
+# ============================================================================
+G4="组 4：沙箱运行时实现不得引用查库 / 作用域解析（SL-8；严格拦截；目标恒为 0）"
+SANDBOX_IMPL_DIR="${CORE_ROOT}/agent/runtime/sandbox/impl"
+RULES+=("sandbox.impl->SubTaskQueryPort|${SANDBOX_IMPL_DIR}|pkg:com.helloai.core.agent.port.SubTaskQueryPort|block|${G4}")
+RULES+=("sandbox.impl->SandboxScopes|${SANDBOX_IMPL_DIR}|pkg:com.helloai.core.agent.runtime.sandbox.SandboxScopes|block|${G4}")
 
 # 匹配式 -> ERE。结果写入全局 RP（**不起子进程**：每条规则各 fork 一次，
 # 在本机的进程创建开销下就足以让守卫慢到不可用）
@@ -359,6 +376,7 @@ if [ "$UPDATE" = "1" ]; then
     printf '#   组 3a 域级前向依赖         %3s 条（%s）\n' "$CNT_G3A" "${FORWARD_PKG_PAIRS[*]}"
     printf '#   组 3b 前向实体泄漏         %3s 条（%s 域全部顺序对）\n' "$CNT_G3B" "$N_DOMAINS"
     printf '#   组 3c 非 core ->core.entity %3s 条\n' "$CNT_G3C"
+    printf '#   组 4  沙箱运行时回退查库/解析 %3s 条（SL-8）\n' "$CNT_G4"
     printf '#   合计 %s 条。\n' "${#RULES[@]}"
     printf '#\n'
     printf '# 域链（CODE_STYLE §6）：%s\n' "${DOMAINS[*]}"

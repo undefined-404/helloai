@@ -1,5 +1,6 @@
 package com.helloai.core.agent.mqconsumer;
 
+import com.helloai.common.config.OpenSandboxProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.TimelineEventCode;
@@ -87,13 +88,21 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
     private final List<AgentRuntime> agentRuntimes;
 
     /**
-     * 沙箱执行通道（`ADR-005`，2026-10-25）：仅用于 turn 结束时释放复用工作沙箱。
+     * 沙箱执行通道（`ADR-005`，2026-10-25）。
      *
-     * <p>放在命令消费边界而非 Runtime 内部，是因为「一次消费 = 一次执行尝试」正是
-     * 「工作区该不该保留」的天然分界：同一次尝试内的多轮工具调用共享沙箱（文件跨调用保留），
-     * 尝试结束即释放（防上一次尝试的残留文件影响下一次尝试）。</p>
+     * <p>`SL-2`（2026-11-12）后<b>默认不再在 turn 末释放</b>：任务级作用域下工作区须跨
+     * turn / 跨子任务保留，统一由任务终态事件回收（`SandboxTaskTerminalListener`）。
+     * 仅当 {@code helloai.sandbox.opensandbox.scope=subtask}（灰度回滚）时，本类才恢复
+     * 「一次执行尝试结束即释放」的旧语义——回滚若只剩键粒度而无释放点，行为会退化成
+     * 「一直留到空闲 TTL」，与改造前不一致。</p>
      */
     private final SandboxExecutionService sandboxExecutionService;
+
+    /** 工作区交付物回读（`SL-9` 起「挑哪一份文件」的策略归它；本类只决定「要不要换正文」）。 */
+    private final DeliverableReader deliverableReader;
+
+    /** 沙箱作用域开关（`SL-1`）：{@code subtask} = 回滚模式，turn 末释放复用沙箱。 */
+    private final OpenSandboxProperties openSandboxProperties;
 
     @Async("executionCommandExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -138,27 +147,19 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
         }
 
         // G-002 单轨：消费统一经 Runtime 真身（唯一 AgentRuntime 实现 RuntimeTurnExecutor）。
-        // 一致性校验已通过；状态推进 / 装配 / 执行 / 回写在本层分层编排（见 runViaRuntime）。
+        // 一致性校验已通过；状态推进 / 装配 / 执行 / 回写在本层分层编排（见 runViaRuntimeInner）。
         if (agentRuntimes == null || agentRuntimes.isEmpty()) {
             log.error("无 AgentRuntime 实现，执行被跳过（单轨下理论不可达）: subTaskId={}",
                     command.getSubTaskId());
             return;
         }
-        runViaRuntime(command, subTask, agent);
-    }
-
-    /**
-     * Runtime 真身路径执行（G-002 单轨后唯一执行入口，分层编排）：
-     * record CAS（先占执行记录）→ startIfNeeded 状态推进 → 消费 timeline → 上下文装配 →
-     * 真身 execute + afterTurn 会话推进 → record CAS 终态 → ExecutionResultHandler 回写。
-     */
-    /**
-     * Turn 边界包装：执行完成后<b>释放该子任务的复用工作沙箱</b>（`ADR-005`）。
-     *
-     * <p>无论成功 / 失败 / 异常 / 取消都释放（{@code finally}）——保证「一次执行尝试的
-     * 工作区不跨尝试残留」，也保证不跨子任务共享。释放失败不影响执行结果（实现内部幂等且吞异常）。</p>
-     */
-    private void runViaRuntime(ExecutionCommand command, SubTaskSnapshot subTask, Agent agent) {
+        // `SL-2`（2026-11-12）：默认（scope=task）任务级共享——turn 末不释放，工作区跨 turn /
+        // 跨子任务保留，统一由任务终态事件回收（`SandboxTaskTerminalListener` → `releaseByTask`）。
+        if (!isSubtaskScope()) {
+            runViaRuntimeInner(command, subTask, agent);
+            return;
+        }
+        // 回滚模式（scope=subtask）：恢复「一次执行尝试结束即释放」的旧语义
         try {
             runViaRuntimeInner(command, subTask, agent);
         } finally {
@@ -171,6 +172,22 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
         }
     }
 
+    /**
+     * 是否处于 {@code scope=subtask} 回滚模式（`SL-1` 开关）。
+     *
+     * <p>该模式下复用槽键回到子任务粒度，并恢复「turn 末释放」的旧语义；默认 {@code task}
+     * 模式下工作区由任务终态统一回收（`ADR-005` §6）。</p>
+     */
+    private boolean isSubtaskScope() {
+        return openSandboxProperties != null
+                && "subtask".equalsIgnoreCase(openSandboxProperties.getScope());
+    }
+
+    /**
+     * Runtime 真身路径执行（G-002 单轨后唯一执行入口，分层编排）：
+     * record CAS（先占执行记录）→ startIfNeeded 状态推进 → 消费 timeline → 上下文装配 →
+     * 真身 execute + afterTurn 会话推进 → record CAS 终态 → ExecutionResultHandler 回写。
+     */
     private void runViaRuntimeInner(ExecutionCommand command, SubTaskSnapshot subTask, Agent agent) {
         // 1. 执行记录 CAS：PENDING → RUNNING（**先占执行记录，再推进子任务状态**）。
         //    ⚠ 顺序契约（2026-10-05 修 804 双消费假阻塞）：MQ 主路径与 DB Poller 兜底路径
@@ -247,8 +264,9 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             ExecutionEnvironment environment = executionEnvironmentProvider.resolve(command.getAccessType());
             AgentContext ctx = contextAssembler.assemble(command, subTask, agent, tools, environment);
             result = agentRuntimes.get(0).execute(ctx);
-            // ★①沙箱正文回传（2026-10-25，`LOG-20261025-010`）：必须在 release 之前、在
-            //   结果落地之前——前者决定工作区还在不在，后者决定交出去的是哪份正文。
+            // ★①沙箱正文回传（2026-10-25，`LOG-20261025-010`）：必须在结果落地之前——
+            //   决定交出去的是哪份正文。（`SL-2` 后 turn 末不再释放工作区，原「先于 release」
+            //   的时序约束消失；工作区由任务终态统一回收。）
             result = recoverDraftFromWorkspace(command.getSubTaskId(), result);
             contextAssembler.afterTurn(subTask, agent, ctx.getTurn(), result);
         } catch (Exception e) {
@@ -319,7 +337,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
         }
         String fromWorkspace;
         try {
-            fromWorkspace = sandboxExecutionService.readWorkspaceFile(subTaskId);
+            fromWorkspace = deliverableReader.readLatestMarkdown(subTaskId);
         } catch (Exception e) {
             // 回读是锦上添花：它失败绝不能影响执行结果
             log.warn("沙箱正文回传异常（忽略，按原对话正文提交）: subTaskId={}, cause={}",

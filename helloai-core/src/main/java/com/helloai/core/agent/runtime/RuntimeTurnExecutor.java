@@ -156,7 +156,9 @@ public class RuntimeTurnExecutor implements AgentRuntime {
         // REF-8.1 A1：绑定本轮执行链真实标识——内部 LLM 无从自报 agentId / subTaskId，改由
         // ToolCallbackToolExecutor 经 ToolInvocationContext 在调用 internal_* 工具前带外注入。
         // 严格 try/finally 成对解绑（防线程复用串味）；不触碰 ChatModelToolLoop 本体（§10.5 红线）。
-        ToolInvocationContext.bind(ctx.getAgentId(), ctx.getSubTaskId());
+        // `SL-4`：同时绑定执行轮次——沙箱台账条目要能回答「这是第几轮跑的」（证据轮次优先）。
+        // `SL-8`：一并绑定 taskId——任务级工作区句柄不再需要为每条命令二次查库。
+        ToolInvocationContext.bind(ctx.getAgentId(), ctx.getTaskId(), ctx.getSubTaskId(), ctx.getTurn());
         AgentLoopResult loopResult;
         try {
             loopResult = agentLoop.run(new AgentLoopInput(

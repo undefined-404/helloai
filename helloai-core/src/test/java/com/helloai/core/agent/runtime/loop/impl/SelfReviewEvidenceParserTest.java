@@ -68,6 +68,41 @@ class SelfReviewEvidenceParserTest {
     }
 
     @Test
+    @DisplayName("SL-5 引用式：只给 callId ⇒ PARSED，旧字段为空")
+    void parsesReferenceByCallId() {
+        SelfReviewEvidenceParser.Parsed parsed = SelfReviewEvidenceParser.parse(
+                "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"callId\":\"c17\"}]");
+
+        assertThat(parsed.status()).isEqualTo(SelfReviewEvidenceParser.Status.PARSED);
+        SelfReviewEvidenceParser.Evidence evidence = parsed.entries().get(0);
+        assertThat(evidence.hasCallId()).isTrue();
+        assertThat(evidence.callId()).isEqualTo("c17");
+        assertThat(evidence.command()).isNull();
+        assertThat(evidence.exitCode()).isNull();
+        assertThat(evidence.truncated()).isNull();
+        assertThat(evidence.digest()).isNull();
+    }
+
+    @Test
+    @DisplayName("SL-5 引用式：旧字段可选，但出现即须类型合法（写坏 ⇒ MALFORMED）")
+    void referenceOptionalFieldsMustBeTyped() {
+        assertThat(SelfReviewEvidenceParser.parse(
+                "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"callId\":\"c17\","
+                        + "\"command\":\"pwd\",\"exitCode\":0,\"truncated\":false}]").status())
+                .isEqualTo(SelfReviewEvidenceParser.Status.PARSED);
+        assertThat(SelfReviewEvidenceParser.parse(
+                "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"callId\":\"c17\",\"exitCode\":\"0\"}]").status())
+                .isEqualTo(SelfReviewEvidenceParser.Status.MALFORMED);
+        assertThat(SelfReviewEvidenceParser.parse(
+                "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"callId\":\"c17\",\"truncated\":\"no\"}]").status())
+                .isEqualTo(SelfReviewEvidenceParser.Status.MALFORMED);
+        // 空白 callId 视同未给 ⇒ 回落旧格式，而旧格式缺 command ⇒ MALFORMED
+        assertThat(SelfReviewEvidenceParser.parse(
+                "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"callId\":\"  \"}]").status())
+                .isEqualTo(SelfReviewEvidenceParser.Status.MALFORMED);
+    }
+
+    @Test
     @DisplayName("空数组 ⇒ PARSED 但不可用（未执行验证的合法声明）")
     void emptyArrayIsParsedButNotUsable() {
         SelfReviewEvidenceParser.Parsed parsed = SelfReviewEvidenceParser.parse("EVIDENCE: []");

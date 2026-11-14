@@ -2,6 +2,7 @@ package com.helloai.core.agent.runtime.sandbox.impl;
 
 import com.helloai.common.config.OpenSandboxProperties;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
+import com.helloai.core.agent.runtime.sandbox.SandboxCallOrigin;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.agent.runtime.sandbox.SandboxSpec;
 import com.helloai.core.agent.runtime.sandbox.SkillInstallResult;
@@ -122,9 +123,20 @@ public class SkillExecutionSupport {
      * @param timeoutSeconds 超时秒数（null/&lt;=0 ⇒ 默认 30，上限 300）
      */
     public ExecuteResponse run(Long subTaskId, SkillTarget target, String command, Integer timeoutSeconds) {
+        return run(subTaskId, target, command, timeoutSeconds, 0);
+    }
+
+    /**
+     * 在技能根目录执行命令（带轮次，`SL-4`）。
+     *
+     * @param round 执行轮次（落台账；无轮次语义的调用方传 0）
+     */
+    public ExecuteResponse run(Long subTaskId, SkillTarget target, String command,
+                               Integer timeoutSeconds, int round) {
         String wrapped = "mkdir -p /workspace/tmp >/dev/null 2>&1; export TMPDIR=/workspace/tmp; cd "
                 + target.rootDir() + " && " + command;
-        return sandboxExecutionService.execute(subTaskId, target.spec(), wrapped, timeoutSeconds);
+        return sandboxExecutionService.execute(subTaskId, target.spec(), wrapped, timeoutSeconds,
+                SandboxCallOrigin.EXECUTOR, round);
     }
 
     /**

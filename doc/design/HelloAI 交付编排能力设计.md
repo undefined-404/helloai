@@ -66,7 +66,7 @@
 | 缺口 | 实测 |
 |---|---|
 | **无计划实体** | planner 域 entity 只有 `ChatAttachment / ChatSkillRun / RequirementConversation / RequirementMessage`——任务之上没有「计划」这层 |
-| **平台进程碰不到宿主仓库** | 全仓唯一 `ProcessBuilder` 是 `PgDumpRunner.java:300`（备份专用）；沙箱 `network-policy.default-action: deny`（`application.yml` `spec-presets.node`）、镜像 `node:20-bookworm-slim`、`/workspace` 默认不存在（`OpenSandboxExecutionService.java:586-591`）、「沙箱文件从不自动上传」（`SandboxExecutionService.java:75`） |
+| **平台进程碰不到宿主仓库** | 全仓唯一 `ProcessBuilder` 是 `PgDumpRunner.java:300`（备份专用）；沙箱 `network-policy.default-action: deny`（`application.yml` `spec-presets.node`）、镜像 `node:20-bookworm-slim`、`/workspace` 由平台预建且与宿主仓库无关（`SandboxWorkspaceRegistry`）、「沙箱文件从不自动上传」（`SandboxExecutionService.java:75`） |
 | **代码类验收无可执行判据** | review 判定 = LLM 输出 `pass/score`；`RV-x` 正在补静态校验与覆盖批评，但「在干净环境跑编译 / 测试」的验收机不存在 |
 
 ## 2.3 并发现状

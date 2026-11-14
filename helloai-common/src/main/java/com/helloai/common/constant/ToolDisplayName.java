@@ -29,6 +29,7 @@ public enum ToolDisplayName {
     INTERNAL_LOAD_SKILL("internal_load_skill", "加载技能", "按名称读取某技能的完整规范正文"),
     INTERNAL_REPORT_BLOCKED("internal_report_blocked", "上报阻塞", "确认无能力完成时上报阻塞，转人工介入"),
     INTERNAL_RUN_IN_SANDBOX("internal_run_in_sandbox", "沙箱执行", "在隔离沙箱容器内执行命令/脚本以验证产出"),
+    INTERNAL_LIST_SANDBOX_CALLS("internal_list_sandbox_calls", "查沙箱台账", "列出本子任务最近的沙箱调用（callId/退出码/来源）"),
 
     // ── 对外 MCP 工具（执行 Agent 与外部系统共用） ──
     WEB_SEARCH("web_search", "联网搜索", "检索外部实时资料（行业、竞品、技术方案、新闻）"),

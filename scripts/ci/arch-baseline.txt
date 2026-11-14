@@ -19,7 +19,8 @@
 #   组 3a 域级前向依赖           2 条（planner:agent task:agent）
 #   组 3b 前向实体泄漏          36 条（9 域全部顺序对）
 #   组 3c 非 core ->core.entity   4 条
-#   合计 154 条。
+#   组 4  沙箱运行时回退查库/解析   2 条（SL-8）
+#   合计 156 条。
 #
 # 域链（CODE_STYLE §6）：planner review task knowledge agent system event dlx shared
 #
@@ -31,7 +32,7 @@
 # 背景：见 doc/review/HelloAI 代码规范与架构偏离专项审计报告（2026-09-30）.md §7
 #       与 doc/review/HelloAI 架构V2进度与质量审计报告（2026-10-02）.md §6.3。
 #
-# 最后更新：2026-10-23
+# 最后更新：2026-11-13
 # ============================================================================
 # ---- 组 1：§6 反向依赖（严格拦截；目标恒为 0） ----
 review->planner=0
@@ -152,19 +153,19 @@ mq->core.mapper=0
 start->core.mapper=0
 
 # ---- 组 3a：域级前向依赖（§6 合法；仅提示） ----
-planner->agent=43
-task->agent=63
+planner->agent=69
+task->agent=64
 
 # ---- 组 3b：前向跨域实体泄漏（A3；仅提示，用于暴露清偿目标） ----
 planner->review.entity=0
-planner->task.entity=0
+planner->task.entity=4
 planner->knowledge.entity=0
 planner->agent.entity=0
 planner->system.entity=0
 planner->event.entity=0
 planner->dlx.entity=0
 planner->shared.entity=0
-review->task.entity=0
+review->task.entity=2
 review->knowledge.entity=0
 review->agent.entity=0
 review->system.entity=0
@@ -194,7 +195,11 @@ event->shared.entity=0
 dlx->shared.entity=0
 
 # ---- 组 3c：非 core 模块的 core 实体泄漏（A3；仅提示） ----
-api->core.entity=56
+api->core.entity=59
 job->core.entity=15
 mq->core.entity=0
 start->core.entity=0
+
+# ---- 组 4：沙箱运行时实现不得引用查库 / 作用域解析（SL-8；严格拦截；目标恒为 0） ----
+sandbox.impl->SubTaskQueryPort=0
+sandbox.impl->SandboxScopes=0

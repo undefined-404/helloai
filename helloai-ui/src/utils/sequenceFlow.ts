@@ -166,6 +166,49 @@ function toolLabelOf(toolName: string): string {
   return store.labelOf(toolName, toolName)
 }
 
+// ── mermaid 文本净化（唯一出口，见 buildMermaidSequence）──
+
+/** Note 文本保留上限（字符）。超长会把泳道撑爆，且模型自由文本本身也没有更长价值。 */
+const NOTE_MAX_CHARS = 80
+
+/** 消息标签保留上限（字符）。 */
+const LABEL_MAX_CHARS = 60
+
+/**
+ * 把业务文本压成 mermaid `sequenceDiagram` 能安全承载的一行（2026-11-14）。
+ *
+ * <p><b>为什么必须做</b>：本文件的文本大量来自<b>模型自由文本</b>——失败原因、人工介入说明、
+ * 命令片段、脚本输出。而 mermaid 里半角 `;` 是<b>语句分隔符</b>：一条
+ * `Note over OPS: …仅 echo probe; pwd; ls /workspace…` 会让整张图解析失败，页面退化成
+ * mermaid 自带的「Syntax error in text / mermaid version 11.16.0」错误图（按钮级不可读）。
+ * 实测（mermaid 11.16.0 `parse()`）：消息体含 `;`、Note 含 `;` 均 `Parse error`；
+ * `（`、`：`、`` ` ``、`#3`、`<br/>` 均合法。</p>
+ *
+ * <p><b>为什么在出口统一做、而不是逐个分支改</b>：note 有 10+ 个来源分支（失败 / 熔断 /
+ * 改派 / 人工 / 耗时…），逐分支转义必然漏；`buildMermaidSequence` 是唯一的语法拼装点，
+ * 在这里收敛才不会随新分支回归。</p>
+ *
+ * <p><b>为什么把 `;` 换成全角 `；`而不是删掉</b>：读者看到的是「命令片段 / 原因」，
+ * 全角分号语义不变、可读性不减，删除会让 `echo probe pwd ls` 变成误导性内容。</p>
+ *
+ * @param text   原始文本（null/undefined 视作空串）
+ * @param maxLen 保留上限（超出以 `…` 收尾）
+ * @returns 单行、无半角分号、无控制字符的文本
+ */
+export function sanitizeMermaidText(text: unknown, maxLen = LABEL_MAX_CHARS): string {
+  const flat = String(text ?? '')
+    // 换行 → 空格：Note 里的真实换行不是合法语法，<br/> 虽合法但会把块撑很高
+    .replace(/[\r\n]+/g, ' ')
+    // 半角分号 → 全角：mermaid 语句分隔符，出现在任何文本位置都是致命的
+    .replace(/;/g, '；')
+    // 控制字符 / 格式字符（零宽、方向标记、BOM）/ 行分隔符：不可见但会让解析器在意外位置断句
+    // 用 Unicode 类别而不是 \u0000-\u001f 区间：后者会触发 no-control-regex
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+  return flat.length > maxLen ? flat.slice(0, maxLen) + '…' : flat
+}
+
 // ── Note 推导：失败 / 重试 / 熔断 / 人工 / 恢复 → 加 note ──
 function inferNote(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, attempt: number): string | undefined {
   const t = cur.eventType
@@ -363,19 +406,21 @@ export function buildMermaidSequence(
   for (const blk of blocks) {
     if (blk.kind === 'message' && blk.msg) {
       const m = blk.msg
-      const safeLabel = m.label.replace(/"/g, '\\"')
+      // 必须过 sanitizeMermaidText：label 含半角分号 / 换行会让整图 Parse error（见该函数注释）
+      const safeLabel = sanitizeMermaidText(m.label, LABEL_MAX_CHARS)
       const prefix = m.from === m.to ? `${m.from}` : m.from
       const arrow = m.kind === 'response' ? '-->>' : '->>'
       lines.push(`    ${prefix}${arrow}${m.to}: ${safeLabel}`)
     } else if (blk.kind === 'note' && blk.noteText) {
       // 默认 note 落在 调度引擎 / 执行 Agent 之间（最常见故障回溯场景）
       const over = blk.notePos ? blk.notePos : 'SCH'
-      const safe = blk.noteText.replace(/"/g, '\\"').replace(/\n/g, '<br/>')
+      // note 是「模型自由文本」密度最高的地方（reason / error / issue 原文），必须净化
+      const safe = sanitizeMermaidText(blk.noteText, NOTE_MAX_CHARS)
       lines.push(`    Note over ${over}: ${safe}`)
     } else if (blk.kind === 'loop' && blk.loopMessages) {
       lines.push(`    loop 自动重试`)
       for (const m of blk.loopMessages) {
-        const safeLabel = m.label.replace(/"/g, '\\"')
+        const safeLabel = sanitizeMermaidText(m.label, LABEL_MAX_CHARS)
         const prefix = m.from === m.to ? m.from : m.from
         const arrow = m.kind === 'response' ? '-->>' : '->>'
         lines.push(`        ${prefix}${arrow}${m.to}: ${safeLabel}`)

@@ -8,6 +8,8 @@ import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
 import com.helloai.core.agent.runtime.sandbox.SandboxArtifact;
+import com.helloai.core.agent.runtime.sandbox.SandboxCallLedger;
+import com.helloai.core.agent.runtime.sandbox.SandboxCallOrigin;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.agent.runtime.sandbox.SkillInstallResult;
 import com.helloai.core.agent.runtime.sandbox.impl.SkillExecutionSupport;
@@ -22,6 +24,7 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -91,17 +94,28 @@ public class InternalLlmExecutorTools {
     private final SkillArtifactExportService skillArtifactExportService;
     /** 对话流写入（LOG-20261112）：自报阻塞后在执行对话流补一条结论，避免执行轮只挂请求、无结论。 */
     private final ConversationService conversationService;
+    /** 沙箱调用台账（`SL-5`）：{@code internal_list_sandbox_calls} 的只读事实源。 */
+    private final SandboxCallLedger sandboxCallLedger;
 
     /** 自报阻塞前置：必须先读过子任务详情（知情拒绝闸门，见 {@code internal_report_blocked}）。 */
     private static final String TOOL_GET_SUB_TASK_DETAIL = "internal_get_sub_task_detail";
     /** 阻塞原因最短长度（防敷衍式「做不到」）。 */
     private static final int MIN_BLOCKED_REASON_CHARS = 10;
 
+    /** 台账查询默认条数（`SL-5`）：覆盖一个子任务的常规验证次数，又不至于一次拉爆上下文。 */
+    private static final int DEFAULT_SANDBOX_CALL_LIST_LIMIT = 20;
+    /** 台账查询条数上限（`SL-5`）：模型要求更多时钳制到本值。 */
+    private static final int MAX_SANDBOX_CALL_LIST_LIMIT = 50;
+
     /**
-     * 产物正文内联上限（字节）：超过则不内联，只回 size / sha256。
+     * 产物正文内联上限（<b>字符</b>，`SL-3` 起按字符计）：超过则只内联前 N 个字符并标 {@code truncated}。
      *
      * <p>取 8000 的理由：一次工具返回要留在模型上下文里，820KB 的 HTML 内联会直接吃掉预算；
-     * 而 8KB 足够覆盖回执 JSON、短日志、错误栈这些「模型确实需要读」的场景。</p>
+     * 而 8000 字符足够覆盖回执 JSON、短日志、错误栈这些「模型确实需要读」的场景。</p>
+     *
+     * <p><b>为什么必须按字符而不是字节</b>：旧实现拿 {@code artifact.size()}（字节）比这个常量，
+     * 中文按 UTF-8 3 字节/字 ⇒ 2666 字就被判「过大不内联」，而验收场景的正文是 1800~3000 汉字，
+     * 正好卡在误伤区间。</p>
      */
     private static final int MAX_INLINE_ARTIFACT_CHARS = 8_000;
 
@@ -397,18 +411,22 @@ public class InternalLlmExecutorTools {
      * @param agentId        执行者 Agent ID（平台自动注入）
      * @param subTaskId      目标子任务 ID（平台自动注入）
      * @param command        要在沙箱内执行的命令（bash -lc 语义）或脚本正文
-     * @param timeoutSeconds 命令超时秒数（默认 30，上限 300；超出钳制到上限）
+     * @param timeoutSeconds 命令超时秒数（默认 300，上限 300；超出钳制到上限）
      * @return 统一执行结果 {output, exitCode, truncated}；exitCode=124 表示命令超时
      */
     @Tool(name = "internal_run_in_sandbox", description = """
             【何时使用】需要执行一段命令或脚本以验证产出时调用——自检：验证脚本跑通、命令输出与结论一致；
             Reviewer：验证脚本确实能通过目标验收标准。
             【工作区语义（重要）】
-            - 同一子任务内的多次调用**复用同一沙箱**：**上一轮写入的文件这一轮还在**（路径不变即同一文件）
+            - 命令默认在 `/workspace` 下执行：`./x.py` 与 `/workspace/x.py` 是**同一个文件**（cwd 已固定）
+            - **同一任务内复用同一工作区**（不只是本子任务）：**子任务之间文件互相可见**，
+              上游子任务写好的产物你这里直接能读到；同一子任务内的多次调用自然也是**上一轮的文件这一轮还在**
             - 因此改稿请对**已有文件**做**定点修改**（`sed -i` / `python` 改写某一段），
               **不要每轮把整篇内容重新写一遍**——整篇重写既浪费轮次，也会让内容在版本间漂移
             - 需要多步操作（写文件 → 校验）时，**写在同一条命令里**（`cat > f && wc -c f`）最稳
-            - 建议把草稿放在固定路径（如 `/workspace/draft.md`）跨轮沿用；子任务执行结束后沙箱销毁
+            - 建议把草稿放在固定路径（如 `/workspace/draft.md`）跨轮沿用；工作区在**任务终态**
+              （完成 / 取消 / 删除）才销毁，中间等待审核不会丢
+            - 命令**串行执行**；平台进程重启后工作区丢失（届时重新建）
             - **沙箱内文件不是交付物**：平台只采集**对话正文**，沙箱文件不会被采集、不进评审
             【抓取约束（2026-10-25 MiniMax 事故后增补）】
             - **curl 抓取最多 6 轮**：联网检索 / 逐页抓取**最多 6 轮**；第 6 轮后无论数据是否齐，
@@ -420,8 +438,8 @@ public class InternalLlmExecutorTools {
             【Gotchas】
             - 命令在 OpenSandbox 容器内执行：默认禁网（egress 白名单外不可达）、零平台凭据 env、
               文件系统/资源/进程受容器隔离——执行不可信脚本的安全边界
-            - 返回 {output, exitCode, truncated}；exitCode=124 表示命令超时（默认 30s，上限 300s），
-              超时或 SDK 异常后工作区会被重建（上一轮文件不再保留）
+            - 返回 {output, exitCode, truncated}；exitCode=124 表示命令超时（默认 300s，上限 300s），
+              超时（124）与 SDK 异常（-1）都**不销毁容器**：工作区文件保留，可直接继续增量编辑
             - 同一沙箱内的命令**串行执行**，不会并发
             - 不能访问宿主文件系统 / 平台凭据 / 外部网络（白名单外）
             - 不执行技能包正文：只执行本调用传入的命令/脚本正文
@@ -432,9 +450,69 @@ public class InternalLlmExecutorTools {
             @ToolParam(description = "内部执行链鉴定的执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
             @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId,
             @ToolParam(description = "要在沙箱内执行的命令（bash -lc 语义）或脚本正文", required = true) String command,
-            @ToolParam(description = "命令超时秒数（默认 30，上限 300）", required = false) Integer timeoutSeconds) {
+            @ToolParam(description = "命令超时秒数（默认 300，上限 300）", required = false) Integer timeoutSeconds) {
         ToolInvocationContext.Ids ids = requireInternalChain();
-        return sandboxExecutionService.execute(ids.subTaskId(), command, timeoutSeconds);
+        // `SL-4`：来源 = 执行者；轮次由执行链绑定（证据轮次优先 / 台账条目可被引用）。
+        // `SL-10`：审查者身份（核验/终报告审查循环带出）→ REVIEWER 来源，工作区静态检查
+        // 落到只读卷（写 /workspace 在容器层被拒），台账按来源区分 executor/reviewer 证据链。
+        SandboxCallOrigin origin = ToolInvocationContext.currentReviewer()
+                ? SandboxCallOrigin.REVIEWER : SandboxCallOrigin.EXECUTOR;
+        return sandboxExecutionService.execute(ids.subTaskId(), null, command, timeoutSeconds,
+                origin, ids.round());
+    }
+
+    /**
+     * 列出本子任务最近的沙箱调用记录（`SL-5`，只读）。
+     *
+     * <p><b>为什么需要它</b>：`SL-5` 起 {@code EVIDENCE} 引用台账条目 ID（{@code callId}），
+     * 而模型在收尾轮未必记得历史轮返回的 ID。没有查询通道，模型只能凭记忆填或放弃证据——
+     * 前者产生 {@code self_reported_mismatch}，后者让真实执行过的证据被判 MISSING。</p>
+     *
+     * <p><b>只读、零副作用</b>：读内存台账快照，不执行命令、不占沙箱槽、不消耗收尾轮预算。</p>
+     *
+     * @param agentId   执行者 Agent ID（平台自动注入）
+     * @param subTaskId 目标子任务 ID（平台自动注入）
+     * @param limit     返回最近条数（空 ⇒ 默认 20；钳制到 1~50）
+     * @return {count, calls:[{callId, command, exitCode, truncated, origin, round, at}]}（按时间升序）
+     */
+    @Tool(name = "internal_list_sandbox_calls", description = """
+            【何时使用】需要在 EVIDENCE 里引用一手证据，或需要回忆本子任务之前跑过哪些命令时调用。
+            只读内存台账：不执行命令、不占沙箱、不消耗任何预算。
+            【返回】{count, calls:[{callId, command, exitCode, truncated, origin, round, at}]}，按时间升序（最近的在后）。
+            - callId：证据引用坐标——EVIDENCE 只填 {"kind":"sandbox_exec","callId":"c17"} 即可，
+              命令 / 退出码 / 截断标志以平台台账为准，不要自行改写
+            - origin：executor（执行者）/ reviewer（核验者）/ platform（平台内部）——自审证据应引用 executor 条目
+            - round：该条命令所在的执行轮次
+            【Gotchas】
+            - 台账只存命令前缀（最多 200 字符），不存完整输出；要看输出请重跑或读产物
+            - 台账是进程内内存，平台重启即清空；沙箱未启用时本工具不会出现（fail-closed）
+            【相关工具】internal_run_in_sandbox / internal_run_skill
+            """)
+    public Object internalListSandboxCalls(
+            @ToolParam(description = "内部执行链鉴定的执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
+            @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId,
+            @ToolParam(description = "返回最近多少条（默认 20，上限 50）", required = false) Integer limit) {
+        ToolInvocationContext.Ids ids = requireInternalChain();
+        int effectiveLimit = limit == null
+                ? DEFAULT_SANDBOX_CALL_LIST_LIMIT
+                : Math.max(1, Math.min(limit, MAX_SANDBOX_CALL_LIST_LIMIT));
+        List<SandboxCallLedger.Entry> entries = sandboxCallLedger.recent(ids.subTaskId(), effectiveLimit);
+        List<Map<String, Object>> calls = new ArrayList<>(entries.size());
+        for (SandboxCallLedger.Entry entry : entries) {
+            Map<String, Object> call = new LinkedHashMap<>();
+            call.put("callId", entry.callId());
+            call.put("command", entry.command());
+            call.put("exitCode", entry.exitCode());
+            call.put("truncated", entry.truncated());
+            call.put("origin", entry.origin());
+            call.put("round", entry.round());
+            call.put("at", entry.at() == null ? null : entry.at().toString());
+            calls.add(call);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("count", calls.size());
+        result.put("calls", calls);
+        return result;
     }
 
     /**
@@ -454,7 +532,7 @@ public class InternalLlmExecutorTools {
      * @param subTaskId      目标子任务 ID（平台自动注入）
      * @param skillName      技能包名（须为已入库包，见 internal_list_skills / 平台内置名）
      * @param command        在技能根目录下执行的命令（如 {@code node bin/archify.mjs doctor}）
-     * @param timeoutSeconds 超时秒数（默认 30，上限 300）
+     * @param timeoutSeconds 超时秒数（默认 300，上限 300）
      * @return {skill, skillDir, installed{files,bytes,skipped}, output, exitCode, truncated}
      */
     @Tool(name = "internal_run_skill", description = """
@@ -463,7 +541,8 @@ public class InternalLlmExecutorTools {
             【工作区与命令语义】
             - 命令等价于在技能根目录执行：`cd /workspace/skills/<技能名> && <你的命令>`，
               所以技能自带 CLI 按相对路径写即可，如 `node bin/archify.mjs validate sequence in.json --json`
-            - 与 internal_run_in_sandbox **共用同一容器**：同一子任务内的文件跨调用保留，命令串行执行
+            - 与 internal_run_in_sandbox **共用同一容器**：同一任务内（跨子任务）的文件互相可见、
+              跨调用保留，命令串行执行
             - 平台已自动导出 `TMPDIR=/workspace/tmp`（技能工具的临时目录需要）
             - 返回 {skill, skillDir, installed, output, exitCode, truncated}；exitCode=124 表示超时
             【三条硬边界】
@@ -474,7 +553,7 @@ public class InternalLlmExecutorTools {
               视觉复核须由人做；`--no-browser` / 跳过浏览器检查的参数按技能文档使用
             【Gotchas】
             - 命令在 OpenSandbox 容器内执行：默认禁网、零平台凭据、文件系统受隔离
-            - 首次调用会注入技能包（约 2s，含建容器）；同子任务后续调用毫秒级
+            - 首次调用会注入技能包（约 2s，含建容器）；同任务后续调用毫秒级
             - 输出超 100KB 会被截断并标注 truncated
             【相关工具】internal_read_artifact / internal_run_in_sandbox / internal_get_sub_task_detail
             """)
@@ -483,7 +562,7 @@ public class InternalLlmExecutorTools {
             @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId,
             @ToolParam(description = "技能包名（已入库的技能，如 archify）", required = true) String skillName,
             @ToolParam(description = "在技能根目录下执行的命令（bash -lc 语义）", required = true) String command,
-            @ToolParam(description = "命令超时秒数（默认 30，上限 300）", required = false) Integer timeoutSeconds) {
+            @ToolParam(description = "命令超时秒数（默认 300，上限 300）", required = false) Integer timeoutSeconds) {
         ToolInvocationContext.Ids ids = requireInternalChain();
         SkillExecutionSupport.SkillTarget target = skillExecutionSupport.resolve(skillName);
         if (target == null) {
@@ -494,7 +573,8 @@ public class InternalLlmExecutorTools {
         if (!install.success()) {
             throw new BizException("技能包注入失败（" + target.label() + "）: " + install.message());
         }
-        ExecuteResponse response = skillExecutionSupport.run(ids.subTaskId(), target, command, timeoutSeconds);
+        ExecuteResponse response = skillExecutionSupport.run(ids.subTaskId(), target, command,
+                timeoutSeconds, ids.round());
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("skill", target.label());
         result.put("skillDir", install.targetDir());
@@ -505,6 +585,7 @@ public class InternalLlmExecutorTools {
         result.put("output", response.output());
         result.put("exitCode", response.exitCode());
         result.put("truncated", response.truncated());
+        result.put("callId", response.callId());
         return result;
     }
 
@@ -516,26 +597,27 @@ public class InternalLlmExecutorTools {
      * 让「回执里的 {@code artifact.sha256}」与「平台实际读到的字节」可以对账——这是技能执行
      * 从「声称」变「实证」的那一步。</p>
      *
-     * <p><b>为什么默认不内联大文件</b>：一份 820KB 的 HTML 内联进对话会直接吃掉上下文预算。
-     * 小文件（≤ {@value #MAX_INLINE_ARTIFACT_CHARS} 字符）内联正文方便模型自检；大文件只给
-     * {@code size} / {@code sha256} / {@code truncated}，要正文就请模型用更小的 {@code maxBytes}
-     * 或换更精确的路径。</p>
+     * <p><b>为什么默认只内联前 8000 字符</b>：一份 820KB 的 HTML 全文内联进对话会直接吃掉上下文预算。
+     * 内联按<b>字符</b>计（`SL-3`）：中文正文 3000 字仍可完整内联；超出部分截断并置
+     * {@code truncated=true}，要完整字节用 {@code size} / {@code sha256} 对账或传更小的 {@code maxBytes}。</p>
      *
      * @param agentId  执行者 Agent ID（平台自动注入）
      * @param subTaskId 目标子任务 ID（平台自动注入）
      * @param path     容器内绝对路径（如 {@code /workspace/out/archify.html}）
      * @param maxBytes 回读上限字节数（空/≤0 ⇒ 默认 4MB；超限读前 N 字节并标 truncated）
-     * @return {path, mime, size, sha256, truncated}（小文件额外带 content）
+     * @return {path, mime, size, sha256, truncated, content}（content 至多 8000 字符，超出部分截断）
      */
     @Tool(name = "internal_read_artifact", description = """
             【何时使用】需要核对沙箱内某个产物文件的实际字节（大小 / sha256 / 小文件正文）时调用——
             例如技能 CLI 回执里给了 artifact.sha256，你要证明「回读到的确实是同一份」。
             【Gotchas】
             - path 必须是**容器内绝对路径**（如 /workspace/out/archify.html），不接受相对路径
-            - 沙箱被重建（超时 / 异常后丢弃）时旧文件会消失，此时返回「产物不存在」
+            - 命令超时（exitCode=124）**不会**重建沙箱，工作区与产物都还在；只有传输层异常
+              重建容器、或任务终态回收后才读不到旧文件（此时返回「产物不存在」）
             - 超过 maxBytes 会截断并标 truncated=true：**截断结果的 sha256 只代表片段**，
               不能拿去和完整文件的回执比对
-            - 超过约 8000 字符的产物**不会内联正文**，只给 size / sha256（避免吃掉上下文预算）
+            - 超过约 8000 **字符**的产物只内联前 8000 字符并标 truncated=true：**截断结果的 sha256
+              只代表片段**，完整字节用 size / sha256 对账，或传更小的 maxBytes
             【相关工具】internal_run_skill / internal_run_in_sandbox
             """)
     public Object internalReadArtifact(
@@ -548,28 +630,44 @@ public class InternalLlmExecutorTools {
                 ids.subTaskId(), path, maxBytes == null ? 0 : maxBytes);
         if (artifact == null) {
             throw new BizException("产物不存在或不可读: " + path
-                    + "（须为容器内绝对路径；沙箱重建后旧文件会消失）");
+                    + "（须为容器内绝对路径；容器重建或任务回收后旧文件会消失）");
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("path", artifact.path());
         result.put("mime", artifact.mime());
         result.put("size", artifact.size());
         result.put("sha256", artifact.sha256());
-        result.put("truncated", artifact.truncated());
-        if (!artifact.truncated() && artifact.size() <= MAX_INLINE_ARTIFACT_CHARS) {
-            result.put("content", artifact.text());
-        } else {
-            result.put("note", "内容过大未内联（" + artifact.size()
-                    + " 字节）：用 size / sha256 做校验，或传更小的 maxBytes 只看开头片段");
-        }
+        String full = artifact.text();
+        String text = inlineArtifactText(full);
+        // truncated 合并两种来源：① 读字节时超 maxBytes 被截；② 本次内联按字符上限截断
+        result.put("truncated", artifact.truncated() || text.length() < full.length());
+        result.put("content", text);
         return result;
+    }
+
+    /**
+     * 截出可内联的正文（`SL-3` 纯函数，便于单测）：按<b>字符</b>上限截断，不切断代理对。
+     *
+     * @param text 完整正文（{@code null} ⇒ 空串）
+     * @return 不超过 {@value #MAX_INLINE_ARTIFACT_CHARS} 字符的正文
+     */
+    static String inlineArtifactText(String text) {
+        if (text == null || text.length() <= MAX_INLINE_ARTIFACT_CHARS) {
+            return text == null ? "" : text;
+        }
+        int end = MAX_INLINE_ARTIFACT_CHARS;
+        // 截断点落在一对代理字符中间时退一格，避免产生半个码点（JSON 序列化后会变乱码）
+        if (Character.isHighSurrogate(text.charAt(end - 1))) {
+            end--;
+        }
+        return text.substring(0, end);
     }
 
     /**
      * 把沙箱内的产物导出为当前子任务的<b>可下载附件</b>（`SKX-11`，2026-10-26）。
      *
      * <p><b>为什么需要它</b>：{@link #internalReadArtifact} 只把字节读进<b>本次工具调用</b>里，
-     * 平台能对账、模型能自检，但用户界面上什么都看不到——沙箱文件随子任务结束被销毁，
+     * 平台能对账、模型能自检，但用户界面上什么都看不到——沙箱文件随**任务终态**被销毁，
      * 「产物」等于没交付。本工具补上最后一段：沙箱字节 → 对象存储 → 附件表，
      * 用户随后在子任务附件里直接下载。</p>
      *
@@ -587,11 +685,11 @@ public class InternalLlmExecutorTools {
             【何时使用】技能/脚本产出了**要给用户看的文件**（如 archify 生成的 HTML 图表）时调用：
             把沙箱内的产物落地成当前子任务的附件，用户即可在界面上直接下载。
             【关键区别】
-            - internal_read_artifact 只是**你自己看**（核对大小/哈希/片段），产物仍在容器里、随子任务销毁
+            - internal_read_artifact 只是**你自己看**（核对大小/哈希/片段），产物仍在容器里、随任务终态销毁
             - internal_export_artifact 是**交付给用户**（写对象存储 + 登记附件），会出现在子任务附件列表
             - 两个都要时先 export 再 read（或反之），互相不影响
             【Gotchas】
-            - path 必须是**容器内绝对路径**；沙箱在该子任务结束后被回收，**必须在同一轮执行内导出**
+            - path 必须是**容器内绝对路径**；沙箱在**任务终态**被回收，**必须在同一轮执行内导出**
             - 产物超过单文件上限（默认 5MB）会被**拒绝**（不会导出截断版）——请让技能输出更精简的产物
             - fileName 可省略，默认取路径的文件名；同名重复导出会把旧版本置为历史版本
             - 导出成功即表示平台已能读到该文件；返回值里的 sha256 可与技能 CLI 回执对账

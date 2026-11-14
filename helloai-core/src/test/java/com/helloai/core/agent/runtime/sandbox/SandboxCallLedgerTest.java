@@ -93,4 +93,45 @@ class SandboxCallLedgerTest {
         assertThat(preview).hasSize(SandboxCallLedger.MAX_COMMAND_CHARS + 3).endsWith("...");
         assertThat(preview).startsWith("x".repeat(SandboxCallLedger.MAX_COMMAND_CHARS));
     }
+
+    // ===== SL-4：条目 ID 与来源（2026-11-13） =====
+
+    @Test
+    @DisplayName("SL-4 callId：c<seq> 格式、同子任务单调、跨子任务不重复；record 返回该条目")
+    void callIdShouldBeMonotonicAndUnique() {
+        SandboxCallLedger.Entry first = ledger.record(1L, "a", new ExecuteResponse("a", 0, false));
+        SandboxCallLedger.Entry second = ledger.record(1L, "b", new ExecuteResponse("b", 0, false));
+        SandboxCallLedger.Entry other = ledger.record(2L, "c", new ExecuteResponse("c", 0, false));
+
+        assertThat(first).isNotNull();
+        assertThat(first.callId()).startsWith("c");
+        int firstSeq = Integer.parseInt(first.callId().substring(1));
+        int secondSeq = Integer.parseInt(second.callId().substring(1));
+        int otherSeq = Integer.parseInt(other.callId().substring(1));
+        assertThat(secondSeq).isGreaterThan(firstSeq);
+        assertThat(otherSeq).isNotEqualTo(firstSeq).isNotEqualTo(secondSeq);
+        // 返回的条目与台账里落盘的是同一条
+        assertThat(ledger.recent(1L)).extracting(SandboxCallLedger.Entry::callId)
+                .containsExactly(first.callId(), second.callId());
+    }
+
+    @Test
+    @DisplayName("SL-4 origin / round：按调用侧声明保留；null 来源按执行者记；负轮次归零")
+    void originAndRoundShouldBePreserved() {
+        ledger.record(1L, "a", new ExecuteResponse("a", 0, false), SandboxCallOrigin.REVIEWER, 3);
+        ledger.record(1L, "b", new ExecuteResponse("b", 0, false), null, -1);
+
+        List<SandboxCallLedger.Entry> entries = ledger.recent(1L);
+        assertThat(entries.get(0).origin()).isEqualTo("reviewer");
+        assertThat(entries.get(0).round()).isEqualTo(3);
+        assertThat(entries.get(1).origin()).isEqualTo("executor");
+        assertThat(entries.get(1).round()).isZero();
+    }
+
+    @Test
+    @DisplayName("SL-4 无上下文：record 返回 null（不生成孤儿 callId）")
+    void recordShouldReturnNullWithoutContext() {
+        assertThat(ledger.record(null, "a", new ExecuteResponse("a", 0, false))).isNull();
+        assertThat(ledger.record(1L, "a", null)).isNull();
+    }
 }

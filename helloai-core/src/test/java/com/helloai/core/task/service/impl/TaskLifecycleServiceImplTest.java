@@ -6,6 +6,7 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
+import com.helloai.core.shared.event.TaskTerminalStateEvent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.TaskMapper;
@@ -92,7 +93,7 @@ class TaskLifecycleServiceImplTest {
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("全部有效子任务终态 → CAS 收尾 + 只发一次自动完成事件")
+    @DisplayName("全部有效子任务终态 → CAS 收尾 + 自动完成事件与终态回收事件各一次（SL-2）")
     void shouldCloseTaskWhenAllEffectiveSubTasksTerminal() {
         Task row = task(9L, TaskStatus.IN_PROGRESS);
         when(taskMapper.selectById(9L)).thenReturn(row);
@@ -104,6 +105,8 @@ class TaskLifecycleServiceImplTest {
         assertThat(service.tryCloseTask(9L)).isTrue();
 
         verify(applicationEventPublisher).publishEvent(any(TaskAutoCompletedEvent.class));
+        // SL-2：任务终态资源回收（沙箱）事件——与报告触发同点发布、类型不同
+        verify(applicationEventPublisher).publishEvent(any(TaskTerminalStateEvent.class));
         verify(taskTimelineService).recordEvent(eq(9L), eq(null),
                 eq(TimelineEventCode.TASK_AUTO_COMPLETED.code()), any(), any(), any());
     }

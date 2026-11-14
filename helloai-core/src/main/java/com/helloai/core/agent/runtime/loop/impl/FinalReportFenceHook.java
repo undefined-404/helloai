@@ -7,6 +7,7 @@ import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.chat.ChatResponseContentExtractor;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.runtime.loop.AgentLoopResult;
+import com.helloai.core.agent.tool.ToolInvocationContext;
 import com.helloai.core.agent.runtime.sandbox.SandboxCallLedger;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionToolContributor;
 import com.helloai.core.shared.util.DeliverableDraft;
@@ -78,13 +79,22 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class FinalReportFenceHook implements LoopHook {
 
     /**
-     * 收尾轮唯一放开的工具（`SR-1`）：沙箱命令执行。
+     * 收尾轮放开的沙箱命令执行工具（`SR-1`）。
      *
      * <p>与 {@link SandboxExecutionToolContributor#TOOL_INTERNAL_RUN_IN_SANDBOX} 同一常量，
      * 不写字面量：工具改名/迁移时两处一起改，防白名单静默失效。沙箱未启用时该工具本就不在
      * {@code enabledToolCallbacks} 里（可用性声明在贡献者侧），故此处不需要第二份开关判断。</p>
      */
     static final String SANDBOX_TOOL_NAME = SandboxExecutionToolContributor.TOOL_INTERNAL_RUN_IN_SANDBOX;
+
+    /**
+     * 收尾轮放开的台账查询工具（`SL-5`）。
+     *
+     * <p><b>为什么要放开</b>：`SL-5` 的 {@code EVIDENCE} 改为引用 {@code callId}，而模型未必记得
+     * 历史轮次返回的 ID；不允许它查询就只能瞎填或放弃证据。查询本身零执行、零副作用
+     * （只读内存台账），故<b>不</b>消耗 {@link #FINALIZE_SANDBOX_MAX_CALLS} 预算。</p>
+     */
+    static final String LIST_CALLS_TOOL_NAME = SandboxExecutionToolContributor.TOOL_INTERNAL_LIST_SANDBOX_CALLS;
 
     /**
      * 收尾轮沙箱调用上限（`SR-1`，N=3）。
@@ -99,11 +109,15 @@ public class FinalReportFenceHook implements LoopHook {
      */
     static final int FINALIZE_SANDBOX_MAX_CALLS = 3;
 
-    /** 围栏第四条：可机读证据（`SR-2`，两条收尾指令共用同一文案，防漂移）。 */
+    /**
+     * 围栏第四条：可机读证据（`SR-2` / `SL-5`，收尾指令共用同一文案，防漂移）。
+     *
+     * <p>`SL-5` 起证据改为<b>引用台账条目</b>：模型只填 {@code callId}，命令 / 退出码 / 截断标志
+     * 全部由平台台账提供——模型少填三项事实，就少三处可编造的面。旧四字段格式仍被解析器兼容
+     * 一版（见 {@link SelfReviewEvidenceParser}）。</p>
+     */
     static final String EVIDENCE_LINE_TEMPLATE =
-            "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"command\":\"<实际执行的命令>\","
-                    + "\"exitCode\":<整数>,\"truncated\":<true|false>,"
-                    + "\"digest\":\"sha256:<输出摘要，无法计算时留空>\"}]";
+            "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"callId\":\"<c17>\"}]";
 
     /**
      * 沙箱未启用时的自审标签（`SR-4`）。
@@ -124,7 +138,8 @@ public class FinalReportFenceHook implements LoopHook {
                     + "要求：原样保留草稿正文，不得改写、删减或扩写草稿内容；"
                     + "如需一手证据，可在本轮调用 " + SANDBOX_TOOL_NAME
                     + " 做验证（最多 " + FINALIZE_SANDBOX_MAX_CALLS + " 次，超出会被平台拒绝）；"
-                    + "仅在草稿末尾追加如下围栏四行（不要省略；EVIDENCE 按实际执行结果填写，未执行则填 []）：\n"
+                    + "返回值与 " + LIST_CALLS_TOOL_NAME + " 都会给出条目 ID（callId）；"
+                    + "仅在草稿末尾追加如下围栏四行（不要省略；EVIDENCE 只引用真实执行过的 callId，未执行则填 []）：\n"
                     + "VERIFICATION:\n- <针对交付物是否满足本轮需求要点的核实说明>\n"
                     + "STATUS: <DONE 或 BLOCKED>\n"
                     + "NEXT_STEPS: <如已全部完成则填 无，否则列出下一步>\n"
@@ -146,8 +161,9 @@ public class FinalReportFenceHook implements LoopHook {
                     + "现在请直接依据上面的【本轮任务要求】与下方的调研结果，"
                     + "写出**完整交付物正文**（Markdown，覆盖全部验收要点；不要写开场白、不要只给自述）。"
                     + "如需一手证据，可调用 " + SANDBOX_TOOL_NAME
-                    + " 做验证（最多 " + FINALIZE_SANDBOX_MAX_CALLS + " 次，超出会被平台拒绝）。"
-                    + "正文末尾附围栏四行（EVIDENCE 按实际执行结果填写，未执行则填 []）：\n"
+                    + " 做验证（最多 " + FINALIZE_SANDBOX_MAX_CALLS + " 次，超出会被平台拒绝）；"
+                    + "返回值与 " + LIST_CALLS_TOOL_NAME + " 都会给出条目 ID（callId）。"
+                    + "正文末尾附围栏四行（EVIDENCE 只引用真实执行过的 callId，未执行则填 []）：\n"
                     + "VERIFICATION:\n- <针对交付物是否满足本轮需求要点的核实说明>\n"
                     + "STATUS: <DONE 或 BLOCKED>\n"
                     + "NEXT_STEPS: <如已全部完成则填 无，否则列出下一步>\n"
@@ -163,7 +179,8 @@ public class FinalReportFenceHook implements LoopHook {
     private static final String SELF_REVIEW_RETRY_INSTRUCTION =
             "自审未通过：%s\n"
                     + "请只补齐上述一手证据（可调用 " + SANDBOX_TOOL_NAME
-                    + " 实际执行验证，本轮最多 %d 次），并保持上面已提交的正文与围栏结构不变后重新提交；"
+                    + " 实际执行验证，本轮最多 %d 次；用 " + LIST_CALLS_TOOL_NAME
+                    + " 可查已执行条目的 callId），并保持上面已提交的正文与围栏结构不变后重新提交；"
                     + "确实无法验证时，把 STATUS 改为 BLOCKED 并写明原因，不要伪造 EVIDENCE。";
 
     /** 空草稿收尾轮注入的调研摘要：单条工具输出截断上限（字符）。 */
@@ -630,7 +647,9 @@ public class FinalReportFenceHook implements LoopHook {
         List<SandboxCallLedger.Entry> ledger = subTaskId == null
                 ? List.of() : sandboxCallLedger.recent(subTaskId);
         SelfReviewEvidenceParser.Parsed parsed = SelfReviewEvidenceParser.parse(text);
-        SelfReviewEvidenceVerifier.Result verified = SelfReviewEvidenceVerifier.verify(parsed, ledger);
+        // `SL-5`：带上当前轮次——旧格式匹配优先本轮条目，跨轮命中只记告警
+        SelfReviewEvidenceVerifier.Result verified = SelfReviewEvidenceVerifier.verify(
+                parsed, ledger, ToolInvocationContext.currentRound());
         SelfReviewGate.Result gate = gateEnabled
                 ? SelfReviewGate.evaluate(sandboxEnabled, subTaskId != null, parsed, verified, ledger, taskText)
                 : SelfReviewGate.disabled();
@@ -664,6 +683,16 @@ public class FinalReportFenceHook implements LoopHook {
             payload.put("gatePassed", gate.passed());
             if (!verified.mismatches().isEmpty()) {
                 payload.put("mismatches", verified.mismatches());
+            }
+            if (!verified.matched().isEmpty()) {
+                // `SL-5`：被证实的条目坐标与来源——自审到底引用了谁的证据，时间线上可追溯
+                payload.put("evidenceCallIds",
+                        verified.matched().stream().map(SandboxCallLedger.Entry::callId).toList());
+                payload.put("evidenceOrigins",
+                        verified.matched().stream().map(SandboxCallLedger.Entry::origin).toList());
+            }
+            if (!verified.notes().isEmpty()) {
+                payload.put("evidenceNotes", verified.notes());
             }
             if (verified.outcome() == SelfReviewEvidenceVerifier.Outcome.MISMATCH && sandboxEnabled) {
                 log.warn("FinalReportFenceHook: 自审证据与台账不一致（self_reported_mismatch）: subTaskId={}, "
@@ -706,10 +735,11 @@ public class FinalReportFenceHook implements LoopHook {
     }
 
     /**
-     * `SR-1`：从本轮可见工具里**白名单过滤**出唯一可注入收尾轮的工具。
+     * `SR-1` / `SL-5`：从本轮可见工具里**白名单过滤**出可注入收尾轮的工具。
      *
-     * <p>沙箱未启用 ⇒ 空清单（不注入）；即便调用方把工具塞进清单，也再按启用事实源兜一层
-     * fail-closed（双保险不是重复逻辑：前者是「模型可见性」，后者是「本钩子要不要放开」）。</p>
+     * <p>白名单 = 沙箱命令执行（消耗预算）+ 台账查询（只读，不消耗预算）。沙箱未启用 ⇒ 空清单
+     * （不注入）；即便调用方把工具塞进清单，也再按启用事实源兜一层 fail-closed（双保险不是
+     * 重复逻辑：前者是「模型可见性」，后者是「本钩子要不要放开」）。</p>
      */
     private List<ToolCallback> finalizeToolCallbacks(AgentLoopTermination termination) {
         // `SR-3` 回滚面①：闸门关闭 ⇒ 收尾轮回到「只产文本」（不放开任何工具）
@@ -719,23 +749,33 @@ public class FinalReportFenceHook implements LoopHook {
         if (!sandboxProperties.isEnabled() || termination.availableToolCallbacks().isEmpty()) {
             return List.of();
         }
-        List<ToolCallback> tools = new ArrayList<>(1);
+        List<ToolCallback> tools = new ArrayList<>(2);
         for (ToolCallback callback : termination.availableToolCallbacks()) {
             if (callback == null || callback.getToolDefinition() == null) {
                 continue;
             }
-            if (SANDBOX_TOOL_NAME.equals(callback.getToolDefinition().name())) {
+            String name = callback.getToolDefinition().name();
+            if (SANDBOX_TOOL_NAME.equals(name) || LIST_CALLS_TOOL_NAME.equals(name)) {
                 tools.add(callback);
             }
         }
         return tools;
     }
 
-    /** 给每次收尾尝试包一层独立计数装饰器（重试 = 新预算，不与上一次尝试共享）。 */
+    /**
+     * 给每次收尾尝试包一层独立计数装饰器（重试 = 新预算，不与上一次尝试共享）。
+     *
+     * <p>只包装沙箱命令执行：台账查询零执行、零副作用，包进去只会让模型误以为查询也要省。</p>
+     */
     private static List<ToolCallback> budgetedSandboxCallbacks(List<ToolCallback> tools) {
         List<ToolCallback> wrapped = new ArrayList<>(tools.size());
         for (ToolCallback tool : tools) {
-            wrapped.add(new BudgetedSandboxCallback(tool, FINALIZE_SANDBOX_MAX_CALLS));
+            ToolDefinition definition = tool.getToolDefinition();
+            if (definition != null && SANDBOX_TOOL_NAME.equals(definition.name())) {
+                wrapped.add(new BudgetedSandboxCallback(tool, FINALIZE_SANDBOX_MAX_CALLS));
+            } else {
+                wrapped.add(tool);
+            }
         }
         return wrapped;
     }

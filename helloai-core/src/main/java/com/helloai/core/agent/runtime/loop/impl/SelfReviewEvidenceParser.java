@@ -11,16 +11,23 @@ import java.util.List;
  *
  * <p><b>围栏契约</b>（与 {@code FinalReportFenceHook} 的两条收尾指令同源）：</p>
  * <pre>
- * EVIDENCE: [{"kind":"sandbox_exec","command":"...","exitCode":0,"truncated":false,"digest":"sha256:..."}]
+ * EVIDENCE: [{"kind":"sandbox_exec","callId":"c17"}]
  * </pre>
+ *
+ * <p><b>`SL-5` 起以引用式为主</b>：{@code callId} 是平台台账条目的坐标（`SL-4` 生成），
+ * 模型只需抄 ID，不再手抄命令与摘要——这正是 `SR-5` 遗留 mismatch 的根因（省略式命令与
+ * 200 字符预览永远比不齐）。旧四字段格式
+ * （{@code kind + command + exitCode + truncated + digest}）保留一版兼容：真机上已发出的围栏
+ * 模板、历史日志与旧 Prompt 不会因升级立刻失效。</p>
  *
  * <p><b>判定口径</b>：解析失败一律视为<b>证据缺失</b>，不外推、不猜测——
  * 这是本计划要消灭的「自述」：模型说执行过不等于执行过，证据块不可解析就没有证据。
  * 只要有一项结构不合契约（非 JSON 数组 / 元素非对象 / 缺键 / 类型不符），整块判
  * {@link Status#MALFORMED}（不做「部分采信」，避免带病证据进入对账）。</p>
  *
- * <p><b>digest 的取值边界</b>：键必须存在，但值允许为空串（模型无法稳定复算输出摘要时，
- * 由对账方降级为「command + exitCode + truncated」三项比对）。</p>
+ * <p><b>digest 的取值边界</b>：旧格式下键必须存在，但值允许为空串（模型无法稳定复算输出摘要时，
+ * 由对账方降级为「command + exitCode + truncated」三项比对）。引用式下旧字段全部可选；
+ * 一旦提供就必须类型合法且值非空，否则整块判 {@code MALFORMED}（防「字段写了但写坏」的带病证据）。</p>
  */
 public final class SelfReviewEvidenceParser {
 
@@ -41,12 +48,19 @@ public final class SelfReviewEvidenceParser {
      * 单条证据（结构对齐台账台账条目）。
      *
      * @param kind      证据类型（当前唯一约定 {@code sandbox_exec}）
-     * @param command   模型自报执行过的命令
-     * @param exitCode  自报退出码
-     * @param truncated 自报输出是否被截断
-     * @param digest    自报输出摘要（{@code sha256:<hex>}；可为空串表示未计算）
+     * @param callId    引用的台账条目 ID（`SL-5` 引用式；旧格式为 {@code null} / 空）
+     * @param command   自报执行过的命令（引用式下可选；旧格式必填）
+     * @param exitCode  自报退出码（引用式下可选；旧格式必填）
+     * @param truncated 自报输出是否被截断（引用式下可选；旧格式必填）
+     * @param digest    自报输出摘要（{@code sha256:<hex>}；旧格式键必存在但值可为空串）
      */
-    public record Evidence(String kind, String command, int exitCode, boolean truncated, String digest) {
+    public record Evidence(String kind, String callId, String command, Integer exitCode,
+                           Boolean truncated, String digest) {
+
+        /** 是否引用式（携带非空 {@code callId}）。 */
+        public boolean hasCallId() {
+            return callId != null && !callId.isBlank();
+        }
     }
 
     /**
@@ -127,13 +141,55 @@ public final class SelfReviewEvidenceParser {
             return null;
         }
         JsonNode kind = node.get("kind");
+        if (kind == null || !kind.isTextual() || kind.asText().isBlank()) {
+            return null;
+        }
+        JsonNode callIdNode = node.get("callId");
+        if (callIdNode != null && !callIdNode.isTextual()) {
+            return null;
+        }
+        String callId = callIdNode == null ? "" : callIdNode.asText().trim();
+
         JsonNode command = node.get("command");
         JsonNode exitCode = node.get("exitCode");
         JsonNode truncated = node.get("truncated");
         JsonNode digest = node.get("digest");
-        if (kind == null || !kind.isTextual() || kind.asText().isBlank()) {
-            return null;
+
+        // 引用式（`SL-5`）：callId 即坐标；旧字段可选，但出现即须合法（不做部分采信）
+        if (!callId.isEmpty()) {
+            String commandText = null;
+            if (command != null) {
+                if (!command.isTextual()) {
+                    return null;
+                }
+                commandText = blankToNull(command.asText().trim());
+            }
+            Integer exitCodeValue = null;
+            if (exitCode != null) {
+                if (!exitCode.isIntegralNumber() || !exitCode.canConvertToInt()) {
+                    return null;
+                }
+                exitCodeValue = exitCode.asInt();
+            }
+            Boolean truncatedValue = null;
+            if (truncated != null) {
+                if (!truncated.isBoolean()) {
+                    return null;
+                }
+                truncatedValue = truncated.asBoolean();
+            }
+            String digestText = null;
+            if (digest != null) {
+                if (!digest.isTextual()) {
+                    return null;
+                }
+                digestText = digest.asText().trim();
+            }
+            return new Evidence(kind.asText().trim(), callId, commandText, exitCodeValue,
+                    truncatedValue, digestText);
         }
+
+        // 旧格式（兼容一版）：四个字段缺一不可
         if (command == null || !command.isTextual() || command.asText().isBlank()) {
             return null;
         }
@@ -146,8 +202,12 @@ public final class SelfReviewEvidenceParser {
         if (digest == null || !digest.isTextual()) {
             return null;
         }
-        return new Evidence(kind.asText().trim(), command.asText().trim(), exitCode.asInt(),
+        return new Evidence(kind.asText().trim(), null, command.asText().trim(), exitCode.asInt(),
                 truncated.asBoolean(), digest.asText().trim());
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isEmpty() ? null : value;
     }
 
     /** 容忍模型把 JSON 包进 ```json 代码块（只剥首尾围栏标记，不改内容）。 */

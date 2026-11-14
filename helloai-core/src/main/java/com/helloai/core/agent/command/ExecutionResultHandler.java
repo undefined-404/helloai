@@ -162,7 +162,7 @@ public class ExecutionResultHandler {
      * {@code status == IN_PROGRESS} 守卫而不动它，记录却停在 RUNNING 无人认领，
      * 同样是一个需要额外恢复链的僵尸态。事务化是唯一不需要新增恢复链的解法。</p>
      *
-     * <p><b>调用方</b>：{@code LocalExecutionCommandConsumer#runViaRuntime} 第 5+6 步
+     * <p><b>调用方</b>：{@code LocalExecutionCommandConsumer#runViaRuntimeInner} 第 5+6 步
      * （原两段独立代码已合并为本方法调用）。</p>
      *
      * @param recordId  执行记录 ID（null ⇒ 跳过记录终态化，仅做结果回写，保持原语义）

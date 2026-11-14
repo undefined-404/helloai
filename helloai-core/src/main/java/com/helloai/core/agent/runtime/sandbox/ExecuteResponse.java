@@ -10,17 +10,32 @@ import java.security.MessageDigest;
  * 超时 / 失败 / SDK 异常都<b>结构化返回</b>（不抛异常），由消费方（内部 LLM 自检 /
  * Reviewer 验证）读取后自行判定 pass/fail——沙箱是「证据提供者」，不是「判定者」。</p>
  *
+ * <p>`SL-4` 追加第 4 分量 {@code callId}（台账条目 ID），对齐平台「证据引用化」方向；
+ * 三参构造保留，{@code callId} 缺省 {@code null}。</p>
+ *
  * @param output    命令输出（截断后；SDK 异常时 = 错误描述）
  * @param exitCode  命令退出码；<b>124 = 命令超时</b>（对齐 octop-harness），SDK 异常 = -1
  * @param truncated 输出是否因超上限被截断（true 时 output 不完整，消费方不得据残缺输出下结论）
+ * @param callId    本次调用在台账里的条目 ID（`SL-4`；未登记 / 一次性语义时为 {@code null}）——
+ *                  模型引用证据时直接用平台给的这个 ID，不再手抄命令（`SL-5`）
  */
-public record ExecuteResponse(String output, int exitCode, boolean truncated) {
+public record ExecuteResponse(String output, int exitCode, boolean truncated, String callId) {
 
     /** 命令超时退出码（对齐 octop-harness command_timeout 语义）。 */
     public static final int EXIT_CODE_TIMEOUT = 124;
 
     /** SDK 调用异常退出码（结构化失败，非命令真实退出码）。 */
     public static final int EXIT_CODE_ERROR = -1;
+
+    /** 未登记台账的旧构造（既有调用零改动；{@code callId = null}）。 */
+    public ExecuteResponse(String output, int exitCode, boolean truncated) {
+        this(output, exitCode, truncated, null);
+    }
+
+    /** 回填台账条目 ID（`SL-4`）：其余分量原样保留。 */
+    public ExecuteResponse withCallId(String callId) {
+        return this.callId == null ? new ExecuteResponse(output, exitCode, truncated, callId) : this;
+    }
 
     /** 命令执行成功且输出未被截断（可作证据的充分条件；判定仍由消费方负责）。 */
     public boolean succeeded() {

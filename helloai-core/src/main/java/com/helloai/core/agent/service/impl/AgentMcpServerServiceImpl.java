@@ -157,6 +157,8 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
             "internal_read_artifact",
             // SKX-11（2026-10-26）：沙箱产物落地为附件。可用性同 read_artifact（只看沙箱启用）。
             "internal_export_artifact",
+            // SL-5（2026-11-13）：台账查询——让模型能查 callId 再在 EVIDENCE 里引用（只读）。
+            "internal_list_sandbox_calls",
             "web_search",
             "search_knowledge"
     );

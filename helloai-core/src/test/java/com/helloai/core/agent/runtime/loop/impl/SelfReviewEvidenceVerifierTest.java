@@ -119,6 +119,127 @@ class SelfReviewEvidenceVerifierTest {
         assertThat(result.mismatches()).hasSize(SelfReviewEvidenceVerifier.MAX_MISMATCH_DETAILS);
     }
 
+    // ==============================================================
+    // `SL-5`：引用式（callId）+ 来源 / 轮次过滤
+    // ==============================================================
+
+    @Test
+    @DisplayName("SL-5 引用 callId 命中 ⇒ VERIFIED，并回填被证实的条目")
+    void referenceByCallIdVerifies() {
+        SandboxCallLedger.Entry hit = entry("c7", "pwd", 0, false, "", "executor", 2);
+        SelfReviewEvidenceVerifier.Result result = SelfReviewEvidenceVerifier.verify(
+                SelfReviewEvidenceParser.parse(reference("c7")), List.of(hit), 2);
+
+        assertThat(result.outcome()).isEqualTo(SelfReviewEvidenceVerifier.Outcome.VERIFIED);
+        assertThat(result.matched()).containsExactly(hit);
+        assertThat(result.notes()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("SL-5 引用不存在的 callId ⇒ MISMATCH")
+    void referenceUnknownCallIdIsMismatch() {
+        SelfReviewEvidenceVerifier.Result result = SelfReviewEvidenceVerifier.verify(
+                SelfReviewEvidenceParser.parse(reference("c99")),
+                List.of(entry("c7", "pwd", 0, false, "", "executor", 1)), 1);
+
+        assertThat(result.outcome()).isEqualTo(SelfReviewEvidenceVerifier.Outcome.MISMATCH);
+        assertThat(result.mismatches()).anyMatch(reason -> reason.contains("c99"));
+        assertThat(result.matched()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("SL-5 引用真实条目但自报结果与台账矛盾 ⇒ MISMATCH（堵「引用 + 编造」）")
+    void referenceContradictingFieldsIsMismatch() {
+        String fence = "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"callId\":\"c7\",\"exitCode\":0}]";
+        SelfReviewEvidenceVerifier.Result result = SelfReviewEvidenceVerifier.verify(
+                SelfReviewEvidenceParser.parse(fence),
+                List.of(entry("c7", "pwd", 1, false, "", "executor", 1)), 1);
+
+        assertThat(result.outcome()).isEqualTo(SelfReviewEvidenceVerifier.Outcome.MISMATCH);
+        assertThat(result.mismatches()).anyMatch(reason -> reason.contains("矛盾"));
+    }
+
+    @Test
+    @DisplayName("SL-5 引用 reviewer 条目 ⇒ 仍 VERIFIED，但记 evidence_origin_non_author")
+    void referenceReviewerEntryAddsOriginNote() {
+        SelfReviewEvidenceVerifier.Result result = SelfReviewEvidenceVerifier.verify(
+                SelfReviewEvidenceParser.parse(reference("c8")),
+                List.of(entry("c8", "pytest", 0, false, "", "reviewer", 1)), 1);
+
+        assertThat(result.outcome()).isEqualTo(SelfReviewEvidenceVerifier.Outcome.VERIFIED);
+        assertThat(result.notes()).anyMatch(note -> note.contains("evidence_origin_non_author"));
+    }
+
+    @Test
+    @DisplayName("SL-5 引用跨轮条目 ⇒ 仍 VERIFIED，但记 evidence_round_crossed")
+    void referenceCrossRoundAddsNote() {
+        SelfReviewEvidenceVerifier.Result result = SelfReviewEvidenceVerifier.verify(
+                SelfReviewEvidenceParser.parse(reference("c8")),
+                List.of(entry("c8", "pytest", 0, false, "", "executor", 1)), 3);
+
+        assertThat(result.outcome()).isEqualTo(SelfReviewEvidenceVerifier.Outcome.VERIFIED);
+        assertThat(result.notes()).anyMatch(note -> note.contains("evidence_round_crossed"));
+    }
+
+    @Test
+    @DisplayName("SL-5 旧格式只认作者条目：reviewer 同名命令不能顶替作者证据")
+    void legacyIgnoresReviewerEntries() {
+        SelfReviewEvidenceVerifier.Result result = SelfReviewEvidenceVerifier.verify(
+                SelfReviewEvidenceParser.parse(evidence("pytest", 0, false, "")),
+                List.of(entry("c9", "pytest", 0, false, "", "reviewer", 1)), 1);
+
+        assertThat(result.outcome()).isEqualTo(SelfReviewEvidenceVerifier.Outcome.MISMATCH);
+    }
+
+    @Test
+    @DisplayName("SL-5 旧格式优先本轮：同命令跨轮各一条 ⇒ 命中本轮且无跨轮告警")
+    void legacyPrefersCurrentRound() {
+        SandboxCallLedger.Entry previous = entry("c1", "pwd", 0, false, "", "executor", 1);
+        SandboxCallLedger.Entry current = entry("c2", "pwd", 0, false, "", "executor", 2);
+        SelfReviewEvidenceVerifier.Result result = SelfReviewEvidenceVerifier.verify(
+                SelfReviewEvidenceParser.parse(evidence("pwd", 0, false, "")),
+                List.of(previous, current), 2);
+
+        assertThat(result.outcome()).isEqualTo(SelfReviewEvidenceVerifier.Outcome.VERIFIED);
+        assertThat(result.matched()).containsExactly(current);
+        assertThat(result.notes()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("SL-5 旧格式本轮无命中才回退全账本，并记 evidence_round_crossed")
+    void legacyFallsBackAndNotesCrossRound() {
+        SelfReviewEvidenceVerifier.Result result = SelfReviewEvidenceVerifier.verify(
+                SelfReviewEvidenceParser.parse(evidence("pwd", 0, false, "")),
+                List.of(entry("c1", "pwd", 0, false, "", "executor", 1)), 2);
+
+        assertThat(result.outcome()).isEqualTo(SelfReviewEvidenceVerifier.Outcome.VERIFIED);
+        assertThat(result.notes()).anyMatch(note -> note.contains("evidence_round_crossed"));
+    }
+
+    @Test
+    @DisplayName("SL-5 同一条目不得被两条引用重复消费")
+    void referenceDoesNotReuseEntry() {
+        SelfReviewEvidenceVerifier.Result result = SelfReviewEvidenceVerifier.verify(
+                SelfReviewEvidenceParser.parse("EVIDENCE: ["
+                        + "{\"kind\":\"sandbox_exec\",\"callId\":\"c7\"},"
+                        + "{\"kind\":\"sandbox_exec\",\"callId\":\"c7\"}]"),
+                List.of(entry("c7", "pwd", 0, false, "", "executor", 1)), 1);
+
+        assertThat(result.outcome()).isEqualTo(SelfReviewEvidenceVerifier.Outcome.MISMATCH);
+        assertThat(result.matched()).hasSize(1);
+        assertThat(result.mismatches()).anyMatch(reason -> reason.contains("已被其它证据占用"));
+    }
+
+    private static String reference(String callId) {
+        return "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"callId\":\"" + callId + "\"}]";
+    }
+
+    private static SandboxCallLedger.Entry entry(String callId, String command, int exitCode,
+                                                 boolean truncated, String digest, String origin, int round) {
+        return new SandboxCallLedger.Entry(command, exitCode, truncated, digest, OffsetDateTime.now(),
+                callId, origin, round);
+    }
+
     private static String evidence(String command, int exitCode, boolean truncated, String digest) {
         return "EVIDENCE: [" + item(command, exitCode, truncated, digest) + "]";
     }
@@ -129,6 +250,7 @@ class SelfReviewEvidenceVerifierTest {
     }
 
     private static SandboxCallLedger.Entry entry(String command, int exitCode, boolean truncated, String digest) {
-        return new SandboxCallLedger.Entry(command, exitCode, truncated, digest, OffsetDateTime.now());
+        return new SandboxCallLedger.Entry(command, exitCode, truncated, digest, OffsetDateTime.now(),
+                "c1", "executor", 1);
     }
 }

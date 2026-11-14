@@ -12,6 +12,7 @@ import com.helloai.common.constant.TaskArchetype;
 import com.helloai.common.constant.TaskPriority;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.common.constant.TeamStatus;
+import com.helloai.core.shared.event.TaskTerminalStateEvent;
 import com.helloai.core.shared.util.CurrentUser;
 import com.helloai.core.agent.port.TeamMemberView;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
@@ -45,6 +46,7 @@ import com.helloai.core.task.statemachine.FinalReportStateMachine;
 import com.helloai.core.task.support.AttachmentObjectPurgeSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -88,6 +90,12 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private final SubTaskService subTaskService;
     private final TeamService teamService;
     private final TaskPlanDraftPort taskPlanDraftPort;
+    /**
+     * `SL-2`（2026-11-12）：任务终态事件的发布口。消费方在 agent 域
+     * （`SandboxTaskTerminalListener`）——task 域只声明「任务终结」这一事实，
+     * 不感知沙箱实现（`CODE_STYLE` §6：发布方不依赖消费方）。
+     */
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     // ══════════════════════════════════════════════════════════════
     //  基础 CRUD（§6.3 收口：条件构造与写操作归 Service）
@@ -242,6 +250,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             tl.setPayload(Map.of("cancelledSubTaskCount", cancelled));
             taskTimelineMapper.insert(tl);
         }
+        // `SL-2`（2026-11-12）：任务进入终态 ⇒ 发布回收事件（沙箱等任务级资源在提交后销毁）。
+        // 本方法在事务内发布，消费方以 AFTER_COMMIT 承接——避免「状态未提交、沙箱先没」。
+        // 只认 DONE / CANCELLED：本方法同时服务 PENDING / IN_PROGRESS 等非终态写入（重发布、启动）。
+        if (status == TaskStatus.DONE || status == TaskStatus.CANCELLED) {
+            applicationEventPublisher.publishEvent(
+                    new TaskTerminalStateEvent(id, status, "status_changed"));
+        }
         log.info("任务状态变更: id={}, status={}", id, status);
         return task;
     }
@@ -380,6 +395,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         subTaskMapper.physicalDeleteByTaskId(taskId);
         moduleMapper.physicalDeleteByTaskId(taskId);
         baseMapper.physicalDeleteById(taskId);
+        // `SL-2`（2026-11-12）：任务行已物理删除 ⇒ 发布回收事件（沙箱等任务级资源在提交后销毁）。
+        // status 取删除前快照——行已不在，消费方无从回查；该值只进日志，不参与判定。
+        applicationEventPublisher.publishEvent(
+                new TaskTerminalStateEvent(taskId, task.getStatus(), "deleted"));
 
         log.info("任务级联删除完成: id={}, title={}, subTask={}, deadLetter={}, traceCleaned={}",
                 taskId, task.getTitle(), counts.get("subTaskCount"),

@@ -32,6 +32,7 @@ public enum TimelineEventCode {
     RUN_COMPLETED("run_completed", "Run 完成", "一次需求完整执行完成"),
     RUN_CREATED("run_created", "Run 创建", "一次需求完整执行启动"),
     SANDBOX_COMMAND_EXECUTED("sandbox_command_executed", "沙箱命令执行", "模型在沙箱内执行了一条命令（payload 含 command 前缀 / exitCode / truncated / digest，SR-5 调用台账）"),
+    SANDBOX_COMMAND_TIMED_OUT("sandbox_command_timed_out", "沙箱命令超时", "命令超时（exitCode=124）但工作区保留（SL-7：超时不销毁容器，payload 含 command 前缀 / timeoutSeconds）"),
     SELF_REVIEW_EVIDENCE_CHECKED("self_review_evidence_checked", "自审证据核对", "收尾轮自审证据块与沙箱台账对账（SR-2：missing / malformed / verified / self_reported_mismatch）"),
     SELF_REVIEW_FAILED("self_review_failed", "自审未通过", "收尾轮自审闸门判证据缺失或与台账不符，已按上限重跑仍不合格（SR-3：payload 含档位 / 失败原因 / 重跑次数，状态流转不变，仍由出口分类与 reviewer 决定）"),
     SKILL_RESOLVED("skill_resolved", "技能解析", "已解析执行所需技能"),

@@ -77,7 +77,7 @@ public class SkillArtifactExportServiceImpl implements SkillArtifactExportServic
         SandboxArtifact artifact = sandboxExecutionService.readArtifact(subTaskId, normalizedPath, limit);
         if (artifact == null) {
             throw new BizException("产物不存在或已不可读: " + normalizedPath
-                    + "（须为容器内绝对路径；沙箱在该子任务结束后会被回收，届时旧文件不再可读）");
+                    + "（须为容器内绝对路径；沙箱在任务终态回收后旧文件不再可读）");
         }
         if (artifact.truncated()) {
             throw new BizException("产物超过单文件上限（" + properties.getMaxFileSize()

@@ -652,6 +652,59 @@ class FinalReportFenceHookTest {
         assertThat(sandboxCalls.get()).isEqualTo(3);
     }
 
+    @Test
+    @DisplayName("SL-5 沙箱启用 ⇒ 收尾轮同时注入沙箱执行与台账查询；只有执行工具受 N=3 预算")
+    void sl5_finalizeInjectsListToolWithoutBudget() {
+        AtomicInteger sandboxCalls = new AtomicInteger();
+        AtomicInteger listCalls = new AtomicInteger();
+        StubChatModel model = new StubChatModel()
+                .enqueue(text("无围栏草稿"))
+                .enqueue(text(withFence("done")));
+
+        loopWith(sandboxEnabled()).run(input(model, AgentAccessType.API_KEY_LLM,
+                List.of(sandboxTool(sandboxCalls),
+                        countingTool(FinalReportFenceHook.LIST_CALLS_TOOL_NAME, listCalls))));
+
+        List<ToolCallback> callbacks = model.lastOptions().getToolCallbacks();
+        assertThat(callbacks).hasSize(2);
+        ToolCallback listTool = callbacks.stream()
+                .filter(callback -> FinalReportFenceHook.LIST_CALLS_TOOL_NAME
+                        .equals(callback.getToolDefinition().name()))
+                .findFirst()
+                .orElseThrow();
+        for (int i = 0; i < 5; i++) {
+            assertThat(listTool.call("{}")).isEqualTo("ok");
+        }
+        assertThat(listCalls.get()).isEqualTo(5);   // 查询只读 ⇒ 不消耗沙箱预算
+        assertThat(sandboxCalls.get()).isZero();
+    }
+
+    @Test
+    @DisplayName("SL-5 引用式证据 ⇒ payload 回填 evidenceCallIds / evidenceOrigins，非作者来源进 evidenceNotes")
+    void sl5_referenceEvidenceRecordedInPayload() {
+        SandboxCallLedger ledger = new SandboxCallLedger();
+        SandboxCallLedger.Entry recorded = ledger.record(10L, "pwd",
+                new ExecuteResponse("/workspace", 0, false),
+                com.helloai.core.agent.runtime.sandbox.SandboxCallOrigin.REVIEWER, 1);
+        List<String> codes = new java.util.ArrayList<>();
+        List<Map<String, Object>> payloads = new java.util.ArrayList<>();
+        AgentLoop loopWithLedger = new ChatModelToolLoop(ContextCompactor.noop(),
+                List.of(hook(ledger, collectingPort(codes, payloads), sandboxEnabled(), selfReview(true, 1))));
+
+        StubChatModel model = new StubChatModel().enqueue(text(withFence("正文")
+                + "\nEVIDENCE: [{\"kind\":\"sandbox_exec\",\"callId\":\"" + recorded.callId() + "\"}]"));
+
+        loopWithLedger.run(documentTaskInput(model));
+
+        assertThat(model.callCount()).isEqualTo(1);      // 引用命中成功条目 ⇒ 不追加收尾轮
+        Map<String, Object> payload = payloads.get(0);
+        assertThat(payload).containsEntry("selfReview", "verified");
+        assertThat(payload.get("evidenceCallIds")).isEqualTo(List.of(recorded.callId()));
+        assertThat(payload.get("evidenceOrigins")).isEqualTo(List.of("reviewer"));
+        assertThat(String.valueOf(payload.get("evidenceNotes")))
+                .contains("evidence_origin_non_author");
+    }
+
     // ==============================================================
     // `SR-2`：自审证据围栏与平台台账对账（纯观测事件）
     // ==============================================================
@@ -1038,6 +1091,24 @@ class FinalReportFenceHookTest {
         return new ToolCallback() {
             private final ToolDefinition definition = new DefaultToolDefinition(
                     FinalReportFenceHook.SANDBOX_TOOL_NAME, "run a command in the sandbox", "{}");
+
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String toolInput) {
+                delegateCalls.incrementAndGet();
+                return "ok";
+            }
+        };
+    }
+
+    /** 指定名字的工具回调（委托调用计数用，`SL-5` 台账查询）。 */
+    private static ToolCallback countingTool(String name, AtomicInteger delegateCalls) {
+        return new ToolCallback() {
+            private final ToolDefinition definition = new DefaultToolDefinition(name, "test tool", "{}");
 
             @Override
             public ToolDefinition getToolDefinition() {

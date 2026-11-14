@@ -26,7 +26,7 @@ outputSchema:
 validationRules:
   - "图必须有可核验的输入：先落 JSON 再渲染，不凭记忆手写 HTML"
   - "渲染后必须 check 通过（provenance=current、issues 为空）才算产出"
-  - "交付给用户的产物必须经 internal_export_artifact 导出，否则子任务结束即丢失"
+  - "交付给用户的产物必须经 internal_export_artifact 导出，否则任务终态回收后即丢失"
   - "不声称跑过浏览器检查——平台不装 Chromium，browser-check/visual-check 不可用"
 ---
 
@@ -46,7 +46,7 @@ validationRules:
 5. **自检**：`node bin/archify.mjs check /workspace/out/<name>.html --json`
    —— 要求 `provenance=current` 且 `issues` 为空。
 6. **导出**：`internal_export_artifact(path="/workspace/out/<name>.html", fileName="<name>.html")`
-   —— 不导出就等于没交付（沙箱随子任务结束销毁）。
+   —— 不导出就等于没交付（沙箱随任务终态销毁）。
 
 ## 图表类型（`<type>` 取值）
 
@@ -94,7 +94,7 @@ node bin/archify.mjs doctor            # 包完整性自检（26 项，正常应
    不要调用、也不要声称「已做浏览器渲染验证」。视觉复核由人做。
 2. **沙箱默认禁网**（egress deny）：`brands capture <url>` 之类需要联网的子命令不可用；
    需要品牌图标时用 `brands <name>` 的**离线内置**能力，不要试图抓网页。
-3. **沙箱内文件不是交付物**：不调用 `internal_export_artifact` 的产物会随子任务销毁。
+3. **沙箱内文件不是交付物**：不调用 `internal_export_artifact` 的产物会随任务终态销毁。
    产物超过单文件上限（默认 5MB）时导出会被拒绝——精简节点数量，而不是分片导出。
 
 ## 常见失败与对策

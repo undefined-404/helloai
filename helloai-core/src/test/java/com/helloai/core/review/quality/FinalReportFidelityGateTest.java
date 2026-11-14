@@ -4,6 +4,7 @@ import com.helloai.core.agent.quality.gate.GateDecision;
 import com.helloai.core.agent.quality.gate.GateOutcome;
 import com.helloai.core.agent.quality.gate.GateSeverity;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
+import com.helloai.core.agent.runtime.sandbox.SandboxCallOrigin;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.review.support.FinalReportFidelityChecker;
 import org.junit.jupiter.api.DisplayName;
@@ -13,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -109,20 +111,20 @@ class FinalReportFidelityGateTest {
     @DisplayName("S-9 脚本执行成功（exitCode=0）→ 不新增违规（证据有效，供 Reviewer 参考）")
     void shouldPassWhenSandboxScriptSucceeds() {
         SandboxExecutionService sandbox = mock(SandboxExecutionService.class);
-        when(sandbox.execute(any(), any(), any())).thenReturn(new ExecuteResponse("ok", 0, false));
+        when(sandbox.execute(any(), any(), any(), any(), any(), anyInt())).thenReturn(new ExecuteResponse("ok", 0, false));
         FinalReportFidelityGate wiredGate = new FinalReportFidelityGate(sandbox);
 
         GateDecision d = wiredGate.evaluate(REPORT_WITH_SH_SCRIPT);
 
         assertEquals(GateOutcome.PASS, d.outcome());
-        verify(sandbox).execute(null, "echo ok", null);
+        verify(sandbox).execute(null, null, "echo ok", null, SandboxCallOrigin.PLATFORM, 0);
     }
 
     @Test
     @DisplayName("S-9 脚本执行失败（exitCode=1）→ HARD script_execution_failed → BLOCK（机械驳回）")
     void shouldBlockWhenSandboxScriptFails() {
         SandboxExecutionService sandbox = mock(SandboxExecutionService.class);
-        when(sandbox.execute(any(), any(), any())).thenReturn(new ExecuteResponse("Traceback", 1, false));
+        when(sandbox.execute(any(), any(), any(), any(), any(), anyInt())).thenReturn(new ExecuteResponse("Traceback", 1, false));
         FinalReportFidelityGate wiredGate = new FinalReportFidelityGate(sandbox);
 
         GateDecision d = wiredGate.evaluate(REPORT_WITH_SH_SCRIPT);
@@ -136,7 +138,7 @@ class FinalReportFidelityGateTest {
     @DisplayName("S-9 沙箱不可用（execute 返回 -1 结构化失败）→ HARD → BLOCK（fail-closed）")
     void shouldBlockWhenSandboxUnavailable() {
         SandboxExecutionService sandbox = mock(SandboxExecutionService.class);
-        when(sandbox.execute(any(), any(), any()))
+        when(sandbox.execute(any(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(new ExecuteResponse("sandbox execution disabled", ExecuteResponse.EXIT_CODE_ERROR, false));
         FinalReportFidelityGate wiredGate = new FinalReportFidelityGate(sandbox);
 
@@ -155,14 +157,14 @@ class FinalReportFidelityGateTest {
         GateDecision d = wiredGate.evaluate(CLEAN);
 
         assertEquals(GateOutcome.PASS, d.outcome());
-        verify(sandbox, never()).execute(any(), any(), any());
+        verify(sandbox, never()).execute(any(), any(), any(), any(), any(), anyInt());
     }
 
     @Test
     @DisplayName("S-9 既有 HARD（空壳引用）且沙箱验证成功 → 仍按既有 HARD 驳回（沙箱不掩盖既有违规）")
     void shouldKeepExistingHardEvenWhenScriptSucceeds() {
         SandboxExecutionService sandbox = mock(SandboxExecutionService.class);
-        when(sandbox.execute(any(), any(), any())).thenReturn(new ExecuteResponse("ok", 0, false));
+        when(sandbox.execute(any(), any(), any(), any(), any(), anyInt())).thenReturn(new ExecuteResponse("ok", 0, false));
         FinalReportFidelityGate wiredGate = new FinalReportFidelityGate(sandbox);
         String report = "# 报告\n## 1. 开源矩阵\n完整矩阵见分册第4章。\n\n## 2. 脚本\n```sh\necho ok\n```\n";
 

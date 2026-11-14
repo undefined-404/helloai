@@ -111,6 +111,42 @@ class ToolInvocationContextTest {
         assertThat(MAPPER.readTree(out).get("agentId").asLong()).isEqualTo(11L);
     }
 
+    // ===== SL-8（2026-11-13）：taskId 透传（任务级沙箱句柄用，消除热路径查库） =====
+
+    @Test
+    @DisplayName("SL-8 绑定 taskId ⇒ 句柄侧可取到；未绑定 / 旧重载 ⇒ null")
+    void taskIdShouldBeOptionalAndReadable() {
+        ToolInvocationContext.bind(11L, 77L, 22L, 0);
+        assertThat(ToolInvocationContext.currentTaskId()).isEqualTo(77L);
+        assertThat(ToolInvocationContext.current().taskId()).isEqualTo(77L);
+
+        ToolInvocationContext.bind(11L, 22L);   // 旧重载：不绑定 taskId
+        assertThat(ToolInvocationContext.currentTaskId()).isNull();
+
+        ToolInvocationContext.unbind();
+        assertThat(ToolInvocationContext.currentTaskId()).isNull();
+    }
+
+    @Test
+    @DisplayName("SL-8 预留支：schema 声明 taskId ⇒ 注入平台值；未声明则不注入（合成 schema，无真实工具声明）")
+    void taskIdShouldFollowSchemaGating() throws Exception {
+        // 注意：下面的 schema 是**合成**的——当前没有任何内部工具声明 `@ToolParam taskId`
+        // （2026-11-14 审计确认），本用例只验证「预留支若被启用，仍受 schema 门控约束」，
+        // 不构成 taskId 存在参数面消费方的证据。taskId 的真实去向是 currentTaskId() 直读。
+        String schemaWithTaskId =
+                "{\"type\":\"object\",\"properties\":{\"agentId\":{\"type\":\"integer\"},"
+                        + "\"taskId\":{\"type\":\"integer\"},\"subTaskId\":{\"type\":\"integer\"}}}";
+        ToolInvocationContext.bind(11L, 77L, 22L, 0);
+
+        String out = ToolInvocationContext.inject("internal_run_in_sandbox", schemaWithTaskId, "{}");
+        assertThat(MAPPER.readTree(out).get("taskId").asLong()).isEqualTo(77L);
+
+        // 真实工具 schema（get_sub_task_detail 风格，只声明 agentId + subTaskId）⇒ 不注入 taskId
+        String withoutDeclaration = ToolInvocationContext.inject(
+                "internal_get_sub_task_detail", SCHEMA_WITH_BOTH, "{}");
+        assertThat(MAPPER.readTree(withoutDeclaration).has("taskId")).isFalse();
+    }
+
     @Test
     @DisplayName("解绑后不再注入——防线程复用串味")
     void shouldNotInjectAfterUnbind() {
@@ -140,5 +176,57 @@ class ToolInvocationContextTest {
     void shouldIgnoreMarkCalledWhenUnbound() {
         ToolInvocationContext.markCalled("internal_get_sub_task_detail");
         assertThat(ToolInvocationContext.hasCalled("internal_get_sub_task_detail")).isFalse();
+    }
+
+    @Test
+    @DisplayName("SL-4 轮次：带轮次绑定可读；缺省绑定为 0；解绑后归零（防线程复用串味）")
+    void shouldCarryRoundWhenBound() {
+        assertThat(ToolInvocationContext.currentRound()).isZero();
+
+        ToolInvocationContext.bind(11L, 22L, 3);
+        assertThat(ToolInvocationContext.currentRound()).isEqualTo(3);
+
+        ToolInvocationContext.bind(11L, 22L);
+        assertThat(ToolInvocationContext.currentRound()).isZero();
+
+        ToolInvocationContext.bind(11L, 22L, 2);
+        ToolInvocationContext.unbind();
+        assertThat(ToolInvocationContext.currentRound()).isZero();
+    }
+
+    // ===== SL-10（2026-11-13）：reviewer 标志（审核隔离身份，只读工作区 + REVIEWER origin） =====
+
+    @Test
+    @DisplayName("SL-10 reviewer 标志：5 参绑定 true 可读；其余重载缺省 false；解绑归位")
+    void reviewerFlagShouldFollowBindOverloads() {
+        assertThat(ToolInvocationContext.currentReviewer()).isFalse();
+
+        ToolInvocationContext.bind(11L, 77L, 22L, 0, true);
+        assertThat(ToolInvocationContext.currentReviewer()).isTrue();
+        assertThat(ToolInvocationContext.current().reviewer()).isTrue();
+
+        ToolInvocationContext.bind(11L, 22L);   // 旧重载：reviewer 缺省 false
+        assertThat(ToolInvocationContext.currentReviewer()).isFalse();
+
+        ToolInvocationContext.unbind();
+        assertThat(ToolInvocationContext.currentReviewer()).isFalse();
+    }
+
+    @Test
+    @DisplayName("SL-10 跨线程快照保留 reviewer 标志——不可跨线程丢失（Scope record 组件）")
+    void reviewerFlagShouldSurviveCrossThreadScope() {
+        ToolInvocationContext.bind(11L, 77L, 22L, 0, true);
+        ToolInvocationContext.Scope scope = ToolInvocationContext.capture();
+        assertThat(scope).isNotNull();
+        assertThat(scope.ids().reviewer()).isTrue();
+
+        ToolInvocationContext.unbind();
+        assertThat(ToolInvocationContext.currentReviewer()).isFalse();
+
+        Boolean carried = ToolInvocationContext.callWith(scope, () ->
+                ToolInvocationContext.currentReviewer() && ToolInvocationContext.current().reviewer());
+        assertThat(carried).isTrue();
+        // callWith 退出后宿主线程还原为「未绑定」
+        assertThat(ToolInvocationContext.currentReviewer()).isFalse();
     }
 }

@@ -75,6 +75,9 @@ const PAYLOAD_KEY_LABEL: Record<string, string> = {
   outputPresent: '有产出文本',
   turn: '环节',
   step: '步骤',
+  callId: '调用 ID',
+  origin: '调用来源',
+  commandChars: '命令字符数',
   taskId: '任务',
   subTaskId: '子任务'
 }

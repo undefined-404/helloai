@@ -206,12 +206,50 @@ class SelfReviewGateTest {
         assertThat(new SelfReviewGate.Result(SelfReviewGate.Tier.SANDBOX_REQUIRED, null).passed()).isTrue();
     }
 
+    // ==============================================================
+    // `SL-5`：成功性判据只看「被证实的引用」
+    // ==============================================================
+
+    @Test
+    @DisplayName("SL-5 引用成功条目 ⇒ 通过")
+    void referencedSuccessPasses() {
+        String fence = "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"callId\":\"c9\"}]";
+        List<SandboxCallLedger.Entry> ledger = List.of(entry("c9", "pytest", 0, false));
+
+        SelfReviewGate.Result result = SelfReviewGate.evaluate(true, true, parsed(fence),
+                SelfReviewEvidenceVerifier.verify(parsed(fence), ledger, 1), ledger, DOC_TASK);
+
+        assertThat(result.tier()).isEqualTo(SelfReviewGate.Tier.SANDBOX_REQUIRED);
+        assertThat(result.passed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SL-5 引用失败条目 ⇒ 即便台账另有成功记录也不通过（不给失败证据背书）")
+    void referencedFailureNotSavedByOtherSuccess() {
+        String fence = "EVIDENCE: [{\"kind\":\"sandbox_exec\",\"callId\":\"c9\"}]";
+        List<SandboxCallLedger.Entry> ledger = List.of(
+                entry("c1", "pwd", 0, false),
+                entry("c9", "pytest", 1, false));
+
+        SelfReviewGate.Result result = SelfReviewGate.evaluate(true, true, parsed(fence),
+                SelfReviewEvidenceVerifier.verify(parsed(fence), ledger, 1), ledger, DOC_TASK);
+
+        assertThat(result.passed()).isFalse();
+        assertThat(result.failures()).anyMatch(reason -> reason.contains("exitCode=0"));
+    }
+
     private static SelfReviewEvidenceParser.Parsed parsed(String fence) {
         return SelfReviewEvidenceParser.parse("正文\n" + fence);
     }
 
     private static SandboxCallLedger.Entry entry(String command, int exitCode, boolean truncated) {
-        return new SandboxCallLedger.Entry(command, exitCode, truncated, "", OffsetDateTime.now());
+        return new SandboxCallLedger.Entry(command, exitCode, truncated, "", OffsetDateTime.now(),
+                "c1", "executor", 1);
+    }
+
+    private static SandboxCallLedger.Entry entry(String callId, String command, int exitCode, boolean truncated) {
+        return new SandboxCallLedger.Entry(command, exitCode, truncated, "", OffsetDateTime.now(),
+                callId, "executor", 1);
     }
 
     @Test

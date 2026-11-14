@@ -1,18 +1,22 @@
 package com.helloai.core.agent.runtime.sandbox.impl;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.ToLongFunction;
 
 /**
  * 「按 key 复用的执行资源槽池」（2026-10-25，`ADR-005` / `LOG-20261025-005`）。
  *
- * <p><b>为什么需要它</b>：原 {@code OpenSandboxExecutionService} 每次调用都新建沙箱、
- * 跑一条命令、{@code finally} 无条件 {@code kill()} ⇒ <b>文件不跨调用保留</b>，模型只能
+ * <p><b>为什么需要它</b>：沙箱实现此前的调用模型是「每次调用都新建沙箱、
+ * 跑一条命令、{@code finally} 无条件 {@code kill()}」⇒ <b>文件不跨调用保留</b>，模型只能
  * 整篇重写正文（实测 MiniMax 20 轮把 3820 字压到 2787 字仍不达标、轮次耗尽）。对齐
  * deepseek-harness 的产品级口径（`dsh-tool-bash-persistent`：同一 agent 的 shell 状态与
  * <b>文件系统</b>跨调用持久），改为「同一子任务复用同一沙箱」。</p>
@@ -118,6 +122,125 @@ final class SandboxSlotPool<K, T> {
     }
 
     /**
+     * 移除并销毁所有匹配、且<b>当前无人持有槽锁</b>的槽（`SL-2`，2026-11-12：任务终态回收）。
+     *
+     * <p><b>为什么不能直接复用 {@link #removeMatching}</b>：任务终态事件到达时，该任务可能
+     * 仍有命令在跑（如最后一个子任务的收尾轮）。无条件摘除并 {@code closer} 会 kill 正在执行的
+     * 容器 ⇒ 正在写的正文丢失。故先 {@code tryLock}：拿到锁说明槽空闲，摘除并销毁；拿不到
+     * 说明有命令在跑，<b>跳过并交给空闲 TTL 兜底</b>（`ADR-005` §6 风险 4）。</p>
+     *
+     * @param matcher       键匹配条件（生产 = {@code kind == TASK && scopeId == taskId}）
+     * @param closer        销毁回调
+     * @param tryLockMillis 单槽尝试持锁上限（毫秒）；{@code <=0} 表示只试一次不等待
+     * @return 释放结果（已释放槽数 / 因在跑而跳过的槽数）
+     */
+    ReleaseResult removeMatchingIfIdle(Predicate<K> matcher, Consumer<T> closer, long tryLockMillis) {
+        if (matcher == null) {
+            return new ReleaseResult(0, 0);
+        }
+        int released = 0;
+        int busy = 0;
+        for (Map.Entry<K, Slot<K, T>> entry : slots.entrySet()) {
+            if (!matcher.test(entry.getKey())) {
+                continue;
+            }
+            Slot<K, T> slot = entry.getValue();
+            boolean locked;
+            try {
+                locked = tryLockMillis > 0
+                        ? slot.lock().tryLock(tryLockMillis, TimeUnit.MILLISECONDS)
+                        : slot.lock().tryLock();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            if (!locked) {
+                busy++;
+                continue;
+            }
+            try {
+                if (slots.remove(entry.getKey(), slot)) {
+                    closer.accept(slot.resource());
+                    released++;
+                }
+            } finally {
+                slot.lock().unlock();
+            }
+        }
+        return new ReleaseResult(released, busy);
+    }
+
+    /**
+     * 后台回收：销毁「空闲超过阈值」的槽（`SL-7`，2026-11-13）。
+     *
+     * <p><b>为什么必须有它</b>：{@link #acquire} 的空闲淘汰只在<b>同键再次访问</b>时发生——
+     * 一个再也不会被访问的键（任务被放弃、会话结束）永远不会触发淘汰，<b>大 TTL 等于泄漏</b>。
+     * 有了定时回收，「保活 8 小时」才是安全的上限而不是泄漏时长。</p>
+     *
+     * <p><b>阈值按键区分</b>：由调用方给出「该键的空闲上限」。任务级槽要活到任务终态
+     * （可能长时间等人工审核），会话/子任务作用域槽没有终态释放点，可以按短空闲上限回收。
+     * 返回 {@code <=0} 表示该类键不参与回收。</p>
+     *
+     * <p><b>与在跑命令互斥</b>：{@code tryLock} 拿不到说明该槽有命令在执行，<b>跳过（计入 busy）</b>
+     * ——回收不能杀掉正在写文件的命令（与 {@link #removeMatchingIfIdle} 同一口径）。</p>
+     *
+     * @param ttlMillisOf 键 ⇒ 空闲上限（毫秒）；{@code <=0} ⇒ 该键不回收
+     * @param closer      销毁回调
+     * @return 回收结果（已销毁 / 在跑跳过 / 未到期保留）
+     */
+    ReapResult reapIdle(ToLongFunction<K> ttlMillisOf, Consumer<T> closer) {
+        if (ttlMillisOf == null) {
+            return new ReapResult(0, 0, 0);
+        }
+        int reaped = 0;
+        int busy = 0;
+        int kept = 0;
+        for (Map.Entry<K, Slot<K, T>> entry : slots.entrySet()) {
+            Slot<K, T> slot = entry.getValue();
+            long ttlMillis = ttlMillisOf.applyAsLong(entry.getKey());
+            if (!slot.idleExpired(ttlMillis)) {
+                kept++;
+                continue;
+            }
+            if (!slot.lock().tryLock()) {
+                busy++;
+                continue;
+            }
+            try {
+                if (slots.remove(entry.getKey(), slot)) {
+                    closer.accept(slot.resource());
+                    reaped++;
+                } else {
+                    kept++;
+                }
+            } finally {
+                slot.lock().unlock();
+            }
+        }
+        return new ReapResult(reaped, busy, kept);
+    }
+
+    /**
+     * 空闲回收结果（`SL-7`）。{@code busy > 0} 说明回收时刻仍有命令占用，本轮跳过、下一轮再试。
+     *
+     * @param reaped 已摘除并销毁的槽数
+     * @param busy   因槽被占用（命令在跑）而跳过的槽数
+     * @param kept   未到空闲阈值而保留的槽数
+     */
+    record ReapResult(int reaped, int busy, int kept) {
+    }
+
+    /**
+     * 批量释放结果（`SL-2`）。{@code busy > 0} 是排障信号：说明终态时刻仍有命令占用该槽，
+     * 回收被推迟到空闲 TTL。
+     *
+     * @param released 已摘除并销毁的槽数
+     * @param busy     因槽被占用（命令在跑）而跳过的槽数
+     */
+    record ReleaseResult(int released, int busy) {
+    }
+
+    /**
      * 是否已有在册槽（**不创建**）。
      *
      * <p>供「终态回读工作区」这类<b>只读探测</b>使用：没有活跃沙箱就不该调用
@@ -133,6 +256,28 @@ final class SandboxSlotPool<K, T> {
      */
     boolean containsMatching(Predicate<K> matcher) {
         return findKey(matcher).isPresent();
+    }
+
+    /**
+     * 找出<b>全部</b>匹配的在册键（**不创建**；`SL-3`，2026-11-13）。
+     *
+     * <p>回读需要它而不是 {@link #findKey}：同一任务可能有多个规格槽，先拿到全部候选
+     * 才能按「同规格优先 / 唯一才回退 / 多规格拒绝」的规则选，避免读到另一个规格的容器。</p>
+     *
+     * @param matcher 键匹配条件
+     * @return 匹配键的快照（无匹配 ⇒ 空列表；{@code matcher == null} ⇒ 空列表）
+     */
+    List<K> keysMatching(Predicate<K> matcher) {
+        if (matcher == null) {
+            return List.of();
+        }
+        List<K> keys = new ArrayList<>();
+        for (K key : slots.keySet()) {
+            if (matcher.test(key)) {
+                keys.add(key);
+            }
+        }
+        return keys;
     }
 
     /**
@@ -164,6 +309,8 @@ final class SandboxSlotPool<K, T> {
         private final T resource;
         private final ReentrantLock lock = new ReentrantLock();
         private volatile long lastUsedAt;
+        /** 服务端过期时刻（毫秒时间戳；{@code 0} = 未知）。{@code renew} 是绝对语义，靠它决定要不要补。 */
+        private volatile long expiresAt;
 
         Slot(K key, T resource) {
             this.key = key;
@@ -191,6 +338,21 @@ final class SandboxSlotPool<K, T> {
 
         long lastUsedAt() {
             return lastUsedAt;
+        }
+
+        /**
+         * 记录服务端过期时刻（`SL-7`）。{@code renew} 是无返回值的绝对设置，
+         * 本地记下目标时刻才能判断「剩余是否已不足、要不要补一次」。
+         *
+         * @param epochMillis 过期时刻（毫秒时间戳）
+         */
+        void markExpiresAt(long epochMillis) {
+            this.expiresAt = epochMillis;
+        }
+
+        /** 服务端过期时刻；{@code 0} = 未知（尚未 renew 过）。 */
+        long expiresAt() {
+            return expiresAt;
         }
 
         /**

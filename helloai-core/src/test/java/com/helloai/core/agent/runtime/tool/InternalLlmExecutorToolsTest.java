@@ -4,6 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
 import com.helloai.core.agent.runtime.sandbox.SandboxArtifact;
+import com.helloai.core.agent.runtime.sandbox.SandboxCallOrigin;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.agent.runtime.sandbox.SkillInstallResult;
 import com.helloai.core.agent.runtime.sandbox.impl.SkillExecutionSupport;
@@ -24,6 +25,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -52,10 +54,12 @@ class InternalLlmExecutorToolsTest {
     private final com.helloai.core.agent.service.SkillArtifactExportService skillArtifactExportService =
             mock(com.helloai.core.agent.service.SkillArtifactExportService.class);
     private final ConversationService conversationService = mock(ConversationService.class);
+    private final com.helloai.core.agent.runtime.sandbox.SandboxCallLedger sandboxCallLedger =
+            new com.helloai.core.agent.runtime.sandbox.SandboxCallLedger();
     private final InternalLlmExecutorTools tools =
             new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService,
                     subTaskCommandPort, sandboxExecutionService, skillExecutionSupport,
-                    skillArtifactExportService, conversationService);
+                    skillArtifactExportService, conversationService, sandboxCallLedger);
 
     /** REF-8.1 A1 强制闸门：本类工具仅可由内部执行链调用，单测需先绑定执行链上下文。 */
     @BeforeEach
@@ -285,24 +289,28 @@ class InternalLlmExecutorToolsTest {
     @DisplayName("S-8 internal_run_in_sandbox：绑定执行链下委托 SandboxExecutionService.execute（用绑定 subTaskId）")
     void shouldRunInSandboxWithBoundSubTaskId() {
         ExecuteResponse response = new ExecuteResponse("out", 0, false);
-        when(sandboxExecutionService.execute(22L, "python -c 'print(1)'", 30)).thenReturn(response);
+        when(sandboxExecutionService.execute(22L, null, "python -c 'print(1)'", 30,
+                SandboxCallOrigin.EXECUTOR, 0)).thenReturn(response);
 
         Object result = tools.internalRunInSandbox(999L, 888L, "python -c 'print(1)'", 30);
 
         // 调用方冒充 (999,888) 也必须落到绑定值 (11,22) → subTaskId=22
         assertThat(result).isSameAs(response);
-        verify(sandboxExecutionService).execute(22L, "python -c 'print(1)'", 30);
+        verify(sandboxExecutionService).execute(22L, null, "python -c 'print(1)'", 30,
+                SandboxCallOrigin.EXECUTOR, 0);
     }
 
     @Test
     @DisplayName("S-8 internal_run_in_sandbox：timeoutSeconds 为空时透传 null（由执行服务按默认 30 处理）")
     void shouldPassNullTimeoutToExecutionService() {
-        when(sandboxExecutionService.execute(22L, "echo ok", null))
+        when(sandboxExecutionService.execute(22L, null, "echo ok", null,
+                SandboxCallOrigin.EXECUTOR, 0))
                 .thenReturn(new ExecuteResponse("ok", 0, false));
 
         tools.internalRunInSandbox(11L, 22L, "echo ok", null);
 
-        verify(sandboxExecutionService).execute(22L, "echo ok", null);
+        verify(sandboxExecutionService).execute(22L, null, "echo ok", null,
+                SandboxCallOrigin.EXECUTOR, 0);
     }
 
     @Test
@@ -310,13 +318,73 @@ class InternalLlmExecutorToolsTest {
     void shouldReturnStructuredFailureFromSandbox() {
         ExecuteResponse failed = new ExecuteResponse("sandbox execution failed: ConnectException: x",
                 ExecuteResponse.EXIT_CODE_ERROR, false);
-        when(sandboxExecutionService.execute(22L, "cat nope.txt", 30)).thenReturn(failed);
+        when(sandboxExecutionService.execute(22L, null, "cat nope.txt", 30,
+                SandboxCallOrigin.EXECUTOR, 0)).thenReturn(failed);
 
         Object result = tools.internalRunInSandbox(11L, 22L, "cat nope.txt", 30);
 
         assertThat(result).isSameAs(failed);
-        verify(sandboxExecutionService).execute(22L, "cat nope.txt", 30);
+        verify(sandboxExecutionService).execute(22L, null, "cat nope.txt", 30,
+                SandboxCallOrigin.EXECUTOR, 0);
     }
+    // ────────────────────────────────────────────────────────────
+    //  SL-5：台账查询（internal_list_sandbox_calls）
+    // ────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("SL-5 internal_list_sandbox_calls：只返回绑定子任务的条目，含 callId / origin / round")
+    @SuppressWarnings("unchecked")
+    void shouldListSandboxCallsOfBoundSubTask() {
+        sandboxCallLedger.record(22L, "pwd", new ExecuteResponse("ok", 0, false),
+                SandboxCallOrigin.EXECUTOR, 2);
+        sandboxCallLedger.record(22L, "pytest", new ExecuteResponse("fail", 1, false),
+                SandboxCallOrigin.EXECUTOR, 3);
+        sandboxCallLedger.record(99L, "other", new ExecuteResponse("x", 0, false),
+                SandboxCallOrigin.EXECUTOR, 1);
+
+        Map<String, Object> result = (Map<String, Object>) tools.internalListSandboxCalls(999L, 888L, null);
+
+        assertThat(result.get("count")).isEqualTo(2);
+        List<Map<String, Object>> calls = (List<Map<String, Object>>) result.get("calls");
+        assertThat(calls).hasSize(2);
+        assertThat(calls.get(0).get("command")).isEqualTo("pwd");
+        assertThat(calls.get(0).get("callId")).isNotNull();
+        assertThat(calls.get(0).get("origin")).isEqualTo("executor");
+        assertThat(calls.get(0).get("round")).isEqualTo(2);
+        assertThat(calls.get(1).get("exitCode")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("SL-5 internal_list_sandbox_calls：limit 缺省 20、钳制到 1~50，取最近 N 条（升序）")
+    @SuppressWarnings("unchecked")
+    void shouldClampLimitAndTakeTail() {
+        for (int i = 0; i < 3; i++) {
+            sandboxCallLedger.record(22L, "cmd-" + i, new ExecuteResponse("ok", 0, false),
+                    SandboxCallOrigin.EXECUTOR, 1);
+        }
+
+        Map<String, Object> one = (Map<String, Object>) tools.internalListSandboxCalls(null, null, 1);
+        assertThat(one.get("count")).isEqualTo(1);
+        assertThat(((List<Map<String, Object>>) one.get("calls")).get(0).get("command"))
+                .isEqualTo("cmd-2");
+
+        Map<String, Object> zero = (Map<String, Object>) tools.internalListSandboxCalls(null, null, 0);
+        assertThat(zero.get("count")).isEqualTo(1);
+
+        Map<String, Object> many = (Map<String, Object>) tools.internalListSandboxCalls(null, null, 999);
+        assertThat(many.get("count")).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("SL-5 internal_list_sandbox_calls：未绑定执行链上下文 ⇒ 拒绝")
+    void shouldRejectListSandboxCallsWithoutChain() {
+        ToolInvocationContext.unbind();
+
+        assertThatThrownBy(() -> tools.internalListSandboxCalls(11L, 22L, 10))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("仅可由平台内部执行链调用");
+    }
+
     // ===== SKX-8：internal_run_skill / internal_read_artifact（2026-10-26） =====
 
     private static SkillExecutionSupport.SkillTarget archifyTarget() {
@@ -359,7 +427,7 @@ class InternalLlmExecutorToolsTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("注入失败")
                 .hasMessageContaining("清单与实际内容不一致");
-        verify(skillExecutionSupport, never()).run(any(), any(), any(), any());
+        verify(skillExecutionSupport, never()).run(any(), any(), any(), any(), anyInt());
     }
 
     @Test
@@ -368,7 +436,7 @@ class InternalLlmExecutorToolsTest {
         when(skillExecutionSupport.resolve("archify")).thenReturn(archifyTarget());
         when(skillExecutionSupport.ensureInstalled(22L, archifyTarget()))
                 .thenReturn(SkillInstallResult.ok(122, 4_330_504L, "/workspace/skills/archify", true, "skipped"));
-        when(skillExecutionSupport.run(22L, archifyTarget(), "node bin/archify.mjs doctor", 60))
+        when(skillExecutionSupport.run(22L, archifyTarget(), "node bin/archify.mjs doctor", 60, 0))
                 .thenReturn(new ExecuteResponse("Archify is ready.", 0, false));
 
         Object result = tools.internalRunSkill(11L, 22L, "archify", "node bin/archify.mjs doctor", 60);
@@ -393,7 +461,7 @@ class InternalLlmExecutorToolsTest {
     }
 
     @Test
-    @DisplayName("SKX-8 internal_read_artifact：小产物内联正文；大产物只给 size / sha256（不吃上下文预算）")
+    @DisplayName("SKX-8 / SL-3 internal_read_artifact：小产物全文内联；超限内联前 8000 字符并标 truncated")
     void readArtifactShouldInlineOnlySmallContent() {
         when(sandboxExecutionService.readArtifact(22L, "/workspace/out/small.json", 0))
                 .thenReturn(new SandboxArtifact("/workspace/out/small.json",
@@ -408,9 +476,46 @@ class InternalLlmExecutorToolsTest {
 
         assertThat(small.get("content")).isEqualTo("{\"ok\":true}");
         assertThat(small.get("sha256")).isEqualTo("a".repeat(64));
-        assertThat(big.get("content")).isNull();
-        assertThat(big.get("note").toString()).contains("未内联");
+        assertThat(small.get("truncated")).isEqualTo(false);
+        // SL-3：按字符（不是字节）截断后仍内联开头，不再只丢一句「未内联」
+        assertThat((String) big.get("content")).hasSize(8_000);
+        assertThat(big.get("truncated")).isEqualTo(true);
+        assertThat(big.containsKey("note")).isFalse();
         assertThat(big.get("size")).isEqualTo(20_000);
+    }
+
+    // ===== SL-3（2026-11-13）：内联长度按字符计（中文不再被字节数误伤） =====
+
+    @Test
+    @DisplayName("SL-3 内联：3000 汉字（UTF-8 9000 字节）全文内联；未超 8000 字符不截断")
+    void inlineShouldCountCharactersNotBytes() {
+        String chinese = "测".repeat(3_000);
+
+        assertThat(chinese.getBytes(StandardCharsets.UTF_8)).hasSize(9_000);
+        assertThat(InternalLlmExecutorTools.inlineArtifactText(chinese)).isEqualTo(chinese);
+    }
+
+    @Test
+    @DisplayName("SL-3 内联：ASCII 边界 8000 字符不截、8001 字符截到 8000")
+    void inlineShouldRespectCharacterBoundary() {
+        String atLimit = "a".repeat(8_000);
+        String overLimit = "a".repeat(8_001);
+
+        assertThat(InternalLlmExecutorTools.inlineArtifactText(atLimit)).isEqualTo(atLimit);
+        assertThat(InternalLlmExecutorTools.inlineArtifactText(overLimit)).hasSize(8_000);
+        assertThat(InternalLlmExecutorTools.inlineArtifactText(null)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("SL-3 内联：截断点落在代理对中间时退一格（不产出半个码点）")
+    void inlineShouldNotSplitSurrogatePair() {
+        String emoji = "😀";           // U+1F600，占两个 char
+        String text = "a".repeat(7_999) + emoji + "b";
+
+        String truncated = InternalLlmExecutorTools.inlineArtifactText(text);
+
+        assertThat(truncated).hasSize(7_999);
+        assertThat(Character.isHighSurrogate(truncated.charAt(truncated.length() - 1))).isFalse();
     }
 
     // ===== SKX-11：internal_export_artifact（沙箱字节 → 对象存储 → 附件登记，2026-10-26） =====

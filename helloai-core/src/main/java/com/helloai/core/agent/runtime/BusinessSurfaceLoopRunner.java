@@ -174,7 +174,8 @@ public class BusinessSurfaceLoopRunner {
             String runId = taskId != null ? AgentEventContextResolver.resolveRunId(taskId) : null;
             // 事件记录器 / 循环检查点回调刻意传 null：业务面不经 agent_event，
             // 亦无 agent_session（会话属子任务执行链），见类 javadoc「不写事件流」。
-            ToolInvocationContext.bind(agent.getId(), subTaskId);
+            // reviewer 标志（`SL-10`）按 scene 声明：核验/终报告审查面 → 只读挂载 + REVIEWER origin
+            ToolInvocationContext.bind(agent.getId(), taskId, subTaskId, 0, isReviewerScene(scene));
             try {
                 loopResult = agentLoop.run(new AgentLoopInput(
                         agentChatClientService.buildChatModel(agent, provider, apiKey),
@@ -235,6 +236,16 @@ public class BusinessSurfaceLoopRunner {
     private static Long longOf(Map<String, Object> context, String key) {
         Object value = context != null ? context.get(key) : null;
         return value instanceof Number number ? number.longValue() : null;
+    }
+
+    /**
+     * 本业务面循环是否处于「审查者」身份（`SL-10`）。
+     *
+     * <p>核验 / 终报告审查两个场景的模型对工作区只读；判定仅看场景字面量，
+     * 不从 agent 角色反推（origin 由调用侧显式声明）。</p>
+     */
+    private static boolean isReviewerScene(String scene) {
+        return "subtask_review".equals(scene) || "task_final_report_review".equals(scene);
     }
 
     /**

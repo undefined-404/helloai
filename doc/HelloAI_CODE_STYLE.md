@@ -5,7 +5,7 @@
 > 当前架构：Spring Boot 单体 + DDD 业务域 + RabbitMQ + PostgreSQL + Redis + Vue 3\
 > 文档定位：**当前有效的代码与架构工程规范**\
 > 版本：V2.1\
-> 最后更新：2026-11-02（§5.5 登记 `system/quota` 能力包）
+> 最后更新：2026-11-14（§5.1 登记 `agent/runtime/sandbox` 沙箱执行能力包——`SL-1` 任务级作用域）
 >
 > **重要：本文件只描述“当前有效规则”，不记录历史迭代过程。**
 >
@@ -419,7 +419,7 @@ agent/
 ├── port              # §7 端口（跨域只读契约）
 ├── projection        # 只读投影（AgentProfileSnapshot 等）
 ├── quality           # 子域：quality_report / gate / service
-├── runtime           # 运行时（RuntimeTurnExecutor / AgentLoop）
+├── runtime           # 运行时（RuntimeTurnExecutor / AgentLoop / sandbox 沙箱执行：SandboxScopes 作用域解析 · OpenSandboxRuntime · SandboxWorkspaceRegistry · SandboxFactory · 槽池 · 台账 · SandboxTaskTerminalListener 任务终态回收）
 ├── session           # 子域：会话锚点 entity / mapper / service
 ├── skill             # 技能包
 ├── tool              # 工具注册与回调

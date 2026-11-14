@@ -313,7 +313,13 @@ docker-compose(.server).yml      独立网络 opensandbox-net，app 不加入；
 
 ```text
 SandboxExecutionService           执行通道接口（ExecuteResponse 统一三字段）
-OpenSandboxExecutionService       执行通道实现（enabled 守卫 / 超时钳制 / 输出截断 / finally 无条件 kill）
+SandboxRuntimeAdapter             唯一装配点与唯一查库点（subTaskId → WorkspaceRef；SL-8）
+OpenSandboxRuntime                执行通道实现（enabled 守卫 / 超时钳制 / 输出截断 / 一次性与复用分支；SL-9 拆出）
+SandboxWorkspaceRegistry          句柄→槽键 / 槽池 / TTL / renew / release / releaseByTask / 空闲回收（SL-7、SL-9）
+SandboxFactory                    建销与规格映射（sandbox.kill() 落点；SL-9）
+SandboxObservation                台账 + timeline 记录（SL-4、SL-9）
+SkillPackageInstaller             技能包注入流水线（SKX-6、SL-9）
+DeliverableReader                 工作区交付物选择（最新 .md 优先 + 体积兜底；SL-9）
 internal_run_in_sandbox           内部 LLM 自检 + Reviewer 验证脚本工具（requireInternalChain 闸门 + fail-closed 摘除）
 SandboxExecutionToolContributor   条件可用声明（enabled=false ⇒ 工具从模型可见列表摘除）
 FinalReportFidelityGate           S-9 机械判定接入点（脚本类交付物可执行性 HARD 规则，checker 保持纯静态）
@@ -341,6 +347,21 @@ internal_run_skill   已落地：工具面生效开关（SKX-8）；模型在工
 部署面收口           已落地：SANDBOX_* 贯通 + preflight fail-close + 侧车端口收敛（SKX-15，用户自测通过）
 平台级 sha256 三方对账 待核：SKX-9 执行侧死信（7059 DEAD_LETTER / 7060 PENDING），技能按通过回填但不宣称自动化通过
 ```
+
+**沙箱生命周期已升格为任务级 + 终态销毁（`SL-1`/`SL-2`，2026-11-12，见 `plan/HelloAI 沙箱生命周期与台账证据改造计划（2026-11-11）.md`）**——只写已落地事实：
+
+```text
+SandboxScopes           新增：上下文 ID → 作用域解析（命中子任务 ⇒ task:{taskId}；未命中/异常 ⇒ scope:{id}）+ 1024 容量 LRU + invalidateTask（agent/runtime/sandbox/）
+槽键升格                SlotKey = (Kind, scopeId, specFingerprint)：同任务子任务共享同一默认规格沙箱，不同规格仍分槽（SKX-5）
+releaseByTask           新增接口：按 taskId 一次性销毁该任务全部规格槽；逐槽 tryLock(5s)，拿不到锁（命令在跑）跳过交给空闲 TTL；销毁后失效作用域缓存
+终态销毁接线            新增 TaskTerminalStateEvent（shared/event）+ SandboxTaskTerminalListener（agent/runtime/sandbox，@Async(appEventExecutor) + AFTER_COMMIT + fallbackExecution）
+                        三处终态出口发布：tryCloseTask（DONE）/ updateStatus（DONE|CANCELLED）/ deleteTaskCascade（deleted）
+turn 末释放            默认删除；scope=subtask 回滚模式下保留（恢复「一次执行尝试结束即释放」旧语义）
+scope 开关              helloai.sandbox.opensandbox.scope = task|subtask（默认 task；subtask 只短路作用域解析，释放语义见上条）
+单测覆盖               SandboxScopesTest 7 + SandboxSlotPoolTest 19（含跨线程占锁跳过）+ SandboxRuntimeAdapterTest 10 + SandboxWorkspaceRegistryTest 9 + OpenSandboxRuntimeTest 8 + SandboxObservationTest 6 + SandboxFactoryTest 4 + SkillPackageInstallerTest 4 + DeliverableReaderTest 5 + SandboxTaskTerminalListenerTest 4（释放已句柄化；SL-9 后实现类单测按切片归属）
+```
+
+> **未落地（`SL-10` + 真机项，见差距表 `G-032`）**：`/workspace` volume 化与 reviewer 只读挂载、`EPHEMERAL_VERIFY` 通道；`SL-3`/`SL-4`/`SL-5`/`SL-7`/`SL-8`/`SL-9` 的真机验证（跨子任务读文件、返工读上一轮、20 分钟空闲、`callId` 反查、引用式证据闭环）随 `SL-6` 收口。
 
 # 11. 当前 Workflow / Team
 

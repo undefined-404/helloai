@@ -138,6 +138,21 @@ const chartRef = ref<HTMLDivElement>()
 const mermaidSyntax = ref<string>('')
 const rendering = ref(false)
 const renderError = ref<string>('')
+/** 最近一次渲染的 mermaid 容器 id（失败/卸载时按它清理 body 上的临时节点）。 */
+let lastRenderId = ''
+
+/**
+ * 清掉 mermaid 在 body 上留下的渲染沙箱（id = `d` + renderId）。
+ *
+ * <p>mermaid 11 的 `render()` 会把 `div#d<id>` 挂到 body 上做离屏渲染，成功才移除；
+ * 语法失败时它在页面右下角<b>常驻</b>——用户看到的就是那个带炸弹图标的
+ * 「Syntax error in text / mermaid version 11.16.0」浮块，而且切到别的路由也不消失
+ * （节点在 body，不随组件卸载回收）。</p>
+ */
+function cleanupMermaidTemp(id: string) {
+  if (!id) return
+  document.getElementById('d' + id)?.remove()
+}
 
 // 摘要：事件总数 / 跨度 / 失败 / 重派 / 人工
 const summarySpan = computed(() => {
@@ -178,6 +193,8 @@ async function render() {
   }
   initMermaid()
   rendering.value = true
+  const id = 'mermaid-' + Date.now() + '-' + Math.floor(Math.random() * 10000)
+  lastRenderId = id
   try {
     const syntax = buildMermaidSequence(props.events, {
       resolveAgentName: opts => props.resolveAgentName(opts)
@@ -185,11 +202,23 @@ async function render() {
     mermaidSyntax.value = syntax
     await nextTick()
     if (!chartRef.value) return
+    // 先做语法预校验（2026-11-14）：mermaid 11 的 render() 遇到语法错误<b>不一定抛异常</b>，
+    // 而是把「Syntax error in text」错误图当正常 SVG 返回——之前的实现会把它 sanitize 后
+    // 塞进画布，用户看到的是一张写着版本号的错误图而不是告警。
+    // suppressErrors: true ⇒ 不往 DOM 插错误图、也不抛错，而是<b>返回 false</b>；
+    // 因此必须判返回值（实测：传 true 时完全不会 throw，只判异常等于没校验）。
+    const parsed = await mermaid.parse(syntax, { suppressErrors: true })
+    if (parsed === false) {
+      throw new Error('mermaid 语法校验未通过（详见下方源代码）')
+    }
     // mermaid 11 推荐 render() 异步 API（render 返回 svg 字符串）
     // 输出 SVG 含中文文本与 mermaid 自绘样式，先 DOMPurify 清理掉 onload/onclick 等可执行属性，
     // 避免 mermaid 库或恶意语法触发脚本执行
-    const id = 'mermaid-' + Date.now() + '-' + Math.floor(Math.random() * 10000)
     const { svg } = await mermaid.render(id, syntax)
+    // 兜底：即便 parse 通过，仍防御「错误图被当正常 SVG 返回」的路径
+    if (/Syntax error in text|mermaid version \d/i.test(svg)) {
+      throw new Error('mermaid 校验未通过（语法错误图）')
+    }
     const safeSvg = DOMPurify.sanitize(svg, {
       USE_PROFILES: { svg: true, svgFilters: true },
       FORBID_TAGS: ['script'],
@@ -201,6 +230,7 @@ async function render() {
     // 保留语法可见以便排查
     if (chartRef.value) chartRef.value.innerHTML = ''
   } finally {
+    cleanupMermaidTemp(id)
     rendering.value = false
   }
 }
@@ -210,6 +240,8 @@ watch(() => props.events, () => render(), { deep: true })
 onMounted(render)
 onBeforeUnmount(() => {
   if (chartRef.value) chartRef.value.innerHTML = ''
+  // 卸载时清掉可能残留的 mermaid 离屏容器，避免错误图浮块跟到别的路由（见 cleanupMermaidTemp）
+  cleanupMermaidTemp(lastRenderId)
 })
 </script>
 

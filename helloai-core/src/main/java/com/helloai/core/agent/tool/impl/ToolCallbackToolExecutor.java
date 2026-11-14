@@ -58,9 +58,11 @@ public class ToolCallbackToolExecutor implements ToolExecutor {
             return ToolExecutionResult.failure(toolName, "unknown tool: " + toolName);
         }
         String input = argumentsJson == null || argumentsJson.isBlank() ? "{}" : argumentsJson;
-        // REF-8.1 A1：内部工具标识带外注入——agentId / subTaskId 不入模型上下文，由执行链
-        // （RuntimeTurnExecutor → ToolInvocationContext）供给。仅 internal_ 前缀 + 工具已声明字段生效，
-        // 外部 MCP 工具逐字不变（口径见 ToolInvocationContext）。
+        // REF-8.1 A1：内部工具标识带外注入——agentId / taskId / subTaskId 都不入模型上下文，
+        // 由执行链（RuntimeTurnExecutor → ToolInvocationContext）供给。仅 internal_ 前缀 + 工具
+        // 已声明字段生效，外部 MCP 工具逐字不变（口径见 ToolInvocationContext）。
+        // 注：taskId 当前无工具声明（预留支），其真实消费方是 SandboxRuntimeAdapter 的
+        // ToolInvocationContext#currentTaskId() 直读，不经参数（SL-8）。
         ToolDefinition definition = callback.getToolDefinition();
         input = ToolInvocationContext.inject(
                 definition != null ? definition.name() : null,

@@ -22,6 +22,7 @@
 #
 # Ref: doc/plan/HelloAI OpenSandbox 沙箱集成计划.md §3（S-6 验收）
 #      doc/plan/HelloAI 沙箱执行链设计方案（2026-10-17）.md §4（S-7/S-8/S-9 验收）
+#      doc/plan/HelloAI 沙箱生命周期与台账证据改造计划（2026-11-11）.md §3 SL-9
 #      doc/log/2026-10.md LOG-20261017-008 / -009 / -010
 # 用法：bash scripts/shell/verify-opensandbox-contract.sh
 # 退出码：0 全部通过 / 1 存在失败项
@@ -42,7 +43,11 @@ PROPS="$COMMON/config/OpenSandboxProperties.java"
 TURN_EXEC="$CORE/agent/runtime/RuntimeTurnExecutor.java"
 # S-7~S-9 执行链落点
 EXEC_SVC="$CORE/agent/runtime/sandbox/SandboxExecutionService.java"
-EXEC_IMPL="$CORE/agent/runtime/sandbox/impl/OpenSandboxExecutionService.java"
+# SL-9（2026-11-13）：原 OpenSandboxExecutionService 按职责拆为 5 片，
+# 执行通道三要素落在 Runtime、建销语义落在 Factory、复用/续期落在 Registry
+EXEC_RUNTIME="$CORE/agent/runtime/sandbox/impl/OpenSandboxRuntime.java"
+EXEC_FACTORY="$CORE/agent/runtime/sandbox/impl/SandboxFactory.java"
+EXEC_REGISTRY="$CORE/agent/runtime/sandbox/impl/SandboxWorkspaceRegistry.java"
 # ADR-005（2026-10-25）：同 subTask 复用的两个新锚点
 EXEC_SLOT_POOL="$CORE/agent/runtime/sandbox/impl/SandboxSlotPool.java"
 LOCAL_CONSUMER="$CORE/agent/mqconsumer/LocalExecutionCommandConsumer.java"
@@ -140,36 +145,40 @@ else
 fi
 
 # ── 断言 ⑤：S-7 执行通道契约齐全（沙箱执行链设计方案 §4）──────────
-printf '\n-- 断言 ⑤：S-7 执行通道契约齐全（SandboxExecutionService / ExecuteResponse / impl）--\n'
+printf '\n-- 断言 ⑤：S-7 执行通道契约齐全（SandboxExecutionService / ExecuteResponse / Runtime+Factory+Registry）--\n'
 missing_exec=0
-for f in "$EXEC_SVC" "$EXEC_RESP" "$EXEC_IMPL"; do
+for f in "$EXEC_SVC" "$EXEC_RESP" "$EXEC_RUNTIME" "$EXEC_FACTORY" "$EXEC_REGISTRY"; do
   if [ ! -f "$f" ]; then
     bad "缺少 S-7 执行通道文件：${f#"$REPO_ROOT"/}"
     missing_exec=1
   fi
 done
 if [ "$missing_exec" -eq 0 ]; then
-  ok "S-7 执行通道契约齐全（SandboxExecutionService / ExecuteResponse / OpenSandboxExecutionService）"
+  ok "S-7 执行通道契约齐全（SandboxExecutionService / ExecuteResponse / Runtime / Factory / Registry）"
 fi
-if [ -f "$EXEC_IMPL" ]; then
+if [ -f "$EXEC_RUNTIME" ]; then
   # 超时钳制 + 输出截断 + 失败结构化返回（不抛异常）——执行通道三要素
-  if grep -q 'MAX_TIMEOUT_SECONDS' "$EXEC_IMPL" && grep -q 'MAX_OUTPUT_CHARS' "$EXEC_IMPL" \
-    && grep -q 'EXIT_CODE_ERROR' "$EXEC_IMPL"; then
-    ok "S-7 执行通道三要素齐备（超时钳制 / 输出截断 / 失败结构化返回）"
+  if grep -q 'MAX_TIMEOUT_SECONDS' "$EXEC_RUNTIME" && grep -q 'MAX_OUTPUT_CHARS' "$EXEC_RUNTIME" \
+    && grep -q 'EXIT_CODE_ERROR' "$EXEC_RUNTIME"; then
+    ok "S-7 执行通道三要素齐备（超时钳制 / 输出截断 / 失败结构化返回，落于 OpenSandboxRuntime）"
   else
     bad "S-7 执行通道三要素缺失（MAX_TIMEOUT_SECONDS / MAX_OUTPUT_CHARS / EXIT_CODE_ERROR）"
   fi
-  # 远端沙箱销毁语义：SDK close() 不删远端沙箱，必须显式 kill（ADR-005 后仍在 destroy() 内）
-  if grep -q 'sandbox.kill()' "$EXEC_IMPL"; then
-    ok "S-7 执行通道保留 sandbox.kill()（远端沙箱销毁语义，防泄漏）"
+fi
+if [ -f "$EXEC_FACTORY" ]; then
+  # 远端沙箱销毁语义：SDK close() 不删远端沙箱，必须显式 kill（SL-9 后落在 Factory.destroy()）
+  if grep -q 'sandbox.kill()' "$EXEC_FACTORY"; then
+    ok "S-7 执行通道保留 sandbox.kill()（远端沙箱销毁语义，防泄漏；落于 SandboxFactory）"
   else
     bad "S-7 执行通道缺失 sandbox.kill()——远端沙箱泄漏风险"
   fi
+fi
+if [ -f "$EXEC_REGISTRY" ]; then
   # ADR-005（2026-10-25）：生命周期改为「同 subTask 复用」，守卫必须跟语义走——
   # 否则断言的仍是已被取代的「即建即毁」，变成保护旧口径的假绿灯。
   reuse_ok=0
   if [ -f "$EXEC_SLOT_POOL" ] && grep -q 'release(Long subTaskId)' "$EXEC_SVC" \
-    && grep -q 'renew(' "$EXEC_IMPL" && grep -q 'isReuseEnabled()' "$EXEC_IMPL"; then
+    && grep -q 'renew(' "$EXEC_REGISTRY" && grep -q 'isReuseEnabled()' "$EXEC_REGISTRY"; then
     reuse_ok=1
     ok "S-7 生命周期 = 同 subTask 复用（槽池 + renew 续期 + release 出口 + reuse 开关退路）"
   fi

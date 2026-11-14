@@ -6,6 +6,7 @@ import com.helloai.core.agent.quality.gate.GateOutcome;
 import com.helloai.core.agent.quality.gate.GateSeverity;
 import com.helloai.core.agent.quality.gate.QualityGate;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
+import com.helloai.core.agent.runtime.sandbox.SandboxCallOrigin;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.review.support.FinalReportFidelityChecker;
 import lombok.extern.slf4j.Slf4j;
@@ -129,7 +130,9 @@ public class FinalReportFidelityGate implements QualityGate<String> {
                     break;
                 }
                 verified++;
-                ExecuteResponse execution = sandboxExecutionService.execute(null, script, null);
+                // `SL-4`：来源 = 平台内部（无 subTaskId ⇒ 一次性语义，不入台账；来源显式声明便于未来接线）
+                ExecuteResponse execution = sandboxExecutionService.execute(null, null, script, null,
+                        SandboxCallOrigin.PLATFORM, 0);
                 out.addAll(FinalReportFidelityChecker.checkScriptExecutability(script, execution).violations());
             }
             if (scripts.size() > MAX_SCRIPTS_VERIFIED) {

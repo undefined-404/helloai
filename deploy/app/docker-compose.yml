@@ -27,6 +27,9 @@
 #   7. (2026-10-26) sandbox is now always-on: opensandbox-server profile removed
 #      (a plain `up -d` starts it), and the app injects SANDBOX_ENABLED/URL/API_KEY
 #      so internal_run_in_sandbox is actually enabled (fail-closed default was off).
+#   8. (2026-11-13) SL-7/SL-10: keep-alive set to 4h via JAVA_TOOL_OPTIONS;
+#      /workspace volume switch (SANDBOX_VOLUME_ENABLED, default off) plus the
+#      sandbox server [storage] allowlist. Both are opt-in per environment.
 # Prerequisite files (same dir as this file, relative paths preserved):
 #   helloai-start-1.0.0-SNAPSHOT.jar   # jar executed inside the app container
 #   dist/                              # frontend static files (mounted by the web service)
@@ -58,7 +61,12 @@
 #   HELLOAI_CREDENTIAL_AES_KEY_BASE64  # REQUIRED (`:?`); must match existing ciphertext
 #   HELLOAI_AGENT_REGISTRATION_TOKEN   # REQUIRED (`:?`); without it the app silently
 #                                      #   falls back to the token baked into the jar
-#   OPEN_SANDBOX_API_KEY         # REQUIRED (`:?`) only when opensandbox-server is used
+#   OPEN_SANDBOX_API_KEY         # REQUIRED (`:?`) at whole-file parse time: any
+#                                      #   `docker compose up` fails without it, even
+#                                      #   when only middleware services are targeted
+#   SANDBOX_VOLUME_ENABLED       # optional, default false; true mounts /workspace as a volume
+#   SANDBOX_VOLUME_HOST_PATH     # required when the above is true; host dir, must be allowlisted
+#                                #   in the sandbox server [storage].allowed_host_paths
 # ============================================================
 
 services:
@@ -332,7 +340,14 @@ services:
       # en_US.UTF-8 which requires the image to ship `locales`.
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
-      JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8
+      # SL-7 (2026-11-13): keep-alive-seconds is the ABSOLUTE renew target for
+      #   task-scope sandboxes (default 28800 = 8h). Dev uses 4h so an abandoned
+      #   task does not pin a container for a full workday.
+      #   Rollback switch (task scope -> subtask scope) is a separate JVM flag:
+      #     -Dhelloai.sandbox.opensandbox.scope=subtask
+      JAVA_TOOL_OPTIONS: >-
+        -Dfile.encoding=UTF-8
+        -Dhelloai.sandbox.opensandbox.keep-alive-seconds=14400
       # Activate dev profile, using Docker internal network config from application-dev.yml
       SPRING_PROFILES_ACTIVE: dev
       # SPRING_* env vars below override application-dev.yml fields,
@@ -415,6 +430,15 @@ services:
       SANDBOX_ENABLED: ${SANDBOX_ENABLED:-true}
       SANDBOX_URL: ${SANDBOX_URL:-http://opensandbox-server:8090}
       SANDBOX_API_KEY: ${OPEN_SANDBOX_API_KEY:?OPEN_SANDBOX_API_KEY is required}
+      # SL-10 (2026-11-13): /workspace volume. OFF by default: the container keeps
+      #   the old layered writable layer and nothing changes. Turn it on to give the
+      #   reviewer a container-level read-only view of the executor's workspace
+      #   (executor rw / reviewer ro, EROFS on writes). Requires the SAME host path
+      #   allowlisted in the sandbox server config ([storage].allowed_host_paths
+      #   below). Both sides need `up -d --force-recreate`; `restart` does not
+      #   re-read env vars or config.toml.
+      SANDBOX_VOLUME_ENABLED: ${SANDBOX_VOLUME_ENABLED:-false}
+      SANDBOX_VOLUME_HOST_PATH: ${SANDBOX_VOLUME_HOST_PATH:-}
     # Joins opensandbox-net so `http://opensandbox-server:8090` above resolves to the
     #   sandbox server container (compose service-name DNS). `default` is kept so
     #   postgres / minio / rabbitmq keep resolving by service name.
@@ -511,6 +535,14 @@ configs:
       drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
       no_new_privileges = true
       pids_limit = 4096
+
+      [storage]
+      # SL-10 (2026-11-13): host bind mounts are REJECTED unless the prefix is
+      #   allowlisted here (an empty list rejects every host mount with
+      #   VOLUME::HOST_PATH_NOT_ALLOWED). Single source of truth is
+      #   SANDBOX_VOLUME_HOST_PATH in .env; changing either side requires
+      #   `docker compose up -d --force-recreate opensandbox-server`.
+      allowed_host_paths = ["${SANDBOX_VOLUME_HOST_PATH:-/home/admin/helloai/sandbox-workspace}"]
 
       [ingress]
       mode = "direct"

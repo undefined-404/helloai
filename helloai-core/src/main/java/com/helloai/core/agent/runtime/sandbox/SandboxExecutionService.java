@@ -1,5 +1,7 @@
 package com.helloai.core.agent.runtime.sandbox;
 
+import java.util.List;
+
 /**
  * 沙箱执行通道（S-7，沙箱执行链设计方案 §3.3）。
  *
@@ -11,7 +13,8 @@ package com.helloai.core.agent.runtime.sandbox;
  * 失败/超时/异常都返回结构化 {@link ExecuteResponse}，不抛异常（与
  * {@code SandboxProvider.resolve} 的 null 语义一致的容错哲学）。</p>
  *
- * <p>实现契约（见 {@code OpenSandboxExecutionService}）：沙箱未启用 ⇒ 返回
+ * <p>实现契约（`SL-8` 起见 {@code SandboxRuntimeAdapter}：本接口是<b>薄适配层</b>，把老的
+ * {@code Long} 参数映射成 {@link WorkspaceRef} 后交给 {@link SandboxRuntime}）：沙箱未启用 ⇒ 返回
  * {@code ExecuteResponse("sandbox execution disabled", EXIT_CODE_ERROR, false)}
  * （工具已摘除，正常情况下不会被调用；此处是纵深防御）。</p>
  */
@@ -22,7 +25,7 @@ public interface SandboxExecutionService {
      *
      * @param subTaskId      调用方子任务 ID（上下文日志定位；可为 null）
      * @param command        要在沙箱内执行的命令（bash -lc 语义）或脚本正文；null/空白 ⇒ 结构化失败
-     * @param timeoutSeconds 命令超时秒数；null / <=0 ⇒ 默认 30；上限 300（超出钳制到上限）
+     * @param timeoutSeconds 命令超时秒数；null / <=0 ⇒ 默认 300；上限 300（超出钳制到上限）
      * @return 统一执行结果（超时 / 失败 / SDK 异常也结构化返回，不抛异常）
      */
     ExecuteResponse execute(Long subTaskId, String command, Integer timeoutSeconds);
@@ -41,26 +44,46 @@ public interface SandboxExecutionService {
      * @param subTaskId      调用方子任务 ID（可为 null）
      * @param spec           沙箱规格；null ⇒ 全局默认
      * @param command        命令（bash -lc 语义）
-     * @param timeoutSeconds 超时秒数；null / <=0 ⇒ 默认 30，上限 300
+     * @param timeoutSeconds 超时秒数；null / <=0 ⇒ 默认 300，上限 300
      */
     default ExecuteResponse execute(Long subTaskId, SandboxSpec spec, String command, Integer timeoutSeconds) {
         return execute(subTaskId, command, timeoutSeconds);
     }
 
     /**
-     * 释放某子任务的<b>复用</b>工作沙箱（`ADR-005` 生命周期出口，2026-10-25）。
+     * 带<b>来源与轮次</b>执行一次命令（`SL-4`，2026-11-13）。
      *
-     * <p>对齐 deepseek-harness `dsh-tool-bash-persistent` 的口径：同一子任务内的多次调用
-     * 复用同一沙箱（写入的文件跨调用保留，模型可 `sed -i` 定点修改而非整篇重写）；
-     * 但<b>子任务执行结束即释放</b>——避免「上一次尝试的残留文件影响下一次尝试」，
-     * 也保证「不跨子任务共享」。</p>
+     * <p>台账条目需标明「谁跑的、第几轮」：自审证据只接受执行者本人条目（`SL-5`），
+     * 轮次用于旧格式证据的「本轮优先」。来源由<b>调用侧</b>声明——沙箱层不推断角色。</p>
      *
-     * <p>由 {@code LocalExecutionCommandConsumer#runViaRuntime} 在 turn 结束时调用；
-     * 幂等（未登记 / null 键静默返回）。实现若不支持复用可置为空实现。</p>
+     * <p><b>默认实现忽略来源与轮次</b>：不支持台账的实现（未来内存沙箱）行为不变。</p>
      *
-     * <p><b>并发假设</b>：调用方须保证与 {@link #execute} <b>不并发</b>（当前实现假设
-     * 「同一子任务的消费是串行的」，`release` 落在同一消费线程的 `finally` 里）。
-     * 若将来出现同子任务并发消费，实现需先取槽锁再销毁，否则可能杀掉在跑命令的工作区。</p>
+     * @param subTaskId      调用方子任务 ID（可为 null）
+     * @param spec           沙箱规格；null ⇒ 全局默认
+     * @param command        命令（bash -lc 语义）
+     * @param timeoutSeconds 超时秒数；null / &lt;=0 ⇒ 默认 300，上限 300
+     * @param origin         调用来源；null ⇒ 执行者
+     * @param round          轮次（子任务执行轮次；无上下文记 0）
+     */
+    default ExecuteResponse execute(Long subTaskId, SandboxSpec spec, String command, Integer timeoutSeconds,
+                                    SandboxCallOrigin origin, int round) {
+        return execute(subTaskId, spec, command, timeoutSeconds);
+    }
+
+    /**
+     * 释放某子任务作用域下的<b>复用</b>工作沙箱（`ADR-005` 生命周期出口，2026-10-25）。
+     *
+     * <p><b>默认已不参与主链路</b>（`SL-2`，2026-11-12）：任务级作用域下工作区须跨 turn /
+     * 跨子任务保留，回收统一走 {@link #releaseByTask(Long)}（由任务终态事件触发）。本方法仅在
+     * {@code helloai.sandbox.opensandbox.scope=subtask} 灰度回滚模式下由命令消费侧于 turn 末
+     * 调用，用于恢复「一次执行尝试结束即释放」的旧语义（见 `LocalExecutionCommandConsumer`
+     * 的 {@code isSubtaskScope()}）。</p>
+     *
+     * <p><b>幂等</b>：未登记 / {@code null} 键静默返回；实现若不支持复用可保留空实现。</p>
+     *
+     * <p><b>并发</b>：本方法按<b>解析后的作用域</b>删除槽，与 {@link #execute} 并发时不做互斥
+     * （回滚模式下仍假设「同一子任务的消费串行」）；任务级批量回收的互斥语义在
+     * {@link #releaseByTask(Long)}（逐槽 {@code tryLock}）。</p>
      *
      * @param subTaskId 子任务 ID；null 或未登记时静默返回
      */
@@ -69,24 +92,45 @@ public interface SandboxExecutionService {
     }
 
     /**
-     * 回读该子任务工作沙箱里<b>篇幅最大的一份 {@code .md} 正文</b>（2026-10-25，`LOG-20261025-010`）。
+     * 释放某<b>任务</b>的全部复用工作沙箱（`SL-1`/`SL-2`，2026-11-12）。
      *
-     * <p><b>为什么需要这条通道</b>：平台只采集<b>对话正文</b>（{@code AgentExecutionResult.output}），
-     * 沙箱文件从不自动上传。实测 MiniMax-M3 两次执行都是「20 轮全在沙箱里写 {@code /workspace/draft.md}、
-     * 对话区只剩 604 字节写作过程叙述」⇒ 终态 {@code STOP} + 围栏齐全 ⇒ 假成功 ⇒ 评审 3 轮全驳回 ⇒ 死信。
-     * 正文其实早就写出来了，只是没交出去。本方法就是在 turn 末把它「捞回来」的通道。</p>
+     * <p><b>为什么需要按任务释放</b>：`SL-1` 起复用槽键为 {@code task:{taskId}} + 规格指纹，
+     * 同一任务的多个子任务共享同一规格的沙箱。任务进入终态（{@code DONE}/{@code CANCELLED}/
+     * 删除）时，必须经本方法一次性销毁该任务下全部规格的沙箱——只按子任务释放会漏掉
+     * 「共享给其它子任务」的那些槽，靠空闲 TTL 兜底回收。</p>
      *
-     * <p><b>只读语义</b>：<b>不创建</b>沙箱（无活跃工作区直接返回 {@code null}）——
-     * 为读一个文件白建沙箱要 3 秒 + 一份资源，且必然读到空目录。</p>
+     * <p><b>接线</b>：由 {@code SandboxTaskTerminalListener}（{@code @Async} +
+     * {@code @TransactionalEventListener(AFTER_COMMIT, fallbackExecution = true)}）在任务终态事件后调用。
+     * 幂等：未登记 ⇒ 零操作；重复事件 ⇒ 槽已不在册，静默返回。</p>
      *
-     * <p><b>不承载判定</b>：方法只回答「工作区里最大那份 .md 是什么」，回传与否、是否构成
-     * 可交付正文由调用方按 {@code DeliverableDraft} 判定（与 {@link #execute} 一致的边界）。</p>
+     * <p><b>并发</b>：逐槽 {@code tryLock} 后再销毁——拿不到锁说明该槽仍有命令在跑，
+     * 跳过并交给空闲 TTL，<b>不误杀</b>在执行的工作区（`ADR-005` §6 风险 4）。</p>
      *
-     * @param subTaskId 子任务 ID（null ⇒ 返回 null）
-     * @return 文件正文；无工作区 / 无 {@code .md} / 读取失败 ⇒ {@code null}
+     * <p><b>仅解耦管理面</b>：本方法只做「槽池摘除 + 销毁 + 作用域缓存失效」，不校验任务状态——
+     * 状态机语义（什么状态算终态）由事件发布侧决定，实现侧不复制判据。</p>
+     *
+     * @param taskId 任务 ID；null 或未登记时静默返回
      */
-    default String readWorkspaceFile(Long subTaskId) {
-        return null;
+    default void releaseByTask(Long taskId) {
+        // 默认空实现：不支持任务级作用域的实现无需关心
+    }
+
+    /**
+     * 列出工作区内某目录的条目（`SL-9`，2026-11-13；<b>不创建</b>沙箱）。
+     *
+     * <p><b>为什么在通道上</b>：{@code SL-9} 把「哪一份文件算交付物」的策略（最新 {@code .md} 优先、
+     * 体积兜底）移到了消费侧 {@code DeliverableReader}，但消费侧仍需要一眼看见目录里有什么。
+     * 本方法只提供这份机制，排序与筛选由调用方决定。</p>
+     *
+     * <p><b>默认实现返回空列表</b>：不支持目录读取的实现（未来可能的内存沙箱）不必假装有文件；
+     * 消费侧据此按「无候选」保守处理。</p>
+     *
+     * @param subTaskId 子任务 ID（null ⇒ 空列表）
+     * @param dir       容器内绝对路径（通常为 {@link SandboxRuntime#WORKSPACE_DIR}）
+     * @return 两层深度的条目快照；无工作区 / 路径非法 / 失败 ⇒ 空列表
+     */
+    default List<WorkspaceEntry> listWorkspaceFiles(Long subTaskId, String dir) {
+        return List.of();
     }
 
     /**
@@ -137,9 +181,9 @@ public interface SandboxExecutionService {
     /**
      * 按<b>指定路径</b>回读沙箱内的一份产物（`SKX-7`，2026-10-26）。
      *
-     * <p><b>为什么不能复用 {@link #readWorkspaceFile}</b>：那条通道是「挑工作区里最大的 .md」，
-     * 只服务「对话正文兜底捞回」一个场景。技能产物是<b>调用方知道确切路径</b>的（{@code /workspace/out/x.html}），
-     * 且必须是<b>字节级原样</b>——回读要能算 {@code sha256} 与工具回执对账。</p>
+     * <p><b>与 {@link #listWorkspaceFiles} 的分工</b>：列举只回答「目录里有什么」；本方法按
+     * <b>调用方给定的确切路径</b>取字节（如 {@code /workspace/out/x.html}），且必须是字节级原样
+     * ——回读要能算 {@code sha256} 与工具回执对账。选择哪一份文件不是本通道的职责。</p>
      *
      * <p><b>为什么走 SDK 文件通道而不是命令</b>：命令输出有 100,000 字符全局截断
      * （{@code MAX_OUTPUT_CHARS}），834KB HTML 的 base64 必然被截断；且单次
@@ -147,7 +191,7 @@ public interface SandboxExecutionService {
      * 任一理由都足以否掉命令通路（`SKX-3` 实测，计划 §2.4 第 30/33 条）。</p>
      *
      * <p><b>只读语义</b>：无活跃槽 ⇒ {@code null}（不为读文件新建沙箱）；路径不存在 ⇒ {@code null}；
-     * 失败一律降级为 {@code null}，不抛异常（与 {@link #readWorkspaceFile} 同一条容错哲学）。</p>
+     * 失败一律降级为 {@code null}，不抛异常（与 {@link #execute} 同一条容错哲学）。</p>
      *
      * @param subTaskId 子任务 ID（定位复用槽；{@code null} ⇒ {@code null}）
      * @param path      容器内<b>绝对路径</b>（如 {@code /workspace/out/archify.html}）；含 {@code ..} 或非绝对 ⇒ {@code null}

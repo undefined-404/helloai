@@ -91,9 +91,13 @@ class LocalExecutionCommandConsumerTest {
     @Mock
     private AgentRuntime agentRuntime;
 
-    /** 沙箱执行通道（turn 末工作区正文回传，`LOG-20261025-010`）。 */
+    /** 沙箱执行通道（turn 末工作区释放，`ADR-005`）。 */
     @Mock
     private SandboxExecutionService sandboxExecutionService;
+
+    /** 工作区交付物回读（`SL-9` 起策略独立；本类只决定「要不要换正文」）。 */
+    @Mock
+    private DeliverableReader deliverableReader;
 
     @InjectMocks
     private LocalExecutionCommandConsumer localExecutionCommandConsumer;
@@ -381,7 +385,7 @@ class LocalExecutionCommandConsumerTest {
         void shouldSubmitWorkspaceDraftWhenConversationBodyIsNotDeliverable() {
             stubHappyPath(AgentExecutionResult.builder()
                     .status(ExecutionStatus.SUCCESS).output(NARRATIVE).finishReason("STOP").build());
-            when(sandboxExecutionService.readWorkspaceFile(22L)).thenReturn(WORKSPACE_BODY);
+            when(deliverableReader.readLatestMarkdown(22L)).thenReturn(WORKSPACE_BODY);
 
             localExecutionCommandConsumer.consume(baseCommand());
 
@@ -402,7 +406,7 @@ class LocalExecutionCommandConsumerTest {
 
             localExecutionCommandConsumer.consume(baseCommand());
 
-            verify(sandboxExecutionService, never()).readWorkspaceFile(any());
+            verify(deliverableReader, never()).readLatestMarkdown(any());
             verify(executionResultHandler).applyResultAtomically(eq(44L), eq(22L), eq(11L),
                     argThat(r -> goodBody.equals(r.getOutput())));
         }
@@ -414,7 +418,7 @@ class LocalExecutionCommandConsumerTest {
             String shortAnswer = "先说结论：先 RAG 后 MCP。".repeat(30);
             stubHappyPath(AgentExecutionResult.builder()
                     .status(ExecutionStatus.SUCCESS).output(shortAnswer).finishReason("STOP").build());
-            when(sandboxExecutionService.readWorkspaceFile(22L))
+            when(deliverableReader.readLatestMarkdown(22L))
                     .thenReturn("# 草稿\n\n" + "草稿内容".repeat(90));
 
             localExecutionCommandConsumer.consume(baseCommand());
@@ -428,7 +432,7 @@ class LocalExecutionCommandConsumerTest {
         void shouldFallBackSilentlyWhenReadFails() {
             stubHappyPath(AgentExecutionResult.builder()
                     .status(ExecutionStatus.SUCCESS).output(NARRATIVE).finishReason("STOP").build());
-            when(sandboxExecutionService.readWorkspaceFile(22L))
+            when(deliverableReader.readLatestMarkdown(22L))
                     .thenThrow(new IllegalStateException("sandbox gone"));
 
             localExecutionCommandConsumer.consume(baseCommand());
@@ -445,7 +449,7 @@ class LocalExecutionCommandConsumerTest {
 
             localExecutionCommandConsumer.consume(baseCommand());
 
-            verify(sandboxExecutionService, never()).readWorkspaceFile(any());
+            verify(deliverableReader, never()).readLatestMarkdown(any());
         }
     }
 

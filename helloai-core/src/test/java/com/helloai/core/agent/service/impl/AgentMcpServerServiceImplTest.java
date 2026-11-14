@@ -63,7 +63,8 @@ class AgentMcpServerServiceImplTest {
             "internal_run_in_sandbox",
             "internal_run_skill",
             "internal_read_artifact",
-            "internal_export_artifact");
+            "internal_export_artifact",
+            "internal_list_sandbox_calls");
 
     private AgentMcpServerServiceImpl service;
     private LambdaQueryChainWrapper<AgentMcpServer> chain;

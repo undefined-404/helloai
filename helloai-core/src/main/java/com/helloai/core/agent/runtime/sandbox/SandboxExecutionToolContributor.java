@@ -23,8 +23,8 @@ import java.util.function.Predicate;
  * （声明的是「平台此刻是否具备运行条件」，不是「某 Agent 是否被授权」）、与上下文无关
  * （不依赖 {@link ToolContext} 任何字段）⇒ 天然满足 fail-open 契约（不知道 ≠ 不具备）。</p>
  *
- * <p><b>判定委托能力所有者</b>：{@link OpenSandboxProperties#isEnabled()} 是执行通道
- * {@code OpenSandboxExecutionService} 的唯一启用事实源，此处只读它（不在本类重算，
+ * <p><b>判定委托能力所有者</b>：{@link OpenSandboxProperties#isEnabled()} 是沙箱执行通道
+ * （`OpenSandboxRuntime`）的唯一启用事实源，此处只读它（不在本类重算，
  * 避免与执行服务漂移）。</p>
  *
  * <p><b>摘除不落库、不改管理面、不改 MCP {@code tools/list} 暴露面</b>：
@@ -37,6 +37,9 @@ public class SandboxExecutionToolContributor implements ToolCallbackContributor 
 
     /** 本贡献者声明的工具名（与 {@link InternalLlmExecutorTools} 的 @Tool name 严格一致）。 */
     public static final String TOOL_INTERNAL_RUN_IN_SANDBOX = "internal_run_in_sandbox";
+
+    /** 沙箱台账查询工具名（`SL-5`；同样只在沙箱启用时可见——台账只在有沙箱时非空）。 */
+    public static final String TOOL_INTERNAL_LIST_SANDBOX_CALLS = "internal_list_sandbox_calls";
 
     private final OpenSandboxProperties properties;
 
@@ -55,10 +58,17 @@ public class SandboxExecutionToolContributor implements ToolCallbackContributor 
     }
 
     /**
-     * 「按条件可用」声明：沙箱执行未启用 ⇒ {@code internal_run_in_sandbox} 从模型可见列表摘除。
+     * 「按条件可用」声明：沙箱执行未启用 ⇒ {@code internal_run_in_sandbox} 与
+     * {@code internal_list_sandbox_calls} 一并从模型可见列表摘除。
+     *
+     * <p>台账查询依赖同一启用事实源：沙箱关着时台账必然为空，暴露一个恒返回空清单的工具
+     * 只会让模型误以为「历史执行都丢了」。</p>
      */
     @Override
     public Map<String, Predicate<ToolContext>> toolAvailability() {
-        return Map.of(TOOL_INTERNAL_RUN_IN_SANDBOX, context -> properties.isEnabled());
+        Predicate<ToolContext> enabled = context -> properties.isEnabled();
+        return Map.of(
+                TOOL_INTERNAL_RUN_IN_SANDBOX, enabled,
+                TOOL_INTERNAL_LIST_SANDBOX_CALLS, enabled);
     }
 }

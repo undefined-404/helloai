@@ -2225,8 +2225,12 @@ html.dark .wb-page {
   box-shadow: var(--wb-shadow-input);
   padding: 14px 16px 12px;
 }
-/* 免责声明：输入框正下方居中一行，弱化成最浅一档墨色，不与工具栏抢视线 */
+/* 免责声明：输入框正下方居中一行，弱化成最浅一档墨色，不与工具栏抢视线
+   max-width 必须显式解除：design-system.css:587 给全站 p 加了 `max-width: 65ch`
+   的可读性宽度，会把本行盒子压成约 435px 并靠左停住，text-align: center 只在
+   这个窄盒子里生效，于是文字整体偏左（RequirementChat 的同款页脚用 div 故不受影响） */
 .wb-disclaimer {
+  max-width: none;
   margin: 8px 0 0;
   text-align: center;
   font-size: 12px;

@@ -119,7 +119,7 @@ public final class SelfReviewGate {
      * @param hasSubTask       是否有子任务上下文（无 ⇒ {@link Tier#SKIPPED_NO_SUB_TASK}）
      * @param parsed           围栏 {@code EVIDENCE} 解析结果
      * @param verified         与台账的对账结果
-     * @param ledger           该子任务的台账记录（成功性判据的事实源）
+     * @param ledger           该子任务的台账记录（无引用证据时的成功性判据事实源）
      * @param taskRequirement  本轮任务要求文本（判交付物形态）
      */
     public static Result evaluate(boolean sandboxEnabled, boolean hasSubTask,
@@ -150,7 +150,12 @@ public final class SelfReviewGate {
             failures.add("自报证据与平台台账不一致（self_reported_mismatch）："
                     + String.join(" / ", verified.mismatches()));
         }
-        if (!hasSuccessfulExecution(ledger)) {
+        // `SL-5`：模型引用了证据 ⇒ 只认「被证实的那些条目」里有没有成功执行，
+        // 不能拿台账里任意一条成功记录给一份指向失败的证据背书；无引用时回退全账本（旧口径）。
+        List<SandboxCallLedger.Entry> evidence = verified != null && !verified.matched().isEmpty()
+                ? verified.matched()
+                : ledger;
+        if (!hasSuccessfulExecution(evidence)) {
             failures.add("台账中没有 exitCode=0 且未截断（truncated=false）的沙箱执行记录");
         }
         return new Result(Tier.SANDBOX_REQUIRED, failures);

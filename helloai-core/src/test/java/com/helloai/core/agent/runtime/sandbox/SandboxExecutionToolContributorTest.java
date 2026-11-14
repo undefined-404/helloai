@@ -47,4 +47,21 @@ class SandboxExecutionToolContributorTest {
         assertThat(availability.get(SandboxExecutionToolContributor.TOOL_INTERNAL_RUN_IN_SANDBOX).test(null))
                 .isTrue();
     }
+
+    @Test
+    @DisplayName("SL-5：台账查询与沙箱执行同源开关（关 ⇒ 双双摘除；开 ⇒ 双双可用）")
+    void listCallsFollowsSameSwitch() {
+        SandboxExecutionToolContributor contributor = new SandboxExecutionToolContributor(properties);
+
+        assertThat(contributor.toolAvailability())
+                .containsKey(SandboxExecutionToolContributor.TOOL_INTERNAL_LIST_SANDBOX_CALLS);
+        assertThat(contributor.toolAvailability()
+                .get(SandboxExecutionToolContributor.TOOL_INTERNAL_LIST_SANDBOX_CALLS).test(null))
+                .isFalse();
+
+        properties.setEnabled(true);
+        assertThat(contributor.toolAvailability()
+                .get(SandboxExecutionToolContributor.TOOL_INTERNAL_LIST_SANDBOX_CALLS).test(null))
+                .isTrue();
+    }
 }
