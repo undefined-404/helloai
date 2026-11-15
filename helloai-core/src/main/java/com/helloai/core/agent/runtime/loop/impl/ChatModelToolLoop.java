@@ -440,7 +440,7 @@ public class ChatModelToolLoop implements AgentLoop {
     /**
      * 执行单个工具调用并记录 TOOL_CALL 事件；记录失败仅告警（write-only，不阻断循环）。
      *
-     * <p><b>为什么带 callId</b>（2026-10-18）：模型返回的 {@code ToolCall.id} 是与 provider
+     * <p><b>为什么带 callId</b>：模型返回的 {@code ToolCall.id} 是与 provider
      * 调用记录一一对应的唯一键。此前只记工具名，导致「调用」与「返回」只能靠
      * 「同名 + 时间相邻」配对——一旦事件丢一条或将来改为并行执行，配对即失效；
      * 排查悬挂调用（只有 started 没有 completed）时也无法确定是哪一次。

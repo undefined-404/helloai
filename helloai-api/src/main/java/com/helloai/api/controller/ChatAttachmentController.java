@@ -119,7 +119,7 @@ public class ChatAttachmentController {
     }
 
     /**
-     * 下载附件（{@code attachment} 语义，2026-10-27）。
+     * 下载附件（{@code attachment} 语义）。
      *
      * <p><b>为什么与 preview 分开而不是加个参数</b>：两者对浏览器的指令不同——
      * {@code inline} 让 HTML 直接在标签页里渲染（技能产物「看图」的场景），

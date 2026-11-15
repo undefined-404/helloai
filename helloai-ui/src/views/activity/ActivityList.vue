@@ -117,7 +117,7 @@ import { useEnumCatalogStore } from '@/stores/enumCatalog'
 import { fmtTime } from '@/utils/tableConfig'
 import type { ActivityLogItem } from '@/types'
 
-// 枚举字典（2026-10-18）：活动 action 中文名由后端下发，前端不再硬编码
+// 枚举字典：活动 action 中文名由后端下发，前端不再硬编码
 const enumStore = useEnumCatalogStore()
 function actionLabel(code: string): string {
   enumStore.ensureLoaded() // fire-and-forget：就绪后重渲染生效
@@ -127,7 +127,7 @@ function actionDesc(code: string): string {
   return enumStore.descOf('activityAction', code)
 }
 
-// ── 动作 → 标签配色（2026-10-22：让「类型」一眼可辨，空值回退 info）──
+// ── 动作 → 标签配色（让「类型」一眼可辨，空值回退 info）──
 type TagType = 'primary' | 'success' | 'info' | 'warning' | 'danger'
 const ACTION_TAG: Record<string, TagType> = {
   delivery: 'success',   // 提交产出
@@ -175,7 +175,7 @@ onMounted(() => load())
 <style scoped>
 /* 列表页通用外观由 design-system.css 的 List Page Template 统一提供。 */
 
-/* Agent 单元格：名称 + 接入类型标签同行（2026-10-22 活动流增强） */
+/* Agent 单元格：名称 + 接入类型标签同行（活动流增强） */
 .agent-cell {
   display: flex;
   align-items: center;

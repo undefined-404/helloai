@@ -4,7 +4,7 @@ import com.helloai.core.agent.entity.Agent;
 import org.springframework.beans.BeanUtils;
 
 /**
- * 「把某次调用钉在指定模型上」的临时载体（2026-11-05）。
+ * 「把某次调用钉在指定模型上」的临时载体。
  *
  * <p><b>为什么需要它</b>：个人工作台让用户直接选<b>模型</b>（无角色），但平台的执行链是
  * <b>按 Agent 执行</b>的——{@code PlatformAgentExecutionService} 的所有入口都以

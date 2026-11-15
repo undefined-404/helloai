@@ -52,7 +52,7 @@ public interface TaskAgentMemberService {
     List<Long> listActiveAgentIds(Long taskId);
 
     /**
-     * 某任务的实际参与成员明细（任务详情页展示用，2026-10-18）。
+     * 某任务的实际参与成员明细（任务详情页展示用）。
      *
      * <p><b>只返回 {@code task_agent_member}（实际参与），不混编制成员</b>：
      * 编制来自 {@code team_member}（团队组合），后续会演进为「专家团」概念，

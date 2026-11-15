@@ -98,7 +98,7 @@ export const taskApi = {
 }
 
 /**
- * 任务实际参与成员（2026-10-18）。
+ * 任务实际参与成员。
  *
  * <p>口径：仅 {@code task_agent_member}（实际参与，加入过即成员），不含团队编制成员
  * （{@code team_member}，后续归入「专家团」概念）。</p>

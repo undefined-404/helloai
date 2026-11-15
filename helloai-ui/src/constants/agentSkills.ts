@@ -16,7 +16,7 @@ export const AGENT_SKILL_OPTIONS = [
 
 // 【2026-10-09 REF-1.2c 改造】本文件原先还导出 ENG_SKILL_OPTIONS（平台 eng-* 目录对齐副本）
 // 与 skillLabelOf（标签→中文名）。技能元数据改为 md frontmatter + 服务端下发后，那份副本必然
-// 漂移（新增技能会出现「后端生效、前端看不见」），已删除：
+// 漂移（技能会出现「后端生效，前端看不见」），已删除：
 //   · 平台技能目录 → `stores/skillCatalog.ts`（懒加载 /api/skills/catalog）
 //   · 标签显示名   → `useSkillCatalogStore().labelOf()`（能力词表 ∪ 目录，未命中回退原文）
 // 本文件只保留 AGENT_SKILL_OPTIONS —— 它是**能力词表**（对齐后端 AgentSkillDeriver.KEYWORD_SKILLS

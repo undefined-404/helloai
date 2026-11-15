@@ -66,7 +66,7 @@ public class SubTaskQueryServiceImpl implements SubTaskQueryService {
     private final ReviewPort reviewPort;
 
     // ══════════════════════════════════════════════════════════════
-    //  个人工作台任务概况（PA-4 改版，2026-11-02）
+    //  个人工作台任务概况（PA-4 改版）
     // ══════════════════════════════════════════════════════════════
 
     @Override

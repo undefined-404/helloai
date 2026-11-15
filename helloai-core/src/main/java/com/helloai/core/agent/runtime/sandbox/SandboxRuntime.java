@@ -3,7 +3,7 @@ package com.helloai.core.agent.runtime.sandbox;
 import java.util.List;
 
 /**
- * 沙箱运行时（`SL-8`，2026-11-13）：以 {@link WorkspaceRef} 为唯一入口的执行面。
+ * 沙箱运行时（`SL-8`）：以 {@link WorkspaceRef} 为唯一入口的执行面。
  *
  * <p><b>与 {@link SandboxExecutionService} 的分工</b>：本接口是<b>运行时</b>——只认句柄，不解释
  * 「这个 ID 是谁」，不查业务库；{@code SandboxExecutionService} 退为<b>适配层</b>，负责把老的

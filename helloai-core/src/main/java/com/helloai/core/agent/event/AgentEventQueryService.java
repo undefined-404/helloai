@@ -59,7 +59,7 @@ public interface AgentEventQueryService {
      * <p>解析后必须以 {@link java.time.OffsetDateTime} 形式下传至 mapper，避免
      * {@code String → timestamptz} 在 PostgreSQL 上抛
      * {@code operator does not exist: timestamp with time zone >= character varying}
-     * （实测：http-nio 500）。</p>
+     * （http-nio 500）。</p>
      *
      * @param taskId    Task ID；为空时返回空分页
      * @param eventType 事件类型过滤（可空/空白 = 不过滤）

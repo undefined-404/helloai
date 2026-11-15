@@ -18,7 +18,7 @@ export const eventApi = {
     return request.get<any, EventCatalogItem[]>('/events/catalog')
   }
 }
-/** 工具名目录项（2026-10-18）：toolName → 中文短名，供时间线/时序图渲染。 */
+/** 工具名目录项：toolName → 中文短名，供时间线/时序图渲染。 */
 export interface ToolCatalogItem {
   toolName: string
   label: string

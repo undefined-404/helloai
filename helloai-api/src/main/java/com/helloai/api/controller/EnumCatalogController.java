@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 枚举字典端点（2026-10-18）：把 {@code sub_task.approved} / {@code coding} 这类后端码值
+ * 枚举字典端点：把 {@code sub_task.approved} / {@code coding} 这类后端码值
  * 统一翻译成人话，供前端渲染。
  *
  * <p>与 {@code /api/events/catalog}、{@code /api/tools/catalog} 同范式：只读目录、

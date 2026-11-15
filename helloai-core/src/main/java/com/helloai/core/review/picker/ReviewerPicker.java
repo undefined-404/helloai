@@ -40,7 +40,7 @@ public interface ReviewerPicker {
      *
      * @param subTask         待核验子任务（可空；taskId 为空时直接走回退链）
      * @param excludeAgentIds 需排除的 Agent ID（可空/空集表示不排除）
-     * @return 可用核验 Agent；排除后无可用时返回 null（调用方据此跳过）
+     * @return 可用核验 Agent；排除后无可用时返回 null（用方据此跳过）
      */
     AgentProfileSnapshot pickSingle(SubTaskView subTask, Set<Long> excludeAgentIds);
 

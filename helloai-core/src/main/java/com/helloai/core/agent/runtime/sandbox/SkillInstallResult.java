@@ -1,7 +1,7 @@
 package com.helloai.core.agent.runtime.sandbox;
 
 /**
- * 技能包注入结果（`SKX-6`，2026-10-26）。
+ * 技能包注入结果（`SKX-6`）。
  *
  * <p><b>为什么需要独立结果类型</b>：注入不是「一条命令」，{@link ExecuteResponse} 的三个字段
  * （output / exitCode / truncated）描述不了「装了几个文件、多大、装到哪、是不是幂等跳过」。

@@ -10,7 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
- * {@link SkillPackageExecutionService} 实现（2026-10-27）：把 {@code SkillExecutionSupport} 的
+ * {@link SkillPackageExecutionService} 实现：把 {@code SkillExecutionSupport} 的
  * 「解析包 → 幂等注入 → 在技能根跑命令」与 {@code SandboxExecutionService} 的「回读 / 释放」
  * 拼成一个对 planner 域可用的契约。
  *

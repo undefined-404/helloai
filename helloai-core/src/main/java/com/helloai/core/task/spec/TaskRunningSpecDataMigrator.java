@@ -20,7 +20,7 @@ import java.util.Map;
 /**
  * JSONB（旧） → 独立表（新）数据迁移器（一次性，幂等）。
  *
- * <p>B4'（2026-10-02）：双轨二选一后开关已删除，本迁移器改为**无条件注册**——
+ * <p>B4'：双轨二选一后开关已删除，本迁移器改为**无条件注册**——
  * 存量库里仍有 {@code task.context.runningSpec} 的 JSONB 数据需要搬进
  * {@code task_running_spec} + {@code task_execution_record}，否则切换后历史任务的
  * Running Spec 会「看起来是空的」。</p>

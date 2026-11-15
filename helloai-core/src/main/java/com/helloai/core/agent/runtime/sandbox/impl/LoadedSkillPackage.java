@@ -3,7 +3,7 @@ package com.helloai.core.agent.runtime.sandbox.impl;
 import java.util.List;
 
 /**
- * 从 classpath 读出的技能包<b>内容</b>（`SKX-6`，2026-10-26）。
+ * 从 classpath 读出的技能包<b>内容</b>（`SKX-6`）。
  *
  * <p><b>为什么不叫 {@code SkillPackage}</b>：{@code com.helloai.core.agent.skill.SkillPackage}
  * 已是「技能目录登记项」（DB 侧 name / version / description / requiredTools）。同名两义会让

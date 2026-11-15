@@ -95,7 +95,7 @@ public class CircuitBreakerAlertServiceImpl implements CircuitBreakerAlertServic
     }
 
     /**
-     * 调度「无可执行候选 Agent」告警（G-015 收口，2026-10-21）。
+     * 调度「无可执行候选 Agent」告警（G-015 收口）。
      *
      * <p>复用熔断器告警的 webhook 通道与发送核心；标题/正文独立，
      * 便于运维在告警流中区分「熔断」与「无候选」两类事件。</p>

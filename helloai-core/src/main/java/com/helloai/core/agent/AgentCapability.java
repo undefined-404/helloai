@@ -102,7 +102,7 @@ public final class AgentCapability {
      * §6.52 本机执行能力判定：CLI_CLIENT / WEB_BROWSER 天然可本机操作；
      * API_KEY_LLM 需 {@code capabilities.supportsMCP=true}。
      *
-     * <p><b>归属说明（2026-10-01 W8 归位）</b>：原为 {@code task.service.SubTaskDispatchService}
+     * <p><b>归属说明（W8 归位）</b>：原为 {@code task.service.SubTaskDispatchService}
      * 的静态方法，但它判定依据**全部是 Agent 自身字段**（{@code accessType} + {@code capabilities}），
      * 属 agent 领域规则，故迁入本工具类。归位后：
      * <ul>

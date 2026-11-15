@@ -11,7 +11,7 @@ import lombok.EqualsAndHashCode;
  *
  * <p>与子任务级 {@code attachment} 分表而非加列：后者的可见性策略、交付物判定与补偿任务
  * 都建立在「子任务」锚点上，塞进会话维度会让判据出现第四种情形（详见
- * doc/plan/HelloAI 需求对话附件设计方案（2026-10-22）.md §3.1）。</p>
+ * doc/plan/HelloAI 需求对话附件设计方案.md §3.1）。</p>
  */
 @Data
 @EqualsAndHashCode(callSuper = true)

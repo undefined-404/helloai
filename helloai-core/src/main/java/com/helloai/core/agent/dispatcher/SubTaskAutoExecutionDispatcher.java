@@ -76,7 +76,7 @@ public class SubTaskAutoExecutionDispatcher {
                     subTaskQueryPort.mergeSkills(event.getSubTaskId()));
             log.info("执行命令派发成功: subTaskId={}, agentId={}", event.getSubTaskId(), agent.getId());
         } catch (Exception e) {
-            // HIGH-1（2026-10-15 修复）：原实现只 log.error ⇒ 派发失败在操作面**不可见**
+            // HIGH-1：原实现只 log.error ⇒ 派发失败在操作面**不可见**
             //（日志易被淹没），子任务停在 ASSIGNED 且无 agent_execution_record。
             // 现补落时间线事件，使「派发失败 → 10 分钟后由 AssignedSubTaskTimeoutTask 回收重派」
             // 这条自愈链在用户可见面上有前因，而不是只有结果。

@@ -319,7 +319,7 @@ onMounted(() => load())
 <style scoped>
 /* 列表页通用外观由 design-system.css 的 List Page Template 统一提供。 */
 
-/* ---- 查看规则弹窗（2026-10-18 排版重整）----
+/* ---- 查看规则弹窗（排版重整）----
    原问题三处：① 元信息四行 el-form-item 占掉小半屏、长标签被挤成方块；
    ② 正文 `white-space: pre-wrap` 直出 ⇒ `##` 与表格 `|` 全裸露；
    ③ 滚动条紧贴文字，长文读起来像挤在缝里。

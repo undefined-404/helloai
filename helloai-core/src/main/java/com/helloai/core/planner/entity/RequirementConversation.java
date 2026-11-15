@@ -79,7 +79,7 @@ public class RequirementConversation extends BaseEntity {
      * <p><b>与 {@link #plannerAgentId} 的分工</b>：plannerAgentId 决定「谁来扮演助理」
      * （PLANNER 角色，决定提示词与技能面），本字段只决定「用哪个模型答」。
      * 个人工作台走「选模型」入口（无角色），需求对话页走「选 Planner」入口（角色绑定模型），
-     * 两条链路的候选集刻意不共用（2026-11-05 设计稿裁定）。</p>
+     * 两条链路的候选集刻意不共用（设计稿裁定）。</p>
      *
      * <p><b>NULL 语义</b>：老数据 / 未指定 ⇒ 执行链回落到 Planner Agent 自身绑定的
      * {@code agent.model_type}，行为与本次改造前一致。指定时由
@@ -116,7 +116,7 @@ public class RequirementConversation extends BaseEntity {
      * 确认卡拒绝记忆（V127，SMALLINT 0/1）。
      * <p>1 = 用户最近一次拒绝了转入方案澄清（点「取消」或回复非确认内容）。
      * 决策阶段若为 1，即使 LLM 判 clarify 也<b>不再弹确认卡</b>（保持 CHAT 对话），
-     * 防「取消 → 下一条又被判 clarify → 再弹卡」死循环（2026-10-27 实测暴露）。
+     * 防「取消 → 下一条又被判 clarify → 再弹卡」死循环（暴露）。
      * 用户显式输入 /planner /task 或再次明确表达转方案时重置为 0。</p>
      */
     @TableField(typeHandler = SmallIntBooleanTypeHandler.class)

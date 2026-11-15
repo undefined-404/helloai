@@ -25,7 +25,7 @@ import java.util.Locale;
 /**
  * 对话式需求澄清编排服务的<b>薄门面</b>（需求模糊 → 多轮追问 → 终稿 → 创建任务）。
  *
- * <p><b>RM9-c 拆分（2026-10-16）</b>：本类由 1557 行上帝类拆为「门面 + 5 职责接口实现」，
+ * <p><b>RM9-c 拆分</b>：本类由 1557 行上帝类拆为「门面 + 5 职责接口实现」，
  * 门面只保留<b>会话生命周期与模式开关</b>（入参最浅、无 LLM 语义）：会话 CRUD
  * （{@code create} / {@code listConversations} / {@code detail} / {@code abandon} / {@code delete}）、
  * 模式切换（{@code switchToClarify} / {@code switchToChat}）、{@code listPlannerOptions}；
@@ -39,7 +39,7 @@ import java.util.Locale;
  *     <li>{@code ClarifyPromptRenderService}（impl：{@code ClarifyPromptRenderServiceImpl}）—— 模板渲染 + 描述段守卫。</li>
  * </ul>
  *
- * <p><b>§7.8 类规模拆分评审结论（2026-08-23）原文保留</b>：本类为澄清编排汇聚点，超 500 行 /
+ * <p><b>§7.8 类规模拆分评审结论原文保留</b>：本类为澄清编排汇聚点，超 500 行 /
  * 8 依赖红线，按 §7.8 选项二书面声明不继续拆分：</p>
  * <ul>
  *     <li>已剥离：PlannerAgentPicker（选 Agent）、ClarifyReplyParser（回复解析）、
@@ -53,7 +53,7 @@ import java.util.Locale;
  *         单会话状态机的自然整体。</li>
  * </ul>
  *
- * <p><b>★2026-10-16 该声明被 RM9-c 取代（顾虑逐条消解）</b>：</p>
+ * <p><b>★ 该声明被 RM9-c 取代（顾虑逐条消解）</b>：</p>
  * <ul>
  *     <li>顾虑①「轮次编排与消息持久化 / 终稿转任务共享会话状态，拆分将导致会话状态在类间传递」
  *         ⇒ 实测<b>不成立</b>：会话实体 {@code RequirementConversation} 本就是入参（非类内可变状态），

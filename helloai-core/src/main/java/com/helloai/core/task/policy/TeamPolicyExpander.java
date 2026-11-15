@@ -14,7 +14,7 @@ import java.util.Map;
  * <p>纯函数（无 DB 依赖，可单测）：把 Team 成员按槽位角色展开为
  * {@code executorAgentIds} / {@code plannerAgentId} / {@code reviewerAgentId}。
  * 显式已指定的槽位键保留（显式 &gt; Team 展开，Team 是默认组合源）；
- * {@code teamId} 键保留为来源元信息（调度只读展开后的白名单/单值键）。</p>
+ * {@code teamId} 键保留为来源元信息（度只读展开后的白名单/单值键）。</p>
  */
 public final class TeamPolicyExpander {
 

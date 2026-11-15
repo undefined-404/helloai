@@ -48,11 +48,10 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * Agent Runtime 真身上下文装配器（G-002 单轨收敛，2026-09-30）。
+ * Agent Runtime 真身上下文装配器（G-002 单轨收敛）。
  *
  * <p><b>职责</b>：把执行命令 + 子任务 + Agent 装配为 {@link AgentContext}（Runtime 真身
- * {@code RuntimeTurnExecutor} 的完整输入），承接旧链 {@code SubTaskExecutionServiceImpl.executeOnce}
- * 的装配职责（G-002 迁移后旧链入口退役，装配逻辑平移至此，行为等价）：</p>
+ * {@code RuntimeTurnExecutor} 的完整输入，G-002 单轨）：</p>
  * <ul>
  *     <li>Prompt 装配：Task Running Spec 全局段 + 技能规范段 + 执行者历史画像段 + 依赖产出参考段
  *         + 重派恢复上下文（B3 Resume 起含事件流「已完成的事实」）+ 返工修正指引 + 产出回填要求
@@ -67,33 +66,25 @@ import java.util.stream.Collectors;
  *
  * <p><b>边界</b>：Turn 事件骨架（AGENT_STARTED / SKILL_RESOLVED / TOOL_RESOLVED /
  * ENVIRONMENT_RESOLVED / CONTEXT_BUILT / TOOL_CALL）由 {@code RuntimeTurnExecutor} 在真身内
- * 自行记录（与旧链同 payload 语义），本类不再记录——避免事件双写。本类不做状态推进
- * （{@code SubTaskCommandPort#startIfNeeded}，原 {@code SubTaskExecutionService} 已随 G-002 删除）
- * 与结果回写（{@link ExecutionResultHandler}），
- * 两者是消费侧（{@code LocalExecutionCommandConsumer}）的编排职责。</p>
+ * 自行记录，本类不记录——避免事件双写。本类不做状态推进（{@code SubTaskCommandPort#startIfNeeded}）
+ * 与结果回写（{@link ExecutionResultHandler}），两者是消费侧（{@code LocalExecutionCommandConsumer}）的编排职责。</p>
  *
- * <p><b>跨域访问（2026-10-01 W11）</b>：本类曾直接 import {@code task.entity.SubTask} /
- * {@code task.entity.Attachment} / {@code task.entity.Uncertainty} / {@code task.service.*} /
- * {@code task.spec.ExecutionRecord}，构成 CODE_STYLE §6 反向依赖（{@code agent → task}）。
- * 现一律改经 {@code agent.port} 端口：子任务走 {@link SubTaskQueryPort}（{@link SubTaskSnapshot}
- * 快照，含 `dependsOn` 与 `uncertainties` 投影）、附件走 {@link AttachmentPort}
- * （{@link AttachmentRef}，其 `contentLoadable` 与不确定性的 `assumption` 均由 <b>task 侧映射器</b>
- * 派生后透传，本域不复制 task 常量）、执行记录走 {@link TaskRunningSpecPort}。
- * 端口归属判据见 §7.2：消费方 agent <b>低于</b>提供方 task ⇒ 契约落消费方、适配器落提供方。</p>
+ * <p><b>跨域访问（W11）</b>：一律经 {@code agent.port} 端口避免 {@code agent → task} 反向依赖（CODE_STYLE §6）——
+ * 子任务走 {@link SubTaskQueryPort}（{@link SubTaskSnapshot} 快照，含 `dependsOn` 与 `uncertainties` 投影）、
+ * 附件走 {@link AttachmentPort}（{@link AttachmentRef}，其 `contentLoadable` 与不确定性的 `assumption`
+ * 均由 <b>task 侧映射器</b>派生后透传，本域不复制 task 常量）、执行记录走 {@link TaskRunningSpecPort}。
+ * 端口归属见 §7.2：消费方 agent <b>低于</b>提供方 task ⇒ 契约落消费方、适配器落提供方。</p>
  *
- * <p><b>容错纪律</b>：与旧链一致的 best-effort 降级哲学——会话 / 对话流 / 画像 / 依赖段 /
- * 恢复上下文任一部分失败均降级不阻断执行；唯一 fail-close 点是真实模式下 API Key 缺失
- * （Runtime 循环必须可解析凭据，契约化失败）。</p>
+ * <p><b>容错纪律</b>：best-effort 降级——会话 / 对话流 / 画像 / 依赖段 / 恢复上下文任一部分失败均降级不阻断执行；
+ * 唯一 fail-close 点是真实模式下 API Key 缺失（Runtime 循环必须可解析凭据，契约化失败）。</p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AgentRuntimeContextAssembler {
 
-    // 单条前置产出注入的字符上限：**口径单源**，见
-    // UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS（该类是两个消费方共用的预算算法宿主）。
-    // REF-5.2a（2026-10-10）：此前本类与 McpToolServiceImpl 各写一份 64000（且注释互相指认已删除的
-    // SubTaskExecutionService/Impl），属典型的口径漂移风险 —— 现统一引用单源。
+    // 单条前置产出注入的字符上限：**口径单源**，见 UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS
+    // （两个消费方共用的预算算法宿主）。REF-5.2a：本类与 McpToolServiceImpl 统一引用单源，不各写一份常量（防口径漂移）。
 
     private final AgentExecutionProperties executionProperties;
     private final AgentChatModelResolver agentChatModelResolver;
@@ -286,16 +277,14 @@ public class AgentRuntimeContextAssembler {
     /**
      * 解析恢复上下文：{@code agent_session} 中断记录<b>优先</b>，缺失时以<b>事件流恢复点兜底</b>。
      *
-     * <p><b>兜底的必要性（实测）</b>：会话表是可变表，且查询口径为「只看最新一行，
-     * ACTIVE / COMPLETED 一律零注入」（{@code AgentSessionServiceImpl#findLatestInterrupted}）。
-     * 进程执行中途被中断（优雅停机 / kill / OOM）时该行可能停在 ACTIVE，或根本没有行
-     * ⇒ 续跑上下文<b>静默零注入</b>，接续者不知道上次已经做过什么，可能重复副作用。
-     * 此时事件流里「{@code AGENT_STARTED} 之后没有 {@code AGENT_COMPLETED}」以及
-     * 「{@code TOOL_CALL_STARTED} 之后没有 {@code TOOL_CALL_COMPLETED}」是 append-only
-     * 的中断点证据，不会被任何后续写入覆盖。</p>
+     * <p><b>为什么要兜底</b>：会话表可变、只看最新一行且 ACTIVE/COMPLETED 零注入
+     * （{@code AgentSessionServiceImpl#findLatestInterrupted}）；进程中途被中断（停机/kill/OOM）时
+     * 该行可能停在 ACTIVE 或无行 ⇒ 续跑上下文静默零注入，接续者不知上次做过什么、可能重复副作用。
+     * 事件流「AGENT_STARTED 无 AGENT_COMPLETED」「TOOL_CALL_STARTED 无 TOOL_CALL_COMPLETED」
+     * 是 append-only 的中断点证据，不被后续写入覆盖。</p>
      *
-     * <p><b>纪律</b>：纯读、零写入 —— 不修正会话表、不修正业务状态；事件流只作事实来源，
-     * 不作第二业务状态源（{@code design/Agent_Event_Stream.md} 原则 2）。</p>
+     * <p><b>纪律</b>：纯读、零写入——不修正会话表/业务状态；事件流只作事实来源，不作第二业务状态源
+     * （{@code design/Agent_Event_Stream.md} 原则 2）。</p>
      */
     private RecoveryContext resolveRecoveryContext(Long subTaskId) {
         AgentSessionService.InterruptedSession session = findRecoverySafely(subTaskId);
@@ -720,14 +709,9 @@ public class AgentRuntimeContextAssembler {
     /**
      * 返工上下文注入（REF-8.2.1：**替换语义**，非追加）。
      *
-     * <p>此前把<b>全部</b>历史轮次逐轮铺开（"共 N 轮历史审核"，每轮含问题/评语/评分）——返工到第 3 轮时
-     * prompt 里堆着 3 份完整驳回 + 前置摘要 + 上次产出，思考链与 token 随轮数线性膨胀，而<b>历史轮次
-     * 对本轮该改什么几乎没有增量信息</b>（`LOG-20261012-007` 实测：模型对"能力上做不到"的任务只是
-     * 重复同一结论，回灌历史驳回零收益）。</p>
-     *
-     * <p>现改为与 DSH 一致的<b>替换语义</b>（`refreshContext` 替换而非追加、运行期快照显式声明
-     * "supersedes earlier snapshots"——研究文档 §1.5.2）：<b>只铺开最近一轮</b>，历史轮次压成一行
-     * 摘要并明写「已被本轮取代」。</p>
+     * <p><b>只铺开最近一轮</b>，历史轮次压成一行摘要并明写「已被本轮取代」——历史轮次对本轮该改什么
+     * 几乎无增量信息，逐轮铺全会让思考链与 token 随轮数线性膨胀（`LOG-20261012-007`）。
+     * 对齐 DSH `refreshContext` 替换语义（运行期快照 "supersedes earlier snapshots"，研究文档 §1.5.2）。</p>
      */
     private void appendReworkContext(StringBuilder sb, SubTaskSnapshot subTask) {
         Map<String, Object> ctx = subTask.context();
@@ -895,11 +879,10 @@ public class AgentRuntimeContextAssembler {
                 }
                 loadedCount++;
                 sb.append("**内容**:\n");
-                // P-1 防御：截断升级为「行边界回退 + 结构化标注 + 缺失声明指引」——
-                // 原实现硬切 substring(0, 4000) 会拦腰截断 URL/清单，且消费方无法机读缺了什么
+                // P-1：行边界回退 + 结构化标注 + 缺失声明指引（硬切 substring 会拦腰截断 URL/清单，且消费方无法机读缺了什么）
                 String render = TextTruncator.truncateAtLineBoundary(content, UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS);
                 boolean topLevelTruncated = render.length() < content.length();
-                // R2（2026-09-30 审计 §15.4）：附件路径的逐附件截断已由 UpstreamAttachmentRenderer
+                // R2（审计 §15.4）：附件路径的逐附件截断已由 UpstreamAttachmentRenderer
                 // 内置 [TRUNCATED] file= 标注（总长受控故顶层不再触发）——统计口径并入，
                 // timeline 的 truncatedCount 如实反映「该前置存在不可见内容」
                 boolean anyTruncated = topLevelTruncated || render.contains("[TRUNCATED] file=");
@@ -926,15 +909,12 @@ public class AgentRuntimeContextAssembler {
     /**
      * 读取前置子任务的完成内容本体：物化附件优先，失败/无附件回退 context.lastExecution.output。
      *
-     * <p><b>P-1 修复（2026-09-30）</b>：原实现按 {@code listActive} 倒序（最新在前）只取
-     * 第一个可加载附件——后创建的附录类文件会把先创建的主文件挤出（tku-e2e-01 下游关键词
-     * 缺失事故根因）。现改为：反转正序（最早创建在前，主文件优先）+ 拼接全部可加载 ACTIVE
-     * 附件（各带 {@code 【文件：xxx】} 来源标题行），单附件读取失败仅跳过不拖垮其余。</p>
+     * <p><b>P-1</b>：{@code listActive} 反转正序（最早创建在前，主文件优先）+ 拼接全部可加载 ACTIVE 附件
+     * （各带 {@code 【文件：xxx】} 来源标题行），单附件读取失败仅跳过不拖垮其余——避免倒序只取第一个时
+     * 后创建的附录把主文件挤出。</p>
      *
-     * <p><b>P-1 修复 R2（2026-09-30 审计 §15.4）</b>：拼接改为
-     * {@link UpstreamAttachmentRenderer} 逐附件配额渲染（主附件保底 + 次要最低配额 +
-     * 逐附件 {@code [TRUNCATED] file=...} 标注）——替代「拼接后单点 4000 截断」，
-     * 第二个及以后附件不再整体不可见。</p>
+     * <p><b>R2（审计 §15.4）</b>：拼接走 {@link UpstreamAttachmentRenderer} 逐附件配额渲染
+     * （主附件保底 + 次要最低配额 + 逐附件 {@code [TRUNCATED] file=...} 标注），第二个及以后附件不再整体不可见。</p>
      */
     private String loadUpstreamContent(SubTaskSnapshot dep) {
         try {
@@ -973,22 +953,18 @@ public class AgentRuntimeContextAssembler {
     }
 
     /**
-     * 构建系统提示词（REF-8.2 动作①：systemPrompt 从 {@code ""} 填角色 / 工具指引 / 输出契约）。
+     * 构建系统提示词（REF-8.2 动作①：systemPrompt 填角色 / 工具指引 / 输出契约）。
      *
-     * <p>此前 {@code AgentRuntimeContextAssembler:213} 硬编码 {@code systemPrompt("")}——模型只有
-     * userPrompt（任务上下文），缺角色边界与「有工具该何时用」的主动指引。本方法补齐：</p>
      * <ul>
-     *   <li><b>角色</b>：明确自己是执行者、为任务交付物负责；</li>
-     *   <li><b>工具指引</b>：接入类型={@code API_KEY_LLM}（内部 LLM，有进程内工具集）时提示
-     *       可经工具读取附件/依赖、无法仅凭预内联摘要做结论时先用工具核验——对齐
-     *       {@code LOG-20261011-007} 事故根因（内部 LLM 只吃摘要、不主动读原始附件）；</li>
-     *   <li><b>输出契约</b>：正文用 Markdown、交付物具体可核验、行末按 userPrompt 的
-     *       {@code EXECUTION_RECORD} 回填要求输出回复。</li>
+     *   <li><b>角色</b>：执行者、为任务交付物负责；</li>
+     *   <li><b>工具指引</b>：{@code API_KEY_LLM}（内部 LLM，有进程内工具集）时提示可经工具读附件/依赖、
+     *       无法仅凭预内联摘要做结论时先用工具核验（{@code LOG-20261011-007}：内部 LLM 只吃摘要不读原始附件）；</li>
+     *   <li><b>输出契约</b>：Markdown 正文、交付物具体可核验、行末按 userPrompt 的 {@code EXECUTION_RECORD} 回填。</li>
      * </ul>
      *
-     * <p><b>克制 / 不臆造</b>：不注入 Agent 姓名或任务级个性化（那些在 userPrompt）；systemPrompt 是
-     * 稳定的角色面，不随任务漂移。external / null 接入类型给通用角色段（不假说有工具）。
-     * 返回值恒非 blank，使 {@code ChatModelToolLoop:74} 的 hasText 守卫通过并发送 system 消息。</p>
+     * <p><b>克制 / 不臆造</b>：不注入 Agent 姓名或任务级个性化（那些在 userPrompt）；systemPrompt 是稳定角色面、
+     * 不随任务漂移。external / null 接入类型给通用角色段（不假说有工具）。返回值恒非 blank，
+     * 使 {@code ChatModelToolLoop} 的 hasText 守卫通过并发送 system 消息。</p>
      *
      * @param agent      执行者 Agent（用于角色声明）
      * @param accessType 接入类型（决定是否提示有工具）
@@ -1014,15 +990,10 @@ public class AgentRuntimeContextAssembler {
                     .append("- 在你的正文之外登记独立的交付文件（internal_register_output_attachment）；\n")
                     .append("- 查看平台全部可用技能目录（internal_list_skills），并按需加载某个技能的完整规范正文")
                     .append("（internal_load_skill）——任务涉及特定专业规范时，先查技能库再按规范执行。\n")
-                    // ★2026-10-25（MiniMax 轮数耗尽事故）：模型把 21211 字节正文写进沙箱 /tmp/work/sc.md
-                    // 并反复自查，平台一条都没收到 ⇒ 必须显式告知「沙箱文件不构成交付物」——
-                    // 这是模型缺的领域知识，不是措辞强度问题（此前已有「正文优先」仍照写文件）。
-                    // ★同日二次修正（ADR-005 沙箱改为复用）：沙箱不再是「一次性环境」——
-                    // 文件跨调用保留、可增量编辑；但「沙箱文件 ≠ 交付物」这条硬约束不变（平台只采集
-                    // 对话正文）。两条必须同时说清：只说「一次性」会让模型整篇重写（实测 20 轮不收敛），
-                    // 只说「可编辑」会让它以为文件就是交付。
-                    // ★SL-3（2026-11-13）：作用域上移到任务级 —— 子任务之间文件可见，且命令 cwd 固定
-                    // 为 /workspace（`./x.py` 与 `/workspace/x.py` 同址）。
+                    // ★沙箱文件 ≠ 交付物（平台只采集对话正文）——这是模型缺的领域知识，非措辞强度问题。
+                    // ADR-005 沙箱复用：文件跨调用保留、可增量编辑，但「≠交付物」硬约束不变；两条须同时说清
+                    // （只说「一次性」会整篇重写不收敛，只说「可编辑」会误以为文件即交付）。
+                    // SL-3 作用域上移任务级：子任务间文件可见，命令 cwd 固定 /workspace（./x.py 与 /workspace/x.py 同址）。
                     .append("- 沙箱（internal_run_in_sandbox）是**本任务的工作区**：同一任务内（含跨子任务）")
                     .append("**复用同一沙箱，子任务之间文件互相可见**，**上一轮写入的文件这一轮还在**")
                     .append("（路径不变即同一文件）。命令默认在 `/workspace` 下执行，`./x.py` 与 `/workspace/x.py` 同址。因此：\n")
@@ -1045,23 +1016,18 @@ public class AgentRuntimeContextAssembler {
                 .append("- 若任务要求（见任务描述末尾的「产出回填要求」），按 EXECUTION_RECORD 结构回填；\n")
                 .append("- **交付物正文必须在工具调研完成后立即写出**：调研 / 检索 / 验证工具调用是手段，")
                 .append("正文才是交付物——本轮循环的最后一轮务必输出完整正文，不要把「我先看看 / 开场白」当正文；\n")
-                // ★2026-10-25（MiniMax 14 轮耗尽事故）：实测「沙箱写文件 + 反复跑校验脚本」会吃掉全部轮次，
-                // 耗尽时正文一个字都没产出。轮次是有限资源，必须显式给出预算口径与优先级。
+                // ★轮次是有限资源：沙箱写文件 + 反复跑校验会吃光轮次致正文零产出，须显式给预算口径与优先级。
                 .append("- **轮次是有限资源，交付优先**：调研 2~4 轮、成文 1 轮即可，自查 / 自验**最多 1 次**；")
                 .append("反复写脚本校验同一条结论会耗尽轮次、导致正文来不及产出而被判失败——")
                 .append("**先写出正文永远是第一优先级**，未复核项写进正文末尾的 VERIFICATION 里说明即可；\n")
-                // ★2026-10-25（MiniMax 竞品分析 MAX_ITERATIONS 事故）：模型把 20 轮全花在沙箱 curl
-                // 逐页抓取 ClickUp 定价页上（18 次沙箱调用、23 次工具调用），正文零产出。
-                // 根因：web_search 授权缺失 → 唯一联网通道 = 沙箱 curl；但模型不知道「抓取也有预算」。
-                // 必须显式给出「调研抓取轮次上限」与「正文优先」的硬约束。
+                // ★须显式给「调研抓取轮次上限」+「正文优先」：沙箱 curl 逐页抓取会吃光轮次致正文零产出
+                // （web_search 授权缺失时沙箱 curl 是唯一联网通道，模型不知抓取也有预算）。
                 .append("- **调研抓取轮次上限**：联网检索 / 沙箱 curl 抓取**最多 6 轮**；")
                 .append("第 6 轮后无论数据是否齐，都必须停止抓取、开始写正文——")
                 .append("数据缺口写进 VERIFICATION 的 NEXT_STEPS 里说明，不要继续抓；\n")
                 .append("- **链接抽查即可**：验收要求「N 条真实可打开来源」时，**抽查 2~3 条验证可达即可**，")
                 .append("不必逐条 curl 验证——逐条验证会耗尽轮次；\n")
-                // ★2026-10-25（MiniMax 第 6 次事故，7443）：验收要求「正文 1800~2300 字」，模型首稿写 3227 字
-                // （超 70%），之后 20 轮只把 3227 削到 3008，每轮 20~50 字，缺口 708 字 ⇒ 数学上不可能收敛。
-                // 根因不是模型懒，而是策略错：它先追求「写得好」再「砍得短」。必须让它首稿就按区间写。
+                // ★字数区间类验收须首稿命中：「先写超再砍」策略下每轮删几十字，缺口大时数学上不收敛（轮次耗尽）。
                 .append("- **字数区间类验收：首稿就要命中，不要「写超再砍」**：验收写「A~B 字」时，")
                 .append("按 B 的**下沿**（约 B×0.85）一次写到位；若已写超，用增量删减")
                 .append("（`python3` 读文件 → 定位删段/删句 → 写回）**一次删够到区间内**，")

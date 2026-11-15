@@ -17,7 +17,7 @@ import java.util.List;
  * MyBatis-Plus **内置方法**才走的路径。自定义 {@code @Select("SELECT * ...")} 返回实体时
  * 不经过该 resultMap，`uncertainties` 会被全局 {@code List} handler 读成
  * {@code List<LinkedHashMap>}，消费点 `u.kind()` 当场 ClassCastException。
- * 这个坑项目已经踩过一次（2026-09-10 派单死锁）。</p>
+ * 这个坑项目已经踩过一次（派单死锁）。</p>
  *
  * <p>所以本接口的分工是：<b>返回实体的查询一律走 {@code BaseMapper} 内置方法 + Wrapper；
  * 自定义 SQL 只返回标量</b>（{@code int} / {@code long}），标量不涉及 JSONB 映射，安全。</p>
@@ -138,7 +138,7 @@ public interface PlanDraftMapper extends BaseMapper<PlanDraft> {
      * {@code uk_plan_draft_code} 是 {@code (task_id, code) WHERE deleted = 0} 的部分索引，
      * 不软删会让下一轮拆解顶在唯一索引上。且设计 §3.1 定死「确认 = 显式一态」：
      * 只软删不标 {@code CONFIRMED}，读侧任何漏过滤 {@code deleted} 的查询会把已转正
-     * 草案当待确认再处理一次（设计 §4.5 裁定，2026-11-08）。</p>
+     * 草案当待确认再处理一次（设计 §4.5 裁定）。</p>
      *
      * @return 被标为 CONFIRMED 的行数（0 = 没有 ACTIVE 行，属正常；幂等重试安全）
      */

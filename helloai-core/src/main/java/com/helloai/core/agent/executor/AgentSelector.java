@@ -213,7 +213,7 @@ public class AgentSelector {
                 .toList();
         Agent chosen = weightedDraw(tier, inFlight, scoreRange(pool));
         if (chosen != null) {
-            // 可观测（2026-10-18）：不记这行，切换策略后无法证明它生效，也无法核对权重与在飞读数
+            // 可观测：不记这行，切换策略后无法证明它生效，也无法核对权重与在飞读数
             log.info("选人策略 WEIGHTED_RANDOM: agentId={}, weight={}, inFlight={}, score={}, tierSize={}",
                     chosen.getId(), weightOf(chosen, scoreRange(pool)),
                     inFlight.getOrDefault(chosen.getId(), 0), chosen.getScore(), tier.size());
@@ -504,7 +504,7 @@ public class AgentSelector {
      * 采用相对档位而非绝对量纲，是因为 token 消耗没有天然上界（不同模型/任务量级差异极大），
      * 任何绝对阈值都会引入"拍脑袋常数"。</p>
      *
-     * <p><b>缺失语义（2026-10-04 订正）</b>：无成本数据（无成功执行记录 / {@code token_usage}
+     * <p><b>缺失语义（订正）</b>：无成本数据（无成功执行记录 / {@code token_usage}
      * 全 NULL / 查询异常）记 {@link #COST_RANK_NEUTRAL}（<b>中立档</b>）——「不可比」的正确落点是
      * <b>不偏袒</b>，而非记 {@code 0}。原实现记 {@code 0} 并在 {@code max(...)} 中比较，等价于
      * 「比最贵档还差」，会在<b>部分覆盖</b>（如候选内仅 1 个 Agent 有历史样本）时把
@@ -592,7 +592,7 @@ public class AgentSelector {
     }
 
     /**
-     * N12 P1 STRICT 独占报锁（ 第 1 段）语义：
+     * N12 P1 STRICT 独占报锁（第 1 段）语义：
      * 返回 true 表示该 Agent 当前以 STRICT 模式上岗，
      * 平台不应当把它列入他人失败/熔断后的替补池候选。
      *

@@ -46,7 +46,7 @@ public final class VisibleToolCallbacks {
      * 按 {@code resolvedTools} 的「生效形态」从目录中选出模型可见回调。
      *
      * @param resolvedTools {@code ToolRegistry.resolve} 的结果（生效形态；null / 空 ⇒ 返回空列表）
-     * @param all           候选目录（调用方已合成的回调数组；null ⇒ 返回空列表）
+     * @param all           候选目录（用方已合成的回调数组；null ⇒ 返回空列表）
      * @return 模型可见回调（顺序 = 目录顺序）；异常时返回已装配部分
      */
     public static List<ToolCallback> select(List<ToolDefinition> resolvedTools, ToolCallback[] all) {

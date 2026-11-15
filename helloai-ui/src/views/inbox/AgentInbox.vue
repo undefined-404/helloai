@@ -244,7 +244,7 @@ const readFilter = ref<number | null>(null)
 // ★库中历史消息可能已全部过期归档，此时默认页为空属预期（空态会引导切换）。
 const archiveFilter = ref<number>(0)
 
-// 枚举字典（2026-10-18）：事件类型中文名由后端 /api/enums/catalog 下发，
+// 枚举字典：事件类型中文名由后端 /api/enums/catalog 下发，
 // 不再依赖前端硬编码的 INBOX_EVENT_TYPE_MAP（后者只覆盖 8 个键，后端实际发 10 种，
 // 导致 sub_task.approved 等裸露）。
 /** 空态文案：区分「真的没有」与「只是被筛选掉了」（避免又被误判成功能坏了）。 */

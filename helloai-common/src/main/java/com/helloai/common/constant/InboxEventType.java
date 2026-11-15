@@ -1,7 +1,7 @@
 package com.helloai.common.constant;
 
 /**
- * 收件箱事件类型 → 中文名目录（**服务端单一事实源**，2026-10-18）。
+ * 收件箱事件类型 → 中文名目录（**服务端单一事实源**）。
  *
  * <p><b>为什么需要</b>：{@code agent_inbox.event_type} 存的是 {@code sub_task.approved}
  * 这类点分字符串，前端原先在 {@code types/dialog.ts} 里硬编码了 8 个键，
@@ -52,7 +52,7 @@ public enum InboxEventType {
         return desc;
     }
 
-    /** 反向查：事件码 → 枚举；未知返回 {@code null}（调用方回退显示原码，不显示「未知」）。 */
+    /** 反向查：事件码 → 枚举；未知返回 {@code null}（用方回退显示原码，不显示「未知」）。 */
     public static InboxEventType of(String code) {
         if (code == null) {
             return null;

@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * sub_task.uncertainties（JSONB → {@code List<Uncertainty>}）强类型 TypeHandler。
  *
- * <p>背景（2026-09-10 派单死锁根因修复）：MyBatisPlusConfig 为兼容 JSONB 列把
+ * <p>背景（派单死锁根因修复）：MyBatisPlusConfig 为兼容 JSONB 列把
  * {@code List.class} 全局注册为 {@link PgJsonbTypeHandler}，MyBatis 自动映射按
  * getter 擦除后的 {@code List.class} 命中该全局注册；Jackson 没有具体泛型目标，
  * 把 JSON 数组反序列化为 {@code List<LinkedHashMap>}。强类型消费点（如

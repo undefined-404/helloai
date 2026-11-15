@@ -149,7 +149,7 @@ router.beforeEach(async (to) => {
   }
 
   // 菜单漂移自愈：命中兜底路由（路径未注册）且本会话尚未自愈过 → 服务端菜单可能已变更
-  // （如新增菜单、调整权限），强制重建动态路由一次并重入；重建后仍兜底则放行（真正的无权限/不存在）。
+  // （如新增菜单，整权限），强制重建动态路由一次并重入；重建后仍兜底则放行（真正的无权限/不存在）。
   if (to.name === 'not-found' && !rebuiltForMenuDrift) {
     rebuiltForMenuDrift = true
     routesBuilt = false

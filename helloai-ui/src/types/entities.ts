@@ -156,7 +156,7 @@ export interface SubTask {
    * 草案位置编号（`TD-16d-4` d-3b-3）：根层 `yyyyMMdd+4位`、子层 `父code-3位`。
    *
    * 这是**位置身份**，`id` 只是行身份——展开会删父行重建，同一个位置可能换了一行，
-   * 但 code 不变。草案写路径（修订 / 展开 / 重生成）以它为定位口径，
+   * 但 code 不变。草案写路径（订 / 展开 / 重生成）以它为定位口径，
    * 行 key 也用它，避免展开后整表按 id 重挂导致展开态/编辑态错位。
    *
    * 存量草案（`V150` 之前拆解、从未双写暂存区）为 null，此时前端回落 `id` 与旧端点，
@@ -580,7 +580,7 @@ export interface RequirementConversation {
   sourceDraftCode?: string | null
   // 派生会话产出的独立任务 Y（V150，软引用）：派生会话的 taskId 是父任务 X（ADR-008 §13.1
   // 「会话挂在父任务下」），产出任务在这列。读侧统一「derivedTaskId 优先，回退 taskId」——
-  // 拿 taskId 当产出会让「查看任务」跳到父任务（2026-11-12 因此在 X 上误点拒绝重拆）。
+  // 拿 taskId 当产出会让「查看任务」跳到父任务（因此在 X 上误点拒绝重拆）。
   derivedTaskId?: LongId | null
   createTime: string
   updateTime: string

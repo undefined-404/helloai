@@ -416,7 +416,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
      *       不能说明没落库——拿它当判据会把每一个存量批次判成残缺。</li>
      * </ol>
      *
-     * @return {@code null} = 完整或判不了（放行）；非 {@code null} = 残缺说明（调用方据此判失败）
+     * @return {@code null} = 完整或判不了（放行）；非 {@code null} = 残缺说明（用方据此判失败）
      */
     private String describeIncompleteBatch(String batchKey) {
         Integer expected = planAttemptService.findLatestByBatchKey(batchKey)
@@ -1107,7 +1107,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         if (items.size() > MAX_DRAFT_COUNT) {
             throw new BizException("拆解结果超过数量上限 " + MAX_DRAFT_COUNT + ": 实际 " + items.size());
         }
-        // 2026-11-08：此方法只做「能不能解析成草案」——结构/字段/kind 三类判据统一由
+        // 此方法只做「能不能解析成草案」——结构/字段/kind 三类判据统一由
         // DraftGateChecker 在**落库之后**判定，结论写进每条草案的 context.gateFindings。
         // 不再在解析期抛异常：一条草案的写法问题不该让整批草案拿不到（那正是「重试必复现」的来源）。
         return items;

@@ -19,7 +19,7 @@ public interface SemanticJudgePort {
      *
      * @param systemPrompt 角色与规则段（含输出 JSON 契约）
      * @param userPrompt   本次判定的事实材料
-     * @return 模型正文（可能为空串，调用方按「无法判定」处理）
+     * @return 模型正文（可能为空串，用方按「无法判定」处理）
      * @throws com.helloai.common.base.BizException Agent 不存在 / 无可用凭据
      */
     String judgeOnce(Long agentId, String systemPrompt, String userPrompt);

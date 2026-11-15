@@ -13,7 +13,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * MCP Server 鉴权上下文（§3.1 / §9 鉴权接入；D-2 分布式化，2026-10-15）。
+ * MCP Server 鉴权上下文（§3.1 / §9 鉴权接入；D-2 分布式化）。
  *
  * <p><b>核心机制</b>：用 sessionId 关联 {@link McpAuthFilter} 写入的鉴权信息与
  * spring-ai MCP Server 反射调用 @Tool 方法时的请求上下文。</p>
@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit;
  * 由客户端在 arguments 显式透传 {@code _sessionId}（见
  * {@link #requireAuthId(String)}）。</p>
  *
- * <p><b>存储（D-2，2026-10-15 由进程级 static map 外置 Redis）</b>：
+ * <p><b>存储（D-2，由进程级 static map 外置 Redis）</b>：
  * 原实现为 {@code static ConcurrentMap} 进程级注册表 = 单实例假设——
  * 多实例部署下鉴权写入（握手/POST 落 A）与工具调用（落 B）不保证同实例，
  * B 上查不到即返 401「session 未鉴权」，现象像鉴权 bug 而非架构 bug。
@@ -301,7 +301,7 @@ public class McpAuthContext {
         }
     }
 
-    /** 诊断读：任何失败都返 null（调用方按「无会话」处理），不抛。 */
+    /** 诊断读：任何失败都返 null（用方按「无会话」处理），不抛。 */
     private AuthContext readQuietly(String sessionId) {
         try {
             String json = bucket(sessionId).get();

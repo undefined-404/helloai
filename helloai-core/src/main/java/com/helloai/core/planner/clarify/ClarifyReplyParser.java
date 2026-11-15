@@ -47,7 +47,7 @@ public class ClarifyReplyParser {
     /** assistant 消息 payload 的联网搜索查验键（与 mode/progress/questions 同级）。 */
     private static final String PAYLOAD_KEY_WEB_SEARCH = "webSearch";
 
-    /** payload 中「思考 + 检索步骤」的键（RoundProcess 序列化位置，2026-10-18）。 */
+    /** payload 中「思考 + 检索步骤」的键（RoundProcess 序列化位置）。 */
     private static final String PAYLOAD_KEY_PROCESS = "process";
 
     /** LLM auto 意图标记的 JSON 键名（CHAT 轮次 LLM 输出末尾隐藏行）。 */
@@ -108,7 +108,7 @@ public class ClarifyReplyParser {
         try {
             reply = objectMapper.readValue(cleaned, RequirementClarifyService.ClarifyReply.class);
         } catch (Exception first) {
-            // 二级修复（2026-10-18）：LLM 在 description/message 里裸写英文引号或换行时，
+            // 二级修复：LLM 在 description/message 里裸写英文引号或换行时，
             // 字符串提前结束 ⇒ "was expecting comma to separate Object entries"。这类输出
             // 内容完整，只是不符合 JSON 转义规范，直接抛错等于让用户白等一次完整 LLM 调用。
             // 先试 repairBrokenStrings；仍失败才走原有降级/抛错分支。

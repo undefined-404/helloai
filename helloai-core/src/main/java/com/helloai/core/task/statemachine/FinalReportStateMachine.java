@@ -80,7 +80,7 @@ public final class FinalReportStateMachine {
      * 校验迁移合法性，非法直接抛 {@link IllegalStateException}。
      *
      * <p>刻意用 {@code IllegalStateException} 而非业务异常：非法迁移是<b>编程错误</b>
-     * （调用方写错了迁移），不是可预期的业务失败，应当快速失败暴露。</p>
+     * （用方写错了迁移），不是可预期的业务失败，应当快速失败暴露。</p>
      *
      * @param from 当前状态
      * @param to   目标状态

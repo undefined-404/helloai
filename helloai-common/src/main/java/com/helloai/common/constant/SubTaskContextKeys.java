@@ -28,7 +28,7 @@ public final class SubTaskContextKeys {
     public static final String ACCEPTANCE_PRECONDITIONS = "acceptancePreconditions";
 
     /**
-     * 门禁结论（{@code Map}：{@code findings / ruleVersion / checkedAt | clearedAt}，`2026-11-08`）。
+     * 门禁结论（{@code Map}：{@code findings / ruleVersion / checkedAt | clearedAt}，``）。
      *
      * <p>写入：{@code SubTaskGateFindingsStore}（**唯一写点**，拆解 / 展开 / 重生成 / 编辑 /
      * 确认五条路径共用）。<b>结构恒存在</b>：无问题写 {@code findings: []} + {@code clearedAt}，

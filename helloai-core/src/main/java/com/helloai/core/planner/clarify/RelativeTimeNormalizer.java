@@ -197,7 +197,7 @@ public class RelativeTimeNormalizer {
                 if (days <= 30) return "oneMonth";
                 if (days <= 365) return "oneYear";
             } catch (Exception ignore) {
-                // 非法日期（如 2026-02-31）：忽略，走 noLimit 兜底
+                // 非法日期（如）：忽略，走 noLimit 兜底
             }
         }
         // 档位六：裸「最近」（无更短/更长窗口限定）→ 月档，与 normalize 的 30 天窗口同源

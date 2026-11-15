@@ -212,7 +212,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
      * 与自动核验 recordReviewEventSafely 同构：同事务双写 agent_event + outbox，
      * 供 B3 对账终态投影校验（DONE → review_approved、REWORK → review_rejected/rework_started）。
      *
-     * <p><b>★事务语义订正（2026-10-15，原注释「事件 write-only，失败不阻断主链路」是错的）</b>：
+     * <p><b>★事务语义订正（原注释「事件 write-only，失败不阻断主链路」是错的）</b>：
      * 本方法的唯一调用方 {@link #createReview} 带 {@code @Transactional}，
      * 而 {@code agentEventRecorder.record} 与之<b>合并同一事务</b> ⇒ 事件 insert 失败会把该事务
      * 标记 rollback-only，<b>人工审核的通过/驳回一并回滚</b>，最终在 commit 处抛

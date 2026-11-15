@@ -12,7 +12,7 @@ const viewModules = import.meta.glob('/src/views/**/*.vue')
  * 按 component 字符串取懒加载器。
  *
  * @param component 形如 'system/UserList'（相对 src/views，不含扩展名）
- * @returns 懒加载函数；映射缺失时告警并返回 undefined（调用方跳过注册）
+ * @returns 懒加载函数；映射缺失时告警并返回 undefined（用方跳过注册）
  */
 export function lazyLoad(component: string): (() => Promise<unknown>) | undefined {
   const normalized = component.replace(/^\/+/, '').replace(/\.vue$/, '')

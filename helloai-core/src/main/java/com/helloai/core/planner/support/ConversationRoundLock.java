@@ -1,12 +1,12 @@
 package com.helloai.core.planner.support;
 
 /**
- * 需求对话「每会话轮次互斥锁」的键与租期常量（RC-1，2026-10-30）。
+ * 需求对话「每会话轮次互斥锁」的键与租期常量（RC-1）。
  *
  * <p>需求对话页放开前端全局 {@code sending} 闸门（自由切换）后，同一会话可能被并发请求
  * 命中同步前置段（读 roundCount → addMessage → setRoundCount(+1) → updateById，非原子）。
  * 用一把握在同步前置段入口的每会话锁串行化该窗口；unlock 后再入异步 LLM 流段（见
- * {@code plan/HelloAI 需求对话自由切换与并发互斥实施计划（2026-10-30）.md} §4.1）。
+ * {@code plan/HelloAI 需求对话自由切换与并发互斥实施计划.md} §4.1）。
  * 本类是锁键与租期的<b>唯一事实源</b>：{@code ClarifyStreamServiceImpl}（流式轮/新建）与
  * {@code ClarifyRoundOrchestratorServiceImpl}（同步轮 + 内部 round 出口）共用，
  * 杜绝两处各写一份字符串/秒数导致漂移。</p>

@@ -38,7 +38,7 @@ import java.util.Map;
 /**
  * MCP 工具任务认领簇：拉取收件箱 / 确认 / 原子认领 / 开工。
  *
- * <p><b>来源</b>：由 {@code McpToolServiceImpl}（RM9-a，2026-10-16）按职责抽取 ——
+ * <p><b>来源</b>：由 {@code McpToolServiceImpl}（RM9-a）按职责抽取 ——
  * 内聚依据为「<b>任务获取 → 确认 → 认领 → 开工</b>是<b>同一条前置链</b>」，
  * 共享 {@code SubTaskQueryPort} / {@code SubTaskCommandPort}。</p>
  *
@@ -182,7 +182,7 @@ public class McpTaskClaimServiceImpl implements McpTaskClaimService {
                 && (subTask.status() == SubTaskStatus.ASSIGNED
                     || subTask.status() == SubTaskStatus.IN_PROGRESS)) {
             heartbeatService.active(agentId);
-            // ★2026-10-03 修复「claim 成功却被超时回收」：自动派单已把任务推到 ASSIGNED，
+            // ★「claim 成功却被超时回收」：自动派单已把任务推到 ASSIGNED，
             // 此处幂等分支原样返回会让任务停留 ASSIGNED、update_time 不刷新，
             // 被 AssignedSubTaskTimeoutTask 误判为「超时未领取」收回改派（真机复现：
             // trae claim 成功 version=2，10 分钟后仍被 unclaimed_timeout_reassign 收回）。
@@ -278,7 +278,7 @@ public class McpTaskClaimServiceImpl implements McpTaskClaimService {
         // 或「状态已变」两种情形，此前统一回 race_condition_or_invalid_status 语义混——
         // 客户端无法区分「应换活（永不重试 409）」与「状态非法（应上报）」。
         // 归因是消费方协议适配层的职责（SubTaskCommandPort javadoc 划界），故在此重读做精确拆分。
-        // ★判据要点（2026-10-22 并发 IT 实测修正）：claimAtomic 的 SQL 原子地同时改
+        // ★判据要点（并发 IT 实测修正）：claimAtomic 的 SQL 原子地同时改
         //   status（PENDING→ASSIGNED）与 assigned_agent_id，故「状态仍 PENDING 但被赋主」
         //   的组合不会出现；「被抢占」的可靠判据是 assigned_agent_id 非空且 ≠ 本 Agent。
         if (!subTaskCommandPort.claimAtomic(subTaskId, agentId)) {

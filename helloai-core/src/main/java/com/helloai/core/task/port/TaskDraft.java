@@ -15,7 +15,7 @@ import java.util.Map;
  * <p><b>为什么是「创建物料」而非实体</b>（§7.2：「读走快照、写走命令」）：消费方只表达目标值，
  * id / createTime / updateTime 等行内状态由提供方落库回填。</p>
  *
- * <p><b>{@code requiredSkills}（2026-10-26）</b>：用户在需求对话「＋→技能」里选中的产出型技能包
+ * <p><b>{@code requiredSkills}</b>：用户在需求对话「＋→技能」里选中的产出型技能包
  * （如 {@code archify} / {@code biz-process-lifecycle}）。写入 {@code task.required_skills} 后，
  * 既有注入链（{@code AgentSkillSpecService}）会在子任务执行时展开为「技能规范 + requiredTools」，
  * 执行者据此跑技能 CLI 并导出产物。空列表 = 未选技能（与改造前完全一致）。</p>

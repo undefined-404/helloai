@@ -32,7 +32,7 @@ export const kbApi = {
   /** 按来源 + 分片键取单个分片（引用溯源卡片点击展示来源原文）。
    *
    * <p>★路径不带 `/api` 前缀：`request` 实例的 baseURL 已是 `/api`，再写一遍会拼成
-   * `/api/api/kb/chunk/...` 直接 404（2026-10-24 用户点引用卡片实测）。</p> */
+   * `/api/api/kb/chunk/...` 直接 404（用户点引用卡片实测）。</p> */
   chunk(source: string, chunkIdx: number): Promise<KbChunk> {
     return request.get<any, KbChunk>(
       `/kb/chunk/${encodeURIComponent(source)}/${encodeURIComponent(chunkIdx)}`

@@ -81,7 +81,7 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
      * 内部 LLM 执行者（API_KEY_LLM）有授权但<b>不可注入</b>（进程内调用无 sessionId）。
      * 若未来授权面与可注入面分叉，本常量独立演进，不会误伤授权语义。</p>
      *
-     * <p><b>缺陷背景（2026-10-06 L3 P1-1）</b>：内部 LLM 执行者（{@code API_KEY_LLM}、
+     * <p><b>缺陷背景（L3 P1-1）</b>：内部 LLM 执行者（{@code API_KEY_LLM}、
      * {@code supportsMCP=false}）此前被等价注入这 13 个工具，进程内调用 100% 命中
      * {@code McpAuthContext.requireAuthId} 的空 {@code _sessionId} 分支 → 401，
      * 模型反复重试至 {@code MAX_ITERATIONS} 失败（L3 实测占内循环约 14.8%）。</p>
@@ -132,7 +132,7 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
      * {@code search_knowledge}，天然进程内安全）。</p>
      *
      * <p><b>为什么独立单列而非复用 DEFAULT/MCP_SESSION_TOOLS</b>：内部执行者没有 MCP 会话上下文，
-     * 注入外部 MCP 工具 100% 401（2026-10-06 L3 P1-1）。本集合正是"解封"的落点——给内部 LLM
+     * 注入外部 MCP 工具 100% 401（L3 P1-1）。本集合正是"解封"的落点——给内部 LLM
      * 一条<b>非 MCP 会话</b>的工具通道，而非松开 {@link #MCP_SESSION_TOOLS} 过滤（那会复活
      * 401 回归）。</p>
      *
@@ -147,22 +147,22 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
             "internal_get_agent_status",
             "internal_register_output_attachment",
             "internal_read_attachment",
-            // RV-12（2026-11-14）：附件有界读取——大文件先取摘要，再按字符偏移续读。
+            // RV-12：附件有界读取——大文件先取摘要，再按字符偏移续读。
             "internal_attachment_digest",
             "internal_read_attachment_range",
-            // RV-14（2026-11-15）：附件惰性注入沙箱——实测前先 stage，sha256 与 digest 对账。
+            // RV-14：附件惰性注入沙箱——实测前先 stage，sha256 与 digest 对账。
             "internal_stage_attachment_to_sandbox",
             "internal_list_skills",
             "internal_load_skill",
             "internal_report_blocked",
             "internal_run_in_sandbox",
-            // SKX-8（2026-10-26）：技能执行面。可用性由 SkillExecutionToolContributor 声明
+            // SKX-8：技能执行面。可用性由 SkillExecutionToolContributor 声明
             // （沙箱未启用 / 无入库技能包 ⇒ 从模型可见列表摘除），此处只做「授权面」登记。
             "internal_run_skill",
             "internal_read_artifact",
-            // SKX-11（2026-10-26）：沙箱产物落地为附件。可用性同 read_artifact（只看沙箱启用）。
+            // SKX-11：沙箱产物落地为附件。可用性同 read_artifact（只看沙箱启用）。
             "internal_export_artifact",
-            // SL-5（2026-11-13）：台账查询——让模型能查 callId 再在 EVIDENCE 里引用（只读）。
+            // SL-5：台账查询——让模型能查 callId 再在 EVIDENCE 里引用（只读）。
             "internal_list_sandbox_calls",
             "web_search",
             "search_knowledge"
@@ -332,7 +332,7 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
      * <p><b>内部 LLM 执行者（{@link AgentAccessType#API_KEY_LLM}）走进程内进程内工具通道
      * {@link #INTERNAL_LLM_TOOLS}（REF-8.1）</b>：该类执行者走进程内 {@code AgentLoop}，
      * 无 MCP 会话上下文（{@code McpAuthContext} 无 sessionId），调用外部 MCP 会话工具
-     * （{@link #MCP_SESSION_TOOLS}）100% 401（2026-10-06 L3 P1-1 已修）。故为其返回
+     * （{@link #MCP_SESSION_TOOLS}）100% 401（L3 P1-1 已修）。故为其返回
      * <b>内部授权集</b>——与平台实际可用工具求交（保留已授权 / 已注册的内部与 contributor 工具），
      * 而非返回被剥空后的空集。其余接入类型（{@code CLI_CLIENT} / {@code WEB_BROWSER} / {@code null}）
      * <b>原样返回</b>，与 {@link #getEnabledTools(Long)} <b>逐字一致</b>（外部链路零回归）。</p>

@@ -174,7 +174,7 @@ public class RuntimeContractGateServiceImpl implements RuntimeContractGateServic
     }
 
     /**
-     * @return {@code null} = 不是约定 JSON（调用方按「未执行」处理，而不是「无冲突」）
+     * @return {@code null} = 不是约定 JSON（用方按「未执行」处理，而不是「无冲突」）
      */
     List<Break> parse(String raw) {
         JsonNode root = readJson(raw);

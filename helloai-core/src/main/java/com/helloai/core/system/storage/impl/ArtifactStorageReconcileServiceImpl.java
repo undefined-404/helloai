@@ -74,7 +74,7 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
 
         // 1) 被引用对象集合：三类记录**共同**构成（含逻辑删除行 → 口径保守，宁可漏判孤儿也不误删）。
         //    只认其中一类，另一类的对象会整批被判成孤儿——三者共用同一个桶，仅 objectKey 前缀不同。
-        //    chat_attachment 于 2026-10-23 补入；skill_package.origin_zip_url 同日补入
+        //    chat_attachment 于 入；skill_package.origin_zip_url 同日补入
         //    （它不叫 storage_url/object_key，按列名检索引用源时扫不到，漏了会误删已装技能包的 zip）。
         Map<String, Long> referencedSize = new LinkedHashMap<>();
         collectReferenced(referencedSize, artifactRows, protocol, bucket);

@@ -3,19 +3,12 @@ package com.helloai.core.review.support;
 /**
  * 最终报告审查「防双审互斥锁」的键与租期常量（§12.2 审查链三级容错）。
  *
- * <p>L1（AFTER_COMMIT 事件）/ L2（Outbox→MQ）/ L3（孤儿巡检）三路可能对同一任务并发触发审查，
- * 用 Redis 锁 {@code final_report_review:{taskId}} 保证「审查 LLM 判定 + 驳回落库」窗口内仅一路进入。
- * 本类是该锁键与租期的<b>唯一事实源</b>：{@code FinalReportReviewServiceImpl}（L1/L2 审查体）与
- * {@code FinalReportReviewOrphanTask}（L3 孤儿收敛）共用，杜绝两处各写一份字符串/秒数导致漂移。</p>
+ * <p>L1（AFTER_COMMIT）/L2（Outbox→MQ）/L3（孤儿巡检）三路可能并发触发同一任务审查，用 Redis 锁
+ * {@code final_report_review:{taskId}} 保证「LLM 判定 + 驳回落库」窗口仅一路进入。本类是锁键与租期的<b>唯一事实源</b>，
+ * 审查体与 {@code FinalReportReviewOrphanTask} 共用，杜绝两处各写一份导致漂移。</p>
  *
- * <p><b>为什么 L3 孤儿收敛也要抢这把锁</b>：孤儿巡检以 DB 状态为事实源，若某条审查正在进行
- * （持锁，驳回落返工重写可达 {@code TTL_SECONDS} 秒），巡检不抢锁就把 REVIEWING 收敛 DONE，
- * 会与在途审查互相覆盖——迟到的 reject 触发 rework 把已收敛的 DONE 又打回 GENERATING。
- * 抢同一把锁后：锁被持有 = 审查在途 = 非真孤儿，跳过即可。</p>
- *
- * <p><b>租期与巡检阈值的关系</b>：L3 孤儿巡检阈值
- * （{@code helloai.dispatch.final-report-review-orphan-threshold-seconds}）必须 ≥ {@link #TTL_SECONDS}，
- * 否则慢审查持锁期间会被巡检误判为孤儿。</p>
+ * <p>L3 孤儿收敛也抢这把锁：锁被持有 = 审查在途 = 非真孤儿，跳过即可，否则巡检把 REVIEWING 收敛 DONE 会与在途审查互相覆盖。
+ * 巡检阈值（{@code helloai.dispatch.final-report-review-orphan-threshold-seconds}）必须 ≥ {@link #TTL_SECONDS}，否则慢审查持锁期间被误判孤儿。</p>
  */
 public final class FinalReportReviewLock {
 

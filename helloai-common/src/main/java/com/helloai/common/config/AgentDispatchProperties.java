@@ -23,24 +23,10 @@ public class AgentDispatchProperties {
     private boolean preferExternal = false;
 
     /**
-     * 选人策略（2026-10-18）。
+     * 选人策略（默认 {@link SelectionStrategy#SCORE_DESC}）。
      *
-     * <p><b>为什么加</b>：原实现是「按 score 降序取最高」——只要最高分 Agent 还可用，
-     * 它就会一直中标，其余长期闲置，且高分模型的高负载会反噬自己的评分（超时拉低 timeScore）。
-     * 这是 {@code max()} 型选人的必然结果，不是配置问题。</p>
-     *
-     * <p><b>为什么不采用「最少连接（WLC）」</b>（本批实测结论）：本系统
-     * {@code require-idle=true} 会把非空闲 Agent 直接过滤掉，候选池内「在飞任务数」恒为 0，
-     * WLC 退化为纯权重比较 —— 等于没改。串行分配的公平性必须靠「按权重轮换」而非「按瞬时负载」。</p>
-     *
-     * <ul>
-     *   <li>{@link SelectionStrategy#SCORE_DESC}：保持原行为（默认，零风险；灰度期用它）</li>
-     *   <li>{@link SelectionStrategy#WEIGHTED_RANDOM}：<b>加权随机</b>——先按分类优先级
-     *       （值班/接入类型/质量/成本）分出最优层级，再在该层级内按
-     *       {@code 权重(score) / (1 + 在飞数)} 做加权抽签。
-     *       长期分配比例 ∝ 权重（高分模型拿更多但非全部）；无状态 ⇒ 分布式安全；
-     *       并发开启时自动叠加负载惩罚。</li>
-     * </ul>
+     * <p>不采用「最少连接（WLC）」：{@code require-idle=true} 已过滤非空闲候选，池内在飞数恒 0，
+     * WLC 退化为纯权重比较；串行公平性靠「按权重轮换」（{@link SelectionStrategy#WEIGHTED_RANDOM}）而非瞬时负载。</p>
      */
     private SelectionStrategy selectionStrategy = SelectionStrategy.SCORE_DESC;
 
@@ -106,7 +92,7 @@ public class AgentDispatchProperties {
     private int maxReassignAttempts = 5;
 
     /**
-     * 「长期无候选 → 人工介入」的最大连续轮数（2026-10-05，时钟 C）。
+     * 「长期无候选 → 人工介入」的最大连续轮数（时钟 C）。
      *
      * <p><b>与 {@link #maxReassignAttempts} 语义不同</b>：那个统计的是「<b>试过但没派成</b>」
      * 的重派次数（选出人后被退回/超时/离线等）；本项统计的是「<b>根本没试成</b>」——
@@ -167,67 +153,39 @@ public class AgentDispatchProperties {
     private int autoReviewMaxRework = 3;
 
     /**
-     * 自动核验重复失败短路开关（P-1 防御层 A2-2，2026-09-30；判据 2026-10-03 二次修订）。
+     * 自动核验重复失败短路开关（P-1 防御层 A2-2）。
      *
-     * <p>开启后：「本轮驳回的 issues 与上一轮高度相似（相似度 ≥
-     * {@link #autoReviewRepeatFailureSimilarity}）」<b>且</b>「评分未提升」两者<b>同时成立</b>时，
-     * 判为「结构性失败」（同一输入连续驳回相同问题，重派结构上不可能成功）——
-     * 不再触发返工重派，直接转 DEAD_LETTER 待人工。默认 true。</p>
-     *
-     * <p><b>2026-10-03 修订原因</b>：原实现以「评分未提升」为单判据（相似度仅在 score 缺失时兜底），
-     * 因评分 1~5 粗粒度，连续 2→2 会误伤「问题性质已变、有实质进展」的返工（真机 687 连续两次误伤，
-     * round6/round8 相似度仅 0.17/0.24 却因分数停滞被判重复失败送死信，各靠人工打捞救回）。
-     * 现改为双条件、与本文档描述一致；真停滞场景改由返工预算（autoReviewMaxRework / attempt_total）兜底封顶。</p>
+     * <p>「本轮驳回 issues 与上一轮相似度 ≥ {@link #autoReviewRepeatFailureSimilarity}」<b>且</b>
+     * 「评分未提升」<b>同时成立</b>时判结构性失败，不再返工重派、直接转 DEAD_LETTER 待人工。
+     * 单靠评分停滞会误伤「问题已变、有实质进展」的返工，故用双条件；真停滞由返工预算
+     * （{@link #autoReviewMaxRework} / attempt_total）兜底封顶。默认 true。</p>
      */
     private boolean autoReviewRepeatFailureShortCircuit = true;
 
     /**
-     * 重复失败相似度阈值（P-1 防御层 A2-2）：连续两轮驳回 issues 的字符 bigram
-     * Jaccard 相似度，1.0 = 完全相同。默认 0.85——既容忍 LLM 措辞微漂移，又要求
-     * 两轮驳回实质同因；与「评分未提升」联合判定（两者同时成立才短路）——
-     * 2026-10-03 起在 score 可读时也强制生效（此前仅 score 缺失时作兜底信号）。
+     * 重复失败相似度阈值（P-1 防御层 A2-2）：连续两轮驳回 issues 的字符 bigram Jaccard 相似度，
+     * 1.0 = 完全相同。默认 0.85——容忍措辞微漂移又要求实质同因；与「评分未提升」联合判定（同时成立才短路）。
      */
     private double autoReviewRepeatFailureSimilarity = 0.85;
 
     /**
-     * `LOG-20261011-007` B 收敛熔断开关：「<b>执行者自报未完成连续 N 轮</b>」提前熔断
-     * （2026-10-16 新增，`D-2026-10-12-3` 的落地形态；判据口径 = `LOG-20261012-008` 决策 3）。
+     * `LOG-20261011-007` B 收敛熔断开关：「执行者自报未完成连续 N 轮」提前熔断
+     * （`D-2026-10-12-3` 落地形态，判据口径 `LOG-20261012-008` 决策 3）。
      *
-     * <p><b>补的是现判据的盲区</b>：{@link #autoReviewRepeatFailureShortCircuit} 的双条件
-     * 「评分未提升 <b>且</b> issues 全文相似度 ≥ {@link #autoReviewRepeatFailureSimilarity}」
-     * 对<b>真停滞</b>形态（评分恒定 + 驳回意见整篇重写）恰好不成立——该形态全文相似度仅
-     * 0.18~0.25，低于 0.85 阈值 ⇒ 不被短路，只能靠 {@link #autoReviewMaxRework} 封顶
-     * （tku-e2e-01 空转 4 轮烧 346K tokens）。</p>
-     *
-     * <p><b>为什么不再走「文本相似度」这条路（重要，勿重蹈）</b>：
-     * `doc/review/HelloAI 架构V2进度与质量审计报告（2026-09-30）.md` §15.3 已用<b>真实语料</b>
-     * （tku-e2e-01 sub3 三轮 {@code review_record.issues}）实测：</p>
-     * <ul>
-     *   <li>全文字符 bigram Jaccard：r1↔r2 = <b>0.2537</b>、r2↔r3 = <b>0.1927</b>；</li>
-     *   <li>首条 {@code [defect]} 标签 Jaccard：<b>0.1203 / 0.1620，比全文更低</b>；</li>
-     *   <li>根因：三轮用<b>三套不同编号</b>指代同一批缺失项，字符级 bigram 捕捉不到「语义相同」。</li>
-     * </ul>
-     * <p>⇒ 「换比较对象为 {@code [defect]} 标签」这类改良<b>也已被证伪</b>，故本判据改用
-     * <b>句法级、零阈值标定</b>的信号：执行者自己的结构化轮报状态。</p>
-     *
-     * <p><b>判据信号</b>：执行者轮报 {@code VERIFICATION:} 围栏里的 {@code STATUS} 值
-     * （`REF-8.2.2` 输出契约已强制内部 LLM 携带）——连续 N 轮均属「自认未完成」
-     * （{@code BLOCKED} / {@code PARTIAL}）且评分未严格提升 ⇒ 判「结构性做不到」，
-     * 早于 {@link #autoReviewMaxRework} 转人工，并标注「执行者无能力满足 / 输入缺失」。</p>
-     *
-     * <p>轮数见 {@link #autoReviewSelfStallRounds}。默认 true。</p>
+     * <p>补 {@link #autoReviewRepeatFailureShortCircuit} 双条件的盲区：真停滞（评分恒定 + 驳回意见整篇重写）
+     * 全文相似度低于 {@link #autoReviewRepeatFailureSimilarity} 阈值，不被短路。文本相似度路已被真实语料证伪
+     * （换 {@code [defect]} 标签比较更低），故改用句法级零阈值信号：执行者轮报 {@code VERIFICATION:} 围栏的
+     * {@code STATUS}（`REF-8.2.2` 契约）——连续 N 轮 {@code BLOCKED}/{@code PARTIAL} 且评分未严格提升
+     * ⇒ 判结构性做不到，早于 {@link #autoReviewMaxRework} 转人工并标注「无能力满足 / 输入缺失」。
+     * 轮数见 {@link #autoReviewSelfStallRounds}。默认 true。</p>
      */
     private boolean autoReviewSelfStallEnabled = true;
 
     /**
      * 「执行者自报未完成连续 N 轮」的 N（`LOG-20261011-007` B / `D-2026-10-12-3`）。
      *
-     * <p>默认 <b>3</b>——对齐事故现场「内部 LLM 连续 3 次返回同一结论、审方 3 次以同一原因打回」。
-     * 取 1 或 0 视为禁用本判据（至少需两轮才谈得上「连续」）。</p>
-     *
-     * <p><b>为什么以「自报状态」为 N 轮的计数依据而不是「驳回原因」</b>：这是产生方
-     * （执行者）对自身完成度的<b>显式声明</b>，属句法级信号，不需任何相似度阈值标定；
-     * 而「驳回原因」只能靠模糊文本比较识别，已在上项 javadoc 所述真实语料上失效。</p>
+     * <p>默认 3；取 1 或 0 视为禁用（至少两轮才谈得上「连续」）。计数依据是执行者显式自报状态
+     * （句法级、无需阈值标定），非靠模糊文本比较的驳回原因。</p>
      */
     private int autoReviewSelfStallRounds = 3;
 
@@ -241,37 +199,25 @@ public class AgentDispatchProperties {
     private boolean fallbackSkipExecutionDense = true;
 
     /**
-     * `LOG-20261011-007` A 能力闸：是否启用「需读原始附件」任务的无能力派发拦截。
+     * `LOG-20261011-007` A 能力闸：「需读原始附件」任务的无能力派发拦截。
      *
-     * <p><b>与 {@link #fallbackSkipExecutionDense} 同族但独立可关</b>：两者都是
-     * 「无本机能力 Agent 不派发」的能力闸，但信号类不同——前者治「需在本机跑东西」
-     * （脚本 / 容器 / 服务），本项治「需打开用户给的结构化文件本体逐项核对」
-     * （用户导出的 xlsx / docx / pdf；内部 `internal_read_attachment` 只做 UTF-8 解码，
-     * 二进制结构化文件读不出列）。</p>
-     *
-     * <p><b>为什么要独立开关</b>：本项依赖关键词表共现判定（信号词表
-     * {@code SubTaskDispatchService.ATTACHMENT_SOURCE_PATTERN} × {@code ATTACHMENT_VERIFY_PATTERN}），
-     * 上线初期误拦风险高于已被真机验证的「执行密集」闸门；独立开关让本项可在不改动
-     * 执行密集闸门的前提下单独关停。默认 true。</p>
-     *
-     * <p>命中后的动作与执行密集闸门<b>完全一致</b>（共用同一 timeline 事件
-     * {@code sub_task_dispatch_skip_no_capability} 与同一人工介入标记
-     * {@code dispatch_skip_execution_dense}）：fast-fail 走 fallback 选同角色替代者；
-     * 无替代时停留 PENDING + 人工介入，等待前端人工改派。</p>
+     * <p>与 {@link #fallbackSkipExecutionDense} 同族但独立可关：前者治「需在本机跑东西」（脚本/容器/服务），
+     * 本项治「需打开用户给的结构化文件本体逐项核对」（xlsx/docx/pdf；{@code internal_read_attachment}
+     * 只做 UTF-8 解码，读不出二进制列）。独立开关因本项靠关键词共现判定
+     * （{@code SubTaskDispatchService.ATTACHMENT_SOURCE_PATTERN} × {@code ATTACHMENT_VERIFY_PATTERN}），
+     * 误拦风险高于已真机验证的执行密集闸。命中后动作与执行密集闸一致（共用
+     * {@code sub_task_dispatch_skip_no_capability} 事件与 {@code dispatch_skip_execution_dense} 人工介入标记）：
+     * fast-fail 走 fallback 选同角色替代者，无替代时停留 PENDING + 人工介入。默认 true。</p>
      */
     private boolean attachmentReadSkipEnabled = true;
 
     /**
      * 兜底：REVIEW 孤儿扫描阈值（秒）。
      *
-     * <p>子任务进入 REVIEW 超过此秒数<b>且未被标记人工介入</b>时，
-     * SubTaskReviewService 的 @Scheduled 兜底扫描会触发核验。
-     * 作为 AFTER_COMMIT 事件链丢失时的二次确保。默认 60s。</p>
-     *
-     * <p><b>口径注意</b>：候选<b>不按 {@code review_record} 是否存在过滤</b>——通过/驳回后状态
-     * 已离开 REVIEW，记录在不在都无所谓；真正需要重跑的是「事件链丢失」与「核验失败/不可解析
-     * 无结论」两类。已转人工（{@code INCONCLUSIVE} / 返工达上限 / 评审自相矛盾等）会打
-     * {@code context.manualIntervention} 标记，从而永久退出本扫描。</p>
+     * <p>子任务进入 REVIEW 超过此秒数<b>且未标记人工介入</b>时，SubTaskReviewService 的 @Scheduled
+     * 兜底扫描触发核验，作为 AFTER_COMMIT 事件链丢失时的二次确保。默认 60s。
+     * 候选不按 {@code review_record} 是否存在过滤（通过/驳回后已离开 REVIEW）；已转人工
+     * （{@code INCONCLUSIVE}/返工达上限/自相矛盾）打 {@code context.manualIntervention} 标记永久退出扫描。</p>
      */
     private int reviewOrphanThresholdSeconds = 60;
 
@@ -296,23 +242,14 @@ public class AgentDispatchProperties {
     private double qualityWeight = 0.1;
 
     /**
-     * 成本画像回灌权重（B5.3 Fleet 成本选人，2026-10-03）。
+     * 成本画像回灌权重（B5.3 Fleet 成本选人）。
      *
-     * <p>用于 {@code AgentSelector} 选人排序：costRank（成本分档位，见
-     * {@link #costSampleLimit}）乘以本权重后，插入 <b>qualityRank 之后、score 之前</b>
-     * 参与比较——与 {@link #qualityWeight} 同为低权重起步防抖动。</p>
-     *
-     * <p><b>语义</b>：成本画像 = 该 Agent「最近 {@link #costSampleLimit} 次成功执行」
-     * 的 token 均值（越小越省）。候选集合内按 min-max 反向归一为 <b>1~5 档</b>
-     * （最省 = 5，最贵 = 1）；无成本数据记 <b>中立档</b>（不可比 ⇒ 不偏袒）；
-     * 候选内<b>有效样本 &lt; 2</b> 时成本维度整体不生效（无可比对象）。</p>
-     *
-     * <p><b>⚠️ 影响面（字典序，非加权求和）</b>：比较器是
-     * {@code dutyRank → accessTypeRank → qualityRank×w1 → costRank×w2 → score} 的链式
-     * {@code thenComparing}，因此 <b>qualityRank 档位不同时 costRank 不生效</b>；
-     * 且 {@code dutyRank} 为最高优先级档，成本/质量实际只在「同值班档」内起作用。</p>
-     *
-     * <p>默认 0.1；0 表示完全关闭成本分参与排序（与接入前行为一致）。</p>
+     * <p>{@code AgentSelector} 选人排序：costRank（最近 {@link #costSampleLimit} 次成功执行 token 均值，
+     * min-max 反向归一 1~5 档，最省=5；无数据记中立档；有效样本 &lt; 2 时该维度不生效）乘本权重，
+     * 插入 qualityRank 之后、score 之前。比较器是字典序链
+     * {@code dutyRank → accessTypeRank → qualityRank×w1 → costRank×w2 → score}（非加权求和），
+     * 故 qualityRank 档位不同时 costRank 不生效，成本/质量只在同值班档内起作用。
+     * 默认 0.1；0 表示关闭成本分参与排序。</p>
      */
     private double costWeight = 0.1;
 
@@ -339,10 +276,8 @@ public class AgentDispatchProperties {
 
     /**
      * 核验侧附件内容注入开关（方案3 F2）：开启后核验 Prompt 注入可直读物化附件正文
-     * （每附件 64000 字符、总计 200000 字符截断，2026-10-03 由 8000/24000 上调以匹配
-     * 官方 DeepSeek 64K 上下文），Reviewer 基于真实文件内容核对
-     * "声称交付物 ↔ 文件正文 ↔ 验收标准"；关闭时仅注入附件清单（与开关引入前行为一致）。
-     * 默认 true。
+     * （每附件 64000 字符、总计 200000 字符截断），Reviewer 基于真实文件内容核对
+     * "声称交付物 ↔ 文件正文 ↔ 验收标准"；关闭时仅注入附件清单。默认 true。
      */
     private boolean attachmentContentEnabled = true;
 
@@ -385,20 +320,12 @@ public class AgentDispatchProperties {
     /**
      * 最终报告审查孤儿兜底阈值（秒，§12.2 审查链三级容错 L3）。
      *
-     * <p>报告状态停留 {@code REVIEWING} 且 {@code final_report_time} 早于
-     * {@code now - 本阈值} 时，判定审查触发链（L1 事件 / L2 Outbox→MQ）已全部丢失，
-     * 由 {@code FinalReportReviewOrphanTask} 收敛为 {@code DONE} 并落
-     * {@code task_final_report_review_orphan_converged} 审计事件。</p>
-     *
-     * <p><b>为什么收敛 DONE 而不是重投审查</b>：审查是增值质量闭环，报告正文此时
-     * 早已落库并交付（UI 正常可读、交付物 zip 含报告）；重复重投会在审查持续失败时
-     * 反复消耗 LLM 配额。收敛 DONE 是确定性、零 token、无循环的最优止血。
-     * 若确实需要补跑审查，UI 的「重新生成」按钮可人工触发。</p>
-     *
-     * <p><b>为什么默认 660（§12.5 #3）</b>：本阈值必须 ≥ 防双审锁租期
-     * （{@code FinalReportReviewLock.TTL_SECONDS}=600s）——驳回返工会同步触发一次完整重写，
-     * 慢审查持锁可达 600s，阈值若小于它会把在途审查误判为孤儿。取 660 在锁 TTL 之上再留
-     * 约一个扫描周期（30s）的余量。孤儿收敛本身已抢同一把防双审锁兜底，阈值对齐是第二道防线。</p>
+     * <p>报告停留 {@code REVIEWING} 且 {@code final_report_time} 早于 {@code now - 本阈值} 时，
+     * 判定审查触发链（L1 事件 / L2 Outbox→MQ）全部丢失，由 {@code FinalReportReviewOrphanTask}
+     * 收敛为 {@code DONE} 并落 {@code task_final_report_review_orphan_converged} 审计事件。
+     * 收敛 DONE 而非重投：报告正文早已落库交付，重投会在审查持续失败时反复烧 LLM 配额，需补跑可走 UI「重新生成」。
+     * 默认 660 必须 ≥ 防双审锁租期（{@code FinalReportReviewLock.TTL_SECONDS}=600s），
+     * 否则把在途慢审查误判为孤儿（§12.5 #3）。</p>
      */
     private int finalReportReviewOrphanThresholdSeconds = 660;
 
@@ -407,7 +334,5 @@ public class AgentDispatchProperties {
      */
     private int finalReportReviewOrphanBatchSize = 20;
 
-    // 注：原 heartbeatFreshMinutes 字段已迁移至
-    //     AgentHealthProperties.offlineMinutes，作为 Selector / Reconcile / SQL 回退候选
-    //     共用的单一心跳阈值来源。详见 com.helloai.common.config.AgentHealthProperties。
+    // 心跳阈值统一见 AgentHealthProperties.offlineMinutes（Selector / Reconcile / SQL 回退共用单一来源）。
 }

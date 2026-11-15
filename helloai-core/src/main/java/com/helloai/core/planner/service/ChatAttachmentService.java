@@ -60,7 +60,7 @@ public interface ChatAttachmentService {
      */
     List<ChatAttachment> list(Long conversationId, String clientToken);
 
-    /** 按会话列附件（Prompt 注入用；不做鉴权，调用方已具备会话上下文）。 */
+    /** 按会话列附件（Prompt 注入用；不做鉴权，用方已具备会话上下文）。 */
     List<ChatAttachment> listByConversation(Long conversationId);
 
     /** 窄查询（PA-5）：按上传/生成用户列会话附件（conversation 源「我的产物」），按上传倒序。 */
@@ -81,7 +81,7 @@ public interface ChatAttachmentService {
     void delete(Long id);
 
     /**
-     * 登记一份<b>对话产物</b>（技能执行生成的文件，2026-10-27）。
+     * 登记一份<b>对话产物</b>（技能执行生成的文件）。
      *
      * <p><b>为什么要单开一条通道</b>：{@link #uploadBatch} 是「用户上传的输入」——要过大小/类型/数量校验、
      * 要投递异步解析、要参与 Prompt 注入。产物是<b>输出</b>：内容由平台自己生成（可信），
@@ -123,7 +123,7 @@ public interface ChatAttachmentService {
     PreviewPayload preview(Long id);
 
     /**
-     * 读取下载所需内容（{@code attachment} 语义，2026-10-27）。
+     * 读取下载所需内容（{@code attachment} 语义）。
      *
      * <p><b>与 {@link #preview} 的区别</b>：下载是「拿到文件落盘」，不受内联预览的
      * MIME 白名单约束——任何类型都该能下载（docx / zip / 二进制产物等）。

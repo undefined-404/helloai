@@ -66,7 +66,7 @@ public class SubTaskController {
     private final AgentDispatchProperties agentDispatchProperties;
     private final TaskTimelineService taskTimelineService;
     private final ConversationService conversationService;
-    /** 子任务视图读权限收口（2026-10-10 统一判据：根任务 Task-Team 成员，与附件读侧同源）。 */
+    /** 子任务视图读权限收口（判据：根任务 Task-Team 成员，与附件读侧同源）。 */
     private final SubTaskViewGuard subTaskViewGuard;
     /** `TD-9` 单条草案 regenerate 编排收口（core 层，Controller 只做薄转发）。 */
     private final PlannerAnalysisService plannerAnalysisService;
@@ -89,7 +89,7 @@ public class SubTaskController {
     }
 
     /**
-     * 批量创建子任务（ 派发控制台）。
+     * 批量创建子任务（派发控制台）。
      *
      * <p>同内容 fan-out 派发给多个 Agent；逐项独立创建（每项自身独立事务），
      * 单项失败不影响其余；返回成功创建的列表（不含失败项）。</p>
@@ -114,7 +114,7 @@ public class SubTaskController {
     }
 
     /**
-     * 子任务执行时间线（ 派发控制台联调可视化）。
+     * 子任务执行时间线（派发控制台联调可视化）。
      *
      * <p>按 id 升序返回该子任务相关的所有 TaskTimeline 事件；不含系统级事件（如 agent_offline）。</p>
      */
@@ -159,7 +159,7 @@ public class SubTaskController {
         if (!isAgentChannel(authType, agentId)) {
             return; // 平台账号 / 无主体：由管理侧鉴权覆盖
         }
-        // 2026-10-10 统一：判据改为「根任务 Task-Team 成员」（与附件读侧同一条，见 SubTaskViewGuard）。
+        // 判据改为「根任务 Task-Team 成员」（与附件读侧同一条，见 SubTaskViewGuard）。
         // 此前只认 assigned_agent_id —— 实测把合法团队成员也拒了（加入 team 后读附件 200、读时间线仍 403）。
         subTaskViewGuard.assertAgentCanView(subTaskId, agentId);
     }
@@ -249,7 +249,7 @@ public class SubTaskController {
     public R<SubTaskResponse> getById(@PathVariable("id") Long id,
                                       @RequestAttribute(value = "_authType", required = false) String authType,
                                       @RequestAttribute(value = "_authId", required = false) Long agentId) {
-        // 2026-10-10：补主体校验 —— 此前**无任何校验**，任何有效 Agent API Key 都能读任意子任务详情
+        // 补主体校验 —— 此前**无任何校验**，任何有效 Agent API Key 都能读任意子任务详情
         // （实测 200；与附件侧修过的 G-014 T04b「凭 attachmentId 读任意附件」同形状）。
         assertSubTaskReadableByAgent(id, authType, agentId);
         SubTask subTask = subTaskService.getById(id);
@@ -387,7 +387,7 @@ public class SubTaskController {
     @SaCheckPermission("subtask:reassign")
     @PostMapping("/reassignById/{id}")
     public R<SubTaskDispatchService.RedispatchResult> reassign(@PathVariable("id") Long id, @Valid @RequestBody ReassignRequest req) {
-        // 2026-10-05 修 804：被退避/熔断闸门拦截时返回明确语义（applied=false + reason + nextAllowed），
+        // 804：被退避/熔断闸门拦截时返回明确语义（applied=false + reason + nextAllowed），
         // 不再静默返回 code=200 让前端误判「换人成功」。
         return R.ok(subTaskDispatchService.dispatchBlockedSubTask(id, req.getAgentId()));
     }
@@ -405,7 +405,7 @@ public class SubTaskController {
      * {@code last_attempt_time}——「换人」不再被自身刷新的时钟拦截；若确在退避窗口内，
      * 返回 {@code applied=false} + {@code nextAllowed} 且**不改动任务状态**。</p>
      *
-     * <p><b>2026-10-07</b>：放开 {@code ASSIGNED}——原先三个改派入口均不收该状态，
+     * <p>放开 {@code ASSIGNED}——原先三个改派入口均不收该状态，
      * 人工无法介入「已指派未开工」的子任务，只能等 {@code dispatch.assigned-timeout-minutes}
      * （默认 10 分钟）自动回收。仍受同一重派闸门约束。</p>
      */

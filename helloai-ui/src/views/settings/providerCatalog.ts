@@ -19,7 +19,7 @@
  * 四方一致性由 {@code scripts/shell/verify-provider-catalog-parity.sh} 守卫（接入门禁 3）。
  * <p><b>{@code catalogId}</b> 是该厂商在 <b>models.dev</b> 目录中的键（⇐ magpie {@code PresetDef.Catalog}），
  * 为 {@code defaultModel} 的归属锚点；{@code M-3}（模型目录种子）据此拉取模型清单落 {@code llm_provider_model}。
- * <b>教训（2026-10-13 实测）</b>：本目录曾长期留存 {@code deepseek-chat} / {@code moonshot-v1-8k} /
+ * <b>教训</b>：本目录曾长期留存 {@code deepseek-chat} / {@code moonshot-v1-8k} /
  * {@code qwen-turbo} / {@code MiniMax-Text-01} 四个陈旧值——其中 {@code moonshot-v1-8k} 已下线（调用 404，
  * 见 V61 注释）为「验证失败」直接根因，{@code deepseek-chat} 已不在模型目录内（见 V101 注释）导致注册被拒。
  * {@code baseUrl} 同理：OpenAI 兼容模式实际端点为 {@code {baseUrl}/v1/chat/completions}

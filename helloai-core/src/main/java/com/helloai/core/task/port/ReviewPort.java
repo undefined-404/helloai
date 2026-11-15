@@ -15,7 +15,7 @@ import java.util.List;
  */
 public interface ReviewPort {
 
-    /** 最新一条审查记录是否 APPROVED；无审查记录返回 null（调用方保持默认值）。 */
+    /** 最新一条审查记录是否 APPROVED；无审查记录返回 null（用方保持默认值）。 */
     Boolean isLatestReviewApproved(Long subTaskId);
 
     /** 子任务全部审查事实（按 round 升序）；无记录返回空列表。 */
@@ -30,6 +30,6 @@ public interface ReviewPort {
     /** 按任务统计审查记录数。 */
     long countByTaskId(Long taskId);
 
-    /** 物理删除任务下全部审查记录（任务级联删除使用，调用方事务内执行）。 */
+    /** 物理删除任务下全部审查记录（任务级联删除使用，用方事务内执行）。 */
     int physicalDeleteByTaskId(Long taskId);
 }

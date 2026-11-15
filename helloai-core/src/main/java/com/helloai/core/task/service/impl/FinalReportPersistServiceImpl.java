@@ -28,7 +28,7 @@ import java.time.OffsetDateTime;
  * <p><b>修的是什么</b>：改造前是典型的 dual-write——先
  * {@code lambdaUpdate()} 写回 {@code REVIEWING}，再另行
  * {@code applicationEventPublisher.publishEvent(...)}。两步之间没有任何原子性，
- * 进程在中间挂掉就是"报告已落库、审查永不触发"的永久卡死（实测已发生）。
+ * 进程在中间挂掉就是"报告已落库、审查永不触发"的永久卡死（已发生）。
  * 现在两件事同事务提交：报告写回成功 ⟺ 审查请求落库成功。</p>
  *
  * <p><b>审查触发的两条腿</b>（都在本事务内落库/发布）：</p>
@@ -47,7 +47,7 @@ import java.time.OffsetDateTime;
  * 后到者见状态已非 {@code REVIEWING} 直接跳过）。这与子任务核验链的
  * 三级容错设计一致。</p>
  *
- * <p><b>命名（2026-10-17 命名整改）</b>：原名 {@code FinalReportPersistService}。按
+ * <p><b>命名（命名整改）</b>：原名 {@code FinalReportPersistService}。按
  * {@code HelloAI_CODE_STYLE.md §8.1}，{@code {domain}.service.impl} 内的实现类须以
  * {@code {接口名}ServiceImpl} 命名 —— 本类原缺接口，故同步补齐
  * {@link FinalReportPersistService} 契约（消费方 {@code TaskFinalReportServiceImpl} 改为经接口注入）。</p>

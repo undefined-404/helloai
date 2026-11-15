@@ -23,7 +23,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * OpenSandbox 容器工厂（`SL-9`，2026-11-13）：建容器 / 销毁容器 / 规格映射。
+ * OpenSandbox 容器工厂（`SL-9`）：建容器 / 销毁容器 / 规格映射。
  *
  * <p><b>为什么从运行时里抽出来</b>：建槽池（{@code SandboxWorkspaceRegistry}）与技能包注入
  * （{@code SkillPackageInstaller}）都需要「按规格开一个容器」，而销毁又是两类回收路径

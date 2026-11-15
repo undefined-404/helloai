@@ -1020,7 +1020,7 @@ const webSearchEnabled = ref(false)
 /** 语音输入进行中。 */
 const recording = ref(false)
 
-// ── SSE 流式状态（PA-11，2026-11-03）：与需求对话同一事件协议 ──
+// ── SSE 流式状态（PA-11）：与需求对话同一事件协议 ──
 /** 已刷入界面的正文（60ms 节流后累加，避免高频帧打爆渲染）。 */
 const streamText = ref('')
 /** 思考过程全文（reasoning 帧，80ms 节流）。 */
@@ -2542,7 +2542,7 @@ html.dark .wb-page {
 }
 
 /* ── 上下文浮层（popover 挂在 body 上，须走 :global 并补一份本页令牌）── */
-/* ── 模型选择面板（2026-11-05 设计稿）
+/* ── 模型选择面板（设计稿）
    popover 被 teleport 到 body，scoped 选择器与 --wb-* 都不继承，
    故用 :global 并把本面板用到的配色令牌就地重声明。 ── */
 :global(.wb-model-popper) {

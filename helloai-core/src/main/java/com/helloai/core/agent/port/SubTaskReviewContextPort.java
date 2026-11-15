@@ -36,7 +36,7 @@ public interface SubTaskReviewContextPort {
      * 否则拷贝 history、覆写末轮 {@code executorDoneIssues} 后落库。</p>
      *
      * @param subTaskId  子任务 ID
-     * @param targetRound 期望的末轮轮次（调用方观测值）
+     * @param targetRound 期望的末轮轮次（用方观测值）
      * @param doneIssues  待回填的「执行者已解决项」
      * @return 处置结果；调用方据此决定是否记录 timeline（见 {@link BackfillOutcome}）
      */

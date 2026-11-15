@@ -167,11 +167,8 @@ public final class ReviewEvidenceLedger {
     }
 
     /**
-     * 是否存在任何不可读附件。
-     *
-     * <p><b>当前无生产消费方</b>：{@link #gap} 的「未写 id」分支已收窄为只认截断（`RV-11` 计划口径），
-     * 因此本方法只被单测用于锁 `absent` 语义。保留而非删除，是因为复判排查时需要一个「有没有
-     * 读不出的附件」的直接判据；若长期无人调用，按「无读取方的 API = 反模式」下线。</p>
+     * 是否存在任何不可读附件。当前无生产消费方（{@link #gap} 的「未写 id」分支已收窄为只认截断，`RV-11`），
+     * 仅单测锁 {@code absent} 语义；保留供复判排查「有没有读不出的附件」，长期无人调用则按「无读取方 API = 反模式」下线。
      */
     public static boolean anyAbsent(String ledger) {
         for (Entry entry : parse(ledger)) {
@@ -185,13 +182,9 @@ public final class ReviewEvidenceLedger {
     /**
      * 指定附件是否构成平台侧证据缺口：不可读，或被截断。
      *
-     * <p>{@code attachmentId == null} 时只要求「注入正文存在截断」（未引用 id 的场景，[RV-11]
-     * 计划口径：不因没写 id 而额外要求 absent，避免把「未引用 id」当成「平台证据缺失」）。</p>
-     *
-     * <p><b>查不到该 id 不等于平台缺口</b>（2026-11-14 订正）：仅当「台账整体为空」（开关关闭 /
-     * 无附件，模型无从知晓）或「条目溢出 {@link #MAX_ENTRIES}」（被略去的条目确实注入过）时算缺口；
-     * 台账非空且无溢出却查不到，只能是模型写了个不存在的 id ⇒ 不算缺口，由
-     * {@link ReviewEvidenceUnavailability#unknownIds} 出 {@code WARN} 留痕。</p>
+     * <p>{@code attachmentId == null} 时只要求注入正文存在截断（`RV-11`：不因没写 id 额外要求 absent）。
+     * 查不到该 id 不等于平台缺口：仅「台账整体为空」（开关关/无附件）或「条目溢出 {@link #MAX_ENTRIES}」算缺口；
+     * 台账非空无溢出却查不到 ⇒ 模型写了不存在的 id，不算缺口，由 {@link ReviewEvidenceUnavailability#unknownIds} 出 {@code WARN} 留痕。</p>
      */
     public static boolean gap(String ledger, Long attachmentId) {
         if (attachmentId == null) {

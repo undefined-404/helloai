@@ -16,7 +16,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 对话内「显式技能」指令（2026-10-26）。
+ * 对话内「显式技能」指令。
  *
  * <p><b>为什么需要</b>：前端「＋→技能」此前只有「方案整理 / 直接拆解」两个<b>流程</b>入口，
  * 而平台技能目录里还有<b>产出型</b>技能（archify / biz-process-lifecycle 等）——
@@ -214,7 +214,7 @@ public class SkillDirective {
      * 真正的渲染靠依赖包 {@code archify}。只传自己的话，执行者拿到了建模纪律却没有 CLI。</p>
      *
      * @param skillName 技能包名
-     * @return 技能标签列表；不存在时返回空列表（调用方据此不写 required_skills）
+     * @return 技能标签列表；不存在时返回空列表（用方据此不写 required_skills）
      */
     public List<String> requiredSkillsWithDependencies(String skillName) {
         if (skillName == null || skillName.isBlank()) {

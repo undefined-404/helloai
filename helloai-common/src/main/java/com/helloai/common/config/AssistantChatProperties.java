@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 个人助理对话配置（PA-11 / N-1，2026-11-03）。
+ * 个人助理对话配置（PA-11 / N-1）。
  *
  * <p>前缀 {@code helloai.assistant}。</p>
  */

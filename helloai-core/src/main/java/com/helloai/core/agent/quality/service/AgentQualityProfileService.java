@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * Agent 质量画像服务（反馈回路第 1 层）。
  *
- * <p>提供画像查询（调度回灌/历史表现摘要数据源）、质量分计算、历史表现节渲染
+ * <p>提供画像查询（度回灌/历史表现摘要数据源）、质量分计算、历史表现节渲染
  * 与重算兜底（admin 端点与 verify-quality-profile.ps1 对账）。</p>
  */
 public interface AgentQualityProfileService extends IService<AgentQualityProfile> {
@@ -31,12 +31,12 @@ public interface AgentQualityProfileService extends IService<AgentQualityProfile
      * 与动态 TTL 复合分使用。</p>
      *
      * @param agentId Agent ID
-     * @return 0~100 质量分；无画像或无评审数据时返回 null（调用方回退原逻辑）
+     * @return 0~100 质量分；无画像或无评审数据时返回 null（用方回退原逻辑）
      */
     Integer computeQualityScore(Long agentId);
 
     /**
-     * 计算<b>核验侧</b>质量分（0~100，null 安全）—— role-aware 质量分（`MED-1`，2026-10-15）。
+     * 计算<b>核验侧</b>质量分（0~100，null 安全）—— role-aware 质量分（`MED-1`）。
      *
      * <p><b>为什么要分角色</b>：{@link #computeQualityScore} 只用<b>执行侧</b>指标
      * （{@code reviewedCount} / {@code firstPassRate} / {@code totalScore}），
@@ -51,7 +51,7 @@ public interface AgentQualityProfileService extends IService<AgentQualityProfile
      *
      * @param agentId Agent ID
      * @return 0~100 核验侧质量分；无画像或<b>核验次数为 0</b> 时返回 {@code null}
-     *         （= 无信号，调用方按中性处理，勿当作 0 分惩罚）
+     *         （= 无信号，用方按中性处理，勿当作 0 分惩罚）
      */
     Integer computeReviewerQualityScore(Long agentId);
 
@@ -59,7 +59,7 @@ public interface AgentQualityProfileService extends IService<AgentQualityProfile
      * 渲染「## 你的历史表现」节（注入执行 Prompt 用）。
      *
      * <p>包含累计评审数、一次通过率、最常见驳回原因 TOP3 与本轮提醒语；
-     * 画像缺失返回空串（调用方据此省略注入，best-effort 哲学）。</p>
+     * 画像缺失返回空串（用方据此省略注入，best-effort 哲学）。</p>
      *
      * @param agentId Agent ID
      * @return 渲染文本；无画像或无数据时返回空串
@@ -104,7 +104,7 @@ public interface AgentQualityProfileService extends IService<AgentQualityProfile
      * Agent 质量排行（质量度量看板 agents 排行）。
      *
      * <p>排序：一次通过率降序 → 审查数降序 → agentId 升序；qualityScore
-     * 复用 {@link #computeQualityScore} 逐行计算（口径唯一）；agentName 经
+     * 复用 {@link #computeQualityScore} 逐行计算（唯一）；agentName 经
      * AgentService 批量补名（缺失显示 ID 字符串）。</p>
      *
      * @param limit 返回条数上限；null 或 &lt;=0 返回全部

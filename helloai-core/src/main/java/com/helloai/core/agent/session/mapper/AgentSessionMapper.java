@@ -21,7 +21,7 @@ public interface AgentSessionMapper extends BaseMapper<AgentSession> {
      * 物理删除某任务下全部执行会话（cascade：task_id / 所辖 sub_task_id 双匹配）。
      *
      * <p>2026-10-05 D-1：{@code agent_session} 带 task_id/sub_task_id 语义列但无外键，
-     * 任务级联删除时被静默漏删（实测 10 行孤儿）。供任务级联删除使用，须在 sub_task 行删除前执行。</p>
+     * 任务级联删除时被静默漏删（10 行孤儿）。供任务级联删除使用，须在 sub_task 行删除前执行。</p>
      */
     @Delete("DELETE FROM agent_session WHERE task_id = #{taskId} "
             + "OR sub_task_id IN (SELECT id FROM sub_task WHERE task_id = #{taskId})")

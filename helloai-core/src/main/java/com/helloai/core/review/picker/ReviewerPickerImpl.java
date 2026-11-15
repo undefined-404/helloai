@@ -135,7 +135,7 @@ public class ReviewerPickerImpl implements ReviewerPicker {
     /**
      * 全部可用 REVIEWER 候选（ACTIVE + API_KEY_LLM）。
      *
-     * <p><b>`MED-1`（2026-10-15）：按核验侧质量分降序</b>。
+     * <p><b>`MED-1`：按核验侧质量分降序</b>。
      * 修复前此列表按 {@code agentService.listProfilesByRole} 的原始顺序返回，
      * 而 {@code AgentSelector} 的 {@code qualityRank} 用的是<b>执行侧</b>指标
      * ⇒ 选核验人时完全忽略其核验履历（{@code reviewerDisagreementCount} 全仓零读取），

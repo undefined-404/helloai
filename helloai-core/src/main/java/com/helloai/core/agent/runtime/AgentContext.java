@@ -59,7 +59,7 @@ public class AgentContext {
      * 执行环境（坑 4 预留；显式供电）：由消费侧经
      * {@code ExecutionEnvironmentProvider.resolve(agent.accessType)} 解析注入
      * （RemoteAgentEnvironment / LocalProcessEnvironment，agent 域数据直读）；
-     * accessType 为 null 或无命中时保持 null（语义兼容，调用方不得依赖非 null）。
+     * accessType 为 null 或无命中时保持 null（语义兼容，用方不得依赖非 null）。
      */
     ExecutionEnvironment environment;
 

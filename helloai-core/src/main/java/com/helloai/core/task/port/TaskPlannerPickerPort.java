@@ -7,7 +7,7 @@ package com.helloai.core.task.port;
  * task 域、由 planner 域 {@code PlannerAgentPicker} 实现（依赖倒置），
  * task 域（如最终报告生成）只依赖本接口。</p>
  *
- * <p><b>RM6 契约去实体（2026-10-04）</b>：返回类型由 {@code agent.entity.Agent}
+ * <p><b>RM6 契约去实体</b>：返回类型由 {@code agent.entity.Agent}
  * 改为值对象 {@link PlannerAgentRef}（只读投影 id + name）——消费方 task 域不需要
  * agent 实体完整可变状态，返回实体会让两域实体耦合（CODE_STYLE §7.2 值对象纪律）。</p>
  */

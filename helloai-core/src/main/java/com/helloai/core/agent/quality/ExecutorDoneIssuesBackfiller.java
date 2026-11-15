@@ -29,11 +29,11 @@ import java.util.concurrent.TimeUnit;
  * {@code executorDoneIssues}。</p>
  *
  * <p>防覆盖：LLM 评估在锁外执行（长耗时）；写入前按 subTaskId 取**分布式锁**
- * （Redisson RLock，2026-10-02 由 JVM 本地分段锁迁来）后重读 context，仅当最后一轮 round 未变且 executorDoneIssues 仍为空时落笔，
+ * （Redisson RLock，由 JVM 本地分段锁迁来）后重读 context，仅当最后一轮 round 未变且 executorDoneIssues 仍为空时落笔，
  * 避免覆盖评估期间新发生的评审轮次或并发回填。全程 best-effort，
  * 三态 timeline（success/skipped/failed）观测。</p>
  *
- * <p><b>2026-10-01（W4）依赖反转</b>：本类原先直接 import
+ * <p><b>（W4）依赖反转</b>：本类原先直接 import
  * {@code task.entity.SubTask} / {@code task.service.SubTaskService} 并自行解析
  * {@code context.reviewHistory}。现改为：
  * <ul>
@@ -46,7 +46,7 @@ import java.util.concurrent.TimeUnit;
  * 行为逐字保留：判定分支、timeline 三态的触发条件与文案均未变；本类的锁仍只承担
  * 「并发回填串行化」，不承担正确性判定（与原实现一致）。</p>
  *
- * <p><b>2026-10-02（分布式改造）</b>：原 {@code ConcurrentHashMap<Long, Object> +
+ * <p><b>（分布式改造）</b>：原 {@code ConcurrentHashMap<Long, Object> +
  * synchronized} 分段锁是**单实例假设**（原注释即自承「单实例安全」），多实例部署下
  * 锁不跨实例 ⇒ 并发回填可能重复触发 LLM 评估与写入。迁 Redisson RLock 后跨实例互斥成立。
  * 语义取 waitTime=0「抢占失败即跳过」是安全的：本回填幂等（同 round 同一份 assess 结果

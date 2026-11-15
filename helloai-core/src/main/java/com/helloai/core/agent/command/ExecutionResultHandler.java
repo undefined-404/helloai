@@ -49,14 +49,10 @@ import com.helloai.core.agent.port.TaskTimelinePort;
  * 让消费侧编排（{@code LocalExecutionCommandConsumer}）更聚焦“执行本身”，
  * 后续也便于把结果处理独立挂接到 MQ/轮询消费端。</p>
  *
- * <p><b>跨域访问（2026-10-01 W10）</b>：本类曾直接 import {@code task.entity.SubTask} /
- * {@code task.service.SubTaskService} / {@code task.spec.ExecutionRecord(Parser)} /
- * {@code task.service.TaskRunningSpecService}，构成 CODE_STYLE §6 反向依赖
- * （{@code agent → task}）。现一律改经 {@code agent.port} 端口：
- * 读走 {@link SubTaskQueryPort}（返回 {@link SubTaskSnapshot} 快照，非实体）、
- * 写走 {@link SubTaskCommandPort}（{@code submit / block / updateContext} 原子命令）、
- * 执行记录回填走 {@link TaskRunningSpecPort}（解析 + fallback 整体落 task 域）。
- * 端口归属判据见 §7.2：消费方 agent <b>低于</b>提供方 task ⇒ 契约落消费方、适配器落提供方。</p>
+ * <p><b>跨域访问（W10）</b>：一律经 {@code agent.port} 端口避免 {@code agent → task} 反向依赖（CODE_STYLE §6）——
+ * 读走 {@link SubTaskQueryPort}（返回 {@link SubTaskSnapshot} 快照，非实体）、写走 {@link SubTaskCommandPort}
+ * （{@code submit/block/updateContext} 原子命令）、执行记录回填走 {@link TaskRunningSpecPort}（解析 + fallback 整体落 task 域）。
+ * 端口归属见 §7.2：消费方 agent 低于提供方 task ⇒ 契约落消费方、适配器落提供方。</p>
  */
 @Slf4j
 @Service
@@ -80,7 +76,7 @@ public class ExecutionResultHandler {
     /**
      * 事件记录器（AGENT_COMPLETED 埋点）。
      *
-     * <p><b>★事务语义（2026-10-15 订正）</b>：{@code record} 与<b>本类事务合并</b>
+     * <p><b>★事务语义</b>：{@code record} 与<b>本类事务合并</b>
      * （{@code @Transactional(REQUIRED)}），任一遍写失败会把共享事务标记 rollback-only
      * ⇒ 本方法整体回滚。故调用点<b>不得</b>用 try-catch 假装「降级不阻断」——
      * 那只挡得住异常冒泡、挡不住回滚，且会让后续工作在注定回滚的事务里空转。
@@ -98,12 +94,10 @@ public class ExecutionResultHandler {
     }
 
     /**
-     * 成功回写主体（`G4`，2026-10-15 抽出以便携带幂等键）。
+     * 成功回写主体（`G4`，抽出以便携带幂等键）。
      *
-     * <p><b>为什么要把 {@code idempotencyKey} 传进来</b>：{@code handleReport} 的幂等分支
-     * （见其内「{@code idempotent_duplicate}」判定）<b>要求 key 非空</b>才生效，
-     * 而在此之前内部执行链恒传 {@code null} ⇒ 该分支对内部执行是<b>死码</b>，
-     * 唯一防护退化为「读 {@code subTask.status()} 再动作」的 TOCTOU 检查。</p>
+     * <p>{@code handleReport} 的幂等分支要求 {@code idempotencyKey} 非空才生效；此前内部执行链恒传
+     * {@code null} ⇒ 该分支是死码，唯一防护退化为「读 {@code subTask.status()} 再动作」的 TOCTOU 检查。</p>
      *
      * @param idempotencyKey 幂等键；{@code null} ⇒ 保持原语义（仅状态守卫）
      */
@@ -124,7 +118,7 @@ public class ExecutionResultHandler {
     }
 
     /**
-     * 内部执行链的幂等键口径（`G4`，2026-10-15）。
+     * 内部执行链的幂等键口径（`G4`）。
      *
      * <p>取 {@code record:<recordId>}——{@code recordId}（{@code agent_execution_record.id}）
      * <b>每次执行唯一</b>且已随命令透传到调用现场，无需改动
@@ -139,31 +133,19 @@ public class ExecutionResultHandler {
     }
 
     /**
-     * <b>原子化「执行记录终态化 + 结果回写」</b>（`HIGH-2` 修复，2026-10-15）。
+     * <b>原子化「执行记录终态化 + 结果回写」</b>（`HIGH-2`）。
      *
-     * <p><b>修的缺陷</b>：消费链原先把这两件事放在<b>两个独立事务</b>里，且顺序是
-     * 「先 <i>记录终态</i>，后 <i>结果回写</i>」。两者提交之间若崩溃，会留下
-     * <b>记录 = SUCCESS 但子任务仍 IN_PROGRESS</b> 的僵尸态——而两条恢复链都覆盖不到它：
-     * {@code ExecutionCompensationTask} 只扫 {@code PENDING} / {@code RUNNING} 超时
-     * （这条记录已是终态 SUCCESS），{@code ExecutionCommandPoller} 只扫 {@code PENDING}。
-     * 结果是<b>成功产出被静默丢弃</b>，且无幂等重放（`LocalExecutionCommandConsumer` 的
-     * `markRunning` CAS 也因记录已终态而拒绝重入）。</p>
+     * <p><b>为什么必须同事务</b>：若分两个独立事务（先记录终态、后结果回写），两者提交间崩溃会留下
+     * <b>记录 SUCCESS 但子任务仍 IN_PROGRESS</b> 的僵尸态，两条恢复链都扫不到（{@code ExecutionCompensationTask}
+     * 只扫 PENDING/RUNNING 超时、{@code ExecutionCommandPoller} 只扫 PENDING，记录已终态故 {@code markRunning} CAS 也拒重入）
+     * ⇒ 成功产出静默丢弃。收进<b>同一事务</b>后任一步失败整体回滚 ⇒ 记录退回 RUNNING、子任务留 IN_PROGRESS
+     * ⇒ {@code ExecutionCompensationTask}（`running-timeout-minutes` 默认 10）判超时落
+     * {@code sub_task_execution_timeout_reassign} + 转 BLOCKED，失败变为可见且可由既有改派链恢复。
+     * 判据：宁可显式可恢复的失败，不要静默的成功丢失。</p>
      *
-     * <p><b>修法</b>：把「记录 CAS 终态」与「结果回写」收进<b>同一事务</b>
-     * （本方法、两个 {@code @Transactional(REQUIRED)} 下游方法天然加入本事务）。
-     * 任一步失败 ⇒ 整体回滚 ⇒ 记录<b>退回 RUNNING</b>、子任务<b>留在 IN_PROGRESS</b>
-     * ⇒ 由 {@code ExecutionCompensationTask}（`running-timeout-minutes`，默认 10）判定超时
-     * 并落 {@code sub_task_execution_timeout_reassign} 事件 + 转 BLOCKED
-     * ⇒ <b>失败从「静默丢结果」变为「可见且可由既有改派链恢复」</b>。
-     * 判据：宁可要一个显式的、可恢复的失败，也不要一个静默的成功丢失。</p>
-     *
-     * <p><b>为什么不改成「先回写后终态化」</b>：那会把窗口挪到另一侧——崩溃时得到
-     * 「子任务已 DONE 但记录仍 RUNNING」，而超时补偿对已 DONE 的子任务会因
-     * {@code status == IN_PROGRESS} 守卫而不动它，记录却停在 RUNNING 无人认领，
-     * 同样是一个需要额外恢复链的僵尸态。事务化是唯一不需要新增恢复链的解法。</p>
-     *
-     * <p><b>调用方</b>：{@code LocalExecutionCommandConsumer#runViaRuntimeInner} 第 5+6 步
-     * （原两段独立代码已合并为本方法调用）。</p>
+     * <p><b>为什么不「先回写后终态化」</b>：窗口挪到另一侧——崩溃得到「子任务 DONE 但记录 RUNNING」，
+     * 超时补偿对已 DONE 子任务因 {@code status==IN_PROGRESS} 守卫不动它，记录停 RUNNING 无人认领，同样僵尸态。
+     * 事务化是唯一不需新增恢复链的解法。</p>
      *
      * @param recordId  执行记录 ID（null ⇒ 跳过记录终态化，仅做结果回写，保持原语义）
      * @param subTaskId 子任务 ID
@@ -188,7 +170,7 @@ public class ExecutionResultHandler {
         }
         // 2) 结果回写（同事务；失败则第 1 步一并回滚，不再产生「记录终态但子任务未应用」的僵尸态）
         if (result.isSuccess()) {
-            // `G4`（2026-10-15）：携带 recordId 派生的幂等键，使 handleReport 的
+            // `G4`：携带 recordId 派生的幂等键，使 handleReport 的
             // idempotent_duplicate 分支对内部执行**不再死码**（原恒传 null ⇒ 只有状态 TOCTOU 守卫）。
             doHandleSuccess(subTaskId, agentId, result, idempotencyKeyOf(recordId));
         } else {
@@ -212,7 +194,7 @@ public class ExecutionResultHandler {
     /**
      * 失败回写（含<b>归属校验</b>）。
      *
-     * <p><b>2026-10-05 修 804 双消费假阻塞</b>：MQ 主路径与 DB Poller 兜底路径可能同时消费同一
+     * <p><b>804 双消费假阻塞</b>：MQ 主路径与 DB Poller 兜底路径可能同时消费同一
      * 执行命令（同一 {@code recordId}）。输家在 {@code startIfNeeded} 的
      * {@code ASSIGNED→IN_PROGRESS} 乐观锁 CAS 上抛「并发修改，请重试」后进本入口——
      * 若不加校验会直接把<b>已被赢家接管</b>的子任务误打成 {@code BLOCKED}（产出被丢弃）。</p>
@@ -232,7 +214,7 @@ public class ExecutionResultHandler {
     /**
      * 失败回写（携带 thinking；归属校验同三参重载 —— {@code recordId} 恒 {@code null}）。
      *
-     * <p><b>2026-10-05 方案 B 配套</b>：空产出被 A 判为 {@code FAILED} 后，模型思维链
+     * <p><b>方案 B 配套</b>：空产出被 A 判为 {@code FAILED} 后，模型思维链
      * （DeepSeek {@code reasoningContent}）仍需可见。本入口与三参重载同链（同 {@code handleReport}），
      * 仅额外透传 {@code thinking}，由 {@code handleReport} 落 conversation_message
      * （toolName={@code sub_task_execute_thinking}，**同一通道**）——<b>不改变失败语义</b>（仍 block）。</p>
@@ -354,7 +336,7 @@ public class ExecutionResultHandler {
         // 对话流增量副本：执行产出/失败原因写入 conversation_message，
         // INTERNAL/EXTERNAL 上报共用本入口；REQUIRES_NEW 独立事务 + try/catch，失败不阻断主链路
         try {
-            // B（2026-10-05）：思考过程与成功/失败无关 —— 只要模型产出了思考过程就落库
+            // B：思考过程与成功/失败无关 —— 只要模型产出了思考过程就落库
             // （同通道 sub_task_execute_thinking）。空产出被 A 判 FAILED 时，思维链仍应可见，
             // 供前端「看到模型到底思考了什么」；仅可观测，不参与成功/失败判定。
             if (report.getThinking() != null && !report.getThinking().isBlank()) {
@@ -397,14 +379,10 @@ public class ExecutionResultHandler {
                             "tokens", report.getTokenUsage(),
                             "idempotencyKey", report.getIdempotencyKey()));
             // AGENT_COMPLETED（Turn 端点事件 step=0；失败路径不发，ADR §5.3）
-            // ★HIGH-3（2026-10-15）fail-fast：原实现把本调用包在 try-catch 里并声称
-            //   「事件 write-only，降级不阻断主链路」——该说法是**错的**：
-            //   `record` 与本事务合并（REQUIRED），insert 失败会把本事务标记 rollback-only，
-            //   try-catch 挡不住回滚；后果是「catch 后继续 publish 事件 / 注册同步 / 推进
-            //   子任务状态（全是注定回滚的无效工作），最终在 commit 处抛
-            //   UnexpectedRollbackException —— 与真正的根因（事件表写失败）隔了很远」。
-            //   现直接调用、不捕获：让失败**在写点现场**暴露，且不再空转。
-            //   事务结果不变（同样整体回滚），变的是可诊断性。
+            // ★HIGH-3：不捕获。record 与本事务合并（REQUIRED），insert 失败即标记 rollback-only，
+            //   try-catch 挡不住回滚——若包成「write-only 降级不阻断」，catch 后仍会 publish/推进子任务
+            //   状态（全是注定回滚的空转），最终在 commit 处抛 UnexpectedRollbackException，离根因
+            //   （事件表写失败）很远。直接调用让失败在写点现场暴露；事务结果不变（同样整体回滚）。
             agentEventRecorder.record(
                     AgentEventContextResolver.resolveRunId(subTask.taskId()),
                     subTask.taskId(), report.getSubTaskId(),
@@ -455,7 +433,7 @@ public class ExecutionResultHandler {
                 }
             }
         } else {
-            // 归属校验（2026-10-05 修 804 假 BLOCKED）：仅当本消费确实持有该 sub_task 的
+            // 归属校验（804 假 BLOCKED）：仅当本消费确实持有该 sub_task 的
             // RUNNING 执行记录时才推进 BLOCKED。否则（记录非 RUNNING，说明本轮是双消费的
             // 输家：他路已接管/已终结，或该记录从未由本轮启动）不 block，只留痕，
             // 避免把赢家正在执行的子任务误判为失败。
@@ -474,9 +452,8 @@ public class ExecutionResultHandler {
                 log.warn("失败回写跳过 BLOCKED（记录非本轮持有, 判为双消费输家）: subTaskId={}, recordId={}, err={}",
                         report.getSubTaskId(), report.getRecordId(), report.getError());
             } else {
-                // LOG-20261104-015 补全：失败原因此前只进了对话流与 context，timeline 的
-                // sub_task_report_blocked（reason）与 sub_task_execute_failed（error）仍写空值，
-                // 外部 agent 上报 blocked 且未带 error 时时间线照旧无线索。统一用同一兜底文本。
+                // LOG-20261104-015：失败原因统一兜底文本——外部 agent 报 blocked 且未带 error 时，
+                // timeline 的 sub_task_report_blocked（reason）与 sub_task_execute_failed（error）也须有线索，不留空值。
                 subTaskCommandPort.block(report.getSubTaskId(), failureReason, report.getAgentId());
             }
             // 执行会话终态 FAILED（error 摘要；best-effort 不阻断回写）
@@ -495,33 +472,22 @@ public class ExecutionResultHandler {
                             "idempotencyKey", report.getIdempotencyKey()));
         }
 
-        // N11 阈值回退计数：仅对 CLI_CLIENT Agent 累加/重置。
-        // SQL 条件已限定 access_type=CLI_CLIENT，误调 API_KEY_LLM 也不会写库；
-        // tracker 内部已做 try/catch + REQUIRES_NEW。
+        // N11 阈值回退计数：仅对 CLI_CLIENT Agent 累加/重置（SQL 已限定 access_type=CLI_CLIENT，
+        // 误调 API_KEY_LLM 不写库；tracker 内部 try/catch + REQUIRES_NEW）。
         //
-        // 关键自死锁防护（§4.1  锁语义重审）：
-        // 修复点：failureTracker 以 REQUIRES_NEW 独立事务更新同一 agent 行，
-        // 而本事务在成功路径下已通过 subTaskCommandPort.submit() -> changeStatus(REVIEW)
-        // -> heartbeatService.active() 锁定了该 agent 行；若在事务内直接调用，
-        // 会形成"外层持锁 + 内层新事务改同一行"的自死锁。
-        // 修复：把 failureTracker.recordSuccess/Failure 挪到主事务提交后（afterCommit）
-        // 执行——此时行锁已释放，REQUIRES_NEW 独立语义仍保留。
-        //
-        // 补充（active() 现在复用 seen()，DB 行锁变频繁）：
-        // seen() 内部会调 agentMapper.updateById(agent)，同样锁定 agent 行；
-        // 若 failureTracker 留在主事务内，即便 active() 用 SELECT+UPDATE
-        // 顺序，REQUIRES_NEW 内层仍会撞主层持有同一行的锁，因此 afterCommit
-        // 模式不可豁免——本段逻辑必须保留。
+        // ★自死锁防护（§4.1，afterCommit 模式不可豁免）：failureTracker 以 REQUIRES_NEW 独立事务
+        // 更新同一 agent 行，而本事务成功路径已通过 submit() → changeStatus(REVIEW) → active()
+        // 锁定该行（active() 复用 seen() → updateById 同样锁行）；留在事务内会形成「外层持锁 +
+        // 内层新事务改同一行」的自死锁。故挪到主事务提交后（afterCommit）执行——行锁已释放，
+        // REQUIRES_NEW 独立语义仍保留。本段逻辑必须保留。
         Agent targetAgent = report.getAgentId() != null ? agentService.getById(report.getAgentId()) : null;
         if (targetAgent != null && targetAgent.getAccessType() == AgentAccessType.CLI_CLIENT) {
             final Long trackAgentId = report.getAgentId();
             final boolean trackSuccess = report.isSuccess();
             // Paperclip 阶段一·4（三配额分离）：失败现场按 output 是否空白归因 ——
-            // 空回复（EMPTY_REPLY）归 continuation 配额（可容忍），其余真失败归 recovery。
-            // ★判据要点（2026-10-22 自查修正）：EMPTY_REPLY 须「output 非 null 且空白」——
-            // handleFailure 等异常路径构造的 report.output 恒为 null（表示「无产出」，
-            // 是异常现场而非执行者空回复），判为真失败 recovery；只有执行者显式回空串
-            // （handleReport 的 output=""）才是 continuation。
+            // 空回复（EMPTY_REPLY）归 continuation（可容忍），其余真失败归 recovery。
+            // ★EMPTY_REPLY 须「output 非 null 且空白」：handleFailure 等异常路径的 output 恒 null
+            // （无产出，是异常现场而非执行者空回复）⇒ recovery；只有执行者显式回空串（output=""）才是 continuation。
             final boolean emptyReply = !trackSuccess
                     && report.getOutput() != null && report.getOutput().isBlank();
             if (TransactionSynchronizationManager.isSynchronizationActive()) {
@@ -596,10 +562,9 @@ public class ExecutionResultHandler {
      * N11 计数写入（成功重置 / 失败累加）。由主事务 afterCommit 回调触发，
      * 确保执行时 agent 行锁已释放，避免与主链路事务自死锁。
      *
-     * <p><b>§4.1  重新声明不可豁免</b>：{@code HeartbeatService.active()}
-     * 在 改为复用 seen() 双写，内部走 {@code agentMapper.updateById(agent)}
-     * 锁 agent 行；本方法若留在主事务内（而非 afterCommit），会与外层事务
-     * 持有的 agent 行锁形成自死锁。本类 L178-192 处的 afterCommit 注册不可删除。</p>
+     * <p><b>§4.1 afterCommit 不可豁免</b>：{@code HeartbeatService.active()} 复用 seen() 双写，
+     * 内部走 {@code agentMapper.updateById(agent)} 锁 agent 行；本方法若留在主事务内（而非 afterCommit）
+     * 会与外层事务持有的 agent 行锁形成自死锁。本类的 afterCommit 注册不可删除。</p>
      */
     private void applyFailureTracking(Long agentId, boolean success, boolean emptyReply) {
         if (success) {

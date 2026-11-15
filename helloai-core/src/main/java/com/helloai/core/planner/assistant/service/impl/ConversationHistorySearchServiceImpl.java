@@ -50,7 +50,7 @@ public class ConversationHistorySearchServiceImpl implements ConversationHistory
             return List.of();
         }
         // 按会话各取最新一条 user 消息（N=limit，通常 5）：避免长会话的近期消息把
-        // 其他会话挤出全局 LIMIT 窗口（2026-11-03 复核 L-2 修正）。
+        // 其他会话挤出全局 LIMIT 窗口（L-2 修正）。
         List<HistoryHit> hits = new ArrayList<>();
         for (RequirementConversation c : conversations) {
             RequirementMessage m = messageService.lambdaQuery()

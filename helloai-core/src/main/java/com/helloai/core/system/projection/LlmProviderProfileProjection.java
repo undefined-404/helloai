@@ -10,7 +10,7 @@ import java.util.List;
  *
  * <p>镜像既有 {@code AgentProfileSnapshotProjection} / {@code SubTaskSnapshotProjection} 形态。</p>
  *
- * <p><b>命名（2026-10-17 命名整改）</b>：原名 {@code LlmProviderProfileMapper}。§17 将 {@code *Mapper}
+ * <p><b>命名（命名整改）</b>：原名 {@code LlmProviderProfileMapper}。§17 将 {@code *Mapper}
  * 保留给 MyBatis 持久化映射，本类与 DB 无关（纯内存投影），故去 {@code Mapper} 后缀并迁出
  * {@code service.impl}（该包只应容纳 {@code *ServiceImpl}），置入 {@code system.projection}。后缀取
  * {@code Projection} 而非裸 {@code LlmProviderProfile}，以避免与 {@code system.port.LlmProviderProfile}

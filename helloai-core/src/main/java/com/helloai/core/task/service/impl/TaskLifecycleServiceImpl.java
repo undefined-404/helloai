@@ -87,7 +87,7 @@ public class TaskLifecycleServiceImpl implements TaskLifecycleService {
         // CAS 赢家唯一，恰好保证整合报告只被触发一次。此处无事务上下文，
         // 消费方（TaskFinalReportService）用普通 @EventListener + @Async 承接。
         applicationEventPublisher.publishEvent(new TaskAutoCompletedEvent(taskId));
-        // `SL-2`（2026-11-12）：任务进入终态 ⇒ 回收该任务全部复用沙箱。与上面「报告触发」
+        // `SL-2`：任务进入终态 ⇒ 回收该任务全部复用沙箱。与上面「报告触发」
         // 同一发布点但语义不同——本事件覆盖 DONE / CANCELLED / 物理删除三种出口，消费方是
         // 资源回收（`SandboxTaskTerminalListener`），见 `TaskTerminalStateEvent` 类注释。
         applicationEventPublisher.publishEvent(

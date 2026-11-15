@@ -37,7 +37,7 @@ public interface ReviewRecheckLogMapper extends BaseMapper<ReviewRecheckLog> {
      * 抽检候选计数：窗口内可复判的 review_record 数。
      *
      * <p>`RV-6`：候选从「仅 APPROVED」扩为 APPROVED / REJECTED 双向抽检。
-     * 驳回侧加**冻结证据硬前置**（`snapshot -> 'frozenEvidence' IS NOT NULL`，2026-11-05 口径 B）——
+     * 驳回侧加**冻结证据硬前置**（`snapshot -> 'frozenEvidence' IS NOT NULL`，口径 B）——
      * 返工已覆盖产出、附件已失效，只有冻结了原判五段证据的记录才能构成有效复判对象。
      * 旧的无冻结快照驳回记录也排除：否则它会因「驳回优先 + 跳过不写日志」永久占据队首，
      * 每 tick 被取一次又跳过，挡住后续有效样本。</p>

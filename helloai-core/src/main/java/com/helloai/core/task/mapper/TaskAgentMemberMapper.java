@@ -17,7 +17,7 @@ import java.util.List;
  * 「先查后写」在并发下会撞 {@code uk(task_id, agent_id)} 唯一索引抛
  * {@code DuplicateKeyException}，而 PostgreSQL 一旦报 duplicate key，<b>整个事务进入
  * aborted(25P02)</b>，后续语句全部失败——捕获异常后在同一事务里补救是无效的
- * （2026-10-02 在 {@code TaskRunningSpecServiceImpl} 已实证并改掉）。
+ * （在 {@code TaskRunningSpecServiceImpl} 已实证并改掉）。
  * {@code ON CONFLICT DO UPDATE} 是<b>单条原子语句</b>、不产生错误、不污染事务。</p>
  *
  * <p><b>为什么 id 由调用方传入</b>：自定义 {@code @Insert} 不会走 MyBatis-Plus 的

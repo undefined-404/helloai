@@ -1,7 +1,7 @@
 package com.helloai.core.agent.runtime.sandbox;
 
 /**
- * 空闲工作区回收通道（`SL-7`，2026-11-13）。
+ * 空闲工作区回收通道（`SL-7`）。
  *
  * <p><b>解决的问题</b>：槽池的空闲淘汰只在「同键再次访问」时发生（{@code SandboxSlotPool#acquire}），
  * 一个再也不会被访问的键（任务被放弃、会话结束）永远不会再触发淘汰。此前能把 TTL 写小，

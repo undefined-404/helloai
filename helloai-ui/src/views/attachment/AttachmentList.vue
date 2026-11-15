@@ -157,7 +157,7 @@ type Item = DirItem | FileItem
 const rows = ref<Attachment[]>([])
 const crumbs = ref<{ key: string; name: string }[]>([])
 const loading = ref(false)
-// 附件版本化（2026-08-19）：默认只看有效版本（同名重传后旧版 INACTIVE），切"全部"可回查历史
+// 附件版本化：默认只看有效版本（同名重传后旧版 INACTIVE），切"全部"可回查历史
 const activeOnly = ref(true)
 const downloadingId = ref<null | string>(null)
 const previewVisible = ref(false)

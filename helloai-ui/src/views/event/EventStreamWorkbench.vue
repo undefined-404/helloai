@@ -1103,7 +1103,7 @@ const activeSpanRange = computed(() => {
   return `${fmtTime(first.createTime)} → ${fmtTime(last.createTime)}`
 })
 
-// ── 时间与归属展示辅助（后端 createTime 为 'yyyy-MM-dd HH:mm:ss' 形态，统一解析） ──
+// ── 时间与归属展示辅助（后端 createTime 为 'yyyy-MM-dd HH:mm:ss' 形态，解析） ──
 function tsOf(t: string | null | undefined): number {
   return Date.parse(String(t ?? '').replace(' ', 'T'))
 }

@@ -81,7 +81,7 @@ const html = computed(() => renderMarkdown(props.content))
 /**
  * 引用弹窗正文：分片原文同样要按 Markdown 渲染。
  *
- * <p><b>2026-10-24 修复</b>：原实现用 `<pre>{@code {{ text }}}</pre>` 直出——docx 转换出的
+ * <p>原实现用 `<pre>{@code {{ text }}}</pre>` 直出——docx 转换出的
  * `**加粗**`、`|---|` 表格、`2 : +1` 之类的标记全以字面量露出来，用户第一眼看到的是
  * 一堆星号和竖线。分片内容与回答正文出自同一套解析，必须走同一条渲染管线。</p>
  */
@@ -91,7 +91,7 @@ const citeHtml = computed(() => renderMarkdown(cleanChunkText(citeContent.value)
  * 分片原文清洗：剥掉 Tika 从 docx/pptx 抽出的图片占位标记。
  *
  * <p>`![](embedded:image39.png)` 是 Tika 对嵌入图片的转写产物——既取不到图片，也不是
- * 用户能读的内容，留着只会把正文切成一地碎片（实测一段话被 5 个这样的标记打断）。</p>
+ * 用户能读的内容，留着只会把正文切成一地碎片（一段话被 5 个这样的标记打断）。</p>
  *
  * <p><b>结尾的 `)` 必须可选</b>：分片是按字数硬切的，切点经常落在标记中间，实测出现过
  * `![](embedded:image43.` 这种截断形态；写死 `\)` 会漏掉它，弹窗末尾就留半截标记。
@@ -132,11 +132,11 @@ function escapeAttr(s: string): string {
 }
 
 /**
- * 标题规范化（2026-10-18）：把 `##标题` / `###1. xxx` 这类**缺空格**的 ATX 标题修正为合法 Markdown。
+ * 标题规范化：把 `##标题` / `###1. xxx` 这类**缺空格**的 ATX 标题修正为合法 Markdown。
  *
  * <p><b>为什么必须做</b>：CommonMark 规定 ATX 标题的 `#` 系列后<b>必须</b>跟一个空格或行尾，
  * 否则整行按普通文本输出。而中文大模型输出极常见 `##先说结论`、`###1. 项目名` 这种写法
- * ⇒ 用户看到裸露的 `##`，以为渲染坏了（实测库中 8 条 assistant 消息有此问题）。</p>
+ * ⇒ 用户看到裸露的 `##`，以为渲染坏了（库中 8 条 assistant 消息有此问题）。</p>
  *
  * <p><b>两类修正</b>：
  * <ol>
@@ -146,7 +146,7 @@ function escapeAttr(s: string): string {
  * </ol>
  * <b>跳过 fenced code block</b>（``` 或 ~~~）内的内容——那里 `#` 是代码/注释，不能改。</p>
  *
- * <p><b>2026-10-23 补：粘连标题必须判长度</b>。实测库里存在这一类真实输出：
+ * <p><b>：粘连标题必须判长度</b>。实测库里存在这一类真实输出：
  * <pre>
  * ##核对范围本次能核对的是检索召回的7个片段：RabbitMQ架构设计（#157、#158）……
  * ##四、可以打磨但不影响对错的地方1. **“平均分摊”**：加上 prefetch后应按处理能力竞争……
@@ -189,7 +189,7 @@ function normalizeHeadings(src: string): string {
     }
     // ② 中文/中文标点后直接续写标题：只负责断行。
     //    这里**绝不能顺手补空格**——补了之后切出的第二段就成了合法标题，① 的长度判断再没机会跑，
-    //    `##三、必须修正的四条###修正1：…` 的后半段仍会整段变标题（实测 151 字巨号粗体）。
+    //    `##三、必须修正的四条###修正1：…` 的后半段仍会整段变标题（151 字巨号粗体）。
     const fixed = line.replace(
       /([一-龥）】》」』。！？；：、，])\s*(#{1,6})(?=[^\s#\d])/g,
       '$1\n$2'
@@ -225,7 +225,7 @@ const CITE_HASH = /^#{1,6}\d+(?!\.\s)/
 
 /**
  * 处理行首 `#{1,6}` 后<b>紧跟非空白</b>的粘连写法。带空格的正规标题原样返回。
- * 见 {@link normalizeHeadings} 的 2026-10-23 补充说明。
+ * 见 {@link normalizeHeadings} 的 充说明。
  */
 function splitGluedHeading(line: string): string {
   const m = /^(\s*)(#{1,6})(?=[^\s#])/.exec(line)
@@ -306,7 +306,7 @@ function charCount(s: string): number {
 }
 
 /**
- * 表头粘连修复（2026-10-24）：`小节名|表头 |表头 |表头 |` + `|---|---|---|`。
+ * 表头粘连修复：`小节名|表头 |表头 |表头 |` + `|---|---|---|`。
  *
  * <p><b>为什么必须做</b>：GFM 要求分隔行的列数与表头行<b>完全一致</b>，否则整张表不成立。
  * 中文大模型极常把小节名直接粘在表头前面且不带 `#`：
@@ -447,7 +447,7 @@ async function onCiteClick(e: MouseEvent): Promise<void> {
 
 <style scoped>
 /*
- * 排版基线（2026-10-18 重做，对齐 DeepSeek / Kimi / assistant-ui 的 AI 回复形态）
+ * 排版基线（重做，对齐 DeepSeek / Kimi / assistant-ui 的 AI 回复形态）
  *
  * 三处参照：
  *  - assistant-ui（`aui-md-*`）：正文 leading-7（1.75）、段间距 5px 量级、

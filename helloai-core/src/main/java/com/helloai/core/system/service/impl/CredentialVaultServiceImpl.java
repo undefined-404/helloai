@@ -561,7 +561,7 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
      * （{@code getActive*} 查不到 ACTIVE），线上表现为「模型突然不可用」而无任何显式信号。
      * magpie 同样拒绝（{@code keys.go:397}「that's the only key in use; turn another on first」）。</p>
      *
-     * @return 继任的备位凭证（调用方负责先降后升）
+     * @return 继任的备位凭证（用方负责先降后升）
      */
     private CredentialVault requireStandbyForSuccession(String provider) {
         List<CredentialVault> standbys = baseMapper.selectList(new LambdaQueryWrapper<CredentialVault>()

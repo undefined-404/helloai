@@ -8,7 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * 助理对话整轮锁 TTL 解析器（N-1，2026-11-03）。
+ * 助理对话整轮锁 TTL 解析器（N-1）。
  *
  * <p><b>不变量</b>：助理轮在<b>同步 LLM 调用期间持锁</b>，锁有效期不得短于单次 LLM 的最坏时长
  * ——后者由 provider 读超时给出。若锁先过期，另一请求的 {@code tryLock} 会成功抢占，

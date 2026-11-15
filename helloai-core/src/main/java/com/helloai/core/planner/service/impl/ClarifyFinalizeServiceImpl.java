@@ -59,7 +59,7 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
     private final ObjectMapper objectMapper;
     private final ClarifyCommandSearchService commandSearch;
 
-    /** 显式技能（2026-10-26）：建任务时把用户选中的产出型技能包写进 required_skills。 */
+    /** 显式技能：建任务时把用户选中的产出型技能包写进 required_skills。 */
     private final SkillDirective skillDirective;
 
     /** 执行期重构派生（`ADR-008` §13，AD-4）：会话带 sourceSubTaskId 时建 Y 而非普通任务。 */
@@ -147,7 +147,7 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
     }
 
     /**
-     * 建任务时回填「用户显式选中的技能」（2026-10-26）。
+     * 建任务时回填「用户显式选中的技能」。
      *
      * <p><b>为什么沿历史回溯而不存在会话表上</b>：技能是「一句消息」的属性——用户这一轮选了
      * archify、下一轮可能换成业务流程图。挂 payload 与 {@code /task} 的「命令随消息走」同构，
@@ -280,7 +280,7 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
             context.put(RequirementPackageParser.CONTEXT_KEY_REQUIREMENT_PACKAGE,
                     conversation.getFinalPackage());
         }
-        // 执行环境（2026-11-12）：终稿里**人工**声明了 executionEnv 时原样搬进 task.context，
+        // 执行环境：终稿里**人工**声明了 executionEnv 时原样搬进 task.context，
         // 拆解链据此注入 {{EXECUTION_ENV}}（解析/渲染唯一实现在 common 的 ExecutionEnv）。
         // 刻意不让模型产出这个字段：requirement-finalize.md 的输出契约里没有它——路径与连接串
         // 一旦由模型编造，执行者会照着一条不存在的路径去找，比「未声明」更糟。
@@ -295,7 +295,7 @@ public class ClarifyFinalizeServiceImpl implements ClarifyFinalizeService {
         TaskArchetypeResolver.Decision archetypeDecision =
                 TaskArchetypeResolver.resolve(conversation.getFinalPackage());
         String archetype = archetypeDecision.value();
-        // 显式技能（2026-10-26）：写进 required_skills 才会被执行链展开成「技能规范 + requiredTools」。
+        // 显式技能：写进 required_skills 才会被执行链展开成「技能规范 + requiredTools」。
         // 但 required_skills 在选人处是 AND 硬匹配（agent.skills 必须全部包含），若没有任何在班 Agent
         // 承接该标签，写进去会让子任务永久 PENDING——那比不写更糟。故先探一次承接面，接不住就降级。
         List<String> requiredSkills = skillsForTask(conversationId);

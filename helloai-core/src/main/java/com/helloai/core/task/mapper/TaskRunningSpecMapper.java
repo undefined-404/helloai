@@ -24,7 +24,7 @@ public interface TaskRunningSpecMapper extends BaseMapper<TaskRunningSpecEntity>
      *
      * <p><b>JSONB 列必须显式配 typeHandler</b>：MyBatis 自定义注解 SQL 走普通自动映射，
      * <b>不套用</b> {@code @TableField(typeHandler)}；不配则 {@code baseline} / {@code contract}
-     * 读成 null（2026-11-04 实测：TaskRunningSpecPhaseBIT 断言「Prompt 段应含总体目标」失败，
+     * 读成 null（TaskRunningSpecPhaseBIT 断言「Prompt 段应含总体目标」失败，
      * 根因 baseline 丢失 → {@code TaskRunningSpec.isEmpty()} → 渲染空串）。</p>
      *
      * <p><b>不能用 {@code selectOne(LambdaQueryWrapper)} 代替</b>：那会按实体全字段生成
@@ -53,7 +53,7 @@ public interface TaskRunningSpecMapper extends BaseMapper<TaskRunningSpecEntity>
     /**
      * 取 {@code taskId} 维度的 <b>Postgres advisory 事务锁</b>（跨实例串行化写入）。
      *
-     * <p>2026-10-02：{@code task_running_spec} 建行与 {@code task_execution_record}
+     * <p>{@code task_running_spec} 建行与 {@code task_execution_record}
      * 的 DELETE+INSERT 都是「先查后写」，在并发（多实例）下存在唯一索引冲突窗口；
      * 而 Postgres 一旦报 duplicate key，<b>整个事务进入 aborted 状态</b>，后续语句全部失败
      * （无法靠捕获异常补救）。故改为<b>事前串行化</b>。</p>

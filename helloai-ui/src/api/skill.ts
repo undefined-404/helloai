@@ -28,7 +28,7 @@ export interface SkillPackageView {
 }
 
 /**
- * 需求对话「＋→技能」里可选的产出型技能（2026-10-26）。
+ * 需求对话「＋→技能」里可选的产出型技能。
  *
  * 只包含声明了 `internal_run_skill` 的技能包——它们能在沙箱里执行 CLI 并导出可下载产物。
  */

@@ -36,7 +36,7 @@ import java.util.List;
  *       （验证 rebuild 与增量维护口径一致）；</li>
  *   <li>{@code POST /dispatchById/{subTaskId}}：对 PENDING 子任务触发自动选人分发，
  *       供 verify-quality-profile.ps1 S3 断言 qualityRank 回灌调度选人
- *       （auto-assign-on-create 默认关闭，实测需显式触发入口）；</li>
+ *       （auto-assign-on-create 默认关闭，需显式触发入口）；</li>
  *   <li>{@code GET /findSpecSectionByTaskId/{taskId}}：返回 TaskRunningSpec 执行上下文
  *       Prompt 段（含契约先行拆解「## 任务契约」节），供
  *       verify-contract-first.ps1 S3/S4 断言契约节渲染；</li>

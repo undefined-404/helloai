@@ -28,7 +28,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * {@link WorkbenchQueryService} 实现（PA-4；2026-11-02 晚改版为三段式）。
+ * {@link WorkbenchQueryService} 实现（PA-4； 晚改版为三段式）。
  *
  * <p>各块复用既有读取面，不新增跨域直连 Mapper：
  * 任务概况与活跃 Agent 走 task 域 {@link SubTaskQueryService}；最近任务走
@@ -121,7 +121,7 @@ public class WorkbenchQueryServiceImpl implements WorkbenchQueryService {
      * 名下处于 REVIEW 的子任务数 = 审核中（产出在复核流程里），其余为待命。
      * 这样右栏在「没有正在跑的任务」时也仍然展示可用 Agent 名单，而不是整块消失。</p>
      *
-     * <p><b>可见性规则（2026-11-05 设计稿裁定）</b>——两类 Agent 的「在线」语义不同：</p>
+     * <p><b>可见性规则（设计稿裁定）</b>——两类 Agent 的「在线」语义不同：</p>
      * <ul>
      *   <li><b>内部 LLM</b>（{@code API_KEY_LLM}）：平台自持凭证，<b>常驻在线</b>，
      *       一律可见，空闲即「待命中」。不看心跳——它没有外部进程需要报活。</li>

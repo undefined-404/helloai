@@ -34,28 +34,15 @@ public class ReviewProperties {
     private DualReviewConsensusPolicy dualReviewConsensusPolicy = DualReviewConsensusPolicy.REQUIRE_BOTH;
 
     /**
-     * 核验互斥锁 TTL <b>下限</b>（秒）。默认 <b>240</b>。
+     * 核验互斥锁 TTL 下限（秒，`MED-3`）。默认 240。
      *
-     * <p><b>★不变量（`MED-3`，2026-10-15 修复）：锁 TTL 不得短于单次核验 LLM 调用的最坏时长。</b>
-     * 原实现硬编码 120s，而读取超时默认 {@code 180000ms}（{@code AgentProviderProperties
-     * .ProviderConfig.readTimeoutMs}）⇒ <b>180s &gt; 120s</b>：单审调用可合法跑到 180s，
-     * 锁却在 120s 就过期，中间留出窗口让 L1 事件 / L2 MQ / L3 孤儿扫描抢到已过期锁，
-     * 对同一子任务并发核验（重复 {@code review_record} → 画像重复计数）。</p>
-     *
-     * <p><b>★本值语义 = 下限，不是精确值</b>：有效 TTL 由
-     * {@code ReviewLockTtlResolver} 计算为
-     * {@code max(本值, 各 provider 读超时最大值 × 单次核验 LLM 调用次数 + 1s 余量)}。
-     * 调用次数 = 1，或 **2（{@link #unparseableRetryEnabled} 开启时的即时重试）**——
-     * 重试是在一次<b>已成功返回</b>的调用之后再发一次，故最坏时长是读超时的 2 倍。
-     * 之所以不采用「配置不对就 fail-fast」，是因为 {@code read-timeout-ms} <b>按 profile 分档</b>
-     * （默认 180s、{@code application-dev.yml} 为整合报告长输出设 600s，且该文件是
-     * {@code skip-worktree} 的本地私有件、不可提交）⇒ fail-fast 会导致 fresh clone 的
-     * dev profile 起不来。该不变量方向唯一（只能调大），故自动抬高是安全的，同时 WARN 留痕。</p>
-     *
-     * <p><b>为什么原先没暴露</b>：{@link #dualReviewTimeoutSeconds} 早已按同一推理收紧到 90s
-     * （见其 javadoc），但那条不变量是按<b>双审路径</b>推导的 —— 单审路径<b>没有 deadline</b>，
-     * 其时长上界由 provider 读超时决定，故双审安全<b>不代表</b>单审安全。
-     * <b>同一功能的两条路径，安全属性要分开验证。</b></p>
+     * <p>不变量：锁 TTL 不得短于单次核验 LLM 调用最坏时长，否则锁先过期、L1/L2/L3 触发源抢到已过期锁
+     * 对同一子任务并发核验（重复 {@code review_record} → 画像重复计数）。本值是<b>下限</b>非精确值：
+     * 有效 TTL 由 {@code ReviewLockTtlResolver} 算为 {@code max(本值, provider 读超时最大值 × 调用次数 + 1s)}，
+     * 调用次数 = 1 或 2（{@link #unparseableRetryEnabled} 开启时即时重试，最坏时长翻倍）。
+     * 不 fail-fast 因 {@code read-timeout-ms} 按 profile 分档（dev 为长输出设 600s 且是 skip-worktree 私有件），
+     * fail-fast 会让 fresh clone 的 dev 起不来；不变量方向唯一（只能调大）故自动抬高安全，WARN 留痕。
+     * 单审路径无 deadline、上界由读超时决定，与双审（{@link #dualReviewTimeoutSeconds}）安全属性须分开验证。</p>
      */
     private long lockTtlSeconds = 240;
 
@@ -70,22 +57,14 @@ public class ReviewProperties {
     private long dualReviewTimeoutSeconds = 90;
 
     /**
-     * 核验输出不可解析时是否**即时重试一次**。默认 <b>true</b>。
+     * 核验输出不可解析时是否即时重试一次。默认 true。
      *
-     * <p><b>为什么需要</b>：核验模型带工具轮次时，常见失败形态是「先输出自然语言思维链、
-     * 或在工具调用后丢失 JSON 格式」，此时 LLM 调用本身是<b>成功</b>的（{@code isSuccess=true}），
-     * 只是 {@code VerdictParser} 取不到 {@code pass}。原实现只能靠 L3 孤儿扫描（30s 扫描 / 60s
-     * 阈值）补偿，真机实测两个场景各命中一次，最坏要等 60s 且可能停在 REVIEW 无人接手。</p>
-     *
-     * <p><b>重试口径</b>：只对「调用成功但输出不可解析」重试，<b>不对调用失败/超时重试</b>
-     * （后者已落 {@code sub_task_auto_review_execution_failed}，重试会放大读超时窗口）。
-     * 重试 prompt 在原 prompt 末尾追加输出契约强化段（只重申格式，不改判定规则）；
-     * 重试仍不可解析才落 {@code sub_task_auto_review_unparseable}（payload 带 {@code attempts=2}），
-     * 重试成功则不落该事件、只留日志与对话流（第二轮 prompt/输出以 {@code *_retry} 类型落库，可复盘）。</p>
-     *
-     * <p><b>★开这个开关必须同时抬锁 TTL</b>：{@link #lockTtlSeconds} 的不变量是「锁不得短于
-     * 其守护的操作」，开启重试后单次核验最坏时长变为 <b>2 倍</b>读超时 ⇒
-     * {@code ReviewLockTtlResolver} 按 {@code 读超时 × attempts} 推导下限。关闭即回到单次口径。</p>
+     * <p>核验模型带工具轮次时常见「调用成功（{@code isSuccess=true}）但输出思维链/丢 JSON 格式」，
+     * {@code VerdictParser} 取不到 {@code pass}；即时重试免去等 L3 孤儿扫描（最坏 60s 且可能停 REVIEW 无人接手）。
+     * 只对「成功但不可解析」重试，不对调用失败/超时重试（后者已落 {@code sub_task_auto_review_execution_failed}，
+     * 重试会放大读超时窗口）；重试 prompt 末尾追加格式强化段（不改判定规则），仍不可解析才落
+     * {@code sub_task_auto_review_unparseable}（{@code attempts=2}），成功则第二轮以 {@code *_retry} 类型落库可复盘。
+     * 开启后单次核验最坏时长翻倍，{@link #lockTtlSeconds} 须按 {@code 读超时 × attempts} 同步抬高。</p>
      */
     private boolean unparseableRetryEnabled = true;
 
@@ -101,15 +80,10 @@ public class ReviewProperties {
     /**
      * 是否启用静态覆盖批评器（`RV-3`）。默认 true。
      *
-     * <p>与 {@link #verdictValidatorEnabled} 分开配：后者管「判定形态自不自洽」（`RV-1` 全项
-     * {@code Warn} + 一条逻辑矛盾 {@code Block}），本开关管「通过是否有逐条覆盖声明」——
-     * 后者会新增 {@code Block} 来源（{@code coverage_absent} / {@code acceptance_not_covered} /
-     * {@code unconfirmed_silently_dropped}）并直接产出 {@code INCONCLUSIVE}（转人工），
-     * 影响面与前者不同量级，需要能单独回滚。</p>
-     *
-     * <p>关闭后行为回到 `RV-3` 之前：{@code coverage} 仍会被解析与落库（纯观测），但不参与判定。
-     * 真机上若发现模型大面积不填 {@code coverage} 导致通过全转人工，先关本开关再改提示词，
-     * 不要放宽覆盖判据（判据一放宽，本项就没有拦截面了）。</p>
+     * <p>与 {@link #verdictValidatorEnabled} 分开配：后者管判定形态自洽（`RV-1`），本开关管「通过是否有逐条覆盖声明」，
+     * 新增 {@code Block} 来源（{@code coverage_absent}/{@code acceptance_not_covered}/{@code unconfirmed_silently_dropped}）
+     * 直接产出 {@code INCONCLUSIVE} 转人工，影响面不同量级需单独回滚。关闭后 {@code coverage} 仍解析落库（纯观测）但不参与判定；
+     * 若模型大面积不填 {@code coverage} 致通过全转人工，先关本开关再改提示词，不要放宽覆盖判据（一放宽就没有拦截面）。</p>
      */
     private boolean coverageCriticEnabled = true;
 
@@ -160,20 +134,12 @@ public class ReviewProperties {
     private int recheckWindowDays = 7;
 
     /**
-     * 审核证据自动物化护栏（`RV-15`，2026-11-15）。
+     * 审核证据自动物化护栏（`RV-15`，配置键 {@code helloai.review.evidence-materialization.*}）。
      *
-     * <p><b>为什么需要护栏</b>：物化把「受审附件从对象存储搬到 reviewer 沙箱」升为平台承诺
-     * （取代 RV-14 的模型命令式 stage——真机证明「工具可用 ≠ 模型会用」），但<b>有界</b>是承诺的
-     * 一部分：数量/单文件/总量三闸任一触顶即停，剩余转 {@code deferred} 由模型按需 stage 补拉，
-     * 而不是把整个任务的全部附件无界搬进容器。</p>
-     *
-     * <p><b>为什么 {@code maxFiles} 是 40 而非更小</b>：真实批回放场景是 35 附件（`G-034`），
-     * 若上限 20 会让近半批次退回模型手动补拉——正是 RV-14 实测判定不可靠的那条路，自动物化
-     * 自废一半。文件数上限只防「附件数量爆炸」的极端场景，真正的物理闸是字节
-     * （{@code /tmp} 容量）；35 个 CSV 大概率远在 {@code maxTotalBytes} 内。</p>
-     *
-     * <p>配置键：{@code helloai.review.evidence-materialization.*}（Spring relaxed binding 亦认
-     * {@code evidenceMaterialization.*}）。</p>
+     * <p>物化把「受审附件从对象存储搬到 reviewer 沙箱」升为平台承诺（取代 RV-14 模型命令式 stage——工具可用 ≠ 模型会用），
+     * 但有界是承诺的一部分：数量/单文件/总量三闸任一触顶即停，剩余转 {@code deferred} 由模型按需 stage 补拉，
+     * 而非把整个任务全部附件无界搬进容器。{@code maxFiles} 取 40 覆盖 35 附件批回放（`G-034`）并留余量，
+     * 上限过小会让近半批次退回 RV-14 不可靠的手动补拉；真正的物理闸是字节（{@code /tmp} 容量）。</p>
      */
     private EvidenceMaterialization evidenceMaterialization = new EvidenceMaterialization();
 

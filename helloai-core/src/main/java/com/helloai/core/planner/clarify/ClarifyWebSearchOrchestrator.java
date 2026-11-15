@@ -338,7 +338,7 @@ public class ClarifyWebSearchOrchestrator {
             int rounds = 1;
             // Deep Research 风格补搜：首轮有结果且配置允许多轮时，LLM 评估缺口 → 补搜 1 轮
             //
-            // ★预算闸（2026-10-18 修复）：原判据是「elapsed <= budgetMs」——只要没超预算
+            // ★预算闸：原判据是「elapsed <= budgetMs」——只要没超预算
             // 就补搜，哪怕只剩 1ms。实测代价：首轮并行 3 词耗时 21s（预算 30s，剩 9s），
             // 补搜启动后单次请求仍按 aiSearchTimeoutMs=25s 跑，全部超时 ⇒ 总耗时 47s、
             // 补搜 0 命中。改为「剩余预算 ≥ 补搜最小预算」才启动：预算不足直接跳过，
@@ -347,7 +347,7 @@ public class ClarifyWebSearchOrchestrator {
             long minGapBudget = Math.min(webSearchProperties.getAiSearchTimeoutMs(),
                     Math.max(1L, webSearchProperties.getMinGapSearchBudgetMs()));
             boolean budgetLeft = remainingMs >= minGapBudget;
-            // ★满额闸（2026-11-06 真机实测）：首轮已吃到 maxResults 时，补搜结果无处可放
+            // ★满额闸（真机实测）：首轮已吃到 maxResults 时，补搜结果无处可放
             // （循环第一行即 break），但缺口评估 LLM 仍会被调用——实测每次白付 1~14 秒。
             // 补搜结果只追加不替换，满额时补搜不可能改变输出，故在调评估前先短路。
             boolean resultsFull = searched.size() >= maxResults;

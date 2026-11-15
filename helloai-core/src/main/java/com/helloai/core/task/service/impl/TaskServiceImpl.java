@@ -77,13 +77,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private final TaskRunningSpecMapper taskRunningSpecMapper;
     private final TaskExecutionRecordMapper taskExecutionRecordMapper;
     private final TaskAgentMemberMapper taskAgentMemberMapper;
-    // D-1（2026-10-05）：task_id 语义列但无外键/原级联漏删的 task 域子表
+    // D-1：task_id 语义列但无外键/原级联漏删的 task 域子表
     private final TaskIterationMapper taskIterationMapper;
     private final WorkflowInstanceMapper workflowInstanceMapper;
     private final ReviewPort reviewPort;
     private final TaskTimelineMapper taskTimelineMapper;
     private final AttachmentMapper attachmentMapper;
-    /** 对象存储回收（P3-3，2026-10-07）：级联删除提交后 best-effort 删对象；独立无环承载点，见其类注释。 */
+    /** 对象存储回收（P3-3）：级联删除提交后 best-effort 删对象；独立无环承载点，见其类注释。 */
     private final AttachmentObjectPurgeSupport attachmentObjectPurgeSupport;
     private final AgentInboxService agentInboxService;
     private final AgentService agentService;
@@ -91,7 +91,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private final TeamService teamService;
     private final TaskPlanDraftPort taskPlanDraftPort;
     /**
-     * `SL-2`（2026-11-12）：任务终态事件的发布口。消费方在 agent 域
+     * `SL-2`：任务终态事件的发布口。消费方在 agent 域
      * （`SandboxTaskTerminalListener`）——task 域只声明「任务终结」这一事实，
      * 不感知沙箱实现（`CODE_STYLE` §6：发布方不依赖消费方）。
      */
@@ -250,7 +250,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             tl.setPayload(Map.of("cancelledSubTaskCount", cancelled));
             taskTimelineMapper.insert(tl);
         }
-        // `SL-2`（2026-11-12）：任务进入终态 ⇒ 发布回收事件（沙箱等任务级资源在提交后销毁）。
+        // `SL-2`：任务进入终态 ⇒ 发布回收事件（沙箱等任务级资源在提交后销毁）。
         // 本方法在事务内发布，消费方以 AFTER_COMMIT 承接——避免「状态未提交、沙箱先没」。
         // 只认 DONE / CANCELLED：本方法同时服务 PENDING / IN_PROGRESS 等非终态写入（重发布、启动）。
         if (status == TaskStatus.DONE || status == TaskStatus.CANCELLED) {
@@ -355,7 +355,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     public Map<String, Object> deleteTaskCascade(Long taskId, String confirmTitle) {
         Task task = getById(taskId);
         if (task == null) throw new BizException("任务不存在: " + taskId);
-        // O-1（2026-10-05）：确认标题不匹配属调用方入参错误，应收敛为 400。
+        // O-1：确认标题不匹配属调用方入参错误，应收敛为 400。
         // BizException(String) 默认 code=500（GlobalExceptionHandler 据 code 设置 HTTP 状态），
         // 此前误将「标题不匹配」打成 HTTP 500；与 P2-3/P3 口径对齐改为 BizException(400, ...)。
         if (!task.getTitle().equals(confirmTitle)) {
@@ -373,7 +373,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         int traceCleaned = agentService.physicalDeleteTaskTrace(taskId);
         // §6.146 域迁移：review_record 级联删除经 ReviewPort 收口（review 域同事务执行）
         reviewPort.physicalDeleteByTaskId(taskId);
-        // P3-3（2026-10-07）：删行前捞取该任务对象引用（口径与 physicalDeleteByTaskId 一致），
+        // P3-3：删行前捞取该任务对象引用（与 physicalDeleteByTaskId 一致），
         // 事务提交后同步回收对象存储。此前级联删除只物理删 DB 行、从不触对象存储，
         // 导致 L4 反复 create/delete 时桶内孤儿持续堆积；回收为 best-effort + 事务后置，
         // 失败不回滚、不 500（见 AttachmentObjectPurgeSupport）。
@@ -381,21 +381,21 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         attachmentMapper.physicalDeleteByTaskId(taskId);
         attachmentObjectPurgeSupport.purgeAfterCommit(taskAttachments);
         taskTimelineMapper.physicalDeleteByTaskId(taskId);
-        // P2-4（2026-10-05）：引用 task.id 的子表共 5 张 —— module / sub_task /
+        // P2-4：引用 task.id 的子表共 5 张 —— module / sub_task /
         // task_running_spec / task_execution_record / task_agent_member。此前只清前两张，
         // 漏掉承载 Running Spec 与执行记录/成员的三张 → 物理删除 task 行时撞
         // task_running_spec_task_id_fkey 等外键 → HTTP 500。全部先于 task 本体删除。
         taskRunningSpecMapper.physicalDeleteByTaskId(taskId);
         taskExecutionRecordMapper.physicalDeleteByTaskId(taskId);
         taskAgentMemberMapper.physicalDeleteByTaskId(taskId);
-        // D-1（2026-10-05）：task 域另两张带 task_id 但无外键的子表，原级联静默漏删
+        // D-1：task 域另两张带 task_id 但无外键的子表，原级联静默漏删
         // （全库孤儿实测：task_iteration 2；workflow_instance 现网 0）。均须先于 task 本体删除。
         taskIterationMapper.deleteByTaskId(taskId);
         workflowInstanceMapper.physicalDeleteByTaskId(taskId);
         subTaskMapper.physicalDeleteByTaskId(taskId);
         moduleMapper.physicalDeleteByTaskId(taskId);
         baseMapper.physicalDeleteById(taskId);
-        // `SL-2`（2026-11-12）：任务行已物理删除 ⇒ 发布回收事件（沙箱等任务级资源在提交后销毁）。
+        // `SL-2`：任务行已物理删除 ⇒ 发布回收事件（沙箱等任务级资源在提交后销毁）。
         // status 取删除前快照——行已不在，消费方无从回查；该值只进日志，不参与判定。
         applicationEventPublisher.publishEvent(
                 new TaskTerminalStateEvent(taskId, task.getStatus(), "deleted"));
@@ -592,7 +592,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setContext(draft.context());
         // TD-4：archetype 由消费方（澄清链路终稿判定）显式传入；null/非法值回落 BUILD（TaskArchetype.parse 收口）
         task.setTaskArchetype(com.helloai.common.constant.TaskArchetype.parse(draft.taskArchetype()));
-        // 2026-10-26：对话「＋→技能」选中的技能包随草稿下发；空列表保持库默认值（行为与改造前一致）
+        // 对话「＋→技能」选中的技能包随草稿下发；空列表保持库默认值（行为与改造前一致）
         if (!draft.requiredSkills().isEmpty()) {
             task.setRequiredSkills(draft.requiredSkills());
         }

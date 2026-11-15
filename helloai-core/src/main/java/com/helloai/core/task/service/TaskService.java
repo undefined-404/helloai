@@ -23,8 +23,8 @@ public interface TaskService extends IService<Task> {
     /**
      * 创建任务（初始状态 PENDING）。
      *
-     * <p>按 §6.3 分层红线从 TaskController 收口：实体装配与落库归 Service，
-     * Controller 只负责参数接收与返回封装。等价于 {@code createTask(title, description, null, null, null)}。</p>
+     * <p>按 §6.3 分层红线：实体装配与落库归 Service，Controller 只接收参数与封装返回。
+     * 等价于 {@code createTask(title, description, null, null, null)}。</p>
      *
      * @param title       任务标题
      * @param description 任务描述
@@ -66,8 +66,8 @@ public interface TaskService extends IService<Task> {
     /**
      * 创建任务（初始状态 PENDING），可指定交付物原型（`TD-1`）。
      *
-     * <p>{@code taskArchetype} 可空：null / 空白=不设置，落库走 DB 默认值 {@code BUILD}
-     * （等于改造前行为）；非法值回落 {@code BUILD}。**创建路径必须走本重载**——
+     * <p>{@code taskArchetype} 可空：null / 空白=不设置，落库走 DB 默认值 {@code BUILD}；
+     * 非法值回落 {@code BUILD}。**创建路径必须走本重载**——
      * 走上面的五参重载会把请求里的 {@code taskArchetype} 静默丢弃。</p>
      *
      * @param title          任务标题
@@ -84,7 +84,7 @@ public interface TaskService extends IService<Task> {
     /**
      * 任务条件查询（状态过滤 + 创建时间倒序）。
      *
-     * <p>按 §6.3 分层红线从 TaskController 收口：条件构造归 Service 层。
+     * <p>按 §6.3 分层红线，条件构造归 Service 层。
      * {@code page == null || page <= 0} 时返回全量列表（包装成 IPage，便于 Controller 统一处理）。</p>
      *
      * @param status   任务状态，可为 null（不过滤）
@@ -97,7 +97,7 @@ public interface TaskService extends IService<Task> {
     /**
      * 当前用户「进行中」任务（PLANNING + IN_PROGRESS），按更新时间倒序。
      *
-     * <p>个人工作台「最近任务」用（PA-4 改版，2026-11-02）：只展示仍在推进的任务，
+     * <p>个人工作台「最近任务」用（PA-4 改版）：只展示仍在推进的任务，
      * 口径与 {@link #pageTasks} 的 owner 宽松并入一致。</p>
      *
      * @param limit 条数上限（≤0 时按实现默认值）
@@ -220,7 +220,7 @@ public interface TaskService extends IService<Task> {
      *
      * <p>CAS 双条件：{@code final_report_status = REVIEWING} 且
      * {@code final_report_time = reportTime}。后者是<b>陈旧守卫</b>——审查耗时期间报告可能已被
-     * 新生成/回滚接管，此时旧链不得覆盖新链状态（返回 false，调用方静默放弃）。
+     * 新生成/回滚接管，此时旧链不得覆盖新链状态（返回 false，用方静默放弃）。
      * 前者保证已被兄弟链路（L1/L2/L3 任一路）收敛过的行不会被重复写。</p>
      *
      * @param taskId     任务 ID
@@ -246,13 +246,9 @@ public interface TaskService extends IService<Task> {
      * 扫描拆解租约已过期的任务（status=PLANNING 且 {@code decompose_lease_until < now}，
      * 按租约到期升序，limit 上限）。
      *
-     * <p>承接 helloai-job {@code PlanningTimeoutTask} 直捅
-     * {@code TaskMapper.selectTimedOutPlanning}（拆解异步化改造兜底）。</p>
-     *
-     * <p><b>2026-11-08 判据变更（`V146`）</b>：改前是「{@code update_time < deadline}
-     * + {@code NOT EXISTS(草案)}」的心跳判活，会误杀正在调模型的拆解（拆解线程十几分钟
-     * 不写库，无法证明自己活着）；改后只扫租约过期。原 {@code NOT EXISTS} 补丁整体删除——
-     * 「草案在等确认」已是独立状态 {@code AWAITING_PLAN_CONFIRM}，不在本方法范围内。</p>
+     * <p><b>判活只看租约，不用心跳（`V146`）</b>：拆解线程调模型期间十几分钟不写库，
+     * 用 {@code update_time} 判活会误杀正在跑的拆解；「草案在等确认」是独立状态
+     * {@code AWAITING_PLAN_CONFIRM}，不在本方法范围内。</p>
      *
      * @param now   当前时刻（租约 &lt; now 视为过期）
      * @param limit 单次最多返回条数
@@ -263,14 +259,12 @@ public interface TaskService extends IService<Task> {
     /**
      * 回收一个租约过期的拆解任务，并**按库中实际情况**决定落到哪个状态。
      *
-     * <p>正常路径下草案与状态推进在同一事务里，所以「PLANNING 且有草案」不该出现；
-     * 该方法仍做分流，是为了让**数据异常**能自愈而不是恶化——把这种任务回退到 PENDING
-     * 会制造死结（re-decompose 报「已存在 N 个子任务」、confirm 报「不是待确认状态」），
-     * 而推进到待确认时用户至少能看到草案并继续。</p>
+     * <p>「PLANNING 且有草案」正常不该出现（草案与状态推进同事务）；仍做分流是为让数据异常自愈：
+     * 回退 PENDING 会制造死结（re-decompose 报「已存在 N 个子任务」、confirm 报「不是待确认状态」），
+     * 推进到待确认则用户至少能看到草案继续。</p>
      *
-     * <p><b>注意这不是判活判据</b>：判活只看租约（{@link #listTimedOutPlanning}）。
-     * 这里的草案存在性判断只决定「回收成什么状态」，不决定「要不要回收」——改前
-     * {@code NOT EXISTS} 补丁的错就在于把后者也交给了它。</p>
+     * <p><b>这不是判活判据</b>：判活只看租约（{@link #listTimedOutPlanning}）；草案存在性只决定
+     * 「回收成什么状态」，不决定「要不要回收」。</p>
      *
      * @return 实际推进到的状态；{@code null} 表示 CAS 未命中（状态已变化）
      */
@@ -284,10 +278,8 @@ public interface TaskService extends IService<Task> {
     /**
      * 最近创建的任务只读快照（`TD-6` 拆解期上下文快照的「历史同类任务」数据源）。
      *
-     * <p><b>为什么按「最近」而不是按「相似」</b>：当前没有任何任务相似度索引（无向量列、
-     * 无关键词倒排），按相似度取名不副实。这里只提供「最近 N 个任务」这一客观口径，
-     * 渲染侧据此给出「骨架参考」——**不宣称是同类任务**。等有相似度能力再换实现，
-     * 调用方签名不变。</p>
+     * <p><b>按「最近」而非「相似」</b>：无任务相似度索引（无向量列/关键词倒排），只提供「最近 N 个任务」
+     * 客观口径，渲染侧据此给「骨架参考」，不宣称是同类任务。</p>
      *
      * @param limit 取几条（≤0 时按实现默认值），仅返回快照字段，不含子任务
      */
@@ -295,20 +287,18 @@ public interface TaskService extends IService<Task> {
 
     // ── 写命令（RM5 批 5a）：供 planner 域消费 ──
 
-    // 注：原三参 casStatus(id, expect, target) 已删除（2026-11-08）。拆解链路是它唯一调用方，
-    // 而「只比状态」正是跨 attempt 迟到写入的成因；留一个不会比 attemptId 的重载，
-    // 等于给下一个人留一条会走错的近路。状态推进统一走 casStatusForAttempt。
+    // 状态推进统一走 casStatusForAttempt（带 attemptId 归属校验）。不提供只比状态的重载——
+    // 只比状态挡不住跨 attempt 迟到写入，等于留一条会走错的近路。
 
     /**
      * 进入拆解：一次原子写完成「{@code PENDING → PLANNING} 的 CAS + 拆解租约 + attemptId」。
      *
-     * <p><b>为什么合成一个方法</b>：三者必须同时生效。分步写会出现「已 PLANNING 但租约/attemptId
-     * 为空」的窗口——租约为空会被巡检漏检（永久卡死），attemptId 为空会让幂等键失效
-     * （异步段各自生成新 UUID，唯一索引永不冲突）。合成一条 UPDATE 后该窗口不存在。</p>
+     * <p><b>为什么合成一个方法</b>：三者必须同时生效。分步写会留下「已 PLANNING 但租约/attemptId 为空」
+     * 的窗口——租约为空被巡检漏检（永久卡死），attemptId 为空使幂等键失效（异步段各自生成新 UUID，
+     * 唯一索引永不冲突）。</p>
      *
-     * <p><b>attemptId 为什么在入口生成而不在异步段生成</b>：幂等的本质是「同一件事有同一个名字」。
-     * 异步段每次执行都生成新 UUID，等于每次都是新的事，唯一索引形同虚设。放在入口后，
-     * 「已提交但响应丢失后重投」与「补偿任务重跑」拿到的都是同一个 attemptId。</p>
+     * <p><b>attemptId 在入口生成而非异步段</b>：幂等要求「同一件事同一个名字」。异步段每次生成新 UUID
+     * 等于每次都是新事，唯一索引形同虚设；放入口后「响应丢失重投」与「补偿重跑」拿到同一 attemptId。</p>
      *
      * @param leaseMinutes 本次拆解允许跑多久（租约 = now + 该值）
      * @return 本次拆解的 attemptId；{@code null} 表示 CAS 未命中（状态已被他人改变）
@@ -325,11 +315,10 @@ public interface TaskService extends IService<Task> {
     /**
      * 带<b>拆解归属校验</b>的状态 CAS：{@code WHERE id=? AND status=? AND decompose_attempt_id=?}。
      *
-     * <p><b>为什么不复用三参 {@link #casStatus}</b>：三参版本只比状态，挡不住「跨 attempt 的
-     * 迟到写入」。真实时序——A 的拆解跑超租约被巡检推回 PENDING，用户重新拆解拿到
-     * attempt=B、状态又回到 PLANNING；此刻 A 的线程苏醒并成功落库，三参 CAS 会命中的是
-     * <b>B 的</b> PLANNING，于是 A、B 两批草案同时入库。唯一索引只约束「同 task + 同 attempt
-     * + 同序号」，跨 attempt 完全挡不住，必须在状态推进这一步把 attempt 一并比上：
+     * <p><b>为什么必须连 attemptId 一起比</b>：只比状态挡不住「跨 attempt 的迟到写入」——
+     * A 的拆解超租约被巡检推回 PENDING，用户重新拆解拿到 attempt=B、状态回到 PLANNING；
+     * 此刻 A 的线程苏醒落库，只比状态的 CAS 会命中 <b>B 的</b> PLANNING，A、B 两批草案同时入库。
+     * 唯一索引只约束「同 task + 同 attempt + 同序号」，跨 attempt 挡不住，必须在状态推进这步把 attempt 比上：
      * 校验失败 ⇒ 调用方抛异常回滚 ⇒ A 那批草案一条不剩。</p>
      *
      * @param attemptId 调用方自己的拆解标识；{@code null} 时直接返回 {@code false}（无归属可比即不放行）
@@ -352,14 +341,12 @@ public interface TaskService extends IService<Task> {
     /**
      * 同 {@link #updateContext}，但以 `REQUIRES_NEW` 独立事务提交——**审计写点专用**。
      *
-     * <p><b>为什么需要</b>：`TD-9` 单条展开/重生成带 {@code @Transactional}，门禁阻断时
-     * 抛 {@code BizException} 会让同一事务里的 findings 一并回滚，用户只看到错误消息、
-     * 库里不留任何排障线索。审计数据不应与业务共命运（同 {@code SubmissionActivityRecorder}
-     * 的取舍）。</p>
+     * <p><b>为什么需要</b>：`TD-9` 单条展开/重生成带 {@code @Transactional}，门禁阻断抛 {@code BizException}
+     * 会让同事务的 findings 一并回滚，库里不留排障线索。审计数据不与业务共命运（同 {@code SubmissionActivityRecorder}）。</p>
      *
-     * <p><b>为什么不直接把 {@link #updateContext} 改成独立事务</b>：{@code task.context}
-     * 同时承载业务语义（需求摘要等），需要与业务同生共死的写入必须能随外层回滚；
-     * 只把传播行为绑在这个入口上，避免留下「业务已回滚、context 却说成功」的假记录。</p>
+     * <p><b>为什么不把 {@link #updateContext} 直接改成独立事务</b>：{@code task.context} 同时承载业务语义
+     * （需求摘要等），需与业务同生共死的写入必须能随外层回滚；只把独立事务绑在本入口，避免「业务已回滚、
+     * context 却说成功」的假记录。</p>
      */
     void updateContextInNewTx(Long taskId, Map<String, Object> context);
 }

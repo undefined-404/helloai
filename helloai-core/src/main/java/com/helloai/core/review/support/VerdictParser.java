@@ -22,7 +22,7 @@ import java.util.regex.Pattern;
  * <ul>
  *     <li>判定解析 {@link #parseVerdict(String)}：LLM 输出 → {@link SubTaskReviewService.ReviewVerdict}，
  *         容错 markdown fence 剥离 + 未转义反斜杠修复；不可解析返回 null
- *         （调用方据此停留 REVIEW 等人工兜底）；</li>
+ *         （用方据此停留 REVIEW 等人工兜底）；</li>
  *     <li>判定渲染与工具：{@link #formatReviewResult}（前端可读中文结论）、
  *         {@link #summarize}（长文本摘要）、{@link #safeMap}（键值对安全组装）、
  *         {@link #nullToEmpty}（空值兜底）、
@@ -57,7 +57,7 @@ public class VerdictParser {
 
     /**
      * 解析核验判定 JSON；严格解析不可用时走 {@link #looseVerdict} 宽松兜底；取不到 {@code pass}
-     * 才返回 null（调用方据此停留 REVIEW / 记录不可解析）。
+     * 才返回 null（用方据此停留 REVIEW / 记录不可解析）。
      */
     public SubTaskReviewService.ReviewVerdict parseVerdict(String rawOutput) {
         return parseWithMeta(rawOutput).verdict();
@@ -88,16 +88,10 @@ public class VerdictParser {
     }
 
     /**
-     * 宽松兜底判定（2026-10-16 事故修）：严格 JSON 解析失败时，仍从原文提取<b>明确可见</b>的
-     * {@code pass}（必需）/ {@code score} / {@code issues}。
+     * 宽松兜底判定：严格 JSON 解析失败时，仍从原文提取<b>明确可见</b>的 {@code pass}（必需）/{@code score}/{@code issues}。
      *
-     * <p><b>为什么需要</b>：审查模型已经写出 {@code "pass": false, "score": 2}，却因 JSON 存在格式
-     * 瑕疵（未转义字符 / 尾段被截 / 收尾轮追加内容）而整条判定被判「不可解析」——报告审查侧
-     * 对不可解析的处置是 {@code convergeToDone}（直接放过），等价于<b>把明确的驳回静默改成通过</b>
-     * （实测事故：task 2110984337513603074 报告正文全缺、审查 {@code pass=false} 却被丢弃）。
-     * 判定解析的职责是「读懂判定」，不是「要求模型输出完美 JSON」。</p>
-     *
-     * <p><b>边界</b>：只在严格解析不可用时启用；{@code pass} 取不到即返回 null（不猜）。</p>
+     * <p>模型已写出 {@code "pass": false} 却因 JSON 格式瑕疵（未转义/尾段被截/收尾轮追加）被判不可解析时，报告审查侧会 {@code convergeToDone}
+     * 直接放过——等价于把明确驳回静默改成通过。解析职责是「读懂判定」而非「要求完美 JSON」。只在严格解析不可用时启用；{@code pass} 取不到返回 null（不猜）。</p>
      */
     private static SubTaskReviewService.ReviewVerdict looseVerdict(String raw) {
         Matcher passMatcher = PASS_PATTERN.matcher(raw);
@@ -170,7 +164,7 @@ public class VerdictParser {
         if (verdict.getComment() != null && !verdict.getComment().isBlank()) {
             sb.append("- 评语: ").append(verdict.getComment()).append("\n");
         }
-        // TD-5 验收③（2026-10-24）：逐条对照验收标准的核验分析（REVIEWED kind 子任务
+        // TD-5 验收③：逐条对照验收标准的核验分析（REVIEWED kind 子任务
         // 「逐条 pass/fail 可见」的对话流主通道）——仅增强展示，不参与判定
         if (verdict.getAnalysis() != null && !verdict.getAnalysis().isBlank()) {
             sb.append("- 逐条核验: ").append(verdict.getAnalysis()).append("\n");

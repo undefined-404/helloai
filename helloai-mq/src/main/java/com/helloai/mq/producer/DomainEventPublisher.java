@@ -42,7 +42,7 @@ public class DomainEventPublisher {
      *
      * @param exchange   目标交换机
      * @param routingKey 路由键
-     * @param message    事件载荷（Map / POJO 均可，统一 JSON 序列化）
+     * @param message    事件载荷（Map / POJO 均可，JSON 序列化）
      */
     public void publish(String exchange, String routingKey, Object message) {
         byte[] body;

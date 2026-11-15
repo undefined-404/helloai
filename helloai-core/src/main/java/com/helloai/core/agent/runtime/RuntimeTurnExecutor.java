@@ -51,7 +51,7 @@ import java.util.Set;
  * 事件 write-only（记录失败不阻断）；上下文装配（prompt 构建）由调用方完成并注入，
  * 本类不复制旧链业务编排（差距表 §6 禁止复制完整业务链）。</p>
  *
- * <p>装配（G-002 单轨，2026-09-30）：作为唯一 {@code AgentRuntime} 实现，经消费者
+ * <p>装配（G-002 单轨）：作为唯一 {@code AgentRuntime} 实现，经消费者
  * {@code List<AgentRuntime>} 注入收敛到 {@code agentRuntimes.get(0)}（Router / Legacy 适配器
  * 已删，无切换语义）。上下文装配（prompt / chatModel / 会话）由 {@code AgentRuntimeContextAssembler}
  * 完成，结果回写由消费者 {@code ExecutionResultHandler} 完成。</p>
@@ -204,7 +204,7 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                         "reasoningTokens", usage != null ? usage.reasoningTokens() : null,
                         "latencyMs", usage != null ? usage.latencyMillis() : null));
         if (loopResult.success()) {
-            // A（2026-10-05 空产出护栏）：成功终态下若「最终正文为空白（StringUtils.isBlank 口径：
+            // A（空产出护栏）：成功终态下若「最终正文为空白（StringUtils.isBlank 口径：
             // null / "" / 纯空白字符均算空）」且「工具调用数 == 0」，判为**可重试失败**而非 SUCCESS。
             // 依据：模型返回 STOP 但既无任何可见正文、也无任何工具调用 ⇒ 本次未产出任何交付物
             // （典型触发：推理模型把输出全放进 reasoning_content，正文被解析为空）。
@@ -224,7 +224,7 @@ public class RuntimeTurnExecutor implements AgentRuntime {
             // REF-8.4 ④ 出口分类（对齐 DSH `turn-stopping` + 复用「空产出护栏」同层位置）：
             // 内部 LLM 自然 STOP 的最终报告若缺 VERIFICATION 围栏 ⇒ 输出契约 fail-close（评审侧同源），
             // 判 FAILED 而非 SUCCESS——但**只改 ExecutionStatus，不碰 SubTaskStatus**（红线①反证）。
-            // 口径 A（决策 `D-2026-10-13-6`，2026-10-13）：
+            // 口径 A（决策 `D-2026-10-13-6`）：
             //   ① 空正文一律交给上面 Guard A 判定（空+0工具=fail / 空+工具=靠附件/工具交付合法 SUCCESS），
             //     故此处显式跳过空正文（!isBlank），不因「空 ⇒ 无 VERIFICATION」重复误杀——生产空报告的
             //     自证由 ② 收尾轮补齐，此处只管「非空但无自证痕迹」。

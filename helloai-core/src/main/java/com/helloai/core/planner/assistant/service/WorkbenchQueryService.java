@@ -8,7 +8,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
- * 个人工作台聚合读取面（PA-4，2026-11-02；2026-11-02 晚改版为三段式）。
+ * 个人工作台聚合读取面（PA-4，； 晚改版为三段式）。
  *
  * <p>一次返回右栏三块所需的全部数据，避免前端开面板时连打多个接口：
  * <ul>
@@ -29,7 +29,7 @@ public interface WorkbenchQueryService {
      * `PA-15`：助理上下文用的「最近任务与子任务」概览（纯文本，超预算截断）。
      *
      * <p>只做只读聚合：按 owner 取最近推进中的任务，逐条带出子任务标题/状态/验收摘要。
-     * 未登录或该开关关闭时返回空串（调用方据此不注入）。</p>
+     * 未登录或该开关关闭时返回空串（用方据此不注入）。</p>
      */
     String recentWorkBrief(Long userId);
 
@@ -89,7 +89,7 @@ public interface WorkbenchQueryService {
     Workbench aggregate();
 
     /**
-     * Composer「选模型」候选集：<b>已注册的纯 LLM 模型</b> + 有效性判定（2026-11-05）。
+     * Composer「选模型」候选集：<b>已注册的纯 LLM 模型</b> + 有效性判定。
      *
      * <p>与「选 Planner」刻意分开：工作台用户选的是模型（无角色），
      * 需求对话页选的是带角色的 Planner（模型由角色绑定）。候选集因此<b>不共用</b>——

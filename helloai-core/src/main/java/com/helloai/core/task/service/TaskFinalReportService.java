@@ -14,7 +14,7 @@ import com.helloai.core.shared.event.TaskAutoCompletedEvent;
  * <ul>
  *   <li><b>自动</b>：{@code SubTaskCompletionListener.tryCloseTask} CAS 收口成功后发布
  *       {@link TaskAutoCompletedEvent}，本类 {@code @Async + @EventListener} 承接
- *       （发布点已无事务上下文，不能用 @TransactionalEventListener）；失败仅记
+ *       （点已无事务上下文，不能用 @TransactionalEventListener）；失败仅记
  *       timeline，不影响任务 DONE 状态——报告是增值物，非交付门槛。</li>
  *   <li><b>手动</b>：{@code POST /api/tasks/{id}/final-report}（历史已 DONE 任务补生成
  *       / 报告不满意重新生成，直接覆盖旧报告）。</li>

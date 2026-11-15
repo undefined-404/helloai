@@ -20,7 +20,7 @@ public interface AttachmentMapper extends BaseMapper<Attachment> {
      * {@code sub_task.task_id → task.owner_id} 推导「任务归属 = 用户归属」（计划 §9 D1 直滤）。
      * 只取 {@code deleted = 0 AND status = 'ACTIVE'}（当前有效版本），避免同名多版本污染聚合展示。</p>
      *
-     * @param ownerId 当前用户 id（null 时语义未定义，调用方保证非空）
+     * @param ownerId 当前用户 id（null 时语义未定义，用方保证非空）
      * @param limit   单次上限
      * @return 该用户名下任务的活跃附件行（按 create_time 倒序）
      */
@@ -52,7 +52,7 @@ public interface AttachmentMapper extends BaseMapper<Attachment> {
 
     /**
      * 查询某任务下全部附件行（不过滤逻辑删除），供任务级联删除<b>前</b>捞取对象引用，
-     * 以便事务提交后同步回收对象存储（P3-3，2026-10-07）。口径与
+     * 以便事务提交后同步回收对象存储（P3-3）。口径与
      * {@link #physicalDeleteByTaskId(Long)} 一致（同一条 sub_task 子查询），保证
      * 「捞到的行」正是「将被物理删的行」。
      *
@@ -64,7 +64,7 @@ public interface AttachmentMapper extends BaseMapper<Attachment> {
 
     /**
      * <b>窄查询</b>：在给定候选 {@code objectKey} 集合中，返回仍被活跃行（{@code deleted=0}）引用的子集，
-     * 供对象回收护栏做批量判定（P2/P3-3 护栏性能收敛，2026-10-07）。
+     * 供对象回收护栏做批量判定（P2/P3-3 护栏性能收敛）。
      *
      * <p><b>为何不再全表读</b>：此前的护栏用 {@link #selectAllIncludingDeleted()} 把整张 {@code attachment}
      * 表载入 JVM 再内存过滤——每次删任意一个附件都是 O(全表)，与 V2「可分布式/可扩展」目标冲突。
@@ -75,7 +75,7 @@ public interface AttachmentMapper extends BaseMapper<Attachment> {
      * 即「活跃」，与旧实现的 {@code getDeleted()==null || ==0} 等价。返回结果<b>可能含重复</b>
      * （同一 key 多条活跃行），调用方须自行去重。</p>
      *
-     * @param keys 候选 objectKey 集合（调用方保证非空、已去重）
+     * @param keys 候选 objectKey 集合（用方保证非空，已去重）
      * @return 其中仍存在 {@code deleted=0} 行引用的 objectKey（可能重复）
      */
     @Select({"<script>",

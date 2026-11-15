@@ -111,7 +111,7 @@ public class TaskRunningSpecServiceImpl implements TaskRunningSpecService {
     /**
      * 回写 ContextSummary：spec 行不存在时补建一行，避免编译结果被静默丢弃。
      *
-     * <p>2026-10-02 修复：原实现只做 {@code UPDATE ... WHERE task_id=?}，
+     * <p>原实现只做 {@code UPDATE ... WHERE task_id=?}，
      * 而 spec 行由 Planner 的 {@link #initialize} 创建。未初始化 baseline 的历史任务
      * （或 initialize 尚未执行的竞态窗口）下该 UPDATE 影响 0 行 —— 无异常、无日志，
      * 编译结果直接丢失（B 级 IT 用例 1 实测查不到 context_summary）。</p>

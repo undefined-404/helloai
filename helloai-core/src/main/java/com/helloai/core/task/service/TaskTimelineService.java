@@ -58,7 +58,7 @@ public interface TaskTimelineService extends IService<TaskTimeline> {
                             Map<String, Object> payload);
 
     /**
-     * 查询指定子任务的时间线条目，按时间升序（ 派发控制台联调）。
+     * 查询指定子任务的时间线条目，按时间升序（派发控制台联调）。
      *
      * <p>供 {@code GET /api/sub-tasks/{id}/timeline} 调用。
      * 返回该子任务的 <b>合并时间线</b>：task_timeline 粗粒度业务/角色事件

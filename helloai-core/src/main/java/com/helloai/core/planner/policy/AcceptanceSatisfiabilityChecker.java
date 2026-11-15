@@ -20,7 +20,7 @@ import java.util.regex.Pattern;
  *
  * <p><b>本类只做「标注」，不做「判定」，更不阻断</b>：命中即返回引用清单，由调用方写进
  * {@code sub_task.context.acceptancePreconditions} + 记一条 WARN 级时间线事件；拆解照常落库。
- * 理由是「拦不住的代价（死信）比放过的代价（质量下滑）更高」，而且放过是**可见的**
+ * 理由是「拦不住的代价比放过的代价（质量下滑）更高」，而且放过是**可见的**
  * （时间线 + `B1a` 修好后的驳回理由），拦下则是直接卡死主链路（`TD-5` 风险 2 的教训）。</p>
  *
  * <p><b>为什么规则只咬「实证型来源」而不咬「所有量词」</b>：`STRUCTURAL` 天然要写量词
@@ -36,7 +36,7 @@ public final class AcceptanceSatisfiabilityChecker {
     /**
      * 实证型来源信号：验收要求「取回并核对外部证据」的文本特征。
      *
-     * <p>取自 2026-10-25 事故契约原文（`URL` / `页面` / `原文摘录`）与同类交付物常见措辞。
+     * <p>取自 契约原文（`URL` / `页面` / `原文摘录`）与同类交付物常见措辞。
      * **刻意不收「条数」**——「≥15 条」本身不指向外部实体。</p>
      */
     private static final Pattern EVIDENCE_SOURCE_PATTERN = Pattern.compile(

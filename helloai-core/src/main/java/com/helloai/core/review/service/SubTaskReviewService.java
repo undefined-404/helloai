@@ -63,7 +63,7 @@ public interface SubTaskReviewService {
     void reviewSubTask(Long subTaskId, Long executorAgentId);
 
     /**
-     * 解析核验判定 JSON；不可解析返回 null（调用方据此停留 REVIEW）。
+     * 解析核验判定 JSON；不可解析返回 null（用方据此停留 REVIEW）。
      */
     ReviewVerdict parseVerdict(String rawOutput);
 

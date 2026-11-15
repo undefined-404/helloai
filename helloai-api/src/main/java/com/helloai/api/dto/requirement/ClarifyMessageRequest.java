@@ -15,7 +15,7 @@ public class ClarifyMessageRequest {
     private Long plannerAgentId;
 
     /**
-     * 钉住的 LLM 模型（{@code provider:model}，仅助理对话接口生效，2026-11-05）。
+     * 钉住的 LLM 模型（{@code provider:model}，仅助理对话接口生效）。
      *
      * <p><b>与 {@link #plannerAgentId} 的分工</b>：plannerAgentId 决定「谁来扮演助理」
      * （角色面，需求对话页的入口）；本字段只决定「用哪个模型答」（个人工作台的入口）。

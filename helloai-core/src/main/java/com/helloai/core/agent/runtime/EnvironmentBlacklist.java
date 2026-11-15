@@ -19,7 +19,7 @@ import java.util.Set;
  *       （{@code HELLOAI_CREDENTIAL_AES_KEY_BASE64}、{@code *_API_KEY}、{@code *_TOKEN}、
  *       {@code *_SECRET}、{@code JAVA_TOOL_OPTIONS}、{@code LD_PRELOAD}、{@code _JAVA_OPTIONS}）。</li>
  * </ul>
- * 大小写不敏感（env 键在多数平台大小写不敏感，统一按小写比较）。</p>
+ * 大小写不敏感（env 键在多数平台大小写不敏感，按小写比较）。</p>
  *
  * <p><b>行为</b>：命中黑名单的键 <b>丢弃 + 返回被丢弃键清单</b>（供调用方告警日志），
  * <b>不拒绝整个执行</b> —— 只丢键、不阻断，符合「配置 env 是增强项」的定位。</p>

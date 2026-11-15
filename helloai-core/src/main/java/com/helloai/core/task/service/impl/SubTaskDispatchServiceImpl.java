@@ -61,14 +61,14 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * 加入退避后，第 1 次重派后等 60s、第 2 次后 180s、第 3 次后 600s、第 4 次及以后 1800s，
      * 让瞬时抖动自然恢复而不是立刻耗尽预算。</p>
      *
-     * <p><b>退避时钟 = {@code sub_task.last_attempt_time}（V102，2026-10-05 修 804）</b>：
+     * <p><b>退避时钟 = {@code sub_task.last_attempt_time}（V102，804）</b>：
      * 仅由 {@code incrementAttemptTotal} 原子写入，与尝试严格同源。
      * 此前误用 {@code update_time}——而 {@code block()}/{@code resume()}/{@code changeStatus()}/
      * {@code resetToPendingForDispatch()} 都会 {@code updateById} 刷新它，导致「换人」入口
      * 先 {@code block()} 再重派时闸门读到被自身刷新的 now，{@code nextAllowed = now + 600s}
      * 必然拦截（attempt_total ≥ 1 时「换人」100% 静默失败）。</p>
      *
-     * <p><b>★2026-10-25 起本表只作用于 {@link GatePurpose#AUTO}</b>：人工「换人」豁免退避。
+     * <p><b>★ 起本表只作用于 {@link GatePurpose#AUTO}</b>：人工「换人」豁免退避。
      * 实测 7443——12:14:42 由 {@code job-scheduler} 的自动重派写入 {@code last_attempt_time}
      * （attempt_total=4 ⇒ 第 4 档 1800s），随后人工 5 次点击全被判 {@code backoff}，只能干等 30 分钟；
      * 而退避本身<b>不消耗预算</b>，豁免它对熔断零副作用。</p>
@@ -84,7 +84,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     /**
      * BLOCKED 重派主链（人工 / 自动共用），差异仅在闸门用途 {@link GatePurpose}。
      *
-     * <p><b>为什么必须区分（2026-10-25）</b>：退避是给「自动巡检探测心跳抖动」用的时间冷却，
+     * <p><b>为什么必须区分</b>：退避是给「自动巡检探测心跳抖动」用的时间冷却，
      * 本意是「别在 3 分钟内烧完 5 次预算」。人工「换人」是显式指令、天然不会空转，却被同一道冷却挡在门外——
      * 实测 7443：12:14:42 由 {@code job-scheduler} 的**自动**重派写入 {@code last_attempt_time}，
      * 随后人工在 12:16:58 / 12:17:06 / 12:17:32 / 12:36:03 / 12:41:00 五次点击全部被拦，
@@ -95,7 +95,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      */
     private RedispatchResult dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId, GatePurpose purpose) {
         // 重分配闸门（熔断 + 退避）：命中则落 sub_task_redispatch_skipped + 返回明确语义，
-        // 不再静默 return（2026-10-05 修 804 可观测性）。
+        // 不再静默 return（804 可观测性）。
         ReassignGateDecision gate = evaluateReassignGate(subTaskId, purpose);
         if (gate.blocked()) {
             recordRedispatchSkipped(subTaskId, gate);
@@ -104,7 +104,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             return RedispatchResult.ofSkipped(gate.reason(), gate.nextAllowed());
         }
         accumulateReassignAttempt(subTaskId);
-        // ── 派发前置：作废在飞的旧执行记录（2026-10-25，D1）──
+        // ── 派发前置：作废在飞的旧执行记录（D1）──
         // 现场（子任务 2113947248843329537）：人工 block() 后改派，旧记录仍 RUNNING
         //（模型进程还在跑，已 4 分 45 秒），createAssignedCommand 的
         //「子任务已有进行中的执行记录」守卫直接拒建命令 ⇒ 改派 100% 失败，
@@ -288,13 +288,13 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     /**
      * {@link #dispatchPendingSubTaskAuto} 与 {@link #dispatchPendingSubTaskCompensating} 的共用实现。
      *
-     * <p><b>计数时机（2026-10-05 修 P1-1）</b>：{@code accumulateReassignAttempt} 已后移到
+     * <p><b>计数时机（P1-1）</b>：{@code accumulateReassignAttempt} 已后移到
      * 「选人成功之后、真正派发之前」——只有真正选出执行者、进入派发才消耗一次重派预算。
      * 「无候选」「子任务不存在」「状态非 PENDING」等<b>未派出</b>的失败不再累加
      * {@code attempt_total}，也不再推进退避时钟 {@code last_attempt_time}（二者同源于
      * {@code incrementAttemptTotal}）⇒ 等待态不会被误烧成熔断死信。</p>
      *
-     * @param countAttempt true=消耗一次重派预算（常规入口）；false=只复用拦截判定不计数（补偿路径）
+     * @param countAttempt true=消耗一次重派预算（常规入口）；false=只复用拦截判定不计数（偿路径）
      */
     private Long doDispatchPendingAuto(Long subTaskId, AgentRole role, boolean countAttempt) {
         // 依赖 ready 守卫必须在熔断计数之前 —— 未就绪的 PENDING 子任务
@@ -324,7 +324,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         var preferred = agentSelector.pickPreferred(role, toSelectorConstraints(constraints));
         if (preferred == null) {
             // 无候选属可自愈等待态：抛专用异常且**不消耗**重派预算（见方法 javadoc）
-            // ★ G-015 收口（2026-10-21）：无候选此前只有 log + 时间线事件，无告警出口；
+            // ★ G-015 收口：无候选此前只有 log + 时间线事件，无告警出口；
             // 接入运行告警（异步 webhook，不阻塞本线程），让运维感知「长时间无 Agent 可接活」。
             alertService.onNoEligibleAgent(subTaskId, subTask.getTaskId(),
                     role != null ? role.name() : "null",
@@ -640,7 +640,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         // 均不收 ASSIGNED ⇒ 人工无法介入，只能干等 dispatch.assigned-timeout-minutes（默认 10 分钟）
         // 自动回收。block() 早已允许 ASSIGNED（SubTaskServiceImpl#block），状态机亦允许
         // ASSIGNED→BLOCKED，故此处放开不涉及状态机改动。
-        // 闸门（熔断 + 退避）仍统一约束，但**人工入口按 MANUAL 用途判定**（2026-10-25）：
+        // 闸门（熔断 + 退避）仍统一约束，但**人工入口按 MANUAL 用途判定**：
         // 退避豁免（它是给自动巡检降噪的时间冷却，且不消耗预算），熔断保留但不再顺手转死信。
         if (subTask.getStatus() != SubTaskStatus.ASSIGNED
                 && subTask.getStatus() != SubTaskStatus.IN_PROGRESS
@@ -746,7 +746,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      *   <li>子任务不存在或已是终态/死信（DONE/CANCELLED/DEAD_LETTER）→ 返回 true（跳过）</li>
      *   <li>{@code attempt_total >= max-reassign-attempts}（共享预算，
      *       判定语义见 {@code RetryPolicy.exceedsMax}）
-     *       → 标记子任务为 DEAD_LETTER（死信池，待人工兜底）+ 记录 timeline → 返回 true（熔断）</li>
+     *       → 标记子任务为 DEAD_LETTER（池，待人工兜底）+ 记录 timeline → 返回 true（熔断）</li>
      *   <li>否则 → 原子累加 {@code attempt_total} → 返回 false（放行）</li>
      * </ol>
      * </p>
@@ -754,7 +754,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * <p>熔断后的状态由 CANCELLED 改为 DEAD_LETTER，区分"人工主动取消"与
      * "系统熔断待人工"；死信由 {@link #redispatchDeadLetter} 人工恢复。</p>
      *
-     * <p><b>2026-10-05 修 804</b>：本入口由周期巡检驱动，拦截时仅对一次性的
+     * <p><b>804</b>：本入口由周期巡检驱动，拦截时仅对一次性的
      * {@code circuit_open} 落 {@code sub_task_redispatch_skipped} 时间线
      * （backoff 每 tick 命中故不落，避免刷屏）；人工入口另在各自方法内对 backoff 也留痕。</p>
      *
@@ -764,7 +764,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     private boolean checkReassignCircuitBreaker(Long subTaskId) {
         ReassignGateDecision gate = evaluateReassignGate(subTaskId, GatePurpose.AUTO);
         if (gate.blocked()) {
-            // 可观测性（2026-10-05 修 804）：闸门拦截不再静默。但这几个入口由周期巡检驱动
+            // 可观测性（804）：闸门拦截不再静默。但这几个入口由周期巡检驱动
             // （离线巡检 / 超时回收 / N11 回退），退避窗口内的 backoff 每 tick 都会命中——
             // 若逐次落事件会刷屏 timeline，故系统入口只对**一次性**的 circuit_open 留痕
             // （熔断转死信后子任务即变终态，不重复）。人工入口（redispatchInProgress /
@@ -793,7 +793,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     }
 
     /**
-     * 闸门用途 —— 区分「谁在发起重派」（2026-10-25 由 7443 事故引入）。
+     * 闸门用途 —— 区分「谁在发起重派」（由 7443 事故引入）。
      *
      * <p>两类发起方的诉求根本不同，混用一道闸门必然互相伤害：</p>
      * <ul>
@@ -812,7 +812,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
 
     /**
      * 重派闸门决策 —— 判定结果连同「拦截原因 / 退避结束时刻」一并返回，
-     * 供调用方落 {@code sub_task_redispatch_skipped} 时间线与回传接口明确语义（2026-10-05 修 804）。
+     * 供调用方落 {@code sub_task_redispatch_skipped} 时间线与回传接口明确语义（804）。
      *
      * @param blocked     true = 拦截本次重派
      * @param reason      拦截原因：{@code terminal}（终态/死信）/ {@code circuit_open}（预算耗尽转死信）
@@ -882,7 +882,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         }
         Long taskId = subTask.getTaskId();
 
-        // 终态/死信不再重分配（死信只能走 redispatchDeadLetter 人工入口）
+        // 终态/死信不再重分配（只能走 redispatchDeadLetter 人工入口）
         SubTaskStatus currentStatus = subTask.getStatus();
         if (currentStatus == SubTaskStatus.DONE || currentStatus == SubTaskStatus.CANCELLED
                 || currentStatus == SubTaskStatus.DEAD_LETTER) {
@@ -894,7 +894,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                 ? subTask.getAttemptTotal() : 0;
 
         if (RetryPolicy.exceedsMax(currentCount, maxAttempts)) {
-            // ★人工入口不转死信（2026-10-25）：判定函数不该有副作用——
+            // ★人工入口不转死信：判定函数不该有副作用——
             // 否则用户点「换人」实际触发的是「打进死信池」，与按钮语义完全相反
             // （前端文案也自相矛盾：一边说重派被拦，一边说已转死信）。
             if (purpose == GatePurpose.AUTO) {
@@ -927,7 +927,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
 
         // G-015 B2.2 退避窗口：距上次尝试（incrementAttemptTotal 写入的 last_attempt_time）不足本档
         // 退避时长则跳过本轮重派，且不消耗预算。只推迟不终止，窗口过后自然恢复。
-        // ★仅约束自动路径（2026-10-25）：退避是「防机器空转」的时间冷却，人工点击天然稀疏且不消耗预算，
+        // ★仅约束自动路径：退避是「防机器空转」的时间冷却，人工点击天然稀疏且不消耗预算，
         // 豁免它对熔断零副作用；反之让自动路径的冷却锁死人工自救权（LOG-20261025-006）。
         if (purpose == GatePurpose.AUTO && currentCount > 0 && subTask.getLastAttemptTime() != null) {
             int backoffSeconds = REASSIGN_BACKOFF_SECONDS[
@@ -943,7 +943,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     }
 
     /**
-     * 落 {@code sub_task_redispatch_skipped} 时间线（2026-10-05 修 804 可观测性）。
+     * 落 {@code sub_task_redispatch_skipped} 时间线（804 可观测性）。
      *
      * <p>仅对**非终态**的闸门拦截留痕（{@code backoff} / {@code circuit_open}）——
      * 终态 / 死信拦截属正常流转不记。</p>

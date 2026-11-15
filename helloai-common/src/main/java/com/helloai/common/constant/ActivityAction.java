@@ -1,7 +1,7 @@
 package com.helloai.common.constant;
 
 /**
- * 活动日志 action → 中文名目录（**服务端单一事实源**，2026-10-18）。
+ * 活动日志 action → 中文名目录（**服务端单一事实源**）。
  *
  * <p><b>取值来源</b>：与全局规则里「活动日志规范」的 action 白名单一致
  * （{@code coding / delivery / blocked / reflection / plan / review / patrol}），
@@ -44,7 +44,7 @@ public enum ActivityAction {
         return desc;
     }
 
-    /** 反向查：未知返回 {@code null}（调用方回退显示原码）。 */
+    /** 反向查：未知返回 {@code null}（用方回退显示原码）。 */
     public static String labelOf(String code) {
         if (code == null) {
             return null;

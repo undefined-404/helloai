@@ -13,24 +13,19 @@ import java.util.Map;
 /**
  * 判定快照构建器（`RV-5`，纯静态、零 Spring 依赖）。
  *
- * <p><b>为什么需要快照</b>：抽检复判读的是 {@code subTaskService.getView(...)} 的<b>当前</b>视图；
- * 对已 `REJECTED` 的记录，复判时产出可能已被返工覆盖 ⇒ 测到的不是原始判定对象。快照把
- * 「判定当时看到了什么」固定下来，复判前先对账（见 {@link ReviewSnapshotMatcher}）。</p>
+ * <p>抽检复判读的是当前视图，已 {@code REJECTED} 记录的产出可能已被返工覆盖；快照固定「判定当时看到了什么」，
+ * 复判前先对账（{@link ReviewSnapshotMatcher}）。只存摘要不存全文：附件记 {@code id/fileName/fileSize}、
+ * 产出记 {@code chars/sha256}（体积阈值 {@link #WARN_BYTES}）。</p>
  *
- * <p><b>只存摘要、不存全文</b>（实施计划 §3 `RV-5`）：附件只记 {@code id / fileName / fileSize}，
- * 执行产出只记 {@code chars / sha256}。附件本体在对象存储、全文在 {@code context} 里，快照存的是
- * 「引用 + 指纹」，存储增长可控（体积阈值见 {@link #WARN_BYTES}）。</p>
- *
- * <p><b>为什么附件用 {@code id + fileSize} 当"版本"</b>：附件表没有 version 列，重新物化会新增一行
- * （id 变），同 id 内容变化则 {@code fileSize} 变；两者合起来足以发现「复判对象被换掉」。
- * 不引入新列是本项的取舍：追版本号需要在物化链路维护版本计数，收益低于「能发现漂移」。</p>
+ * <p>附件用 {@code id+fileSize} 当「版本」：附件表无 version 列，重新物化新增行（id 变）、同 id 内容变则 fileSize 变，
+ * 两者足以发现复判对象被换掉，无需引入版本列。</p>
  */
 public final class ReviewSnapshotBuilder {
 
     /**
-     * 快照结构版本（新增字段时递增，消费方据此兼容）。
+     * 快照结构版本（字段时递增，消费方据此兼容）。
      *
-     * <p>v2（2026-11-05，`RV-6`）：驳回记录增可选 {@code frozenEvidence}（原判证据五段文本），
+     * <p>v2（`RV-6`）：驳回记录增可选 {@code frozenEvidence}（原判证据五段文本），
      * 复判直接复用；v1 快照无该字段，消费方按「无冻结证据」处理。</p>
      */
     public static final int SCHEMA_VERSION = 2;
@@ -47,7 +42,7 @@ public final class ReviewSnapshotBuilder {
     /**
      * 构建快照。
      *
-     * @param attachments 核验当时可读物化附件（调用方传入与证据装配同一来源）
+     * @param attachments 核验当时可读物化附件（用方传入与证据装配同一来源）
      * @param output      核验当时的执行产出全文（只取其摘要，不入快照）
      * @return JSONB 可落库的有序 Map（键序固定，便于测试与人工比对）
      */

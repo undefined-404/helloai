@@ -51,7 +51,7 @@ public class PlanningTimeoutTask {
     @SchedulerLock(name = "planningTimeout", lockAtMostFor = "PT60S")
     public void scan() {
         try {
-            // 判据是「租约过期」，不再用 update_time 心跳（2026-11-08，`V146`）：
+            // 判据是「租约过期」，不再用 update_time 心跳（`V146`）：
             // 拆解线程调模型的十几分钟里一次库都不写，它没有能力用 update_time 证明自己活着。
             List<Task> timedOut = taskService.listTimedOutPlanning(OffsetDateTime.now(), BATCH_LIMIT);
 

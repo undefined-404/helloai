@@ -76,7 +76,7 @@ export function buildDynamicRoutes(menus: SysPermission[]): RouteRecordRaw[] {
   const walk = (nodes: SysPermission[]): string[] => {
     const leafPaths: string[] = []
     for (const n of nodes) {
-      // 先递归子树：无 path / path 带 '?'（死信池 /sub-tasks?status=...）只表示「自身不注册路由」，
+      // 先递归子树：无 path / path 带 '?'（池 /sub-tasks?status=...）只表示「自身不注册路由」，
       // 不表示整棵子树都不注册。放在守卫之后会把子节点一并丢掉，且无任何提示。
       const childLeafs = n.children?.length ? walk(n.children) : []
       if (!n.path || n.path.includes('?')) {

@@ -164,7 +164,7 @@ public class PromptTemplateServiceImpl extends ServiceImpl<PromptTemplateMapper,
      * 获取 Agent 的角色接入手册（从文件系统读取 + 运行时变量替换）。
      * 文件路径: resources/onboarding/{role}/guide.md
      *
-     * <p>命名口径（2026-09-30 Document V2.1 治理）：角色手册与「能力包（Skill）」是两件事，禁止混用 SKILL 一词：
+     * <p>命名口径（Document V2.1 治理）：角色手册与「能力包（Skill）」是两件事，禁止混用 SKILL 一词：
      * 本方法读的是<b>角色接入手册</b>（onboarding）；能力包见 {@code resources/skills/plugins/*.md}。
      * 注意交付物文件名仍是 {@code SKILL.md}——那是第三方 IDE（Trae / Qoder）skills 目录的约定，不得更改。</p>
      */

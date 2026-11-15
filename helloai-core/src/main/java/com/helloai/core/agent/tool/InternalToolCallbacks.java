@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 内部执行链<b>专用</b>工具回调集合（REF-8.1 B，2026-10-12）。
+ * 内部执行链<b>专用</b>工具回调集合（REF-8.1 B）。
  *
  * <p><b>为什么单独一类</b>：{@code internal_} 前缀的进程内工具（{@link
  * com.helloai.core.agent.runtime.tool.InternalLlmExecutorTools}）只应被<b>内部执行链</b>消费，

@@ -20,7 +20,7 @@ import java.sql.Statement;
  * <p><b>三门</b>：</p>
  * <ol>
  *   <li><b>跨引擎拒</b> —— 归档头 {@code Dumped from database version} 的**主版本** 必须等于
- *       运行时 PG 主版本。判据取自 {@code pg_restore -l} 的头部（**不解档**，实测可行）。</li>
+ *       运行时 PG 主版本。判据取自 {@code pg_restore -l} 的头部（**不解档**，可行）。</li>
  *   <li><b>schema 高过运行时拒</b> —— manifest 携带的 {@code flywayMaxVersion} 若**高于**
  *       当前代码内已知的最高迁移号，说明这份备份来自更新的版本 ⇒ 拒。
  *       （反之允许：较旧的备份恢复后由 Flyway 在下次启动补齐。）</li>

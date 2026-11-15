@@ -3,7 +3,7 @@ package com.helloai.core.agent.runtime.sandbox;
 import java.time.OffsetDateTime;
 
 /**
- * 工作区目录项（`SL-9`，2026-11-13）：沙箱文件系统的一行只读元数据。
+ * 工作区目录项（`SL-9`）：沙箱文件系统的一行只读元数据。
  *
  * <p><b>只承载机制，不承载策略</b>：本记录只回答「目录里有什么」，不回答「哪一份是交付物」。
  * 后者（最新 {@code .md} 优先、体积兜底）是对话正文兜底场景的业务判据，落在消费侧

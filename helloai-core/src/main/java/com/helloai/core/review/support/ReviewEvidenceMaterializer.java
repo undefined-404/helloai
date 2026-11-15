@@ -14,31 +14,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 审核证据自动物化器（`RV-15`，2026-11-15）：审核 turn 开始、LLM 调用前，平台把<b>受审附件</b>
- * （{@link AttachmentPort#listActive} 台账，即 RV-8 有界证据集的附件侧）从对象存储物化进
- * reviewer 沙箱的 {@code /tmp/staged/}，模型<b>零操作</b>拿到可执行证据。
+ * 审核证据自动物化器（`RV-15`）：审核 turn 开始、LLM 调用前，平台把受审附件
+ * （{@link AttachmentPort#listActive}，RV-8 有界证据集的附件侧）从对象存储物化进 reviewer 沙箱
+ * {@code /tmp/staged/}，模型零操作拿到可执行证据。
  *
- * <p><b>为什么存在（取代什么）</b>：RV-14 的模型命令式 stage 已被真机证明「工具可用 ≠ 模型会用」
- * ——reviewer 进入审核的第一步是 {@code find}，3~5 轮白跑才被指路拉回。把「物化」从<b>模型技能</b>
- * 升为<b>平台承诺</b>（qoder 路线 A + 修正 1 的口径），模型从「想起 stage」降级为「看见就位清单、
- * cp 来用」，依赖面大幅收窄；二次审核（抽检复审）自动获得同一证据环境的可复现性。</p>
+ * <p>取代 RV-14 模型命令式 stage（真机证明「工具可用 ≠ 模型会用」），把物化从模型技能升为平台承诺。
+ * 只物化<b>当前子任务</b>有效附件（归属硬校验同 RV-14）；前置/上游产物本期不支持（`G-029`）。
+ * 冻结复判路径（{@code executeWithEvidence}）<b>不调用本组件</b>——避免「Prompt 看冻结文本、沙箱跑当前文件」矛盾（F3）。</p>
  *
- * <p><b>边界（有界证据集的附件侧）</b>：只物化<b>当前子任务</b>的有效附件（{@code listActive} 归属
- * 硬校验同源，RV-14 stage 工具同口径）。前置/上游子任务产物<b>本期不支持</b>（归属范围现限本子任务，
- * 与 `G-029` 任务级列举待办呼应）——传递依赖靠 {@code internal_get_deps_summary} 文本 + 按其所属
- * 子任务另行 stage，见实测计划 §3 `RV-15` 已知边界。</p>
- *
- * <p><b>与 RV-6 冻结复判的关系（F3）</b>：本组件只服务<b>当前证据</b>路径（单审/双审/抽检首轮）。
- * 冻结证据复判（{@code ReviewExecutionEngine.executeWithEvidence}）重放的是驳回时冻结的<b>文本</b>
- * 证据做漂移检测，此时当前附件可能已被返工替换——物化它会让模型「Prompt 看冻结文本、沙箱跑当前
- * 文件」自相矛盾，故冻结路径<b>不调用本组件</b>（由接线侧保证）。</p>
- *
- * <p><b>fail-open</b>：任一附件读取/写入失败只记该条 {@code FAILED}、继续下一条，<b>不阻断核验</b>
- * （与全链路闸门一致）；整个物化器抛异常也不阻断——接线侧把「物化失败」降级为提示段，引导模型用
- * stage 定向补拉或退回读工具。</p>
- *
- * <p><b>护栏</b>：数量 / 单文件 / 总量三闸（{@link ReviewProperties.EvidenceMaterialization}）
- * 任一触顶即停，剩余转 {@code deferredIds} 由模型按清单定向补拉——有界是承诺的一部分。</p>
+ * <p>fail-open：单条读取/写入失败记 {@code FAILED} 继续下一条，整体异常也不阻断核验。
+ * 护栏：数量/单文件/总量三闸（{@link ReviewProperties.EvidenceMaterialization}）触顶即停，剩余转 {@code deferredIds} 由模型定向补拉。</p>
  */
 @Slf4j
 @Component

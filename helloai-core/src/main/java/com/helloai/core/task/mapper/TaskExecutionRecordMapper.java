@@ -25,7 +25,7 @@ public interface TaskExecutionRecordMapper extends BaseMapper<TaskExecutionRecor
      * <p><b>JSONB 列必须显式配 typeHandler</b>：注解 SQL 走普通自动映射，不套用
      * {@code @TableField(typeHandler)}；不配则 {@code keyDecisions} / {@code downstreamNotes} /
      * {@code deliverables} 三个列表静默为 null，{@code compileContextSummary} 会永久丢掉
-     * 「关键决策 / 下游须知 / 产出文件」（2026-11-04 与 TaskRunningSpecMapper 同批修复）。</p>
+     * 「关键决策 / 下游须知 / 产出文件」（与 TaskRunningSpecMapper 同批修复）。</p>
      */
     @Select("SELECT * FROM task_execution_record WHERE task_id = #{taskId} AND deleted = 0 ORDER BY create_time ASC")
     @Results(id = "executionRecordResult", value = {

@@ -39,7 +39,7 @@ import java.util.List;
  * 都注入<b>单个</b> {@link ToolCallbackProvider}，若存在两个 provider Bean 会因
  * {@code NoUniqueBeanDefinitionException} 崩溃。故对外 MCP 面仍是<b>唯一</b> provider Bean。</p>
  *
- * <p><b>★ 内部工具不进对外面（REF-8.1 B，2026-10-12）</b>：{@link InternalLlmExecutorTools}
+ * <p><b>★ 内部工具不进对外面（REF-8.1 B）</b>：{@link InternalLlmExecutorTools}
  * （{@code internal_} 前缀的进程内工具）<b>不再</b>并入 {@link #mcpToolCallbacks()}，改由
  * {@link #internalToolCallbacks()}（类型 {@link InternalToolCallbacks}，<b>不是</b>
  * {@code ToolCallbackProvider}）承载，使 spring-ai MCP Server 自动配置

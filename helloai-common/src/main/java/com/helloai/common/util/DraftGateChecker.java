@@ -16,34 +16,23 @@ import java.util.Set;
 /**
  * 草案质量门禁的**唯一判据来源**（门 1 依赖结构 / 门 2 单条机械可判项）。
  *
- * <p><b>为什么在 {@code common}</b>：拆解域（{@code planner}）与子任务域（{@code task}）都要跑同一套
- * 判据——拆解/展开后整批判定、草案编辑后单条复检、确认前放行判定。判据放在任一域都会让另一域
- * 反向依赖（{@code planner(0) > task(2)}），因此与 {@link AcceptanceKindValidator} 同置于最底层。</p>
+ * <p><b>为什么在 {@code common}</b>：拆解域（{@code planner}）与子任务域（{@code task}）都跑同一套判据
+ * （整批判定 / 单条复检 / 确认前放行），放任一域都会让另一域反向依赖（{@code planner(0) > task(2)}），
+ * 故与 {@link AcceptanceKindValidator} 同置最底层。</p>
  *
- * <p><b>2026-11-08 口径变更（本类相对 {@code PlanBatchGateChecker} 的实质差异）</b></p>
- * <ol>
- *   <li><b>入参从「LLM 输出序号」换成「已落库草案」</b>（2026-11-08）：旧实现判定发生在落库之前，
- *       只能用 1-based 序号定位；而序号只在单次 LLM 输出内有意义，一旦跨入口（展开新增的组、被编辑过
- *       的草案）必然错位，findings 也就无法按草案过滤。</li>
- *   <li><b>{@code draftRef} 对外口径从 {@code sub_task.id} 换成稳定 code</b>（{@code B2}，2026-11-09）：
- *       id 是行身份，重排/重建会变；code（{@code yyyyMMdd+seq}）是逻辑位置身份，重生成后不变。
- *       判定**内部键仍是 id**（依赖构图/环检测的唯一性依据，恒非 null、不失效）；findings 暴露用
- *       {@link DraftSnapshot#ref()}——code 优先，存量 V147 前无 code 的行回落 {@code String.valueOf(id)}。
- *       存量行回落是刻意的 fail-closed：宁可显示旧身份也不跳过判定。</li>
- *   <li><b>{@code G1_DEP_OUT_OF_RANGE} 语义随之改为「依赖指向不在本批次内的草案」</b>
- *       （悬空引用），不再判「序号越界」。序号越界是解析期问题，由调用方在「序号 → id」映射时兜底。</li>
- *   <li><b>门 2 接入 {@code acceptanceKind} 写法判定</b>：旧实现把它留在调用方以异常形式抛出，
- *       导致「一条验收写法不匹配」连带整批草案作废；现在它是 findings 的一条，只影响该草案。</li>
- * </ol>
+ * <p><b>身份口径</b>：入参是<b>已落库草案</b>而非 LLM 输出序号——序号只在单次输出内有意义，跨入口
+ * （展开新增组 / 编辑过的草案）必错位。判定<b>内部键用 id</b>（依赖构图 / 环检测唯一性依据，恒非 null）；
+ * findings 对外用 {@link DraftSnapshot#ref()}＝稳定 code 优先（{@code B2}，逻辑位置身份、重生成不变），
+ * V147 前无 code 存量行回落 {@code String.valueOf(id)}（刻意 fail-closed：宁显示旧身份也不跳过判定）。
+ * {@code G1_DEP_OUT_OF_RANGE} 语义＝「依赖指向不在本批次内的草案」（悬空引用），序号越界属解析期、由调用方映射时兜底。</p>
  *
- * <p><b>只判定，不落库、不抛异常、不依赖框架</b>：结论由调用方按 {@code severity} 决定处置——
- * 「生成类」操作（拆解）把它当产出的一部分，草案照常落库、带诊断不可确认；「改造类」操作
- * （展开/重生成/人工编辑）据此回滚，用户原来的草案不受影响。</p>
+ * <p><b>只判定，不落库、不抛异常、不依赖框架</b>：结论由调用方按 {@code severity} 处置——生成类（拆解）
+ * 当产出的一部分，草案照常落库、带诊断不可确认；改造类（展开/重生成/人工编辑）据此回滚，原草案不受影响。
+ * 门 2 的 {@code acceptanceKind} 写法判定是 findings 的一条、只影响该草案，不以异常连带整批作废。</p>
  *
- * <p><b>block 权只给「结论与样本分布无关」的规则</b>：字段空不空、依赖图闭不闭合，判的是
- * 「有没有」与「图结构」；文本启发式（中文名词包含、覆盖矩阵）依据是某一时点的样本快照，
- * 分布一变就误拦合法产出。阈值型规则持有 block 权的条件是量化的——
- * 阈值 ≤ 存量分布最小值 / {@link #BLOCK_THRESHOLD_MARGIN}（见该类常量注释）。</p>
+ * <p><b>block 权只给「结论与样本分布无关」的规则</b>：字段空不空、依赖图闭不闭合判的是「有没有」与「图结构」；
+ * 文本启发式（中文名词包含、覆盖矩阵）依据某一时点样本快照，分布一变就误拦合法产出。阈值型规则持 block 权的
+ * 条件量化为：阈值 ≤ 存量分布最小值 / {@link #BLOCK_THRESHOLD_MARGIN}。</p>
  */
 public final class DraftGateChecker {
 
@@ -58,9 +47,7 @@ public final class DraftGateChecker {
     /**
      * 阈值型规则持有 {@code block} 权的余量条件：**阈值 ≤ 存量分布最小值 / 本倍数**。
      *
-     * <p>历史两例均由本条件正确判定：{@code deliverable} 5 / 8 = 0.6 倍 → 阈值整体删除；
-     * {@code acceptance} 39 / 10 = 3.9 倍 → 保留 {@code block}。**改阈值前必须重跑存量回放
-     * 并核对本倍数**，否则该条件又会退化成「某一时点的快照」。</p>
+     * <p><b>改阈值前必须重跑存量回放并核对本倍数</b>，否则该条件退化成「某一时点的快照」。</p>
      */
     public static final int BLOCK_THRESHOLD_MARGIN = 3;
 
@@ -433,9 +420,8 @@ public final class DraftGateChecker {
     /**
      * 一条草案的 findings payload：{@code {findings, ruleVersion, checkedAt}}。
      *
-     * <p><b>为什么形状必须由本类出</b>：写点和清点曾分散在多个调用方，新增写点的人只照抄
-     * 「写」的那一半，于是 `2026-10-24` 修好的「只写不清」在 `2026-11-07` 的第三个写点原样复发。
-     * 现在「有结论」与「已清零」是同一份结构的两种取值，消费方只看 {@code findings} 是否为空。</p>
+     * <p><b>形状必须由本类出</b>：写点与清点同源，避免新增写点只照抄「写」的一半导致「只写不清」复发；
+     * 「有结论」与「已清零」是同一结构的两种取值，消费方只看 {@code findings} 是否为空。</p>
      */
     public static Map<String, Object> payload(List<Finding> findings, String checkedAt) {
         Map<String, Object> payload = new LinkedHashMap<>();

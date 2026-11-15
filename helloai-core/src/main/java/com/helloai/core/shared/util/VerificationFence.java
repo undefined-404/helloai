@@ -66,7 +66,7 @@ public final class VerificationFence {
     }
 
     /**
-     * 剥离<b>结尾处</b>的自检围栏段（交付物净化，2026-10-16）。
+     * 剥离<b>结尾处</b>的自检围栏段（交付物净化）。
      *
      * <p>与 {@link #bodyWithoutFence}（无条件结构切分，供完整性判据用）不同，本方法是
      * <b>条件化</b>剥离：仅当「末个 {@code VERIFICATION:} 之后的尾段自身构成<b>合格</b>围栏」

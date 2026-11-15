@@ -183,7 +183,7 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  管理端视角（2026-10-18）
+    //  管理端视角
     // ══════════════════════════════════════════════════════════════
 
     @Override

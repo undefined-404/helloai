@@ -81,13 +81,13 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     private final ChatRoundDecisionParser decisionParser;
     private final ClarifyWebSearchOrchestrator webSearchOrchestrator;
 
-    /** 显式技能指令（2026-10-26）：「＋→技能」里选中的产出型技能包，解析 / 渲染 / 落 required_skills。 */
+    /** 显式技能指令：「＋→技能」里选中的产出型技能包，解析 / 渲染 / 落 required_skills。 */
     private final SkillDirective skillDirective;
 
     /**
-     * 对话内技能执行（2026-10-27）：选技能即当场跑 CLI 出文件，产物落成会话附件。
+     * 对话内技能执行：选技能即当场跑 CLI 出文件，产物落成会话附件。
      *
-     * <p><b>2026-10-30 改为异步（SKX-13）</b>：本类不再直接执行技能，只负责「提交运行记录 +
+     * <p><b>改为异步（SKX-13）</b>：本类不再直接执行技能，只负责「提交运行记录 +
      * 投递后台 + 返回句柄」；真正的执行在 {@link SkillExecutionWorker}。</p>
      */
     private final ChatSkillRunService chatSkillRunService;
@@ -118,7 +118,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * 只新建会话（不跑 LLM）：同步 create 与流式 streamCreate 共用（2026-10-18 抽取）。
+     * 只新建会话（不跑 LLM）：同步 create 与流式 streamCreate 共用（抽取）。
      *
      * <p>口径与原门面 {@code create} 的建会话段逐字一致，仅把「跑一轮」留给调用方。</p>
      */
@@ -215,11 +215,11 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     /**
      * 确认卡前置处理（同步与流式共用）：确认 ⇒ 切 CLARIFY + 清标记；其他 ⇒ 清标记继续对话。
      *
-     * <p>从 {@code runLlmRound} 抽出（2026-10-18）：流式路径此前直接拒绝待确认卡场景
+     * <p>从 {@code runLlmRound} 抽出：流式路径此前直接拒绝待确认卡场景
      * （抛「请使用普通发送回答确认卡」），而结构化卡提交改走流式后该守卫会误拦确认操作。
      * 抽成单一方法后两条路径共用同一口径，不再各写一套。</p>
      *
-     * <p><b>2026-10-27 拒绝记忆（V127）</b>：取消分支额外置 {@code clarifyDeclined=true}——
+     * <p><b>拒绝记忆（V127）</b>：取消分支额外置 {@code clarifyDeclined=true}——
      * 用户明确拒绝转入方案澄清后，后续轮次即使 LLM 再次判 clarify 也不再弹确认卡
      * （防「取消 → 下一条又被判 clarify → 再弹卡」死循环）。确认分支同时重置该记忆。</p>
      */
@@ -272,7 +272,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     }
 
     /**
-     * 编辑已发送的用户消息并重跑（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi「编辑 → 回溯 → 重答」）：
+     * 编辑已发送的用户消息并重跑（对齐 ChatGPT/DeepSeek/Kimi「编辑 → 回溯 → 重答」）：
      *
      * <p>三步走：① 校验会话 ACTIVE、目标消息存在且为 user、且是<b>最后一条</b> user 消息
      * （更早消息是「中间编辑」，涉及分支语义，本项目线性会话结构暂不支持，拒绝防误删）；
@@ -324,7 +324,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
             messageService.removeByIds(truncateIds);
         }
         // 更新编辑后的内容（payload 保留——纯文本 user 消息无 payload，选择快照等结构化数据不动）
-        // 编辑后的内容同样要解析技能前缀（2026-10-27）：runRoundCore 没有技能分支，
+        // 编辑后的内容同样要解析技能前缀：runRoundCore 没有技能分支，
         // 不解析就意味着「编辑重发」必然退化成普通对话 —— 技能名只存在于 payload 里，
         // 而 runRoundCore 从不读它。前端提交时会把技能拼回 `[skill:name] ` 前缀。
         SkillDirective.Parsed edited = skillDirective.parse(trimmed);
@@ -357,7 +357,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     public ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage,
                                              String userPayload) {
         Long conversationId = conversation.getId();
-        // 显式技能（2026-10-27 起）：用户在「＋→技能」里选了产出型技能包（[skill:name] 前缀）。
+        // 显式技能：用户在「＋→技能」里选了产出型技能包（[skill:name] 前缀）。
         // 语义是「这一轮就出文件」——当场注入技能包、跑 CLI、把产物落成会话附件，
         // **不建任务、不进拆解**（建任务派子任务是 /task 的语义，对「画一张图」全是噪声）。
         if (skillDirective.isSkillCommand(userMessage)) {
@@ -398,7 +398,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     @Override
     public ClarifyConversationDetail enterClarify(Long conversationId, String extraMessage) {
         // RC-1 每会话互斥：转澄清轮前置段（追加 user 消息 + 切 mode + 清标记）持锁串行化。
-        // 锁内只做同步写（分配 seq / 切 mode），runLlmRound 是同步 LLM（实测数百秒），
+        // 锁内只做同步写（分配 seq / 切 mode），runLlmRound 是同步 LLM（数百秒），
         // 必须在锁释放后执行（§4.1：临界区只覆盖前置段，长 LLM 持锁放大故障面）。
         roundLocker.runLocked(conversationId, () -> {
             if (extraMessage != null && !extraMessage.isBlank()) {
@@ -445,7 +445,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         }
         RoundDecision roundDecision = makeRoundDecision(conversation, userMessage);
         if (roundDecision.decision().isClarify()) {
-            // 2026-10-27：已被拒绝过（clarify_declined=1）时不弹确认卡，继续普通对话；
+            // 已被拒绝过（clarify_declined=1）时不弹确认卡，继续普通对话；
             // applyClarifyDecision 返回 null 表示抑制（保持 CHAT 回复语义）
             ClarifyConversationDetail suppressed = applyClarifyDecision(conversation, roundDecision.decision());
             if (suppressed != null) {
@@ -471,7 +471,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     }
 
     /**
-     * 显式技能轮（2026-10-27）：选中的产出型技能<b>当场执行</b>，产物落成会话附件。
+     * 显式技能轮：选中的产出型技能<b>当场执行</b>，产物落成会话附件。
      *
      * <p><b>与 {@code runTaskDirectRound} 的分工</b>：那边是「把需求变成待拆解的任务」，
      * 这边是「这一轮就把文件给你」。用户选 archify 说「画一张支付生命周期图」，
@@ -508,11 +508,11 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     /**
      * 执行技能轮（用户消息<b>已落库之后</b>的部分：提交执行 + 落 assistant 结果）。
      *
-     * <p><b>为什么从 {@link #runSkillRound} 抽出</b>（2026-10-27）：编辑重发也要走技能，
+     * <p><b>为什么从 {@link #runSkillRound} 抽出</b>：编辑重发也要走技能，
      * 但编辑场景的 user 消息已被原地更新，不能再 addMessage 一条。抽成独立方法后，
      * 「新增消息 + 执行」与「更新消息 + 执行」共用同一段执行逻辑，避免两份实现漂移。</p>
      *
-     * <p><b>2026-10-30 改为异步（SKX-13）</b>：技能执行实测一次 377s（LLM 两轮 + 注入 +
+     * <p><b>改为异步（SKX-13）</b>：技能执行实测一次 377s（LLM 两轮 + 注入 +
      * 三段门禁 + 回读 + 落库），全程挂在 HTTP 线程上 ⇒ 前端一超时就刷一屏 {@code Broken pipe}，
      * 且长任务把线程池占满。现在本方法只做「落库一条运行记录 + 投递后台 + 立即返回句柄」，
      * 真正的执行与产物落库都在 {@code SkillExecutionWorker} 里，
@@ -570,7 +570,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
                 conversation.setPendingClarifyConfirm(false);
                 conversationService.updateById(conversation);
             }
-            // 2026-10-27 起显式技能不再走本方法（改为 runSkillRound 当场执行）；
+            // 显式技能不再走本方法（改为 runSkillRound 当场执行）；
             // 这里保留解析只为「历史消息里带过 [skill:x]」的兼容：旧数据 /task 消息 parse 出 null，行为不变。
             SkillDirective.Parsed parsed = skillDirective.parse(userMessage);
             String extraText = parsed.hasSkill() ? parsed.text() : commandSearch.taskCommandExtra(userMessage);
@@ -783,7 +783,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         // P1-3：description 四小节不全 → 同轮纠偏重试一次（fail-open，不阻断终稿落库）
         reply = promptRenderService.applyDescriptionSectionGuard(conversation, planner, prompt,
                 "requirement_clarify", reply);
-        // TD-8（2026-10-24）：LLM 产出追问 + 用户连续 N 轮无新信息 ⇒ 收敛轮（强制按现有
+        // TD-8：LLM 产出追问 + 用户连续 N 轮无新信息 ⇒ 收敛轮（强制按现有
         // 信息出终稿，不再追问）。判据客观：用户回答是否携带新信息（selections/纯文本），
         // progress 自评不参与门控（计划「不做的」）。
         if (!"final".equals(reply.getType())

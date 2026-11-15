@@ -33,7 +33,7 @@ public class DocumentParserRouter {
     }
 
     /**
-     * 解析；无可用的解析器时抛 {@link AttachmentParseException}（调用方据此标 SKIPPED 而不是 FAILED）。
+     * 解析；无可用的解析器时抛 {@link AttachmentParseException}（用方据此标 SKIPPED 而不是 FAILED）。
      */
     public ParsedContent parse(ContentKind kind, ParsedInput input) {
         return find(kind)

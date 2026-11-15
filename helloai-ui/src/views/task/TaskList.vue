@@ -398,7 +398,7 @@ function reportInFlight(status?: string) {
 }
 
 /**
- * 「待确认草案」已等待时长（2026-11-08）。
+ * 「待确认草案」已等待时长。
  *
  * `AWAITING_PLAN_CONFIRM` 是**只进不出**的状态：无超时、无自动回收（设计如此——草案是
  * 十几分钟模型调用的成果，自动作废等于白烧）。代价是「人一直不管」这件事**不可见**：
@@ -540,7 +540,7 @@ function openDesc(row: any) {
   void loadDescMembers(row.id)
 }
 
-// ── 参与成员（2026-10-18）：只取 task_agent_member「实际参与」，不含团队编制 ──
+// ── 参与成员：只取 task_agent_member「实际参与」，不含团队编制 ──
 const descMembers = ref<TaskMemberView[]>([])
 const membersLoading = ref(false)
 
@@ -781,7 +781,7 @@ async function handlePlan(row: Task) {
 .desc-md :deep(h2),
 .desc-md :deep(h3),
 .desc-md :deep(h4) { margin-bottom: 0; }
-/* 参与成员 chips（2026-10-18）：一行内换行排列，不换行截断 */
+/* 参与成员 chips：一行内换行排列，不换行截断 */
 .member-chips {
   display: flex;
   flex-wrap: wrap;
@@ -813,7 +813,7 @@ async function handlePlan(row: Task) {
 .member-dot.is-idle { background: var(--el-color-warning); }
 .member-dot.is-offline, .member-dot.is-sleeping { background: var(--el-color-info-light-3); }
 
-/* 任务详情弹窗分区（2026-10-18 两次调整合并）
+/* 任务详情弹窗分区（两次调整合并）
    ① 分区之间靠「上间距 + 细分隔线」区分，长列表不再糊成一片；
    ② 需求包已从「定宽标签列」改为「小标题 + 列表」的纵向堆叠（见 `.pkg-*`），
       原 `min-width:72px → width:132px` 的两次放宽都在跟中文长标签较劲，属于方向问题。 */

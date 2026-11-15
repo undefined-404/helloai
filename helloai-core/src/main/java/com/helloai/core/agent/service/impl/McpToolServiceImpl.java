@@ -23,7 +23,7 @@ import java.util.List;
  * MCP 工具核心逻辑（<b>协议门面 / 薄门面</b>）。
  * 每个方法对应一个 MCP 工具，供 Controller（REST + JSON-RPC）统一调用。
  *
- * <p><b>★RM9-a 拆分（2026-10-16）</b>：本类由 1334 行上帝类改造为<b>薄门面</b> ——
+ * <p><b>★RM9-a 拆分</b>：本类由 1334 行上帝类改造为<b>薄门面</b> ——
  * 只做「<b>横切守卫 + 逐方法委托</b>」，业务实现按职责迁入三个包内 {@code @Service}：</p>
  * <ul>
  *     <li>{@link McpTaskClaimService} —— 任务获取 → 确认 → 认领 → 开工（同一前置链）；</li>
@@ -31,14 +31,14 @@ import java.util.List;
  *     <li>{@link McpReadModelService} —— 纯只读组装（前置产出摘要 / 子任务详情）。</li>
  * </ul>
  *
- * <p><b>★与 2026-08-23「§7.8 选项二：不继续拆分」书面声明的关系</b>（该声明见本类历史版本）：
+ * <p><b>★与 「§7.8 选项二：不继续拆分」书面声明的关系</b>（该声明见本类历史版本）：
  * 原声明的不拆理由有二 —— ① 「所有工具共享同一套 agent 活跃度守卫、工具开关与租约续期前置
  * （{@code assertAgentActive} / {@code assertToolEnabled} / {@code refreshDutyLease}），
  * 拆分后守卫逻辑被迫复制或跨类回调」；② 「按工具分组拆分只会平移行数」。
  * 本拆分对二者分别给出结论：② 成立故<b>不按工具分组</b>，改按 {@code §9.1 业务职责} 切分；
  * ① 由「<b>守卫留在门面、职责类不持有守卫</b>」消解 —— 守卫既未复制、也无需跨类回调，
  * 门面成为守卫的<b>唯一装配点</b>。该切分线（三类目标类名与承接方法）已于
- * <b>2026-10-12 经用户裁定「全部接受」</b>（`RM计划 §4.3`，属架构动作 / 协作规约 §42），
+ * <b>经用户裁定「全部接受」</b>（`RM计划 §4.3`，属架构动作 / 协作规约 §42），
  * 故原「不继续拆分」书面声明在此<b>被后续裁定取代</b>（保留其理由供回读，不删史）。</p>
  *
  * <p><b>外部调用方零改动</b>：本类仍 {@code implements McpToolService} 且类名不变，
@@ -157,11 +157,11 @@ public class McpToolServiceImpl implements McpToolService {
      * 心跳上报。刷新 Agent 的 last_seen_time，维持在线状态。
      * 幂等，频繁调用无副作用。
      *
-     * <p>：响应附带当前值班租约状态（onDuty / leaseId / leaseExpiresAt /
+     * <p>响应附带当前值班租约状态（onDuty / leaseId / leaseExpiresAt /
      * remainingTtlSeconds），供 Agent 每次心跳自检续约——租约剩余时间不足时可主动
      * 重新 checkIn，避免被静默切到离岗。</p>
      *
-     * <p>：心跳顺带自动续租——有 ACTIVE 租约时按原 TTL 窗口延长
+     * <p>心跳顺带自动续租——有 ACTIVE 租约时按原 TTL 窗口延长
      * expire_time，remainingTtlSeconds 为续租后的剩余 TTL；外部 Agent 只要保持
      * 轮询本工具即可持续在岗，无需手动重做 checkIn。</p>
      *
@@ -370,7 +370,7 @@ public class McpToolServiceImpl implements McpToolService {
     }
 
     /**
-     * 工具调用自动续租 + 在岗续证（ §6.67 + E1 动态 TTL 自适应）：有 ACTIVE 租约时顺带延长
+     * 工具调用自动续租 + 在岗续证（§6.67 + E1 动态 TTL 自适应）：有 ACTIVE 租约时顺带延长
      * {@code expire_time}，长任务执行期间任何工具调用即可保活，无需 Agent 主动
      * 重做 checkIn；无 ACTIVE 租约时跳过（不自动打卡，保持 checkIn 的打卡语义）。
      *

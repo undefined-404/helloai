@@ -25,7 +25,7 @@ import java.io.StringWriter;
  * <p>三个必须做对的细节：</p>
  * <ol>
  *   <li><b>必须带文件名</b>：{@link TikaCoreProperties#RESOURCE_NAME_KEY} 缺失时，
- *       类型判定会退化成 {@code application/octet-stream} 并解析出空串（实测）。</li>
+ *       类型判定会退化成 {@code application/octet-stream} 并解析出空串。</li>
  *   <li><b>必须用 Markdown handler</b>：{@code Tika.parseToString} 走 {@code BodyContentHandler}，
  *       标题与表格结构全丢；Markdown handler 才能把表格输出成 {@code |a|b|}。</li>
  *   <li><b>必须设限额</b>：{@link TimeoutLimits} 给总时长与停顿预算，{@link OutputLimits}

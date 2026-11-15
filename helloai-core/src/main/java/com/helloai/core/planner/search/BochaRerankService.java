@@ -79,7 +79,7 @@ public class BochaRerankService {
      *
      * <p>开关归属调用方——网页重排看 {@code helloai.web-search.rerank-enabled}，
      * 附件片段重排看 {@code helloai.attachment.retrieval-rerank-enabled}。
-     * 若在此处统一判定网页开关，附件侧单独开启会被静默吞掉（2026-11-07 真机发现）。</p>
+     * 若在此处统一判定网页开关，附件侧单独开启会被静默吞掉（真机发现）。</p>
      */
     private boolean hasCredential() {
         String key = credentialKeyStore.resolveBochaApiKey();
@@ -93,14 +93,14 @@ public class BochaRerankService {
      * 超出部分按原顺序附在重排结果之后——既控制成本，也不丢弃已有结果。
      * {@code rerankMinScore > 0} 时丢弃低于阈值的条目（默认 0 = 只排不过滤）。</p>
      *
-     * @param query   语义锚（调用方传用户真实意图文本，非拆词后的候选词）
-     * @param results 待重排的检索结果（调用方保证不含用户直取页面）
+     * @param query   语义锚（用方传用户真实意图文本，非拆词后的候选词）
+     * @param results 待重排的检索结果（用方保证不含用户直取页面）
      * @return 重排后的新列表；不具备能力/失败/无排空间时返回**入参原列表**
      */
     public List<WebSearchResult> rerank(String query, List<WebSearchResult> results) {
         if (results == null || results.isEmpty() || !isAvailable()) {
             // 网页入口的开关（rerankEnabled）只在此处生效：rerankOrder 是通用通道，
-            // 开关归调用方各自判定，不能替附件侧做主（2026-11-07 真机发现）。
+            // 开关归调用方各自判定，不能替附件侧做主（真机发现）。
             return results;
         }
         List<String> documents = new ArrayList<>(results.size());
@@ -166,7 +166,7 @@ public class BochaRerankService {
                     query, documents.size(), order.size(), documents.size() - order.size());
             return order;
         } catch (Exception e) {
-            // 契约：重排失败绝不抛（调用方拿到原顺序，主流程不受影响）
+            // 契约：重排失败绝不抛（用方拿到原顺序，主流程不受影响）
             log.warn("博查 Rerank 失败，降级原顺序: query={}, err={}", query, e.getMessage());
             return null;
         }

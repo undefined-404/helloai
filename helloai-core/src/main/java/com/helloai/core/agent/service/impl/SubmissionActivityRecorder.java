@@ -12,7 +12,7 @@ import java.util.Map;
 /**
  * 「提交产出」活动日志的独立事务写入器。
  *
- * <p><b>为什么必须独立事务</b>（2026-10-21 实测定位）：
+ * <p><b>为什么必须独立事务</b>（定位）：
  * {@code McpToolServiceImpl.submitResult} 带 {@code @Transactional}，整条上报链路共用一个事务；
  * 活动日志此前以 {@code REQUIRED} 传播加入该事务，一旦写入失败（如 JSONB 参数类型不匹配），
  * PostgreSQL 会把事务标记为 aborted —— 外层 {@code catch} 虽吞掉异常并打印

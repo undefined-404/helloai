@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * 配置规格 → 领域规格的转换与「规格指纹」（`SKX-5`，2026-10-26）。
+ * 配置规格 → 领域规格的转换与「规格指纹」（`SKX-5`）。
  *
  * <p><b>为什么需要两个类型</b>：{@link OpenSandboxProperties.Spec} 是 <b>Spring 可绑定的配置类</b>
  * （字段可变、默认值散布在字段初始化器里），{@link SandboxSpec} 是<b>领域纯声明 record</b>

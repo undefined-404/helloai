@@ -28,7 +28,7 @@ public interface ToolCallbackContributor {
     /**
      * 返回承载一个或多个 {@code @Tool} 方法的实例（通常为 this）。
      *
-     * <p><b>纯声明类返回 {@code null}</b>（2026-10-17，S-8 修正）：本端口同时承载两类语义——
+     * <p><b>纯声明类返回 {@code null}</b>（S-8 修正）：本端口同时承载两类语义——
      * ① 工具本体贡献者（本方法返回含 {@code @Tool} 方法的实例）；② 纯「条件可用/动态描述」
      * 声明者（如 {@code SandboxExecutionToolContributor}，工具本体在别处、只声明可用性）。
      * 收集器（{@code McpToolConfig.mcpToolCallbacks}）须过滤 {@code null}，避免把无

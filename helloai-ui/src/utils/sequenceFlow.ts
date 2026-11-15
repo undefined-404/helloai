@@ -67,7 +67,7 @@ export function classifySwimlane(ev: TaskTimelineItem): Swimlane {
       || t === 'context_built' || t === 'tool_call_started' || t === 'tool_call_completed' || t === 'agent_completed') return 'EXT'
   // 任务级：业务系统视角
   if (t.startsWith('task_plan_') || t === 'task_auto_completed') return 'BIZ'
-  // 人工介入（死信重派 / 手动触发 / 人工介入标记 / 人工驳回改派）→ 人工运维台
+  // 人工介入（重派 / 手动触发 / 人工介入标记 / 人工驳回改派）→ 人工运维台
   if (t === 'sub_task_dead_letter_manual_assign'
       || t === 'sub_task_manual_intervention_required'
       || t === 'sub_task_manual_review_passed'
@@ -78,7 +78,7 @@ export function classifySwimlane(ev: TaskTimelineItem): Swimlane {
   if (t === 'sub_task_dead_letter' || t === 'sub_task_review_dead_letter') return 'DLQ'
   // 核验 → 核验 Agent
   if (t.startsWith('subtask_review_') || t.startsWith('sub_task_auto_review_')) return 'RVW'
-  // 超时/离线改派（2026-09-01）：调度引擎的关键决策节点，归 SCH 泳道；
+  // 超时/离线改派：调度引擎的关键决策节点，归 SCH 泳道；
   // execution_timeout 以 sub_task_execute_ 开头，不显式拦截会被下方规则误归 EXT
   if (t === 'sub_task_unclaimed_timeout_reassign' || t === 'sub_task_execution_timeout_reassign'
       || t === 'sub_task_offline_reassign') return 'SCH'
@@ -120,7 +120,7 @@ function shortLabel(ev: TaskTimelineItem): string {
 }
 
 /**
- * 执行链事件的具体名称（2026-10-18）：`技能解析 · s1、s2` / `工具调用 · 沙箱执行`。
+ * 执行链事件的具体名称：`技能解析 · s1、s2` / `工具调用 · 沙箱执行`。
  *
  * <p>参照 deepseek-harness 的 Chat 折叠行做法：阶段文案 + 从 payload 提取的具体摘要，
  * 让「用了哪个技能、调了哪个工具」在时序图上直接可读，而不是只有一个阶段名。</p>
@@ -175,7 +175,7 @@ const NOTE_MAX_CHARS = 80
 const LABEL_MAX_CHARS = 60
 
 /**
- * 把业务文本压成 mermaid `sequenceDiagram` 能安全承载的一行（2026-11-14）。
+ * 把业务文本压成 mermaid `sequenceDiagram` 能安全承载的一行。
  *
  * <p><b>为什么必须做</b>：本文件的文本大量来自<b>模型自由文本</b>——失败原因、人工介入说明、
  * 命令片段、脚本输出。而 mermaid 里半角 `;` 是<b>语句分隔符</b>：一条
@@ -223,7 +223,7 @@ function inferNote(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, at
   if (t === 'sub_task_execution_command_poll_recovery') {
     return '巡检恢复遗漏指令'
   }
-  // 超时改派（2026-09-01）：调度决策留痕，Note 标注改派原因便于回溯
+  // 超时改派：调度决策留痕，Note 标注改派原因便于回溯
   if (t === 'sub_task_unclaimed_timeout_reassign') {
     return '分配后超时未领取，自动改派'
   }
@@ -234,11 +234,11 @@ function inferNote(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, at
   if (t === 'sub_task_offline_reassign') {
     return 'Agent 离线（心跳丢失），自动改派'
   }
-  // 死信（调度维度）
+  // 死信（度维度）
   if (t === 'sub_task_dead_letter') {
     return `熔断器打开（累计失败 ${p.failureCount || attempt} 次）`
   }
-  // 死信（核验维度，2026-08-19 新增）：带返工计数，DLQ 泳道可回溯熔断原因
+  // 死信（核验维度）：带返工计数，DLQ 泳道可回溯熔断原因
   if (t === 'sub_task_review_dead_letter') {
     const rc = p.reworkCount !== undefined ? String(p.reworkCount) : String(attempt)
     const max = p.maxRework !== undefined ? String(p.maxRework) : '上限'
@@ -268,11 +268,11 @@ function inferNote(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, at
     const dt = new Date(cur.createTime).getTime() - new Date(prev.createTime).getTime()
     if (dt >= 1000) return `LLM 耗时 ${(dt / 1000).toFixed(1)}s`
   }
-  // 工具耗时（2026-10-18）：started → completed 的墙钟差。
+  // 工具耗时：started → completed 的墙钟差。
   // 与 deepseek-harness 同口径（它也不在事件里存 duration，由消费方按时间戳求差）；
   // 但注意：该差值是「含排队/准备的上界」，不是纯工具执行时间。
   if (t === 'tool_call_completed' && prev && prev.eventType === 'tool_call_started') {
-    // 优先用 callId 硬关联（2026-10-18 起 payload 带 callId）；历史事件无 callId 时回退「同名 + 相邻」
+    // 优先用 callId 硬关联（payload 带 callId）；历史事件无 callId 时回退「同名 + 相邻」
     const prevCallId = String((prev.payload || {}).callId || '')
     const curCallId = String(p.callId || '')
     const sameCall = prevCallId && curCallId
@@ -354,7 +354,7 @@ function buildBlocks(events: TaskTimelineItem[], attempts: Map<string, number>, 
     const cur = events[i]
     const curLane = classifySwimlane(cur)
     // 检测连续多次「失败/熔断 → 重新生成指令」是否值得折叠为 loop
-    // 2026-08-19：核验熔断（sub_task_review_dead_letter）与调度熔断（sub_task_dead_letter）对称折叠
+    // 核验熔断（sub_task_review_dead_letter）与调度熔断（sub_task_dead_letter）对称折叠
     if (cur.eventType === 'sub_task_dead_letter' || cur.eventType === 'sub_task_review_dead_letter') {
       // 死信前置：合并自上一次 dead_letter 之后的所有失败/重派事件
       const loopMsgs: SequenceMessage[] = []

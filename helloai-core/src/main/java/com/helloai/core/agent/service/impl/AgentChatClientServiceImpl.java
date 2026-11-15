@@ -180,7 +180,7 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
     @Override
     public ChatModel buildChatModel(Agent agent, String provider, String apiKeyPlaintext) {
         ChatModel raw = buildRawChatModel(agent, provider, apiKeyPlaintext);
-        // ★G8（2026-10-15）：出口统一包并发限流装饰器 —— 执行链（RuntimeTurnExecutor →
+        // ★G8：出口统一包并发限流装饰器 —— 执行链（RuntimeTurnExecutor →
         // ChatModelToolLoop / ContextCompactor / FinalReportFenceHook）此前拿的是裸 ChatModel，
         // 完全绕过 LlmCallConcurrencyGuard（其 javadoc 却声称覆盖「执行」）⇒ maxConcurrentLlmCalls
         // 对最高频路径失效。在此包装即全覆盖，且与 chat 路径（buildChatClient 的独立缝、

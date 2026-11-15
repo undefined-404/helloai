@@ -20,7 +20,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 工作台事件推送（PA-6）：复用既有任务事件内核，只推「有变化」提示，
  * 不把任务数据写进 SSE 帧——数据仍由 {@code /workbench} 按当前用户过滤后重新拉取。
  *
- * <p><b>按 owner 过滤（2026-11-03 复核修正）</b>：连接建立时绑定当前 userId；广播时解析
+ * <p><b>按 owner 过滤</b>：连接建立时绑定当前 userId；广播时解析
  * 任务 owner，仅推给归属用户的连接（owner 为空的老数据按共享处理）。任务不存在/解析失败
  * 时跳过本帧，避免向所有连接泄漏 taskId。</p>
  *

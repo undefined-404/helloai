@@ -7,8 +7,8 @@ import type { ClarifySelection, LongId } from '@/types'
 //
 // 事件协议（与服务端 RequirementConversationController.streamSendById 对齐）：
 //   event: token     -> data: 增量正文文本块（服务端已按 ≥50 字符或 ≥100ms 聚合）
-//   event: reasoning -> data: 增量思考过程块（推理模型，2026-10-18 新增；只做展示，不并入正文）
-//   event: done      -> data: [DONE]（主回复已落库，调用方随后拉 detail 收敛）
+//   event: reasoning -> data: 增量思考过程块（推理模型，；只做展示，不并入正文）
+//   event: done      -> data: [DONE]（主回复已落库，用方随后拉 detail 收敛）
 //   event: error     -> data: 错误消息（user 消息已落库，可走 retry 重试链路）
 // 流非正常结束（连接断开且未收到 done/error）由本层兜底转 error。
 
@@ -25,14 +25,14 @@ export interface ChatStreamHandlers {
   onDone: () => void
   /** 流失败（含服务端业务拒绝与连接中断），message 可直接提示 */
   onError: (message: string) => void
-  /** 主动停止（2026-10-19）：AbortSignal 触发中断，静默结束（不弹错误），调用方据此刷新详情 */
+  /** 主动停止：AbortSignal 触发中断，静默结束（不弹错误），调用方据此刷新详情 */
   onAbort?: () => void
 }
 
 /**
  * 发送 CHAT 流式消息并消费 SSE 帧。Promise 在流收尾（done/error/主动停止/断开）后 resolve，
  * 不会 reject——所有失败路径都收敛到 onError，调用方 await 后统一清理发送态。
- * @param signal 可选 AbortSignal（调用方主动中断，如「停止生成」按钮/切换会话）
+ * @param signal 可选 AbortSignal（用方主动中断，如「停止生成」按钮/切换会话）
  */
 export async function streamSendConversation(
   id: LongId,
@@ -56,7 +56,7 @@ export async function streamSendConversation(
 }
 
 /**
- * 新建会话 + 首轮流式（2026-10-18）：与 {@link streamSendConversation} 共用同一 SSE 消费内核，
+ * 新建会话 + 首轮流式：与 {@link streamSendConversation} 共用同一 SSE 消费内核，
  * 仅端点与请求体不同。首帧 `session` 事件回传新会话 id（通过 {@code handlers.onSession}）。
  */
 export async function streamCreateConversation(
@@ -84,7 +84,7 @@ export async function streamCreateConversation(
 }
 
 /**
- * 助理对话：新建会话 + 首轮流式（PA-11，2026-11-03）。
+ * 助理对话：新建会话 + 首轮流式（PA-11）。
  *
  * <p>与需求对话共用同一 SSE 消费内核与事件协议，仅端点与请求体不同（多一个本轮技能
  * {@code skill}）。工作台此前只有同步端点，联网检索与整段生成期间无任何反馈、

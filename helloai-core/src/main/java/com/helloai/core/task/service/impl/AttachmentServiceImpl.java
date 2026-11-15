@@ -56,10 +56,10 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
      */
     private final AttachmentVisibilityPolicy attachmentVisibilityPolicy;
 
-    /** timeline 审计（P2 删除通道，2026-10-07）：删除附件落 {@code attachment_deleted} 事件。 */
+    /** timeline 审计（P2 删除通道）：删除附件落 {@code attachment_deleted} 事件。 */
     private final TaskTimelineService taskTimelineService;
 
-    /** 对象存储回收（P3-3 / P2，2026-10-07）：事务提交后 best-effort 删对象；独立无环承载点，见其类注释。 */
+    /** 对象存储回收（P3-3 / P2）：事务提交后 best-effort 删对象；独立无环承载点，见其类注释。 */
     private final AttachmentObjectPurgeSupport attachmentObjectPurgeSupport;
 
     /**

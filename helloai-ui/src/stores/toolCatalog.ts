@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { toolApi, type ToolCatalogItem } from '@/api/event'
 
 /**
- * 工具名目录（2026-10-18，工具名服务端单一来源）。
+ * 工具名目录（工具名服务端单一来源）。
  *
  * <p>解决「时间线只显示 internal_run_in_sandbox 这种英文标识」的问题。与 eventCatalog store
  * 完全同构：懒加载、失败静默降级（回退原始英文名，绝不显示「未知工具」掩盖事实）、

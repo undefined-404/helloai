@@ -50,7 +50,7 @@ public interface PlatformAgentExecutionService {
     Flux<com.helloai.core.agent.chat.LlmStreamChunk> executeStream(Long agentId, AgentTask task);
 
     /**
-     * 流式执行一次 Agent 任务，并把本次调用钉在指定 {@code modelType} 上（2026-11-05）。
+     * 流式执行一次 Agent 任务，并把本次调用钉在指定 {@code modelType} 上。
      *
      * <p><b>用途</b>：个人工作台把「用户选的模型」落到执行上——会话记住
      * {@code provider:model}，执行时覆盖 Agent 自身绑定的模型，其余（凭证 / 能力 / 角色）

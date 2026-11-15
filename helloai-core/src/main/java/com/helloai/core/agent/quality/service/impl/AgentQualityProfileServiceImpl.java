@@ -78,7 +78,7 @@ public class AgentQualityProfileServiceImpl
     }
 
     /**
-     * 核验侧质量分（`MED-1`，2026-10-15）—— 口径与「为什么分角色」见接口 javadoc。
+     * 核验侧质量分（`MED-1`）—— 口径与「为什么分角色」见接口 javadoc。
      *
      * <p>只读 {@code reviewerReviewedCount} / {@code reviewerDisagreementCount} 两个
      * 此前**全仓零消费**的字段；执行侧指标一律不参与（同一 Agent 兼作执行者与核验者时，

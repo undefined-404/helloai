@@ -22,7 +22,7 @@ import org.springframework.context.annotation.Configuration;
  * - 分页插件不随 starter 自动注册，需显式加 PaginationInnerInterceptor，
  *   否则 IPage.page() 不执行 COUNT、total 恒为 0 且不分页（G-012 用户分页 API 实测暴露）
  * - JSONB 读侧映射由「含 JSONB 字段的实体 @TableName(autoResultMap=true) +
- *   @TableField(typeHandler=PgJsonbTypeHandler.class)」驱动（2026-10-27 起不再全局注册
+ *   @TableField(typeHandler=PgJsonbTypeHandler.class)」驱动（不再全局注册
  *   Map/List → PgJsonbTypeHandler——全局注册会劫持 mpFillEt 等参数绑定，见方法注释）
  * - 通过 ConfigurationCustomizer 向 JacksonTypeHandler 静态注入带 JavaTimeModule 的
  *   ObjectMapper：MyBatis-Plus 内置 JacksonTypeHandler 默认 new ObjectMapper()（裸 mapper，
@@ -41,7 +41,7 @@ public class MyBatisPlusConfig {
         // 1. 分页拦截器（PostgreSQL）
         interceptor.addInnerInterceptor(new PaginationInnerInterceptor(DbType.POSTGRE_SQL));
 
-        // 2. 乐观锁拦截器（修复 测试中 updateById 失败的问题）
+        // 2. 乐观锁拦截器（测试中 updateById 失败的问题）
         interceptor.addInnerInterceptor(new OptimisticLockerInnerInterceptor());
 
         return interceptor;
@@ -56,7 +56,7 @@ public class MyBatisPlusConfig {
      * PgJsonbTypeHandler / UncertaintyListTypeHandler / 实体 @TableField(typeHandler=...) 全部受益
      * （写侧序列化 + 读侧反序列化）。</p>
      *
-     * <p><b>2026-10-27 根治（移除全局 Map/List 注册）</b>：此前此处把
+     * <p><b>根治（移除全局 Map/List 注册）</b>：此前此处把
      * {@code Map/HashMap/List/ArrayList → PgJsonbTypeHandler} 全局注册到 TypeHandlerRegistry，
      * 本意是让 JSONB 列 SELECT 读出时命中自定义 handler，但副作用致命——
      * MyBatis 对 {@code removeByIds}/{@code updateById} 内部构造的 {@code mpFillEt} 参数 map 推断

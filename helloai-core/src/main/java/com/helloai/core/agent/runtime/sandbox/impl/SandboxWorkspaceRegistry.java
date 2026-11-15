@@ -14,7 +14,7 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 复用工作区注册表（`SL-9`，2026-11-13）：槽池 / 键 / TTL / 续期 / 回收。
+ * 复用工作区注册表（`SL-9`）：槽池 / 键 / TTL / 续期 / 回收。
  *
  * <p><b>为什么单独一个类</b>：这些事回答的是「哪个容器在册、还能活多久、什么时候该销毁」，
  * 与「命令怎么跑、文件怎么读」是两套变化原因。运行时与技能安装器共用同一份注册表，
@@ -145,7 +145,7 @@ public class SandboxWorkspaceRegistry implements SandboxIdleReaper {
     /**
      * 打开（或复用）一个槽，必要时调用 {@link SandboxFactory#create} 建容器。
      *
-     * @param ref            工作区句柄（调用方已保证可入池）
+     * @param ref            工作区句柄（用方已保证可入池）
      * @param effective      生效规格
      * @param createFailure  创建失败原因出口
      * @return 可用槽；创建失败 ⇒ {@code null}

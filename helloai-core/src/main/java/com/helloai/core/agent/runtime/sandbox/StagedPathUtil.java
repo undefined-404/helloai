@@ -1,7 +1,7 @@
 package com.helloai.core.agent.runtime.sandbox;
 
 /**
- * stage-in 路径工具（`RV-14` / `RV-15`，2026-11-15）：附件注入沙箱的<b>落盘路径与文件名消毒</b>，
+ * stage-in 路径工具（`RV-14` / `RV-15`）：附件注入沙箱的<b>落盘路径与文件名消毒</b>，
  * 全仓唯一事实源。
  *
  * <p><b>为什么需要抽公共</b>：`RV-14` 的模型命令式 stage 工具（{@code InternalLlmExecutorTools}）

@@ -35,7 +35,7 @@ public interface ClarifyRoundOrchestratorService {
     /**
      * <b>只新建会话</b>（不跑 LLM 轮次）——同步 {@code create} 与流式 {@code streamCreate} 共用。
      *
-     * <p>拆分原因（2026-10-18）：{@code create} 原实现是「建会话 + 同步跑首轮」打包在一起，
+     * <p>拆分原因：{@code create} 原实现是「建会话 + 同步跑首轮」打包在一起，
      * 导致<b>新会话首条消息只能走同步</b>（用户要等搜索 + 完整 LLM 才见到回复，无打字机、
      * 无思考过程）。拆出本方法后，流式入口可以先建会话、拿 id 首发 {@code session} 事件，
      * 再走与老会话完全相同的流式首轮。</p>
@@ -65,7 +65,7 @@ public interface ClarifyRoundOrchestratorService {
     ClarifyConversationDetail retryRound(Long conversationId);
 
     /**
-     * 编辑已发送的用户消息并重跑（2026-10-19）：物理删除目标消息<b>之后</b>的所有消息
+     * 编辑已发送的用户消息并重跑：物理删除目标消息<b>之后</b>的所有消息
      * （旧回复与后续追问）→ 更新该消息 content → 重跑该消息（同 {@link #retryRound}，
      * 不新增 user 消息、不加轮数）。仅支持「最后一条 user 消息」，更早消息抛 BizException。
      */

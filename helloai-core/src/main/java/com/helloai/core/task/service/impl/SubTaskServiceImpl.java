@@ -69,7 +69,7 @@ import java.util.Set;
  *   └── SubTaskLeaseService        租约 / 回收 / 巡检 → StateMachine（仅回收状态半段）
  * </pre>
  *
- * <p><b>对 2026-08-23「§7.8 选项二：书面声明不继续拆分」的正面回应</b>（历史声明<b>保留</b>如下，
+ * <p><b>对 「§7.8 选项二：书面声明不继续拆分」的正面回应</b>（历史声明<b>保留</b>如下，
  * 其顾虑已被逐条消解，而非被无视）：</p>
  * <ul>
  *     <li>已剥离：状态机校验（{@code SubTaskStateMachine}）、核验编排（{@code SubTaskReviewServiceImpl}）、

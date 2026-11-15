@@ -60,7 +60,7 @@ public interface PlatformProviderConfigService {
      *
      * @param provider LLM Provider
      * @param rawText  粘贴的原始文本（可含多把 Key）
-     * @return 批量结果（新增把数 / 已存在把数 / 是否升了首把 / 新增指纹列表）
+     * @return 批量结果（把数 / 已存在把数 / 是否升了首把 / 新增指纹列表）
      * @throws com.helloai.common.base.BizException provider 为空，或文本中未解析出任何 Key
      */
     ApiKeyBatchSaveOutcome saveApiKeys(String provider, String rawText);

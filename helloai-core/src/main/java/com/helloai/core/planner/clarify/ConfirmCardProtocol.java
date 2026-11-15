@@ -58,7 +58,7 @@ public class ConfirmCardProtocol {
      * 手写确认词仍兼容（IntentDetectionService 已删除，改为 LLM auto 意图路由），
      * 后端状态机零改动，交互形态与方案细则确认卡片一致。</p>
      *
-     * <p><b>2026-10-02 语义反转（选项 A）</b>：原 {@code buildAskPayload(String questionText)}
+     * <p><b>语义反转（选项 A）</b>：原 {@code buildAskPayload(String questionText)}
      * 重载把联合决策 LLM 产出的「澄清问题」直通卡片题面——但本卡只有「确认/取消」两个选项
      * 且无自由输入框，用户无法回答该澄清问题；点「确认」只切模式，问题被静默丢弃。故本类
      * <b>忽略传入的澄清问题</b>，确认卡题面恒为默认确认文案；澄清问题由 CLARIFY 模式下一轮
@@ -73,7 +73,7 @@ public class ConfirmCardProtocol {
     /**
      * 意图确认卡 structured payload 重载（遗留兼容入口）。
      *
-     * <p><b>2026-10-02 语义反转（选项 A）</b>：参数 {@code questionText} <b>被忽略</b>，
+     * <p><b>语义反转（选项 A）</b>：参数 {@code questionText} <b>被忽略</b>，
      * 确认卡题面恒为默认文案——杜绝「把澄清问题塞进只有确认/取消选项的卡」这一类 bug 复发。
      * 调用方若想让用户回答澄清问题，应走 CLARIFY 模式的正式追问，而非本确认卡。</p>
      *
@@ -131,7 +131,7 @@ public class ConfirmCardProtocol {
     /**
      * 确认卡可读正文重载（遗留兼容入口）。
      *
-     * <p><b>2026-10-02 语义反转（选项 A）</b>：参数 {@code questionText} <b>被忽略</b>，
+     * <p><b>语义反转（选项 A）</b>：参数 {@code questionText} <b>被忽略</b>，
      * 正文恒为默认文案——与 {@link #buildAskPayload(String)} 口径一致，
      * 澄清问题由 CLARIFY 模式下一轮正式生成。</p>
      *

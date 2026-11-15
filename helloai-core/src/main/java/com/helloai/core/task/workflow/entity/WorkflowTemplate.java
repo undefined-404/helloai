@@ -26,7 +26,7 @@ public class WorkflowTemplate extends BaseEntity {
     /** 状态：DRAFT / ACTIVE / ARCHIVED。 */
     private WorkflowTemplateStatus status;
 
-    /** 当前激活版本（软引用 workflow_template_version.id，发布版本时回填）。 */
+    /** 当前激活版本（软引用 workflow_template_version.id，版本时回填）。 */
     private Long currentVersionId;
 
     /** 分类（可选，如 dev-release / data-etl）。 */

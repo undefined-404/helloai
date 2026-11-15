@@ -4,7 +4,7 @@ package com.helloai.core.agent.service;
  * 平台运行告警服务（钉钉/飞书 webhook 推送，异步执行不阻塞调用方）。
  *
  * <p>原为「熔断器状态变更报警」，2026-10-21 扩展为通用运行告警：
- * 新增 {@link #onNoEligibleAgent}（调度无候选）——复用同一 webhook 通道与发送核心，
+ * 新增 {@link #onNoEligibleAgent}（度无候选）——复用同一 webhook 通道与发送核心，
  * 避免为同类诉求再造一套发送链路（单点收口原则）。</p>
  */
 public interface CircuitBreakerAlertService {
@@ -21,7 +21,7 @@ public interface CircuitBreakerAlertService {
                               String fromState, String toState);
 
     /**
-     * 调度「无可执行候选 Agent」告警（G-015 收口，2026-10-21）。
+     * 调度「无可执行候选 Agent」告警（G-015 收口）。
      *
      * <p>触发点：{@code SubTaskDispatchServiceImpl.doDispatchPendingAuto} 无候选分支
      * （此前只有 log + 时间线事件，无指标/告警出口）。该场景属<b>可自愈等待态</b>

@@ -235,7 +235,7 @@ public class ContextCompactor {
         for (Unit unit : tail) {
             rebuilt.addAll(unit.messages());
         }
-        // 净收益守卫（2026-10-12 实测暴露：首次摘要出现 4939 → 6327 的净增——摘要比被压区间还长）。
+        // 净收益守卫（暴露：首次摘要出现 4939 → 6327 的净增——摘要比被压区间还长）。
         // 无净收益 ⇒ **回滚原文**（宁可保持原样，也不接受"越压越大"）。
         int beforeTokens = estimateTokens(messages);
         List<Message> snapshot = new ArrayList<>(messages);

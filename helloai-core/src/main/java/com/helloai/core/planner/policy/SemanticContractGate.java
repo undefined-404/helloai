@@ -221,7 +221,7 @@ public class SemanticContractGate {
      * <p><b>只认本批出现过的 Ref</b>：模型常把 `draftRef` 写成标题或自造编号，这种冲突定位不到草案，
      * 采纳它只会得到一条用户无法操作的 blocking（错误消息里没有可点的行）。</p>
      *
-     * @return {@code null} = 输出不是约定 JSON（调用方按「未执行」处理，而不是按「无冲突」）
+     * @return {@code null} = 输出不是约定 JSON（用方按「未执行」处理，而不是按「无冲突」）
      */
     List<Conflict> parse(String raw, List<Node> nodes) {
         JsonNode root = readJson(raw);

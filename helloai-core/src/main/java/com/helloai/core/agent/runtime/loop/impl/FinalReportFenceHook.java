@@ -38,41 +38,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * 内部 LLM 提交前自我审计的收尾轮（REF-8.4 ②，{@link LoopHook} 的 {@code beforeTerminate} 首条实现）。
  *
- * <p><b>语义（用户口径）</b>：内部 LLM 在提交产物 / 标记任务完成之前，必须先对自身产出做一次
- * 自审——这条 {@code VERIFICATION/STATUS/NEXT_STEPS} 围栏就是它自证「已核对过自己交付物」的声明。
- * 缺/不合格围栏 ⇒ 有界一次无工具重跑（追加收尾指令）让模型自纠；只对内部 LLM 生效，外部 Agent
- * （有自己工作空间/沙箱，走平台 reviewer 审核）不参与。产出物<b>是否真符合</b>不由此判定——
- * 统一仍归平台 reviewer 角色审核（标准一致）。</p>
+ * <p>内部 LLM 提交产物前须自审，{@code VERIFICATION/STATUS/NEXT_STEPS} 围栏是其「已核对交付物」的声明；
+ * 缺/不合格围栏 ⇒ 恰好一次无工具重跑（追加式保留草稿正文、末尾补围栏），不重入、不循环。
+ * 只对内部 LLM 生效（外部 Agent 走平台 reviewer）；产出是否真符合仍归 reviewer 审核。
+ * 出口分类 ④（`D-2026-10-13-6` 口径 A）用宽松 {@code containsMarker}，完全无 {@code VERIFICATION:} 痕迹才 fail-close。</p>
  *
- * <p><b>有界保证</b>：恒在「自然 STOP」且围栏不合格时<b>恰好一次</b>收尾轮，收尾轮本身不再重入。
- * 收尾后仍未合格<b>不循环</b>——由 {@code RuntimeTurnExecutor} 出口分类 ④ 收口。口径 A
- * （`D-2026-10-13-6`）下 ④ 用宽松 {@code containsMarker}（有 {@code VERIFICATION:} 痕迹即放行），
- * 故「二次仍缺 STATUS」这类会被放行交 reviewer 大环兜底；只有非空且<b>完全无</b> {@code VERIFICATION:}
- * 痕迹才 fail-close → FAILED。</p>
+ * <p><b>判定落出口而非 prompt 指令</b>：模型可能不遵从「保留草稿正文」，故收尾轮产出若不含草稿正文
+ * （{@link #preservesDraftBody} 空白无关比对）一律回退「原草稿 + 围栏段」。例外：草稿剔空白后低于
+ * {@link #NEAR_BLANK_DRAFT_CHARS}（200 字符）视为无实质内容可丢，围栏合格即直接采信，避免丢掉唯一完整交付物。</p>
  *
- * <p><b>自审依据 + 防劣化</b>：收尾 prompt = <b>system（身份/输出契约）+ 原 userPrompt（任务要求）+ 草稿</b>，
- * 使模型能「对照任务要求」核验草稿（而非仅复述草稿）；指令为<b>追加式</b>（原样保留草稿正文、仅末尾追加围栏三行），
- * 堵掉「重写草稿 ⇒ 掉细节但带围栏」被 ④ 宽松放行的劣化空间。不喂整段工具调用史 ⇒ 有界，
- * 规避长上下文溢出；重跑有界重试一次（覆盖瞬时故障）；收尾那一轮 token 计入累计；iterations 与
- * maxIterations 取 min，不超配置上限。</p>
- *
- * <p><b>③ 出口强制（2026-10-16 事故修）</b>：「原样保留草稿正文」只是 prompt 里的<b>指令</b>，模型可能不遵从
- * ——实测 MiniMax-M3 只回围栏三行，整篇报告被 793 字符自检段顶替。故判定权<b>落在出口</b>：
- * 收尾轮产出若不包含草稿正文（{@link #preservesDraftBody} 空白无关比对），一律回退「原草稿 + 收尾轮围栏段」，
- * 既不丢交付物、又照样给出围栏（口径 A 语义不变、不新增拒绝面）。「说了 ≠ 强制」是本钩子的核心教训。</p>
- *
- * <p><b>③b 近空白草稿例外（2026-10-25 死信事故修）</b>：{@link #preservesDraftBody} 的「原样保留」比对
- * 只对<b>有实质内容的草稿</b>有意义——草稿若只有一句开场白（首轮执行者 MAX_ITERATIONS 硬终止，
- * 10 轮迭代全花在工具调用、正文没来得及写，实测草稿 51~98 字符），「收尾轮未包含草稿」判回退
- * 会把<b>唯一合格的完整交付物</b>（收尾轮实测产出 5120~7187 字符、含全部验收证据）一并丢弃，
- * 平台宁可交近空白空壳 + BLOCKED 围栏 → 审查判空 → 返工 3 次 → 死信（3 个子任务同构复现）。
- * 处置：草稿剔除空白后长度低于 {@link #NEAR_BLANK_DRAFT_CHARS}（200 字符，远小于任何文档类
- * 验收的字数下限）时视为「无实质内容可丢」，收尾轮产出<b>只要围栏合格</b>即直接采信
- * （不再要求包含近空白草稿）；2026-10-16 事故的「完整草稿被围栏顶替」不受影响（草稿长，仍回退）。
- * 判定方向保持保守：近空白草稿下「采信收尾轮」只可能让交付物变好（空壳 → 完整报告），不会丢内容。</p>
- *
- * <p><b>红线合规</b>：只改 {@link AgentLoopResult}（循环出口），不碰 {@code SubTaskStatus} / 平台
- * 状态机；不动 {@link AgentLoopTermination#messages()}（精简 prompt，避免对循环消息列表产生副作用）。</p>
+ * <p>只改 {@link AgentLoopResult}（循环出口），不碰 {@code SubTaskStatus} 状态机与 {@link AgentLoopTermination#messages()}。</p>
  */
 @Slf4j
 @Component
@@ -149,7 +124,7 @@ public class FinalReportFenceHook implements LoopHook {
     private static final int FINALIZE_MAX_ATTEMPTS = 2;
 
     /**
-     * 空草稿收尾指令（2026-10-25 增补）。
+     * 空草稿收尾指令（增补）。
      *
      * <p><b>为什么不能沿用 {@link #FINALIZE_HEADER_INSTRUCTION}</b>：那条指令是「原样保留草稿正文、
      * 只在末尾追加围栏」。草稿为空时它等价于「给一份空文档做审计」——实测 MiniMax 直接回
@@ -174,7 +149,7 @@ public class FinalReportFenceHook implements LoopHook {
      *
      * <p>两个占位符：{@code %s} = 闸门失败摘要，{@code %d} = 本轮沙箱调用上限。
      * 指令只要求<b>补证据</b>、明确要求保持正文不变 —— 重跑的目的是让一手证据到位，
-     * 不是再要一篇新正文（2026-10-16 的「收尾轮顶替正文」回归不得借道重跑复活）。</p>
+     * 不是再要一篇新正文（的「收尾轮顶替正文」回归不得借道重跑复活）。</p>
      */
     private static final String SELF_REVIEW_RETRY_INSTRUCTION =
             "自审未通过：%s\n"
@@ -190,7 +165,7 @@ public class FinalReportFenceHook implements LoopHook {
     static final int RESEARCH_DIGEST_MAX_CHARS = 12000;
 
     /**
-     * 「近空白草稿」字符阈值（③b，2026-10-25 死信事故修）。
+     * 「近空白草稿」字符阈值（③b）。
      *
      * <p>草稿剔除全部空白后长度低于本值 <b>且不含 Markdown 标题标记</b>（{@link #looksLikeDraftBody}）
      * ⇒ 视为<b>无实质内容可丢</b>（首轮执行者 MAX_ITERATIONS 硬终止时实测只写下一句开场白，
@@ -198,7 +173,7 @@ public class FinalReportFenceHook implements LoopHook {
      * 收尾轮完整产出直接采信、不再做「原样保留」比对。
      * 200 字符远小于任何文档类验收的字数下限（本事故验收要求 1800~2400 字）。
      * <b>必须叠加「不含 Markdown 标题」</b>：实测「# 手册 - 最终整合报告\n\n## 执行摘要…」剔除空白后
-     * 仅 30 余字符，但它是 2026-10-16 事故的「有实质内容草稿」——只按字符数会误判成近空白、
+     * 仅 30 余字符，但它是 的「有实质内容草稿」——只按字符数会误判成近空白、
      * 导致完整草稿被收尾轮顶替（回归）。标题标记是「草稿已有交付物骨架」的最廉价信号。</p>
      */
     static final int NEAR_BLANK_DRAFT_CHARS = 200;
@@ -208,10 +183,10 @@ public class FinalReportFenceHook implements LoopHook {
      *
      * <p>取 1500 的理由：文档类子任务验收下限普遍 ≥1800 字（本事故 1800~2300），
      * 草稿若已有 1500+ 字符<b>且带标题骨架</b>，说明正文确实写在对话里、不是进度叙述，
-     * 此时追加收尾轮只会用缩水版顶替完整草稿（2026-10-16 回归）。
+     * 此时追加收尾轮只会用缩水版顶替完整草稿（回归）。
      * 低于此值一律视为「正文不在草稿区」，交由收尾轮救。</p>
      *
-     * <p><b>唯一事实源已迁至 {@link DeliverableDraft#MIN_BODY_CHARS}</b>（2026-10-25）：
+     * <p><b>唯一事实源已迁至 {@link DeliverableDraft#MIN_BODY_CHARS}</b>：
      * 同一判据现被「turn 末沙箱文件回传」（{@code LocalExecutionCommandConsumer}）共用，
      * 两处各写一份必然漂移（一处调 200、另一处 1500 ⇒ 一边回传、一边又判不值得救）。
      * 此处仅保留常量别名，数值不得独立修改。</p>
@@ -219,7 +194,7 @@ public class FinalReportFenceHook implements LoopHook {
     static final int EXHAUSTED_DELIVERABLE_MIN_CHARS = DeliverableDraft.MIN_BODY_CHARS;
 
     /**
-     * 「可疑 STOP」的沙箱调用次数门槛（2026-10-25，`LOG-20261025-009` 实测形态）。
+     * 「可疑 STOP」的沙箱调用次数门槛（`LOG-20261025-009` 实测形态）。
      *
      * <p><b>为什么按「沙箱调用次数」而不是「总工具调用次数」</b>：假成功的病因很具体——
      * <b>正文写进了沙箱文件、没贴回对话</b>（实测 20 轮 / 23 次工具调用，绝大部分是
@@ -237,7 +212,7 @@ public class FinalReportFenceHook implements LoopHook {
     private static final String SANDBOX_TOOL_NAME_FRAGMENT = "sandbox";
 
     /**
-     * 不触发收尾轮的业务面 scene（`TD-9` 事故修复，2026-10-24）。
+     * 不触发收尾轮的业务面 scene（`TD-9` 事故修复）。
      *
      * <p>收尾轮语义 = 「子任务交付物提交前自证」（VERIFICATION 围栏），只对<b>子任务执行链</b>
      * 生效（{@code scene == null}）。业务面循环（{@code BusinessSurfaceLoopRunner}）产出的是
@@ -295,7 +270,7 @@ public class FinalReportFenceHook implements LoopHook {
             return null;
         }
         // 只在「自然 STOP」的草稿上触发收尾轮（MAX_ITERATIONS / ERROR 属硬终态，不给自纠机会）。
-        // ★例外（2026-10-25 MiniMax 轮数耗尽事故）：轮次耗尽**且**已有工具调研**且**草稿近空白时，
+        // ★例外（MiniMax 轮数耗尽事故）：轮次耗尽**且**已有工具调研**且**草稿近空白时，
         // 追加一次收尾成文——见 {@link #isExhaustedDraftWorthFinalizing} 的条件收紧说明。
         // ★二次例外（同日 #009 实测）：**STOP 也会假成功**——见 {@link #isSuspiciousStopWithoutDeliverable}。
         if (draft == null) {
@@ -311,7 +286,7 @@ public class FinalReportFenceHook implements LoopHook {
         // ★但「可疑 STOP」不认围栏：实测 MiniMax 的假成功恰好是「604 字节写作过程叙述 + 围栏
         // 声称 DONE」——围栏本身是它自证完成的方式，拿围栏当放行依据正好被它绕过。
         //
-        // `SR-3` 接线修复（2026-11-04 真机实测）：原实现在这里直接 return，导致「模型自然写出三行
+        // `SR-3` 接线修复（真机实测）：原实现在这里直接 return，导致「模型自然写出三行
         // 合格围栏」这条最正常的路径**从不产生** {@code self_review_evidence_checked}，也从不核对
         // EVIDENCE 与台账——本地真实任务的 3 条子任务全部命中该缺口（0 条证据核对事件、6 条沙箱
         // 台账事件）。闸门评估本身零 token：通过 ⇒ 零额外调用；不通过 ⇒ 才追加一次补证据重跑。
@@ -331,7 +306,7 @@ public class FinalReportFenceHook implements LoopHook {
     }
 
     /**
-     * 「STOP 但没交出正文」的假成功判据（2026-10-25 增补，`LOG-20261025-009`）。
+     * 「STOP 但没交出正文」的假成功判据（增补，`LOG-20261025-009`）。
      *
      * <p><b>为什么单靠 {@link #isExhaustedDraftWorthFinalizing} 不够</b>：它只认
      * {@code finishReason == MAX_ITERATIONS}。实测 MiniMax 两次执行都是<b>正常 STOP</b>
@@ -393,7 +368,7 @@ public class FinalReportFenceHook implements LoopHook {
     }
 
     /**
-     * 轮数耗尽但「有调研、无正文」的兜底判据（2026-10-25 增补，同日二次修正）。
+     * 轮数耗尽但「有调研、无正文」的兜底判据（增补，同日二次修正）。
      *
      * <p><b>为什么放宽既有「MAX_ITERATIONS 不给自纠机会」</b>：MiniMax 实测把 14 轮全部花在
      * 「沙箱写文件 + 反复跑校验脚本」上（`toolCalls=17`、`outputTokens=24563`），
@@ -401,7 +376,7 @@ public class FinalReportFenceHook implements LoopHook {
      * 而工具调研成果就在 messages 里。追加一次「无工具、只喂任务要求 + 草稿」的有界收尾轮，
      * 是把「执行失败」救成「有正文可评审」的唯一低成本手段（一次 LLM 调用，不重入工具）。</p>
      *
-     * <p><b>★2026-10-25 二次修正（7443 第 6 次事故）：原判据判错了对象</b>。
+     * <p><b>★ 二次修正（7443 第 6 次事故）：原判据判错了对象</b>。
      * 原第 3 条要求「草稿近空白（&lt;200 字符且无标题骨架）」，判的是「草稿<b>有没有内容</b>」；
      * 但耗尽场景该判的是「草稿<b>是不是可交付正文</b>」。实测本次 20 轮耗尽时草稿区是逐轮
      * **进度叙述**（「已压缩至 3022 字」之类，超过 200 字符、带 markdown 记号）⇒ 被判「有正文、不必救」，
@@ -413,7 +388,7 @@ public class FinalReportFenceHook implements LoopHook {
      * 而「有标题骨架 ⇒ 不救」这条 2026-10-16 回归防护保持不变。</p>
      *
      * <p><b>成本口径</b>：多一次无工具收尾调用（草稿上限 {@value #RESEARCH_DIGEST_MAX_CHARS} 字符）。
-     * 对比一次 20 轮耗尽的执行（实测 122378 tokens / 3 分 51 秒）与随后的重派，这次调用便宜两个数量级。</p>
+     * 对比一次 20 轮耗尽的执行（122378 tokens / 3 分 51 秒）与随后的重派，这次调用便宜两个数量级。</p>
      */
     static boolean isExhaustedDraftWorthFinalizing(AgentLoopResult draft) {
         if (draft == null || !"MAX_ITERATIONS".equals(draft.finishReason())) {
@@ -503,11 +478,11 @@ public class FinalReportFenceHook implements LoopHook {
         if (StringUtils.hasText(taskText)) {
             body.append("【本轮任务要求】\n").append(taskText).append("\n\n");
         }
-        // 空草稿分支（2026-10-25）：改用「从头写正文」指令 + 注入调研摘要——
-        // 否则「审计空草稿」只会换来 BLOCKED 自述（实测），被 ③b 采信即假成功。
+        // 空草稿分支：改用「从头写正文」指令 + 注入调研摘要——
+        // 否则「审计空草稿」只会换来 BLOCKED 自述，被 ③b 采信即假成功。
         // 判据用「真的一字未出」（hasText=false），**不用** NEAR_BLANK 阈值：后者是
         // ③b「有无内容可丢」的判据，对「短但有实质内容」的草稿（如已有骨架的短稿）
-        // 会误判成空，导致丢弃既有正文 + 围栏（2026-10-16 / LOG-050 两个反例均依赖旧路径）。
+        // 会误判成空，导致丢弃既有正文 + 围栏（/ LOG-050 两个反例均依赖旧路径）。
         // ★2026-10-25 扩展：{@code forceWriteFromScratch} 覆盖「非空但不是正文」的情况
         // （STOP 假成功的 604 字节过程叙述），此时草稿必须**不作为**审计对象喂进去。
         boolean blankDraft = !StringUtils.hasText(draftText);
@@ -577,25 +552,25 @@ public class FinalReportFenceHook implements LoopHook {
             log.warn("FinalReportFenceHook: 收尾轮空产出，本轮不采信（防交付物被清空）");
             return null;
         }
-        // ③ 防「收尾轮改写丢正文」（2026-10-16 实测事故）：指令虽写明「原样保留草稿正文、
+        // ③ 防「收尾轮改写丢正文」：指令虽写明「原样保留草稿正文、
         // 仅在末尾追加围栏三行」，但模型可能只回围栏三行 —— 此时若直接采用收尾轮正文，
         // 整篇交付物被 793 字节的自检段顶替（task 2110984337513603074 的整合报告即此形态）。
         // 「说了」不等于「强制」：判定权必须落在出口，不能交给模型自觉。
         // 处置：改为「原草稿正文 + 收尾轮围栏段」——既保住交付物，又照样给出围栏
         // （不新增拒绝面：围栏仍在，出口分类口径 A 的语义不变）。
         String effectiveText = text;
-        // ③d 只回围栏不算产出（2026-10-25 实测）：模型会回「VERIFICATION / STATUS: BLOCKED」
+        // ③d 只回围栏不算产出：模型会回「VERIFICATION / STATUS: BLOCKED」
         // 自述充当产出——那不是交付物，采信即「假成功」（success=true 但零交付物，评审必驳回，
         // 等于把失败伪装成成功）。判定 = 本轮走「从头写正文」**且** 收尾轮剔除围栏后一个字都没有。
         // 用「有无正文」而非字符阈值：短但真实的正文（如已有骨架的短稿）必须被采信，
-        // 阈值会把它误判成自述（2026-10-16 / LOG-050 两个反例依赖被采信）。
+        // 阈值会把它误判成自述（/ LOG-050 两个反例依赖被采信）。
         if (writeFromScratch && !StringUtils.hasText(stripFence(text))) {
             log.warn("FinalReportFenceHook: 要求「从头写正文」但收尾轮只回了围栏（{} 字符，正文近空白），"
                     + "本轮不采信", text.length());
             return null;
         }
         if (writeFromScratch) {
-            // ③b' 从头写正文场景（2026-10-25，空草稿 / STOP 假成功）：成功标准只有一个 ——
+            // ③b' 从头写正文场景（空草稿 / STOP 假成功）：成功标准只有一个 ——
             // 收尾轮**真的写出了正文**。此处不得比对「是否原样保留草稿」：草稿本就不是正文
             // （空 / 604 字节过程叙述），比对必然失败并回退成「过程叙述 + 围栏」= 假成功复现。
             log.info("FinalReportFenceHook: 从头成文场景，采信收尾轮产出（正文 {} 字符，原草稿 {} 字符且非正文）",
@@ -603,7 +578,7 @@ public class FinalReportFenceHook implements LoopHook {
         } else if (compact(draftText).length() < NEAR_BLANK_DRAFT_CHARS
                 && !looksLikeDraftBody(draftText)
                 && VerificationFence.parse(text).adequate()) {
-            // ③b 近空白草稿例外（2026-10-25 死信事故修）：草稿无实质内容可丢（仅开场白 / 极短残句，
+            // ③b 近空白草稿例外：草稿无实质内容可丢（仅开场白 / 极短残句，
             // 无 Markdown 标题骨架）⇒ 不判「未保留草稿」回退——收尾轮完整产出即交付物（否则唯一合格
             // 报告被丢弃 → 近空白空壳 + BLOCKED 围栏 → 审查判空 → 返工 3 次死信，3 子任务同构复现）。
             // 收尾产出仍须围栏合格才采信（防采信垃圾）；2026-10-16「完整草稿被围栏顶替」不受影响
@@ -906,7 +881,7 @@ public class FinalReportFenceHook implements LoopHook {
     /**
      * 草稿是否已具备「交付物骨架」（③b 判据补充）。
      *
-     * <p><b>实现已迁至 {@link DeliverableDraft#looksLikeDraftBody}</b>（2026-10-25）：
+     * <p><b>实现已迁至 {@link DeliverableDraft#looksLikeDraftBody}</b>：
      * 同一判据现被「turn 末沙箱文件回传」共用，两处各写一份必分叉。此处保留为委托，
      * 使本类既有调用点与单测无需改签名。</p>
      */

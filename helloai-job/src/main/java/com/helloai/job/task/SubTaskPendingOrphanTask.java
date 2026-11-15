@@ -57,13 +57,13 @@ import java.util.concurrent.ThreadLocalRandom;
  *     <li>{@code dispatchPendingSubTaskAuto} 本身要求子任务当前为 PENDING 状态，
  *         若已被外部 Agent claim 或被其它路径推进到非 PENDING，会抛 BizException；
  *         catch 后仅记录日志，不影响同轮其他记录</li>
- *     <li><b>「暂无可用候选」是可自愈等待态（2026-10-05 修 P1-1）</b>：
+ *     <li><b>「暂无可用候选」是可自愈等待态（P1-1）</b>：
  *         {@code dispatchPendingSubTaskAuto} 选不出人时抛 {@link NoCandidateAgentException}
  *         （不消耗重派预算），本类按异常类型<b>单独分流</b>并落
  *         {@code sub_task_no_candidate} 时间线，不再被静默归入 skipStatusChanged；
  *         下一轮巡检（60s）候选恢复后自动重试。返回值 {@code null}（闸门拦截 / 退避 /
  *         依赖未就绪）计入 skipGated，不与「已重派」混为一谈。</li>
- *     <li><b>时钟 C · 每子任务重试节拍（2026-10-05）</b>：连续无候选时按
+ *     <li><b>时钟 C · 每子任务重试节拍</b>：连续无候选时按
  *         {@code no-candidate-retry-interval-seconds} + 抖动 写回
  *         {@code context.noCandidate.nextDispatchAt}，未到点则 {@code skipWaiting} 跳过
  *         （不再每 60s 空扫）；达 {@code no-candidate-max-rounds} 轮转人工介入
@@ -166,7 +166,7 @@ public class SubTaskPendingOrphanTask {
                         continue;
                     }
 
-                    // // 时钟 C（2026-10-05）：每子任务重试节拍 —— 上一轮「无候选」写入的
+                    // // 时钟 C：每子任务重试节拍 —— 上一轮「无候选」写入的
                     // nextDispatchAt 未到之前，不重试、不计数、不落事件（避免 60s 空扫噪音）。
                     // 该门控必须在 dispatchPendingSubTaskAuto 之前，否则每次 tick 都会再试一次。
                     OffsetDateTime nextDispatchAt = readNextDispatchAt(latest);
@@ -236,7 +236,7 @@ public class SubTaskPendingOrphanTask {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  时钟 C（2026-10-05）：每子任务无候选重试节拍
+    //  时钟 C：每子任务无候选重试节拍
     //  与时钟 A（孤儿扫描 60s tick）/ 时钟 B（重派退避）正交，独立于 dispatch 本体
     // ═══════════════════════════════════════════════════════════════
 
@@ -331,7 +331,7 @@ public class SubTaskPendingOrphanTask {
                 long waitedMs = resolveWaitedMs(noCandidate, rounds, now);
                 subTaskService.markManualIntervention(subTaskId, "no_candidate_long_wait",
                         Map.of("rounds", rounds, "waitedMs", waitedMs));
-                // 转人工 = 交棒给人的终态动作：一并清除残留的 noCandidate 计数器（2026-10-05 修 P3）。
+                // 转人工 = 交棒给人的终态动作：一并清除残留的 noCandidate 计数器（P3）。
                 // 否则人工日后清除标记重开（如死信人工重派 SubTaskDispatchServiceImpl 会
                 // remove("manualIntervention")）时，残留 rounds（如 9）会接着累加 ⇒ 下一轮无候选
                 // 立刻又达阈值（「复活即再死」），且 waitedMs 会用旧 firstSeenAt 算出偏大错误值。

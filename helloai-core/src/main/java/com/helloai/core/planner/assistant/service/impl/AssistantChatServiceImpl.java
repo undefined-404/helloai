@@ -284,7 +284,7 @@ public class AssistantChatServiceImpl implements AssistantChatService {
     }
 
     /**
-     * 钉住的模型可中途切换（2026-11-05）：请求带值时定点回写会话，后续轮次沿用。
+     * 钉住的模型可中途切换：请求带值时定点回写会话，后续轮次沿用。
      *
      * <p>与 {@link #applyWebSearchFlag} 同模式（定点 set，不整行 updateById——避免覆盖
      * 并发自增的 {@code round_count}）。空值表示「本轮不改」，而不是「清空钉住」：

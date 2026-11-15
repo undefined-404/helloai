@@ -43,7 +43,7 @@ public record GateDecision(GateOutcome outcome, List<GateFinding> findings, Map<
         return new GateDecision(GateOutcome.SKIP, List.of(), Map.of());
     }
 
-    /** 是否拦截（命中硬判据，调用方可据此阻断 / 驳回）。 */
+    /** 是否拦截（命中硬判据，用方可据此阻断 / 驳回）。 */
     public boolean blocks() {
         return outcome == GateOutcome.BLOCK;
     }

@@ -144,7 +144,7 @@ function toggle(q: ClarifyQuestion, opt: ClarifyOption) {
 const canSubmit = computed(() =>
   props.questions.every(q => (picked[q.id] ?? []).length > 0 || (customText[q.id] ?? '').trim().length > 0))
 
-// B（2026-10-27）确认卡「取消」不污染 LLM 判定：
+// B确认卡「取消」不污染 LLM 判定：
 // 意图确认卡（confirm-switch）选中「取消」时，可读文本只输出「取消」二字，
 // 不带题面「检测到你想把讨论整理成落地方案」——否则该字样随 user 消息进上下文，
 // 下一条 LLM 意图决策会再次判 clarify、反复弹卡（死循环根源之一）。

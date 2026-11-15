@@ -15,14 +15,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * {@link ReviewPort} 适配实现（§6.146 端口反转配套）：task 域消费方所有审查数据
- * 诉求经本类收口（布尔判定/评分事实/摘要/统计/级联删除），不暴露 review 域实体。
- * 无审查记录返回 null（调用方保持默认值）。
+ * {@link ReviewPort} 适配实现（§6.146 端口反转配套）：task 域消费方所有审查数据诉求经本类收口
+ * （布尔判定/评分事实/摘要/统计/级联删除），不暴露 review 域实体；无审查记录返回 null（用方保持默认值）。
  *
- * <p><b>为什么独立于 {@link ReviewServiceImpl}？</b>端口实现若挂在业务服务上，
- * 会与 task 域构成构造器依赖环（SubTaskServiceImpl → ReviewPort 实现 →
- * SubTaskService → SubTaskServiceImpl）。本类仅依赖同域 Mapper（无任何 task/agent
- * 服务依赖），断环且职责更纯粹：查询适配与审查落库/状态推进分离。</p>
+ * <p>独立于 {@link ReviewServiceImpl} 以断构造器依赖环（SubTaskServiceImpl → ReviewPort 实现 → SubTaskService → SubTaskServiceImpl）：
+ * 本类仅依赖同域 Mapper，查询适配与审查落库/状态推进分离。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -88,7 +85,7 @@ public class ReviewPortAdapter implements ReviewPort {
         if (taskId == null) {
             return 0; // 空 id 短路
         }
-        // D-1（2026-10-05）：review 域两张子表随任务级联删除。
+        // D-1：review 域两张子表随任务级联删除。
         // ★★ 子先父后（顺序不可调换）★★：review_recheck_log 有两处 FK——
         //   ① review_recheck_log.review_record_id → review_record(id)（review_record 是**父**）
         //   ② review_recheck_log.sub_task_id      → sub_task(id)

@@ -139,3 +139,9 @@ doc/diagrams/html/*.delivery.json
 # 这批 tar.gz 是传输中间产物（含 README/load-all.sh/checksums.txt，随包走不随仓走），
 # 一旦提交会把仓库撑到 GB 级，故整目录不入仓。
 deploy/images/
+
+# --- 本地临时工作区（验收截图 / 设计 dump / 探针脚本 / 迁移脚手架等过程产物）---
+# scratch/ 全是一次性验证中间产物（UI 截图、Calicat 设计 dump、预览 HTML、Flyway 脚手架、
+# 沙箱探针、冒烟草案），正式交付物另落 doc/diagrams/html、docs-site 等目录。整目录不入仓，
+# 避免 git add . 把数百 KB 截图与 dump 误扫进提交。
+scratch/

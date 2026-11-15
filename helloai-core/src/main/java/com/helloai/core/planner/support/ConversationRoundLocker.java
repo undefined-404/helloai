@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /**
- * 需求对话「每会话轮次互斥锁」的获取 / 释放 / 临界区工具（RC-1，2026-10-30）。
+ * 需求对话「每会话轮次互斥锁」的获取 / 释放 / 临界区工具（RC-1）。
  *
  * <p>把同步前置段（读 roundCount → addMessage → setRoundCount(+1) → updateById）串行化，
  * 抢占失败即拒（waitTime=0）并抛 {@link BizException}（RC-2 可读文案）。

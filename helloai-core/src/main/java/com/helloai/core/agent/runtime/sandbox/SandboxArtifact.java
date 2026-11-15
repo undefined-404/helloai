@@ -3,7 +3,7 @@ package com.helloai.core.agent.runtime.sandbox;
 import java.nio.charset.StandardCharsets;
 
 /**
- * 沙箱内一份产物文件的回读结果（`SKX-7`，2026-10-26）。
+ * 沙箱内一份产物文件的回读结果（`SKX-7`）。
  *
  * <p><b>为什么带 {@code byte[]} 而不是 {@code String}</b>：`SKX-9` 的验收要拿回读内容的
  * {@code sha256} 与 archify 回执里的 {@code artifact.sha256} 对照。<b>哈希必须算在字节上</b>——

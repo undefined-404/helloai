@@ -16,7 +16,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * 附件对象存储回收支持（P3-3 级联删除 / P2 删除通道，2026-10-07）。
+ * 附件对象存储回收支持（P3-3 级联删除 / P2 删除通道）。
  *
  * <p><b>职责</b>：把「删除附件 DB 行」与「回收对象存储」解耦为<b>事务后置</b>动作——
  * 在事务<b>提交后</b>（{@code afterCommit}）才对平台可读对象调
@@ -39,7 +39,7 @@ import java.util.stream.Collectors;
  * <p><b>安全护栏</b>：回收某 {@code objectKey} 前，若仍存在<b>其他活跃（{@code deleted=0}）附件行</b>
  * 指向同一 {@code objectKey}，则跳过（避免误删被他人仍引用的对象）。护栏判定走
  * {@link AttachmentMapper#selectActiveObjectKeysIn(java.util.Collection)} <b>窄查询</b>（按候选 key 批量查），
- * 不作全表载入（P2/P3-3 性能收敛，2026-10-07）。</p>
+ * 不作全表载入（P2/P3-3 性能收敛）。</p>
  */
 @Slf4j
 @Component

@@ -50,7 +50,7 @@ public class TaskController {
     private final TaskService taskService;
     /** ADR-008 §5：草案期「拆出去」开派生会话（对话确认终稿后再建 Y）。 */
     private final RestructureSessionService restructureSessionService;
-    /** 任务实际参与成员（详情页成员区，2026-10-18）。 */
+    /** 任务实际参与成员（详情页成员区）。 */
     private final TaskAgentMemberService taskAgentMemberService;
     private final AgentService agentService;
     private final AgentInboxService agentInboxService;
@@ -106,7 +106,7 @@ public class TaskController {
     }
 
     /**
-     * 任务的实际参与成员（2026-10-18）。
+     * 任务的实际参与成员。
      *
      * <p><b>为什么单开一个端点而不塞进 getById</b>：成员是列表型附加信息，
      * 塞进任务主体会让每个任务查询都多一次成员表扫描；且详情页可单独刷新成员
@@ -243,7 +243,7 @@ public class TaskController {
     }
 
     /**
-     * 单条草案派生**会话**（按 code，ADR-008 §5 对话版，2026-11-12）：
+     * 单条草案派生**会话**（按 code，ADR-008 §5 对话版）：
      * 先开一条 ACTIVE 需求会话，把草案四要素 / 上下游草案 / 已声明的执行环境写进首条用户
      * 消息，让用户与 Planner 把「仓库在哪、运行时有什么、数据源是哪种」问清楚；定稿时由
      * {@code ClarifyFinalizeServiceImpl} 建派生任务 `Y`。

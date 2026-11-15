@@ -22,7 +22,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * 「我的产物」聚合读取面实现（PA-5，2026-11-02）。
+ * 「我的产物」聚合读取面实现（PA-5）。
  *
  * <p>两源各自经<b>既有 Service</b>拉取（不跨域直连 Mapper），归一并按 createTime 倒序：
  * <ul>

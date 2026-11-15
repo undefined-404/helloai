@@ -106,7 +106,7 @@ public class GlobalExceptionHandler {
      *
      * <p>此前无专属 handler，落入 {@link #handleException} 兜底成 HTTP 500 +「服务内部错误」，
      * 外部 Agent 无法区分「文件过大（客户端问题，不该重试）」与「平台故障（应上报）」——
-     * 属静默语义失败（P1-1，2026-10-06 L4 复测暴露）。现按 RFC 9110 → <b>413 Payload Too Large</b>。</p>
+     * 属静默语义失败（P1-1，L4 复测暴露）。现按 RFC 9110 → <b>413 Payload Too Large</b>。</p>
      */
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
@@ -196,7 +196,7 @@ public class GlobalExceptionHandler {
      * 路径/查询参数<b>类型不匹配</b>（如 {@code /api/attachments/deleteById/{id}} 的 {@code id} 传非数字）：
      * Spring 抛 {@link MethodArgumentTypeMismatchException} → <b>400 Bad Request</b>。
      * 此前被 {@link #handleException} 兜底成 500，客户端拿到「服务内部错误」无法判断是自己传错参数，
-     * 属参数校验盲区（与 P1-1 上传端点同类问题，2026-10-07 随 ① 删除通道一并收口）。
+     * 属参数校验盲区（与 P1-1 上传端点同类问题，随 ① 删除通道一并收口）。
      */
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)

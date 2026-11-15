@@ -14,7 +14,7 @@ import java.util.Map;
  * Workflow 模板版本（N-001，C1 设计）。
  *
  * <p>不可变版本快照：{@link #definition} 存节点集 + 依赖边 + paramsSchema
- * （发布后不可编辑，历史实例绑定本快照）。</p>
+ * （后不可编辑，历史实例绑定本快照）。</p>
  *
  * <p>definition 结构（C1 D2/D5，应用层校验见 WorkflowDefinitionValidator）：</p>
  * <pre>{@code
@@ -44,6 +44,6 @@ public class WorkflowTemplateVersion extends BaseEntity {
     @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> definition;
 
-    /** 状态：DRAFT / PUBLISHED（发布后不可变）。 */
+    /** 状态：DRAFT / PUBLISHED（后不可变）。 */
     private WorkflowVersionStatus status;
 }

@@ -105,7 +105,7 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
     /**
      * 查询 Agent 最近一条值班租约（任意状态，按开始时间倒序取第一条）。
      *
-     * <p>：checkOut 幂等返回当前状态时使用——租约已过期或从未打卡时
+     * <p>checkOut 幂等返回当前状态时使用——租约已过期或从未打卡时
      * 也能给出可自检的语义（EXPIRED / NONE），而不是只给 closedCount=0。</p>
      *
      * @return null 如果该 Agent 从未有过租约
@@ -219,7 +219,7 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
         active.setLastRenewTime(now);
         // P2-10：到期时刻单调钳制——同一租约内只增不减。续约窗口随「有无在跑子任务」
         // 在 maxTtlMinutes(240) 与动态值之间伸缩，若直接取 now+ttl 会让 leaseExpiresAt 倒退
-        // （实测 7 分钟内回退近 3 小时），Agent 无法据此判断是否需要重签租约。
+        // （7 分钟内回退近 3 小时），Agent 无法据此判断是否需要重签租约。
         OffsetDateTime renewed = now.plusMinutes(ttlMinutes);
         OffsetDateTime current = active.getExpireTime();
         active.setExpireTime(current != null && current.isAfter(renewed) ? current : renewed);

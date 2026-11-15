@@ -25,28 +25,14 @@ import java.util.Map;
 /**
  * 最终报告审查 L2 消费者（§12.2 审查链三级容错 L2）。
  *
- * <p><b>为什么需要它</b>：改造前报告审查只有 L1（AFTER_COMMIT 内存事件 + 本地线程池）。
- * L1 的触发链依赖进程内存——JVM 重启、线程池丢失、或事件在提交后恰好落空，
- * 报告就永久停在 {@code REVIEWING} 且无任何重投/补偿入口（实测已发生，需人工介入）。
- * 本消费者承接 Outbox 持久化后的审查请求，使触发具备「重启不丢 + 可重投」。</p>
+ * <p>承接 Outbox 持久化后的审查请求，使触发具备「重启不丢 + 可重投」——L1（AFTER_COMMIT 内存事件 + 本地线程池）依赖进程内存，
+ * JVM 重启/线程池丢失/事件落空会让报告永久停 {@code REVIEWING}。L1/L2 各触发一次，重复由防双审锁 + {@code final_report_status}
+ * 状态守卫消解（先到者收敛 DONE，后到者幂等跳过），与子任务核验链三级容错同构。</p>
  *
- * <p><b>与 L1 的关系</b>：L1 与 L2 会各触发一次审查，重复由
- * {@code FinalReportReviewServiceImpl} 的 Redis 防双审锁 + {@code final_report_status}
- * 状态守卫消解（先到者收敛 DONE 后，后到者幂等跳过），与子任务核验链三级容错同构。</p>
- *
- * <p><b>消费骨架</b>（与 {@code MqReviewCommandConsumer} / {@code MqExecutionCommandConsumer} 同款约束）：</p>
- * <ol>
- *   <li>仅在 {@code helloai.mq.report-review.consumer-enabled=true} 时生效
- *       （yml 默认开启）；关闭后整个 Bean 不存在，L1 与 L3 路径不受影响</li>
- *   <li>消息体为 {@code AgentOutboxService.createReportReviewEvent} 的 payload JSON
- *       （eventId / taskId / reportTime / attempt / reportLength）；
- *       解析失败或缺 taskId 按 ACK 处理（坏消息不阻塞队列，写死信也无意义）</li>
- *   <li>MANUAL ACK：消费成功 → basicAck；消费失败 → basicNack(requeue=false) 走 DLX
- *       （失败计数由父类 markFailed 写入 event_consumption_log，不反复弹回主队列）</li>
- *   <li>幂等由父类 {@link AbstractIdempotentConsumer#tryConsume} 提供 Redis + DB 双层去重：
- *       幂等键取 payload.eventId——同一 Outbox 事件重投不重复消费，
- *       而同任务的首次生成 / 驳回返工 / 兜底重投各自持有独立 eventId，互不误伤</li>
- * </ol>
+ * <p>消费骨架（同 {@code MqReviewCommandConsumer}/{@code MqExecutionCommandConsumer}）：① 仅 {@code helloai.mq.report-review.consumer-enabled=true}
+ * 生效（默认开），关闭后 Bean 不存在、L1/L3 不受影响；② 消息体为 {@code createReportReviewEvent} payload JSON，解析失败或缺 taskId 按 ACK（坏消息不阻塞队列）；
+ * ③ MANUAL ACK：成功 basicAck，失败 basicNack(requeue=false) 走 DLX（计数由父类 markFailed 写 event_consumption_log）；
+ * ④ 幂等由父类 {@link AbstractIdempotentConsumer#tryConsume} Redis+DB 双层去重，键取 payload.eventId（同事件重投不重复消费，首次/返工/兜底各持独立 eventId 互不误伤）。</p>
  */
 @Slf4j
 @Component

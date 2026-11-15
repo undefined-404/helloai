@@ -149,7 +149,7 @@ public class ExecutionCommandPoller {
         // 1. 标记已 Poller 触及（防止下个周期重复扫到，同时留下审计痕迹）
         agentExecutionRecordService.markPolled(record.getId());
 
-        // 2. 数据完整性校验：缺关键字段则跳过（理论上不会发生，调度侧已做校验，防御性兜底）
+        // 2. 数据完整性校验：缺关键字段则跳过（理论上不会发生，度侧已做校验，防御性兜底）
         if (record.getSubTaskId() == null || record.getAgentId() == null || record.getAccessType() == null) {
             log.warn("DB Poller 跳过：记录缺关键字段 recordId={}, eventId={}, scan={}",
                     record.getId(), record.getEventId(), scanType);

@@ -56,7 +56,7 @@ public final class AcceptanceKindValidator {
      *
      * <p>宽集用于 {@link #validateAutomated} 的 Pass 判定——「运行 X 输出含 Y」「接口 Z 返回 200 且
      * 字段 W 存在」都是合法 AUTOMATED 写法，「输出/返回」在这里是「预期结果」的引子词，算命令成分。
-     * <b>★不要把结果性动词从这里移除</b>（2026-10-25 实测）：「接口返回 200 且 data.users 字段非空」
+     * <b>★不要把结果性动词从这里移除</b>：「接口返回 200 且 data.users 字段非空」
      * 去掉「返回」后命令成分归零 → 显式 AUTOMATED 被误拒（回归）。</p>
      */
     private static final Pattern COMMAND_LIKE = Pattern.compile(
@@ -66,15 +66,11 @@ public final class AcceptanceKindValidator {
      * 强命令特征（窄）：只有「无歧义的可执行动作」才算——用于 {@link #validateStructural} 的
      * 「疑似 AUTOMATED」反例触发。
      *
-     * <p><b>★收窄的动机（2026-10-25 事故修复，{@code LOG-20261024-049}）</b>：「输出 / 返回 / 检查 /
-     * 验证 / 编译 / 构建 / 配置 / 查询 / 校验 / 核对」是<b>结果性 / 中性措辞</b>——在文档语境
-     * （STRUCTURAL）是正常写作动作（「输出《现状》章节」「撰写…输出完整文档」「输出部署文档」），
-     * 把它们当命令特征会把 STRUCTURAL 验收误判成「疑似 AUTOMATED」→ fail-close 整批拒绝
-     * （真实事故：DOCUMENT 任务「撰写现状与挑战…输出完整文档」第 2 条被误拒）。
-     * 真·AUTOMATED 的特征是<b>无歧义的可执行动作</b>（运行 / 执行 / 调用 / 命令名 pytest / mvn /
-     * npm / curl / grep / 断言 / assert）——「运行 pytest 输出含 5 passed」标 STRUCTURAL 才是错配，
-     * 应由本窄集拦截。两集分工：宽集保 AUTOMATED Pass 不回归（接口断言式），窄集保 STRUCTURAL
-     * 反例不误伤（文档写作式）。</p>
+     * <p><b>★为什么收窄（{@code LOG-20261024-049}）</b>：「输出/返回/检查/验证/编译/构建/配置/查询/校验/核对」
+     * 是<b>结果性/中性措辞</b>，在文档语境（STRUCTURAL）是正常写作动作（「输出《现状》章节」），当命令特征会把
+     * STRUCTURAL 误判成「疑似 AUTOMATED」→ fail-close 整批拒绝。真·AUTOMATED 特征是无歧义可执行动作
+     * （运行/执行/调用/pytest/mvn/npm/curl/grep/断言/assert）。<b>两集分工</b>：宽集 {@link #COMMAND_LIKE}
+     * 保 AUTOMATED Pass 不回归（接口断言式），窄集保 STRUCTURAL 反例不误伤（文档写作式）。</p>
      */
     private static final Pattern COMMAND_STRONG = Pattern.compile(
             "(运行|执行|调用|执行命令|pytest|mvn|npm|curl|grep|断言|assert)");
@@ -82,25 +78,19 @@ public final class AcceptanceKindValidator {
     /**
      * 预期结果特征：数字 / 布尔 / 状态码 / 时间等可判定产物。
      *
-     * <p><b>★2026-11-07 真机误伤修复（dashscope / qwen3.7-plus 实测）</b>：业务系统验收的预期结果
-     * 常常<b>不是</b>「成功 / 失败 / 200 / true」这类通用词，而是<b>业务枚举赋值</b>与<b>字段存在断言</b>。
-     * 实测被 fail-close 的原文：「调用内容发布接口后…返回 {@code matchResult=HIT} 且内容状态变更为
-     * {@code PENDING_MANUAL_REVIEW}；机审结果记录中包含 {@code ruleId} 与 {@code ruleVersion} 字段」——
-     * 动作成分「调用」已命中 {@link #COMMAND_LIKE}，预期结果却<b>零命中</b>，显式 AUTOMATED 被判
-     * 写法不匹配，整批 6 条草案全部作废，用户拿不到任何草案。这是纯误伤：该文本比
-     * 「接口返回 200」信息量更高、同样可机器判定。</p>
+     * <p><b>★为什么补业务断言特征</b>：业务验收的预期结果常<b>不是</b>「成功/失败/200/true」通用词，
+     * 而是<b>业务枚举赋值</b>与<b>字段存在断言</b>（如 {@code matchResult=HIT}、包含 {@code ruleId} 字段）；
+     * 只认通用词会让这类信息量更高、同样可机器判定的文本预期结果零命中 → 显式 AUTOMATED 被误拒、整批作废。</p>
      *
      * <p>故补三类特征（只增不减，保持既有 Pass 不回归）：
      * <ol>
      *   <li><b>赋值式断言</b> {@code key=value} / {@code key: value}——枚举、状态码、字段值；</li>
-     *   <li><b>字段存在断言</b>「包含 / 含有 / 含 / 存在 / 返回 / 输出 + 标识符」——要求后续紧跟
-     *       ASCII 标识符，中文宾语（「输出完整文档」）不命中，不会让 STRUCTURAL 写作式蒙混；</li>
-     *   <li><b>全大写枚举常量</b>（须含下划线，如 {@code PENDING_MANUAL_REVIEW}）——排除 {@code UTF}
-     *       这类普通缩写。</li>
+     *   <li><b>字段存在断言</b>「包含/含有/含/存在/返回/输出 + 标识符」——须紧跟 ASCII 标识符，
+     *       中文宾语（「输出完整文档」）不命中，不让 STRUCTURAL 写作式蒙混；</li>
+     *   <li><b>全大写枚举常量</b>（须含下划线，如 {@code PENDING_MANUAL_REVIEW}）——排除 {@code UTF} 这类缩写。</li>
      * </ol>
-     * 放宽方向是单向的（只影响 {@code AUTOMATED} 的 Pass 判定，不影响 STRUCTURAL / REVIEWED /
-     * ATTESTED 的 fail-close），因此不会把误伤转移到其它 kind；空话（「功能正常，体验良好」）
-     * 不含等号赋值与大写枚举，仍判 Fail。</p>
+     * 放宽单向（只影响 {@code AUTOMATED} 的 Pass，不动 STRUCTURAL/REVIEWED/ATTESTED 的 fail-close），
+     * 不把误伤转移到其它 kind；空话（「功能正常，体验良好」）不含赋值与大写枚举，仍判 Fail。</p>
      */
     private static final Pattern EXPECTED_OUTCOME = Pattern.compile(
             "(\\d+\\s*[%条页个次份项章节秒分钟天月年]|[0-9]+\\s*passed|passed|failed|all ok|\\bok\\b|成功|通过|失败|200|404|500|true|false|为空|非空|存在|缺失|0 条|0 项"
@@ -116,11 +106,11 @@ public final class AcceptanceKindValidator {
      * 可数量词：数字 + 单位 / 明确的数量词头（STRUCTURAL 硬约束）。
      *
      * <p><b>单位必须与数字组合出现</b>（{@code \d+单位}），不设裸单位——「运行」「执行」里的
-     * 「行」、普通句子里的「条 / 项 / 章」都会误命中（2026-10-24 实测：COUNTABLE 的裸「行」
+     * 「行」、普通句子里的「条 / 项 / 章」都会误命中（COUNTABLE 的裸「行」
      * 把「运行 pytest」误判为 STRUCTURAL 写法）。「不少于 / 至少 / 上限」等数量词头单独出现
      * 也算（它们必然引出数量），但「字段 / 清单 / 条目数」这类名词不算（无数量语义）。</p>
      *
-     * <p><b>★汉字数字 + 结构单位也必须算可数量词（2026-10-25 事故修复，{@code LOG-20261024-049}）</b>：
+     * <p><b>★汉字数字 + 结构单位也必须算可数量词（修复，{@code LOG-20261024-049}）</b>：
      * 中文 LLM 写文档验收常用汉字数字（「涵盖四个部分」「五个章节」「共四项」「三张图」），
      * 只认阿拉伯数字 {@code \d+} 会把这类正当的 STRUCTURAL 结构断言漏判成「无可数量词」→ fail-close
      * 整批拒绝。汉字数字须与<b>结构单位</b>（条 / 页 / 个 / 次 / 份 / 项 / 章节 / 张 / 篇 / 部分 / 处 /
@@ -205,7 +195,7 @@ public final class AcceptanceKindValidator {
             return new Result.Pass("STRUCTURAL");
         }
         // ★只认强命令特征（可执行动作）判「疑似 AUTOMATED」：结果性动词（输出/返回/检查/验证）
-        // 在文档语境是中性写作动作，不能触发反例（2026-10-25 事故，LOG-20261024-049）
+        // 在文档语境是中性写作动作，不能触发反例（LOG-20261024-049）
         if (COMMAND_STRONG.matcher(text).find()) {
             return new Result.Fail("STRUCTURAL",
                     "文本含可执行命令/断言但无可数量词——疑似应为 AUTOMATED（如「运行 pytest 输出含 3 passed」），"
@@ -252,7 +242,7 @@ public final class AcceptanceKindValidator {
                 "acceptance 缺少「" + missing + "」——ATTESTED 要求写明谁 / 什么时点 / 留什么痕 三要素");
     }
 
-    /** 审查项计数：数字序号（1) / 1. / ① / 一、）与「审查项」关键词出现次数。 */
+    /** 审查项计数：数字序号（1) / 1. / ① / 一）与「审查项」关键词出现次数。 */
     private static int countReviewItems(String text) {
         java.util.regex.Matcher m = REVIEW_ITEMS.matcher(text);
         int count = 0;

@@ -169,7 +169,7 @@ export const settingsApi = {
   /**
    * 批量更新配置（保存"基础配置"区域：平台名 + 外部访问地址）。
    * 后端 ConfigBatchRequest 期待 wrapper 结构 {config:{...}}，前端不能直接发 flat map，
-   * 否则 SysConfigService.batchUpdate 拿到 null 会 NPE（2026-08-08 实测 500 复现）。
+   * 否则 SysConfigService.batchUpdate 拿到 null 会 NPE（500 复现）。
    */
   batchUpdateConfig(map: Record<string, string>) {
     return request.put(paths.admin.configBatch, { config: map })

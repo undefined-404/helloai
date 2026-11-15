@@ -7,17 +7,10 @@ import java.util.List;
 /**
  * 子任务只读查询端口（agent 域消费，task 域实现）。
  *
- * <p><b>端口归属判据</b>（{@code doc/HelloAI_CODE_STYLE.md} §7.2）：消费方是 <b>agent</b>、
- * 提供方是 <b>task</b>；按依赖链 {@code planner > review > task > agent > system > shared}，
- * agent <b>低于</b> task ⇒ 属「消费方低于提供方」情形 ⇒ 端口落<b>消费方 {@code agent.port}</b>、
- * 适配器落提供方 task 域，实现侧依赖 {@code task → agent} 属<b>顺向合法</b>。</p>
- *
- * <p><b>为什么返回快照而不是实体</b>：若返回 {@code task.entity.SubTask}，消费方仍要
- * import task 实体，{@code agent → task} 反向依赖计数<b>不会下降</b>（只是把 service import
- * 换成 entity import）。故一律经 {@link SubTaskSnapshot} 值对象传递；快照字段<b>按需增长</b>。</p>
- *
- * <p>实现见 {@code task.service.impl.SubTaskQueryPortAdapter}（薄委托 {@code SubTaskService}，
- * <b>不改动任何 SQL、参数顺序与语义</b>）。</p>
+ * <p>端口归属（{@code CODE_STYLE §7.2}）：消费方 agent 低于提供方 task（依赖链 planner>review>task>agent>system>shared），
+ * 属「消费方低于提供方」⇒ 端口落消费方 {@code agent.port}、适配器落 task 域，实现侧 {@code task→agent} 顺向合法。
+ * 一律经 {@link SubTaskSnapshot} 值对象传递而非 task 实体——返回实体只是把 service import 换成 entity import，
+ * {@code agent→task} 反向依赖计数不下降；快照字段按需增长。实现见 {@code SubTaskQueryPortAdapter}（薄委托，不改 SQL/参数顺序/语义）。</p>
  */
 public interface SubTaskQueryPort {
 
@@ -33,16 +26,12 @@ public interface SubTaskQueryPort {
     SubTaskSnapshot findById(Long subTaskId);
 
     /**
-     * 按子任务主键<b>加行级锁</b>读取快照（{@code SELECT ... FOR UPDATE}）。
+     * 按子任务主键加行级锁读取快照（{@code SELECT ... FOR UPDATE}）。
      *
-     * <p>用于「读现状 + 紧接写入」需要原子化的路径（如执行命令创建时的二次判重），
-     * 避免同一子任务上并发重复发命令。语义与 {@code SubTaskService#getByIdForUpdate(Long)}
-     * 逐字一致：不存在返回 {@code null}。</p>
-     *
-     * <p><b>⚠️ 必须在已开启的事务内调用</b>：提供方实现<b>只发 {@code SELECT ... FOR UPDATE}、
-     * 不自行开启事务</b>（适配器方法亦<b>不带</b> {@code @Transactional}）——行锁随<b>调用方事务</b>
-     * 的存续而保持；若在提供方另开 REQUIRED 之外的独立事务或方法返回即提交，锁会立刻释放、
-     * 失去互斥意义。</p>
+     * <p>用于「读现状 + 紧接写入」需原子化的路径（如执行命令创建二次判重），避免并发重复发命令。
+     * 语义同 {@code SubTaskService#getByIdForUpdate}：不存在返回 {@code null}。
+     * <b>必须在已开启的事务内调用</b>：提供方只发 {@code SELECT ... FOR UPDATE}、不自开事务（适配器不带 {@code @Transactional}），
+     * 行锁随调用方事务存续；若另开独立事务或方法返回即提交，锁立刻释放、失去互斥意义。</p>
      *
      * @param subTaskId 子任务 ID
      * @return 加锁读取到的子任务快照；不存在返回 {@code null}
@@ -52,13 +41,9 @@ public interface SubTaskQueryPort {
     /**
      * 列出最近有变更的子任务（事件对账候选源）。
      *
-     * <p>语义与 {@code SubTaskService#listRecentlyChanged(OffsetDateTime, int)} 逐字一致，
-     * 仅把返回类型由 task 实体收敛为 {@link SubTaskSnapshot}（对账消费方实际只用
-     * {@code id} 与 {@code status} 两个字段）。</p>
-     *
-     * <p>事件是业务状态的投影，对账必须<b>以业务表为候选源</b>：只扫描最近变更的子任务，
-     * 校验其是否发出了与当前状态匹配的终态事件；若以事件流为候选源，埋点失败/缺失的
-     * 子任务永远不会进入对账视野。</p>
+     * <p>语义同 {@code SubTaskService#listRecentlyChanged}，返回类型收敛为 {@link SubTaskSnapshot}（对账只用 id/status）。
+     * 对账必须以业务表为候选源：事件是业务状态的投影，只扫最近变更子任务校验其是否发出匹配终态事件；
+     * 若以事件流为候选源，埋点失败/缺失的子任务永不进对账视野。</p>
      *
      * @param since 只统计 update_time &gt;= since 的子任务（对账窗口）
      * @param limit 返回上限（窗口内变更量超限时本轮截断，下一轮继续）
@@ -79,14 +64,11 @@ public interface SubTaskQueryPort {
     List<SubTaskSnapshot> listByIds(Collection<Long> subTaskIds);
 
     /**
-     * 判断子任务的前置是否<b>全部就绪</b>（前置均 DONE；无前置恒为就绪）。
+     * 判断子任务的前置是否全部就绪（前置均 DONE；无前置恒就绪）。
      *
-     * <p><b>为什么形参是 ID 而不是快照</b>：该判定除依赖 {@code dependsOn} 外还要查一次
-     * 前置状态计数（{@code count(status=DONE)}），属**提供方持有的口径**
-     * （{@code SubTaskService#isReady(SubTask)} 同时被内部分发链复用）。若把它拆成
-     * 「消费方拿快照里的 dependsOn → 自行统计」会把就绪口径复制进消费方，故保持
-     * **整体不透明**：消费方只问「这个子任务是否就绪」，提供方内部自行取数判定。
-     * 代价是提供方多一次主键读（认领路径低频，可接受）。</p>
+     * <p>形参是 ID 而非快照：判定除 {@code dependsOn} 外还要查前置状态计数（{@code count(status=DONE)}），
+     * 属提供方口径（{@code SubTaskService#isReady} 被内部分发链复用）；拆成「消费方拿快照自行统计」会把就绪口径复制进消费方，
+     * 故整体不透明，代价是提供方多一次主键读（认领低频可接受）。</p>
      *
      * @param subTaskId 子任务 ID
      * @return 前置全部 DONE（或无前置）返回 {@code true}；子任务不存在返回 {@code false}
@@ -105,13 +87,11 @@ public interface SubTaskQueryPort {
     List<String> mergeSkills(Long subTaskId);
 
     /**
-     * 判定子任务是否属「<b>执行密集</b>」（内容 / 验收 / 交付物含本机操作信号词）。
+     * 判定子任务是否属「执行密集」（内容/验收/交付物含本机操作信号词）。
      *
-     * <p><b>为什么形参是 ID 而不是快照</b>：判定口径**单源在提供方**
-     * （{@code SubTaskDispatchService.isExecutionDense} 的 §6.52 信号词表），
-     * 消费方不得自行复现——历史教训正是「各入口各自实现导致判定不一致」。
-     * 故消费方只问结论，提供方自读文本判定（信号词表与匹配逻辑都不外泄）。
-     * 代价是提供方多一次主键读（仅走「执行密集预检」分支时发生）。</p>
+     * <p>形参是 ID 而非快照：判定口径单源在提供方（{@code SubTaskDispatchService.isExecutionDense} 的 §6.52 信号词表），
+     * 消费方不得自行复现（历史教训：各入口各自实现导致判定不一致），故只问结论、词表与匹配逻辑不外泄，
+     * 代价是提供方多一次主键读（仅走执行密集预检分支时）。</p>
      *
      * @param subTaskId 子任务 ID
      * @return 命中执行密集信号返回 {@code true}；子任务不存在返回 {@code false}
@@ -119,21 +99,14 @@ public interface SubTaskQueryPort {
     boolean isExecutionDense(Long subTaskId);
 
     /**
-     * 判定子任务是否「<b>需读原始附件</b>」（`LOG-20261011-007` A 能力闸信号）。
+     * 判定子任务是否「需读原始附件」（`LOG-20261011-007` A 能力闸信号）。
      *
-     * <p><b>语义</b>：子任务的内容 / 验收 / 交付物两侧信号共现——「原始文件 / 原始字段」类
-     * 源侧措辞 <b>且</b>「逐项核对 / 逐项标注」类动作侧措辞 ⇒ 该任务必须打开用户提供的
-     * 结构化文件本体（xlsx / docx / pdf）逐项比对，仅凭平台预内联的依赖文本摘要完不成。</p>
-     *
-     * <p><b>为什么形参是 ID 而不是快照</b>：与 {@link #isExecutionDense(Long)} 同理——
-     * 判定口径**单源在提供方**（{@code SubTaskDispatchService.isAttachmentReadDense} 的信号词表），
-     * 消费方不得自行复现；否则重演「各入口各自实现导致判定不一致」的历史教训。
-     * 故消费方只问结论，提供方自读文本判定（两侧词表与匹配逻辑都不外泄）。
-     * 代价是提供方多一次主键读（仅走「需读原始附件预检」分支时发生）。</p>
-     *
-     * <p><b>与 {@link #isExecutionDense(Long)} 的关系</b>：两者是<b>不同</b>的信号类，不可互相替代
-     * ——执行密集治「需在本机跑东西」（脚本 / 容器 / 服务），本判定治「需打开结构化文件本体」
-     * （只解码 UTF-8 的内部读附件工具读不出二进制列）。同一子任务可能两者都命中。</p>
+     * <p>语义：内容/验收/交付物两侧信号共现——「原始文件/原始字段」源侧措辞 <b>且</b>「逐项核对/逐项标注」动作侧措辞
+     * ⇒ 必须打开用户提供的结构化文件本体（xlsx/docx/pdf）逐项比对，仅凭预内联依赖文本摘要完不成。
+     * 形参是 ID 而非快照：口径单源在提供方（{@code SubTaskDispatchService.isAttachmentReadDense} 词表），消费方不得复现，
+     * 故只问结论、词表不外泄，代价是提供方多一次主键读（仅走需读原始附件预检分支时）。
+     * 与 {@link #isExecutionDense(Long)} 是不同信号类、不可互替：后者治「需在本机跑东西」，本判定治「需打开结构化文件本体」
+     * （只解码 UTF-8 的内部读附件工具读不出二进制列），同一子任务可能两者都命中。</p>
      *
      * @param subTaskId 子任务 ID
      * @return 命中「需读原始附件」信号返回 {@code true}；子任务不存在返回 {@code false}
@@ -141,19 +114,15 @@ public interface SubTaskQueryPort {
     boolean requiresOriginalAttachment(Long subTaskId);
 
     /**
-     * 取「认领准入」所需的白名单 + 必需技能约束（MCP 认领闸门 P1 修复）。
+     * 取「认领准入」所需的白名单 + 必需技能约束（MCP 认领闸门 P1）。
      *
-     * <p><b>整体不透明</b>：白名单口径（任务 {@code agent_policy.executorAgentIds}）与
-     * 技能口径（子任务级 ∪ 任务级 {@code required_skills}）单源都在提供方 task 域，
-     * 消费方不做任何规则复制。与 {@link #mergeSkills(Long)} 同源（提供方复用的正是派发链
-     * 同款合并），口径必然一致。</p>
-     *
-     * <p><b>为什么返回 {@link SubTaskClaimConstraint} 而非白名单 / 技能两个平行方法</b>：
-     * 二者是同一次准入判定的两个维度，合并成一个值对象可让「不约束」以 {@code null} 单点表达，
-     * 避免消费方对两个返回值分别判空、口径漂移。</p>
+     * <p>整体不透明：白名单（任务 {@code agent_policy.executorAgentIds}）与技能（子任务级 ∪ 任务级 {@code required_skills}）
+     * 口径单源在提供方 task 域，与 {@link #mergeSkills(Long)} 同源（复用派发链同款合并），消费方不复制规则。
+     * 返回 {@link SubTaskClaimConstraint} 而非白名单/技能两平行方法：二者是同一次准入判定的两维度，
+     * 合并成值对象让「不约束」以 {@code null} 单点表达，避免消费方分别判空、口径漂移。</p>
      *
      * @param subTaskId 子任务 ID
-     * @return 认领约束；<b>无约束（白名单与技能均空）或子任务不存在时返回 {@code null}</b>
+     * @return 认领约束；无约束（白名单与技能均空）或子任务不存在时返回 {@code null}
      */
     SubTaskClaimConstraint claimConstraint(Long subTaskId);
 }

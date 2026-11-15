@@ -14,7 +14,7 @@ import java.util.Optional;
  * DeepSeek 余额查询。
  *
  * <p>端点 {@code GET https://api.deepseek.com/user/balance}，响应**根级**
- * {@code balance_infos[]}（2026-11-02 真机核对，不在 {@code data} 下），取
+ * {@code balance_infos[]}（真机核对，不在 {@code data} 下），取
  * {@code total_balance}（金额型，含 currency）。</p>
  */
 @Slf4j
@@ -50,7 +50,7 @@ public class DeepSeekBalanceProvider extends AbstractBalanceProvider {
         }
         try {
             JsonNode root = objectMapper.readTree(body.get());
-            // 真实响应为根级 balance_infos[]（2026-11-02 真机核对），非 data.balance_infos
+            // 真实响应为根级 balance_infos[]（真机核对），非 data.balance_infos
             JsonNode infos = root.path("balance_infos");
             if (infos.isArray() && infos.size() > 0) {
                 JsonNode first = infos.get(0);

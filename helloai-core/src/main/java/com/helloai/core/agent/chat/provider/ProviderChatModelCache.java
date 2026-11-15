@@ -128,7 +128,7 @@ public class ProviderChatModelCache {
     }
 
     /**
-     * 构造缓存 key（五元组主签名，2026-08-22 起包含 model 维度）。
+     * 构造缓存 key（五元组主签名，包含 model 维度）。
      *
      * <p>原四元组 (provider, baseUrl, apiKey, protocolType) 不含 model：Agent 修改 model_type 后
      * 命中同一 key 复用旧 ChatModel 实例，新模型配置不生效直到重启（实测 qwen3.8-Max 改

@@ -17,7 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
- * {@link SkillArtifactExportService} 实现（`SKX-11`，2026-10-26）。见接口注释的链路说明。
+ * {@link SkillArtifactExportService} 实现（`SKX-11`）。见接口注释的链路说明。
  *
  * <p><b>三条判定都是 fail-close</b>（宁可报错也不产出半成品）：</p>
  * <ol>

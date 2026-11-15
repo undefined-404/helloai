@@ -11,7 +11,7 @@ import java.util.Map;
 import java.util.function.Predicate;
 
 /**
- * {@code internal_run_skill} / {@code internal_read_artifact} 的「按条件可用」声明（`SKX-8`，2026-10-26）。
+ * {@code internal_run_skill} / {@code internal_read_artifact} 的「按条件可用」声明（`SKX-8`）。
  *
  * <p><b>为什么需要</b>：两个工具的方法体在 {@link com.helloai.core.agent.runtime.tool.InternalLlmExecutorTools}，
  * 但「此刻能不能用」取决于两件与代码无关的事实——沙箱是否启用（{@code helloai.sandbox.opensandbox.enabled}）、
@@ -38,7 +38,7 @@ public class SkillExecutionToolContributor implements ToolCallbackContributor {
     /** 产物回读工具名（同上）。 */
     public static final String TOOL_INTERNAL_READ_ARTIFACT = "internal_read_artifact";
 
-    /** 产物导出工具名（`SKX-11`，2026-10-26：沙箱字节 → 对象存储 → 附件登记）。 */
+    /** 产物导出工具名（`SKX-11`，：沙箱字节 → 对象存储 → 附件登记）。 */
     public static final String TOOL_INTERNAL_EXPORT_ARTIFACT = "internal_export_artifact";
 
     private final SkillExecutionSupport skillExecutionSupport;

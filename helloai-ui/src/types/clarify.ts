@@ -23,7 +23,7 @@ export interface ClarifyQuestion {
 }
 
 /**
- * 对话内技能产物引用（assistant payload.artifact，2026-10-27）。
+ * 对话内技能产物引用（assistant payload.artifact）。
  *
  * 选技能（如 archify）后由平台在对话轮内直接跑出文件并登记为会话附件，
  * 前端据此渲染「产物卡片」——`attachmentId` 同时可用于内联预览与下载。
@@ -154,7 +154,7 @@ export interface PlannerOption {
 }
 
 /**
- * 工作台 Composer「选模型」候选（工作台选的是**无角色**的纯 LLM 模型，2026-11-05）。
+ * 工作台 Composer「选模型」候选（工作台选的是**无角色**的纯 LLM 模型）。
  *
  * <p>与 {@link PlannerOption} 是两套候选集，不能互相替代：这里来自 LLM 模型注册表
  * （{@code llm_provider_model}），Planner 下拉来自 Agent 名册（带角色）。</p>
@@ -208,7 +208,7 @@ export interface WorkbenchActiveAgent {
   name: string
   /** true = 内部 LLM；false = 外部 AI Agent */
   internal: boolean
-  /** Agent 角色：EXECUTOR（执行）| REVIEWER（复核） */
+  /** Agent 角色：EXECUTOR（执行）| REVIEWER */
   role: string
   /** 运行状态：RUNNING（运行中）| REVIEWING（审核中）| STANDBY（待命中） */
   status: string
@@ -298,7 +298,7 @@ export interface ChatAttachmentItem {
   createTime?: string | null
   /**
    * 附件归属：`user` = 用户上传（uploader_user_id 非空）；`platform` = 平台产物
-   * （saveArtifact 写入时 uploader_user_id 为 null，2026-10-27）。
+   * （saveArtifact 写入时 uploader_user_id 为 null）。
    * 胶囊条只展示 user；平台产物进右侧「产物」侧栏。
    */
   source?: 'user' | 'platform' | string | null

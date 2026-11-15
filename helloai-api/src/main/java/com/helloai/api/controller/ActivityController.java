@@ -35,7 +35,7 @@ public class ActivityController {
      * <p>{@code page <= 0} 时返回全量列表（IPage 中只填 records），
      * 否则按分页参数返回（PageResult 包含 total/pages/current）。</p>
      *
-     * <p>2026-10-22：列表增强——每条记录附带 {@code agentName} 与 {@code agentAccessType}
+     * <p>列表增强——每条记录附带 {@code agentName} 与 {@code agentAccessType}
      * （活动流页面展示「哪个 Agent 干的 + 接入类型标签」）。用 {@code listProfilesByIds}
      * 批量投影，避免逐条 N+1。</p>
      */

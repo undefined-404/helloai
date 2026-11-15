@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
  * <p><b>为什么不放在 policy 包</b>：Controller 侧约定「不直接 import {@code task.policy}」
  * （判据类属 core 内部实现），故收口方法落在 service 包，供 api 层依赖。</p>
  *
- * <p><b>统一背景（2026-10-10 实测）</b>：此前三个视图端点两套判据且都有问题 ——</p>
+ * <p><b>统一背景</b>：此前三个视图端点两套判据且都有问题 ——</p>
  * <ul>
  *   <li>{@code listTimelineBySubTaskId} / {@code listConversationBySubTaskId}：只认
  *       {@code sub_task.assigned_agent_id}，实测**把合法团队成员也拒了**（同一 Agent 加入 team 后

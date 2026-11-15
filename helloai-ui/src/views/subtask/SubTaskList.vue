@@ -693,7 +693,7 @@ const statusFilter = ref<SubTaskStatus | ''>('')
 const dispatchVisible = ref(false)
 // 路由 query 中的主任务 ID（LongId 保持 string，不转 Number 防精度丢）
 const taskId = computed(() => queryString(route.query, 'taskId') || '')
-// 路由 query 中的状态筛选（死信池菜单跳 /sub-tasks?status=DEAD_LETTER 复用本页）
+// 路由 query 中的状态筛选（池菜单跳 /sub-tasks?status=DEAD_LETTER 复用本页）
 const statusQuery = computed(() => queryString(route.query, 'status') || '')
 const parentTask = ref<Task | null>(null)
 // 列表/依赖图/执行迭代三视图（仅按主任务过滤时可切换）
@@ -815,7 +815,7 @@ async function load(page = 1) {
 }
 
 /**
- * 死信待处理数量（2026-10-18：原「死信池」独立菜单已隐藏，改由本页按钮承载）。
+ * 死信待处理数量（原「死信池」独立菜单已隐藏，改由本页按钮承载）。
  *
  * <p>用 size=1 的分页 total 取数量：后端 SQL 只查 COUNT + LIMIT 1，代价可忽略；
  * 失败静默为 0（角标缺失不影响列表主流程，与 eventCatalog 的降级口径一致）。</p>
@@ -1169,7 +1169,7 @@ useAutoRefresh(() => { load(currentPage.value) }, {
 })
 
 onMounted(() => {
-  // 带筛选跳转（死信池菜单）：先用 query.status 初始化筛选再加载
+  // 带筛选跳转（池菜单）：先用 query.status 初始化筛选再加载
   const initStatus = statusQuery.value
   const validStatuses: SubTaskStatus[] = [
     'PENDING', 'ASSIGNED', 'IN_PROGRESS', 'PAUSED', 'REVIEW',

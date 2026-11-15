@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * 平台内 Agent 执行链配置。
  *
- * <p>默认真实模式（2026-09-30 起，审计 §11.4 风险 3 修正）：mock 必须由显式配置
+ * <p>默认真实模式（审计 §11.4 风险 3 修正）：mock 必须由显式配置
  * {@code helloai.execution.mock-mode=true} 开启（如 application-it.yml 测试 profile）；
  * 避免新增 profile / 属性绑定异常时静默走 mock（"看着执行了，其实没调 LLM"）。</p>
  */
@@ -20,28 +20,11 @@ import java.util.List;
 public class AgentExecutionProperties {
 
     /**
-     * 执行命令消费载体模式。
+     * 执行命令消费载体模式（差距表 N6 / 架构参考 §5.1）。
      *
-     * <p><b>重塑语义（与差距表 N6 + 架构参考 §5.1 阶段一拍板对齐）</b>：
-     * 三种模式都对应"Poller 仅作孤儿/超时/补偿兜底"，区别在于<b>主消费路径</b>由谁承担。
-     * 主消费路径失效时（如 MQ Consumer Bean 未注册、@Async 线程池卡死、JVM 异常退出），
-     * Poller 通过 {@code listOrphanPending(threshold)} 兜底扫描重新触发消费。</p>
-     *
-     * <ul>
-     *     <li>{@code EVENT}：{@code @Async + @TransactionalEventListener} 作为本地事务事件主消费，
-     *         Poller 仅扫孤儿（兼容模式，与 §5.1 ②a 之前的旧行为等价）；</li>
-     *     <li>{@code POLLER}：MQ 主消费路径（前提 {@code dispatch-mode ∈ {MQ,BOTH}} +
-     *         {@code helloai.mq.execution-command.consumer-enabled=true} + {@code producer-enabled=true} +
-     *         {@code outbox.relay.enabled=true}，启动期 {@code ExecutionDispatchValidator} 会 fail-fast），
-     *         Poller 仅扫孤儿；</li>
-     *     <li>{@code BOTH}：本地事务事件 + MQ 双主消费，由 Consumer 内部 CAS {@code markRunning}
-     *         保证幂等（与 EVENT→MQ 灰度切换过渡形态），Poller 仅扫孤儿。</li>
-     * </ul>
-     *
-     * <p><b>本轮明确不做</b>：保留 POLLER 旧语义"扫全量 PENDING 作主路径"作为兼容模式——
-     * MQ 投递已通过 ②a/②b 完成可靠性收口，Poller 降级为兜底是必然演进方向，
-     * 但仍允许通过不修改代码直接切回旧 POLLER 语义（虽然 {@code ExecutionDispatchValidator}
-     * 会在默认配置下阻断这种部署）。</p>
+     * <p>三种模式都对应「Poller 仅作孤儿/超时/补偿兜底」，区别在主消费路径由谁承担；
+     * 主路径失效（Consumer Bean 未注册 / @Async 线程池卡死 / JVM 退出）时 Poller 经
+     * {@code listOrphanPending(threshold)} 兜底重新触发消费。各模式语义见枚举常量。</p>
      */
     public enum ConsumerMode {
         /**
@@ -83,15 +66,9 @@ public class AgentExecutionProperties {
     /**
      * 内部 LLM 执行者（API_KEY_LLM）的 AgentLoop 最大循环轮数（REF-8.2 分档）。
      *
-     * <p>内部执行者要多步调工具、读附件、写产物，故独立分档默认高于外部一次性。
-     * 默认 20（2026-10-25 二次调高）：10 轮在「web_search 资料调研 + 沙箱验证」上
-     * 耗尽迭代、正文没来得及写（草稿仅开场白）的实测事故表明，文档写作类任务
-     * 「调研 + 成文」合计需要 12~14 轮；但同日 MiniMax 实测出现更强形态——
-     * 14 轮被「沙箱写文件 + 反复跑校验脚本」全部吃掉（toolCalls=17、outputTokens=24563，
-     * 正文只存在于沙箱文件里），仍以 MAX_ITERATIONS 失败。故再留 6 轮余量；
-     * 同时 turnDeadlineSeconds（默认 1800s）仍兜住异常长跑，且提示词侧已明确
-     * 「自查最多 1 次、正文优先」（{@code AgentRuntimeContextAssembler} 输出契约）。
-     * 单元测试可直接观测该档位；配置项语义与 {@link #maxExternalIterations()} 正交。</p>
+     * <p>内部执行者要多步调工具、读附件、写产物，故独立分档高于外部一次性（{@link #externalMaxIterations}）。
+     * 默认 20：文档写作类「调研 + 成文」需 12~14 轮，沙箱写文件 + 反复跑校验脚本还会再吃数轮，故留余量；
+     * 异常长跑由 {@link #turnDeadlineSeconds} 兜住，提示词侧已明确「自查最多 1 次、正文优先」。</p>
      */
     private int internalMaxIterations = 20;
 
@@ -117,14 +94,11 @@ public class AgentExecutionProperties {
     // ────────────────────────────────────────────────────────────
 
     /**
-     * 单次 Agent Turn（一次子任务执行尝试 / 一次业务面调用）的**取消截止时间**（秒）。
+     * 单次 Agent Turn（一次子任务执行尝试 / 一次业务面调用）的取消截止时间（秒，REF-8.6 取消/超时树）。
      *
-     * <p><b>为什么需要</b>：REF-8.6 前，循环内任何一轮模型调用或工具调用卡住，都没有任何
-     * 主动中断机制（只能事后靠外部超时回收）。本项是**自驱动的取消源**——到期后循环在下一个
-     * 动作边界停止（不再发起新的模型 / 工具调用），并在结果上带 {@code finishReason=CANCELLED}。</p>
-     *
-     * <p><b>默认 1800（30 分钟）</b>：单 Turn 至多 {@code internalMaxIterations}（默认 10）轮模型
-     * 调用，30 分钟是「正常绝不会触发、异常必被拦住」的量级。{@code <= 0} = 不限（回到改造前行为）。</p>
+     * <p>自驱动取消源：到期后循环在下一个动作边界停止（不再发起新模型/工具调用），结果带
+     * {@code finishReason=CANCELLED}，弥补此前「任一轮卡住只能事后靠外部超时回收」的缺口。
+     * 默认 1800（30 分钟）是「正常绝不触发、异常必被拦住」的量级；{@code <= 0} = 不限。</p>
      */
     private long turnDeadlineSeconds = 1800L;
 
@@ -142,28 +116,18 @@ public class AgentExecutionProperties {
     /**
      * 业务 LLM 面是否走工具循环（REF-8.5 覆盖面收敛）。
      *
-     * <p><b>背景</b>：REF-8.5 实测确认——内部 LLM 的工具循环此前<b>只</b>存在于子任务执行链
-     * （{@code RuntimeTurnExecutor}），业务面（拆解 / 子任务核验 / 终报告整合 / 终报告审查）
-     * 全部走 {@code executeSync} 的<b>裸单次</b> {@code ChatModel} 调用（无工具 / 无循环 / 无 hook）。
-     * 本开关把那 4 个已裁定面接进同一份 {@code AgentLoop}。</p>
-     *
-     * <p><b>回退语义</b>：置 {@code false} ⇒ 全部业务面立即回到裸单次（无需改代码 / 重启热配置）。
-     * 循环本身异常（抛异常 / {@code finishReason=ERROR}）时，业务面亦自动回退单次，不阻断业务。</p>
-     *
-     * <p><b>默认 true</b>：覆盖面清单（plan §10.6）已由用户逐项裁定「需要做」——
-     * 默认关闭等于裁定不生效；且 mock 模式下 {@code MockChatModel} 不产工具调用 ⇒
-     * 循环一轮即终态，与单次行为等价，故默认开启的观测风险可控。</p>
+     * <p>把拆解 / 子任务核验 / 终报告整合 / 终报告审查 4 个业务面从 {@code executeSync} 裸单次
+     * {@code ChatModel} 调用接进同一份 {@code AgentLoop}（此前工具循环只存在于子任务执行链 {@code RuntimeTurnExecutor}）。
+     * 置 {@code false} 或循环异常（抛异常 / {@code finishReason=ERROR}）时业务面自动回退裸单次，不阻断业务。
+     * 默认 true（覆盖面清单 plan §10.6 已逐项裁定；mock 下 {@code MockChatModel} 不产工具调用，循环一轮即终态）。</p>
      */
     private boolean businessLoopEnabled = true;
 
     /**
-     * 进循环的 {@code scene} 白名单（REF-8.5 覆盖面收敛）。
+     * 进循环的 {@code scene} 白名单（REF-8.5 覆盖面收敛，取值 = {@code AgentTask.context} 的 {@code scene} 键）。
      *
-     * <p>取值 = {@code AgentTask.context} 的 {@code scene} 键。默认 = plan §10.6 已裁定的
-     * <b>4 个进循环面</b>（其余 12 项明确不进，见该表尾注「★本表即 REF-8.5 的验收边界」）。</p>
-     *
-     * <p><b>变更边界须走新裁定并登记决策</b>：新增 scene 须按同判据（产出是否需查阅 / 校验外部证据）
-     * 重新取证，不得以「顺便」为由扩面。</p>
+     * <p>默认 = plan §10.6 已裁定的 4 个进循环面（其余明确不进，该表即验收边界）。
+     * 新增 scene 须按同判据（产出是否需查阅/校验外部证据）重新取证并登记决策，不得「顺便」扩面。</p>
      */
     private List<String> businessLoopScenes = new ArrayList<>(List.of(
             "planner_decompose",
@@ -198,11 +162,10 @@ public class AgentExecutionProperties {
     private int contextCompactionMaxOverflowRetries = 1;
 
     /**
-     * 单次执行内**摘要次数上限**（REF-8.2.3 防抖动）。
+     * 单次执行内摘要次数上限（REF-8.2.3 防抖动）。默认 2。
      *
-     * <p>压缩的净收益不保证（摘要可能比被压区间还长）⇒ 我们：① 只在**净减**时接受（否则回滚原文）
-     * ② 用本上限封顶，避免"每轮都试一次摘要"的反复调用（实测暴露：窗口设得远小于实际内容时，
-     * 首次摘要出现 4939 → 6327 的净增）。</p>
+     * <p>压缩净收益不保证（摘要可能比被压区间还长）：① 只在净减时接受（否则回滚原文）
+     * ② 用本上限封顶，避免「每轮都试一次摘要」的反复调用。</p>
      */
     private int contextCompactionMaxSummariesPerRun = 2;
 
@@ -258,17 +221,12 @@ public class AgentExecutionProperties {
     private boolean pollerEnabled = true;
 
     /**
-     * §4.1：PENDING 孤儿阈值（分钟）。
+     * §4.1：PENDING 孤儿阈值（分钟）。默认 5。
      *
-     * <p>子任务 status=PENDING 且 create_time 距今超过本阈值、且尚未创建
-     * {@code agent_execution_record} 记录的，视为“dispatch-mode=EVENT 主路径丢失”
-     * 的孤儿，由 {@code SubTaskPendingOrphanTask} 周期重派。</p>
-     *
-     * <p>依赖解锁瞬间“无空闲候选”导致自动分发失败
-     * （pickPreferred 返回 null）的子任务同样呈现“PENDING 且无 execution_record”，
-     * 需巡检快速兜底，避免形成无人兜底窗口。扫描命中后循环内还有 {@code isReady}
-     * 依赖守卫——未就绪的合法 PENDING 会跳过不误伤，因此收窄阈值安全，
-     * 仅缩短“分发失败”的恢复时间。</p>
+     * <p>子任务 status=PENDING 且 create_time 距今超过本阈值、且尚未创建 {@code agent_execution_record}
+     * 的，视为「dispatch-mode=EVENT 主路径丢失」孤儿，由 {@code SubTaskPendingOrphanTask} 周期重派。
+     * 依赖解锁瞬间「无空闲候选」致分发失败（pickPreferred 返回 null）的子任务同样呈现此态，需巡检兜底；
+     * 扫描命中后循环内还有 {@code isReady} 依赖守卫跳过未就绪的合法 PENDING，故收窄阈值安全。</p>
      */
     private int pendingOrphanThresholdMinutes = 5;
 
@@ -295,13 +253,10 @@ public class AgentExecutionProperties {
     /**
      * BLOCKED 子任务自动重派巡检是否启用。默认 true。
      *
-     * <p><b>补的是哪条缺口</b>：{@code dispatchBlockedSubTask} 此前<b>只有人工入口</b>
-     * （`reassignById` / `redispatchInProgress`），而 BLOCKED 恰恰是「重启撞上在途任务」
-     * 与「执行者自报无能力」两条路径的落点 ⇒ 无人干预时下游依赖恒 PENDING，流水线永久停摆。
-     * 本开关打开后由 {@code SubTaskBlockedAutoRedispatchTask} 周期扫描并自动重派。</p>
-     *
-     * <p><b>不变量</b>：只<b>触发</b>既有重派链，不改状态机；重派仍受既有闸门约束
-     * （退避窗口 + 熔断，达 {@link AgentDispatchProperties#maxReassignAttempts} 转 DEAD_LETTER）。</p>
+     * <p>BLOCKED 是「重启撞上在途任务」与「执行者自报无能力」的落点，此前只有人工入口
+     * （{@code reassignById}/{@code redispatchInProgress}），无人干预时下游依赖恒 PENDING、流水线停摆；
+     * 开启后由 {@code SubTaskBlockedAutoRedispatchTask} 周期扫描自动重派。只触发既有重派链、不改状态机，
+     * 仍受退避窗口 + 熔断约束（达 {@link AgentDispatchProperties#maxReassignAttempts} 转 DEAD_LETTER）。</p>
      */
     private boolean blockedRedispatchEnabled = true;
 
@@ -325,26 +280,16 @@ public class AgentExecutionProperties {
 
     /**
      * 是否把「执行者自报阻塞」（{@code manualIntervention.reason} =
-     * {@link com.helloai.common.constant.ManualInterventionReasons#EXECUTOR_REPORTED_BLOCKED}）
-     * 也纳入自动重派。默认 true。
+     * {@link com.helloai.common.constant.ManualInterventionReasons#EXECUTOR_REPORTED_BLOCKED}）纳入自动重派。默认 true。
      *
-     * <p><b>为什么这类要单独开关</b>：其余 {@code manualIntervention} 原因码都表示
-     * 「等人工拍板」，自动链一律不碰（与 PENDING 孤儿巡检 / N11 回退同口径）；
-     * 只有自报阻塞表示「当前执行者做不到」，而平台对此有确定处置动作 = 换执行者
-     * （plan §10.7.6「发现放内、处置放外」）。置 {@code false} ⇒ 回到「自报阻塞一律等人工」。</p>
+     * <p>其余 {@code manualIntervention} 原因码都表示「等人工拍板」，自动链一律不碰；只有自报阻塞表示
+     * 「当前执行者做不到」，平台对此有确定处置 = 换执行者（plan §10.7.6「发现放内、处置放外」）。
+     * 置 {@code false} ⇒ 自报阻塞一律等人工。</p>
      */
     private boolean blockedRedispatchSelfReportedEnabled = true;
 
     /**
-     * 消费载体模式。默认 POLLER，使 DB Poller 成为执行命令主消费路径。
-     *
-     * <p>三挡：
-     * <ul>
-     *     <li>{@code EVENT}：本地事务事件为主，Poller 仅扫描孤儿；</li>
-     *     <li>{@code POLLER}：命令服务不发布本地事件，Poller 扫所有 PENDING 作为主路径；</li>
-     *     <li>{@code BOTH}：事件与 Poller 都运行，CAS 保证幂等，适合作为 EVENT→POLLER 过渡阶段。</li>
-     * </ul>
-     * </p>
+     * 消费载体模式。默认 POLLER（MQ Consumer 主消费、Poller 仅扫孤儿兜底）。各模式语义见 {@link ConsumerMode}。
      */
     private ConsumerMode consumerMode = ConsumerMode.POLLER;
 
@@ -383,10 +328,8 @@ public class AgentExecutionProperties {
     /**
      * 是否为 MQ 主消费模式（POLLER 或 BOTH 都算）。
      *
-     * <p>重塑语义：POLLER/BOTH 模式都对应"MQ Consumer 作为主消费路径"，
-     * Poller 仅扫孤儿作兜底。本方法名保留仅为兼容外部调用方（如
-     * {@code ExecutionCommandPoller} 与 {@code ExecutionDispatchValidator}），
-     * 实际语义已从"Poller 主消费"更新为"MQ 主消费路径启用"。</p>
+     * <p>方法名沿用旧「Poller 主消费」语义，实际指「MQ 主消费路径启用」、Poller 仅扫孤儿兜底
+     * （保留名仅为兼容 {@code ExecutionCommandPoller} / {@code ExecutionDispatchValidator} 调用方）。</p>
      */
     public boolean isPollerMain() {
         return consumerMode == ConsumerMode.POLLER || consumerMode == ConsumerMode.BOTH;

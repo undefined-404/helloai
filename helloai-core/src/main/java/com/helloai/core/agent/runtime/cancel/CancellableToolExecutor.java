@@ -69,7 +69,7 @@ public class CancellableToolExecutor implements ToolExecutor {
         if (timeoutMillis <= 0) {
             return delegate.execute(toolName, argumentsJson);
         }
-        // ★2026-10-18 修复：本类把工具放到「新线程」跑（TIMEOUT_POOL + agent-tool-timeout-N），
+        // ★：本类把工具放到「新线程」跑（TIMEOUT_POOL + agent-tool-timeout-N），
         // 而 ToolInvocationContext 是 ThreadLocal —— 子线程读不到父线程绑定 ⇒ 所有 internal_*
         // 工具都被 requireInternalChain() 判为「缺少执行链上下文」而失败（实测 success 全 false）。
         // 修复：提交前捕获上下文快照，在子线程内装载后执行（工具内部 markCalled 的写入

@@ -245,7 +245,7 @@ public interface McpToolService {
      * <p>字段与子任务实体一一对应，不做事后截断：验收标准与执行边界被截断正是
      * 「执行者看不到验收标准」缺口的成因，故全文下发（内容长度由拆解侧 LLM 产物约束）。</p>
      *
-     * <p>§6.1 豁免<b>已回收</b>（2026-10-01 W7）：{@code uncertainties} 原直接使用 task 域
+     * <p>§6.1 豁免<b>已回收</b>（W7）：{@code uncertainties} 原直接使用 task 域
      * {@code Uncertainty} 实体（2026-09-11 code review 显式豁免，理由为 kind 常量须与
      * 拆解写入 / 执行注入 / 审查核验链单源）。现改用 {@link UncertaintySnapshot}
      * ——只做<b>原样透传投影</b>（kind + note），**不在 agent 侧定义任何 kind 常量、

@@ -908,7 +908,7 @@ function dualVerdictText(pass: boolean | undefined, score: number | undefined): 
 }
 
 /**
- * 时间线卡片标题：静态 label + 具体名称（2026-10-18）。
+ * 时间线卡片标题：静态 label + 具体名称。
  *
  * <p>「工具调用 · web_search」「工具返回 · web_search」比只有「工具调用」信息量高得多；
  * 无具体名称的事件（大部分状态流转）保持原样，不产生视觉噪声。</p>
@@ -937,7 +937,7 @@ function eventTitleWithDetail(ev: TaskTimelineItem): string {
 }
 
 /**
- * 工具名 → 中文短名（2026-10-18）：`internal_run_in_sandbox` → `沙箱执行`。
+ * 工具名 → 中文短名：`internal_run_in_sandbox` → `沙箱执行`。
  *
  * <p>非技术用户看不懂英文工具标识；目录来自后端 {@code /api/tools/catalog}
  * （{@code ToolDisplayName} 单一事实源），未就绪/未收录时回退原名。</p>
@@ -956,7 +956,7 @@ function toolLabelWithCode(toolName: string): string {
 }
 
 /**
- * 执行链事件的具体化描述（2026-10-18）。
+ * 执行链事件的具体化描述。
  *
  * <p>背景：agent_event 里 `skill_resolved` / `tool_resolved` / `tool_call_started` /
  * `tool_call_completed` 的 payload 已带具体名称（技能名+版本、模型可见工具集、
@@ -1035,7 +1035,7 @@ function abbreviateText(text: string, limit: number): string {
 function eventDescription(ev: TaskTimelineItem): string {
   const base = eventCatalog.descOf(ev.eventType) || ev.eventType
   const p = ev.payload || {}
-  // ── 执行链细节（2026-10-18）：把「技能解析/工具解析/工具调用/工具返回」落到具体名称 ──
+  // ── 执行链细节：把「技能解析/工具解析/工具调用/工具返回」落到具体名称 ──
   // 后端 payload 早已带全量字段（skill_resolved.resolvedSpecs / tool_resolved.effectiveTools /
   // tool_call_*.tool），此前只在卡片上显示阶段名，等于把执行细节藏起来了。
   const chainDetail = executionChainDetail(ev, p)
@@ -1051,7 +1051,7 @@ function eventDescription(ev: TaskTimelineItem): string {
   if (ev.eventType === 'sub_task_auto_execute_dispatch' && ev.agentId) {
     return base + '（派往：' + resolveAgentName(ev.agentId) + '）'
   }
-  // 双审并行校验结果：后端事件 payload 已含双方结论，此处翻译成人话展示（2026-09-01）
+  // 双审并行校验结果：后端事件 payload 已含双方结论，此处翻译成人话展示
   if (ev.eventType === 'sub_task_dual_review_consented' || ev.eventType === 'sub_task_reviewer_disagreement') {
     const dp = p as DualVerdictPayload
     const v1 = dualVerdictText(dp.pass1, dp.score1)
@@ -1259,7 +1259,7 @@ const CONV_TAG_MAP: Record<string, { label: string; type: 'success' | 'danger' |
   subtask_recheck_thinking: { label: '抽检思考', type: 'info' },
   subtask_recheck_verdict: { label: '抽检分析', type: 'warning' },
   subtask_recheck_result: { label: '抽检结论', type: 'danger' },
-  // 核验跳过 / 终态分支（2026-10-05）：让终态分支对话流与时间线「对得上」
+  // 核验跳过 / 终态分支：让终态分支对话流与时间线「对得上」
   subtask_review_skip_max_rework: { label: '跳过核验·返工超限', type: 'warning' },
   subtask_review_skip_no_capability: { label: '跳过核验·无本机能力', type: 'warning' },
   subtask_review_skip_no_evidence: { label: '跳过核验·无产出证据', type: 'warning' },
@@ -1288,7 +1288,7 @@ interface ConvRound {
 }
 
 // 把扁平消息按「执行轮次 / 核验轮次」分组，方便看清 Agent ↔ LLM 完整请求/返回
-// 2026-10-07：分段键由「仅 type」扩为「type + Agent」——执行中换人（如 kimi 失败后
+// 分段键由「仅 type」扩为「type + Agent」——执行中换人（如 kimi 失败后
 // 人工换 qwen 重跑）会在同一 type 下混入两个 Agent 的消息，此前全被并进一轮，
 // 轮头 Agent 取轮内第一条（显示旧 Agent）、状态取「轮内存在失败」（整轮标失败），
 // 于是轮头写着 kimi 失败、轮内却装着 qwen 的成功产出，误导运维判断。
@@ -1542,7 +1542,7 @@ async function loadDetail(id: string) {
   }
 }
 
-// ── 本任务参与成员（2026-10-18）：task_agent_member 实际参与，只读展示 ──
+// ── 本任务参与成员：task_agent_member 实际参与，只读展示 ──
 const taskMembers = ref<TaskMemberView[]>([])
 
 /**
@@ -1622,7 +1622,7 @@ const downloadingAttId = ref<LongId | null>(null)
 // 在线预览（复用附件管理页的 PreviewDialog；不可预览类型按钮禁用，避免点了才发现 413）
 const previewVisible = ref(false)
 const previewTarget = ref<Attachment | null>(null)
-// 附件版本化（2026-08-19）：同名重传后旧版 INACTIVE；默认只看有效版，"历史"开关回查旧版
+// 附件版本化：同名重传后旧版 INACTIVE；默认只看有效版，"历史"开关回查旧版
 const showHistoryAtt = ref(false)
 const historyAttachments = computed(() => attachments.value.filter(a => a.status !== 'ACTIVE'))
 const viewAttachments = computed(() => showHistoryAtt.value ? attachments.value : attachments.value.filter(a => a.status === 'ACTIVE'))
@@ -2261,7 +2261,7 @@ onActivated(() => {
   .page .main-col { grid-column: auto; grid-row: auto; }
   .page .side-card { grid-column: auto; }
 }
-/* 本任务参与成员（2026-10-18）：与任务详情弹窗同一视觉语言 */
+/* 本任务参与成员：与任务详情弹窗同一视觉语言 */
 .member-row {
   display: flex;
   flex-wrap: wrap;

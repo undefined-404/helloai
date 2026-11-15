@@ -4,7 +4,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
- * 「我的产物」聚合读取面（PA-5，2026-11-02）。
+ * 「我的产物」聚合读取面（PA-5）。
  *
  * <p><b>三源归一</b>：把三个产物来源归并成一份「当前用户」视角的产物清单，供
  * PA-4 统一工作台右栏展示。三源及其归属口径（按计划 §9 D1「直滤 owner」）：
@@ -65,7 +65,7 @@ public interface MyArtifactsQueryService {
     /**
      * 仅「会话产物」源（{@code chat_attachment}），按创建时间倒序。
      *
-     * <p>个人工作台「最近产物」用（PA-4 改版，2026-11-02）：只展示最近会话中的产物，
+     * <p>个人工作台「最近产物」用（PA-4 改版）：只展示最近会话中的产物，
      * 不混入子任务执行产物。</p>
      *
      * @param limit 条数上限（null/≤0 用实现默认值）

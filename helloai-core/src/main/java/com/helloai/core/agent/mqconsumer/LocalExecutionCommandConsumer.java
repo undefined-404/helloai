@@ -46,12 +46,12 @@ import java.util.Map;
  * POLLER 模式下 {@code ExecutionCommandService} 不发布事件，因此不会进入事件适配器，
  * 但本 Bean 必须保留，供 Poller 完成实际消费。</p>
  *
- * <p>G-002 单轨（2026-09-30）：旧链（executeCommand / executeOnce / TurnLlmCaller）与双轨路由
+ * <p>G-002 单轨：旧链（executeCommand / executeOnce / TurnLlmCaller）与双轨路由
  * （RuntimeAgentRuntimeRouter / LegacyExecutorAdapter）已删除，本类为唯一执行入口，分层编排：</p>
  * <ol>
  *     <li>加载 subTask / agent，做一致性校验</li>
  *     <li>{@link AgentExecutionRecordService#markRunning} CAS 执行记录 PENDING→RUNNING
- *         （<b>先占执行记录</b>；双消费下输家在此被拒即软跳过，2026-10-05 修 804 假阻塞）</li>
+ *         （<b>先占执行记录</b>；双消费下输家在此被拒即软跳过，804 假阻塞）</li>
  *     <li>{@link SubTaskCommandPort#startIfNeeded} 幂等状态推进（ASSIGNED / REWORK / PAUSED → IN_PROGRESS）</li>
  *     <li>记录消费阶段 timeline（route 观察点，route=agent_runtime）</li>
  *     <li>{@link AgentRuntimeContextAssembler#assemble} 装配真身上下文（prompt / chatModel / 会话）</li>
@@ -88,9 +88,9 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
     private final List<AgentRuntime> agentRuntimes;
 
     /**
-     * 沙箱执行通道（`ADR-005`，2026-10-25）。
+     * 沙箱执行通道（`ADR-005`）。
      *
-     * <p>`SL-2`（2026-11-12）后<b>默认不再在 turn 末释放</b>：任务级作用域下工作区须跨
+     * <p>`SL-2`后<b>默认不再在 turn 末释放</b>：任务级作用域下工作区须跨
      * turn / 跨子任务保留，统一由任务终态事件回收（`SandboxTaskTerminalListener`）。
      * 仅当 {@code helloai.sandbox.opensandbox.scope=subtask}（灰度回滚）时，本类才恢复
      * 「一次执行尝试结束即释放」的旧语义——回滚若只剩键粒度而无释放点，行为会退化成
@@ -153,7 +153,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
                     command.getSubTaskId());
             return;
         }
-        // `SL-2`（2026-11-12）：默认（scope=task）任务级共享——turn 末不释放，工作区跨 turn /
+        // `SL-2`：默认（scope=task）任务级共享——turn 末不释放，工作区跨 turn /
         // 跨子任务保留，统一由任务终态事件回收（`SandboxTaskTerminalListener` → `releaseByTask`）。
         if (!isSubtaskScope()) {
             runViaRuntimeInner(command, subTask, agent);
@@ -190,7 +190,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
      */
     private void runViaRuntimeInner(ExecutionCommand command, SubTaskSnapshot subTask, Agent agent) {
         // 1. 执行记录 CAS：PENDING → RUNNING（**先占执行记录，再推进子任务状态**）。
-        //    ⚠ 顺序契约（2026-10-05 修 804 双消费假阻塞）：MQ 主路径与 DB Poller 兜底路径
+        //    ⚠ 顺序契约（804 双消费假阻塞）：MQ 主路径与 DB Poller 兜底路径
         //    可能同时消费同一命令（同一 recordId），两者都读到 sub_task(ASSIGNED) 快照。
         //      · 旧顺序（先 startIfNeeded 后 markRunning）下，输家在 startIfNeeded 的
         //        ASSIGNED→IN_PROGRESS 乐观锁 CAS 上抛「并发修改，请重试」→ 进 catch →
@@ -252,7 +252,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
                     ? command.getRequiredSkills() : Collections.emptyList();
             // 启用工具为 agent 域数据（agent_mcp_server），消费侧 agent 域内
             // 直读注入 ctx.tools（与 skills 的 task 域装箱不同，无 §6 跨域问题）；恒非 null 仅防御。
-            // L3 P1-1（2026-10-06）：按 accessType 过滤 —— 内部 LLM 执行者（API_KEY_LLM）进程内
+            // L3 P1-1：按 accessType 过滤 —— 内部 LLM 执行者（API_KEY_LLM）进程内
             // 无 MCP 会话，注入 13 个 MCP 生命周期工具必然 401；外部 Agent（CLI_CLIENT）原样注入。
             List<String> tools = agentMcpServerService.getEnabledToolsForAccess(
                     command.getAgentId(), command.getAccessType());
@@ -264,7 +264,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             ExecutionEnvironment environment = executionEnvironmentProvider.resolve(command.getAccessType());
             AgentContext ctx = contextAssembler.assemble(command, subTask, agent, tools, environment);
             result = agentRuntimes.get(0).execute(ctx);
-            // ★①沙箱正文回传（2026-10-25，`LOG-20261025-010`）：必须在结果落地之前——
+            // ★①沙箱正文回传（`LOG-20261025-010`）：必须在结果落地之前——
             //   决定交出去的是哪份正文。（`SL-2` 后 turn 末不再释放工作区，原「先于 release」
             //   的时序约束消失；工作区由任务终态统一回收。）
             result = recoverDraftFromWorkspace(command.getSubTaskId(), result);
@@ -282,7 +282,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             return;
         }
 
-        // 5+6. 结果原子化落地（`HIGH-2` 修复，2026-10-15）：执行记录终态化 与 结果回写
+        // 5+6. 结果原子化落地（`HIGH-2` 修复）：执行记录终态化 与 结果回写
         //      收进**同一事务**。
         //      · 修复前：第 5 步 markSuccess/markFailed 与第 6 步 handleSuccess/handleFailure
         //        是两个独立事务，且顺序「先终态、后回写」⇒ 两者之间崩溃会留下

@@ -9,23 +9,14 @@ import java.util.Map;
 /**
  * 核验判定静态校验器（`RV-1`，纯函数、零 token、无 Spring 依赖）。
  *
- * <p><b>职责</b>：对已解析的 {@link ReviewVerdict} 做确定性结构校验，产出分级
- * {@link Finding}。<b>只产结论，不做处置</b>——是否拒收由调用方按档位决定
- * （本批次为 `Warn` 档：只记 timeline 事件，不改判定）。</p>
+ * <p>对已解析的 {@link ReviewVerdict} 做确定性结构校验，产出分级 {@link Finding}；
+ * <b>只产结论不做处置</b>，是否拒收由调用方按档位决定（当前 {@code Warn} 档：只记 timeline，不改判定）。</p>
  *
- * <p><b>分级口径（按真机数据定，见实施计划 §4 D1）</b>：</p>
- * <ul>
- *     <li>{@link Severity#BLOCK}：仅「逻辑矛盾」一条——{@code pass=false} 却打满分
- *         （{@link #REJECT_WITH_FULL_SCORE}）。反向矛盾 {@code pass=true && score < 3}
- *         已由 {@code SubTaskReviewServiceImpl.MIN_PASS_SCORE} 拦截，此处不重复。</li>
- *     <li>{@link Severity#WARN}：{@code analysis} 为空、{@code missingEvidence} 的
- *         {@code acceptanceRef} 不是验收标准原文子串、宽松兜底解析命中、驳回但无
- *         {@code [defect]} 条目。真机语料（n=12）上四项零命中，不足以证明零误伤，
- *         故先只观测。</li>
- * </ul>
+ * <p>分级：{@link Severity#BLOCK} 仅「逻辑矛盾」——{@code pass=false} 却打满分（{@link #REJECT_WITH_FULL_SCORE}；
+ * 反向 {@code pass=true && score<3} 已由 {@code MIN_PASS_SCORE} 拦截）。{@link Severity#WARN}：{@code analysis} 空、
+ * {@code acceptanceRef} 非验收原文子串、宽松兜底解析命中、驳回无 {@code [defect]} 条目——只观测。</p>
  *
- * <p><b>不做</b>：不校验 {@code comment} 质量，不校验 {@code issues} 四元组完整性
- * （属提示词风格项，误伤面未知），不清洗判定字段。</p>
+ * <p>不校验 {@code comment} 质量与 {@code issues} 四元组完整性（提示词风格项，误伤面未知），不清洗判定字段。</p>
  */
 public final class ReviewVerdictValidator {
 

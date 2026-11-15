@@ -98,7 +98,7 @@ public class RequirementConversationController {
     /** Chat SSE 流式发送（S1 最小闭环）：快速建立连接 → 线程池内执行
      *  「决策/搜索同步前置 + 主回复 token 流」，事件协议 token/done/error。
      *
-     *  <p><b>停止生成（2026-10-19）</b>：客户端主动中断（前端「停止」按钮 abort 连接）时，
+     *  <p><b>停止生成</b>：客户端主动中断（前端「停止」按钮 abort 连接）时，
      *  SseEmitter 触发 onCompletion/onError → dispose LLM 流订阅。Reactor 取消沿 Flux 链向上游
      *  传播（executeStream → generateStream → Spring AI stream），真实 LLM 调用被中断、
      *  未完成的回复<b>不落库</b>（user 消息已在前置段落库，前端刷新详情后走重试条续跑）。</p>
@@ -114,10 +114,10 @@ public class RequirementConversationController {
     }
 
     /**
-     * Chat SSE 流式「新建会话 + 首轮」（2026-10-18）：
+     * Chat SSE 流式「新建会话 + 首轮」：
      *
      * <p><b>为什么需要</b>：前端新会话首条消息此前走同步 {@code POST /requirement-conversations}，
-     * 该接口要跑完「意图决策 + 联网搜索（实测 21.5s）+ 完整 LLM 生成」才一次性返回——用户只看到
+     * 该接口要跑完「意图决策 + 联网搜索（21.5s）+ 完整 LLM 生成」才一次性返回——用户只看到
      * 「思考中」占位，没有打字机也没有思考过程。本端点把「建会话」与「跑首轮」解耦后，
      * 新会话与老会话走同一条流式通道。</p>
      *
@@ -138,10 +138,10 @@ public class RequirementConversationController {
     }
 
     /**
-     * 助理 SSE 流式「新建会话 + 首轮」（PA-11 与需求对话对齐，2026-11-03）。
+     * 助理 SSE 流式「新建会话 + 首轮」（PA-11 与需求对话对齐）。
      *
      * <p>与同步 {@link #assistantCreate} 同参，事件协议同 {@link #streamCreate}。补齐流式的动因：
-     * 工作台此前只有同步端点，联网搜索（实测可达 20s+）与整段 LLM 输出期间用户无任何反馈，
+     * 工作台此前只有同步端点，联网搜索（可达 20s+）与整段 LLM 输出期间用户无任何反馈，
      * 也没有思考过程与「停止生成」；同步端点保留作兜底。</p>
      */
     @SaCheckPermission("conversation:add")
@@ -252,7 +252,7 @@ public class RequirementConversationController {
     /**
      * SseEmitter 帧聚合器：token 增量按「长度 ≥ 50 字符或距上次发送 ≥ 100ms」聚合发射，
      * 防止真实 provider 高频小帧打爆连接；done/error 终帧前先 flush 剩余 token。
-     * 连接断开后置 dead 静默停止发送（2026-10-19 起连接断开由外层 dispose 订阅，
+     * 连接断开后置 dead 静默停止发送（连接断开由外层 dispose 订阅，
      * LLM 流被取消不再跑完、不落库）。
      */
     private static final class StreamFrameAggregator {
@@ -262,7 +262,7 @@ public class RequirementConversationController {
 
         private final SseEmitter emitter;
         private final StringBuilder pending = new StringBuilder();
-        /** 思考过程独立缓冲（2026-10-18）：高频小帧若不聚合会打爆连接，且与正文缓冲分开
+        /** 思考过程独立缓冲：高频小帧若不聚合会打爆连接，且与正文缓冲分开
          *  才能保证两条流各自的顺序（前端分区渲染，思考在前、正文在正文区）。 */
         private final StringBuilder pendingReasoning = new StringBuilder();
         private long lastSendAt;
@@ -347,7 +347,7 @@ public class RequirementConversationController {
     }
 
     /**
-     * 工作台 Composer「选模型」数据源（2026-11-05）：<b>已注册的纯 LLM 模型</b> + 有效性判定。
+     * 工作台 Composer「选模型」数据源：<b>已注册的纯 LLM 模型</b> + 有效性判定。
      *
      * <p><b>为什么与 {@link #listPlannerOptions} 分成两个端点</b>：两者是不同语义的候选集——
      * 这里选「用哪个模型答」（无角色），那里选「谁来扮演 Planner」（角色，模型由角色绑定）。
@@ -464,7 +464,7 @@ public class RequirementConversationController {
     /**
      * 技能执行状态轮询（SKX-13）。
      *
-     * <p>技能执行已改为「提交即返回 + 后台跑」（实测一次 377s，不能挂在 HTTP 线程上），
+     * <p>技能执行已改为「提交即返回 + 后台跑」（一次 377s，不能挂在 HTTP 线程上），
      * 所以前端拿到 {@code skillRunId} 后靠本端点轮询进度，终态后再拉一次会话详情。</p>
      *
      * <p>只回状态与阶段，不回产物内容 —— 产物走会话详情里的那条 assistant 消息。</p>
@@ -507,7 +507,7 @@ public class RequirementConversationController {
     }
 
     /**
-     * 编辑已发送的用户消息并重跑（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）。
+     * 编辑已发送的用户消息并重跑（对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）。
      *
      * <p>事务内：物理删除目标消息之后的旧回复 → 更新内容 → 从该点重跑一轮 LLM。
      * 仅支持编辑最后一条 user 消息；更早消息返回业务错误。

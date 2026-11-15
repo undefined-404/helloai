@@ -3,7 +3,7 @@ package com.helloai.core.task.projection;
 import lombok.Data;
 
 /**
- * 个人工作台任务概况行（PA-4 改版，2026-11-02）。
+ * 个人工作台任务概况行（PA-4 改版）。
  *
  * <p>按当前用户任务归属（{@code task.owner_id = ? OR owner_id IS NULL}）一次性聚合：
  * 执行中任务数 + 子任务「待分配 / 待审查 / 待人工」三态计数。

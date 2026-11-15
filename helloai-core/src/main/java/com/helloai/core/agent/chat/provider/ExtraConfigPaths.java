@@ -32,7 +32,7 @@ final class ExtraConfigPaths {
      *
      * @param extraConfig 快照中的扩展配置（允许 {@code null}）
      * @param key         {@link #COMPLETIONS_PATH} 或 {@link #MESSAGES_PATH}
-     * @return 去首尾空白后的路径；未配置 / 空白 ⇒ {@code null}（调用方跳过覆盖）
+     * @return 去首尾空白后的路径；未配置 / 空白 ⇒ {@code null}（用方跳过覆盖）
      */
     static String path(Map<String, Object> extraConfig, String key) {
         if (extraConfig == null || key == null) {

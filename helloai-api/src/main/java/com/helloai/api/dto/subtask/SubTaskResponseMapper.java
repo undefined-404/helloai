@@ -9,7 +9,7 @@ import java.util.Set;
 /**
  * {@link SubTask} → {@link SubTaskResponse} 的**唯一**映射点。
  *
- * <p><b>为什么单独成类</b>（2026-10-18）：此前映射是写在 {@code SubTaskController} 里的私有方法，
+ * <p><b>为什么单独成类</b>：此前映射是写在 {@code SubTaskController} 里的私有方法，
  * 逐字段手抄。它导致了 `LOG-20261018-018` 的线上表现——`sub_task` 表里
  * `composite_score / score_grade / score_factors` 一直有值，DTO 却没这三个字段，
  * 于是子任务列表「评分」列恒为 `-`，而详情页（走 review 接口）有分。
@@ -100,7 +100,7 @@ public final class SubTaskResponseMapper {
         response.setCompletedAt(subTask.getCompleteTime());
         response.setCreateTime(subTask.getCreateTime());
         response.setUpdateTime(subTask.getUpdateTime());
-        // 评分三件套（2026-10-18 补：漏映射导致列表评分列恒空，见 LOG-20261018-018）
+        // 评分三件套（漏映射导致列表评分列恒空，见 LOG-20261018-018）
         response.setCompositeScore(subTask.getCompositeScore());
         response.setScoreGrade(subTask.getScoreGrade());
         response.setScoreFactors(subTask.getScoreFactors());

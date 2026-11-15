@@ -80,7 +80,7 @@ import java.util.concurrent.TimeUnit;
  * {@code helloai.dispatch.auto-review-max-rework}（默认 3）后停留 REVIEW 等人工，
  * 不再自动打回，避免"执行→驳回→重执行"无限循环。</p>
  *
- * <p><b>§7.8 类规模拆分评审结论（2026-08-23）</b>：本类经四轮剥离后仍为
+ * <p><b>§7.8 类规模拆分评审结论</b>：本类经四轮剥离后仍为
  * 核验编排强内聚汇聚点，按 §7.8 选项二书面声明不继续拆分：</p>
  * <ul>
  *     <li>已剥离：§6.136 解析器/证据装配（VerdictParser / ReviewEvidenceAssembler）、
@@ -101,7 +101,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     private static final String REVIEW_LOCK_PREFIX = "review:lock:";
 
     /**
-     * 核验通过的评分下限（MED-2，2026-10-15）。
+     * 核验通过的评分下限（MED-2）。
      *
      * <p>与评审 prompt 的明规则同源：`prompts/subtask-review.md`「score 为 1~5 整数…
      * <b>pass=true 时 score 不低于 3</b>」。此前代码不校验该一致性 ⇒ 矛盾评分被放行，
@@ -271,7 +271,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         RLock lock = redissonClient.getLock(REVIEW_LOCK_PREFIX + subTaskId);
         try {
             // waitTime=0 保持"抢占失败即跳过"语义；显式 leaseTime 禁看门狗，TTL 兜底口径与旧 setIfAbsent 一致。
-            // ★MED-3（2026-10-15）：TTL 改由 ReviewLockTtlResolver 提供「有效值」——
+            // ★MED-3：TTL 改由 ReviewLockTtlResolver 提供「有效值」——
             //   = max(helloai.review.lock-ttl-seconds, 各 provider 读超时最大值 × 调用次数 + 余量)。
             //   原硬编码 120s < 读超时（默认 180s / dev 档 600s）⇒ 单审可跑到读超时才结束，
             //   而锁已过期，留出并发核验窗口（重复 review_record / 画像重复计数）。
@@ -331,7 +331,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             // §6.52 人工介入标记：前端据此展示"人工介入"面板（用户选 agent 驳回改派 / 直接通过）
             subTaskService.markManualIntervention(subTaskId, TimelineEventCode.REWORK_LIMIT.code(),
                     Map.of("reworkCount", reworkCount, "maxRework", maxRework));
-            // 对话流留痕（2026-10-05）：终态分支与核验正常路径一样在对话流可见，
+            // 对话流留痕：终态分支与核验正常路径一样在对话流可见，
             // 避免「对话流断档、时间线继续」导致用户看到两边对不上
             recordReviewSkipConversation(subTaskId, null,
                     "自动核验跳过：返工已达上限（reason=rework_limit_exceeded，reworkCount=" + reworkCount
@@ -341,7 +341,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             return;
         }
 
-        // 执行密集 × 无本机能力提交者：**只观测，不阻断**（★2026-10-25 修正）。
+        // 执行密集 × 无本机能力提交者：**只观测，不阻断**（★ 修正）。
         // 历史做法是「跳过自动核验 + 标记人工介入 + return」，理由是「核验 LLM 无法辨别幻觉证据」。
         // 实测证明这条护栏会必然卡死：子任务 2114355728453206020「字数与合规机器终检」的
         // content 里「对定稿执行脚本化终检」命中旧词条「执行脚本」被判执行密集；提交者
@@ -463,7 +463,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             log.warn("核验结果对话流写入失败（不阻断核验）: subTaskId={}, err={}", subTaskId, e.getMessage());
         }
 
-        // MED-2（2026-10-15 修复）：核验结论自相矛盾拒收。
+        // MED-2：核验结论自相矛盾拒收。
         // prompt 明规则「pass=true 时 score 不低于 3」（prompts/subtask-review.md:87），
         // 但此前代码无条件接受 pass=true ⇒ 矛盾评分（pass=true/score=1）被直接放行，
         // 等于把「评审太宽容」这个本该被纠正的信号当成有效判定。
@@ -492,7 +492,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             recordAutoReviewQuietly(subTask, reviewer.id(), ReviewResult.APPROVED, verdict);
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
                     TimelineEventCode.SUB_TASK_AUTO_REVIEW_PASSED.code(), AgentRole.REVIEWER, reviewer.id(),
-                    // TD-5 验收③（2026-10-24）：payload 补 acceptanceKind（REVIEWED kind 子任务
+                    // TD-5 验收③：payload 补 acceptanceKind（REVIEWED kind 子任务
                     // 审查逐条可见）+ analysis（逐条对照验收标准的核验分析），仅增强观测不改变判定
                     VerdictParser.safeMap("score", verdict.getScore(), "comment", verdict.getComment(),
                             "acceptanceKind", subTask.acceptanceKind() == null ? null
@@ -808,7 +808,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             log.warn("核验意见写入 context 失败（不阻断返工）: subTaskId={}, err={}", subTaskId, e.getMessage());
         }
 
-        // P-1 防御（A2-2，2026-09-30）：重复失败短路——同一输入连续驳回相同结构性失败时，
+        // P-1 防御（A2-2）：重复失败短路——同一输入连续驳回相同结构性失败时，
         // 重派只是空转（tku-e2e-01 空转 4 轮烧 346K tokens 后仍进死信）。判定在 reviewHistory
         // 落库后、返工之前：评分连续未严格提升（主判据）或文本高度相似（兜底）→ 不触发
         // 返工重派，直接 DEAD_LETTER 待人工。
@@ -834,7 +834,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         recordAutoReviewQuietly(subTask, reviewerAgentId, ReviewResult.REJECTED, verdict);
         taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
                 TimelineEventCode.SUB_TASK_AUTO_REVIEW_REJECTED.code(), AgentRole.REVIEWER, reviewerAgentId,
-                // TD-5 验收③（2026-10-24）：payload 补 acceptanceKind + analysis（逐条核验可见），
+                // TD-5 验收③：payload 补 acceptanceKind + analysis（逐条核验可见），
                 // 与 PASSED 路径同口径——仅增强观测不改变判定
                 VerdictParser.safeMap("score", verdict.getScore(), "issues", verdict.getIssues(),
                         "comment", verdict.getComment(),
@@ -874,11 +874,11 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     }
 
     /**
-     * P-1 防御（A2-2；R1 修订 2026-09-30 §15.2；<b>2026-10-03 二次修订</b>）：重复失败短路判定与处置。
+     * P-1 防御（A2-2；R1 修订  §15.2；<b> 二次修订</b>）：重复失败短路判定与处置。
      *
      * <p>判定（reviewHistory 末尾两条 = 上轮 + 本轮，先决条件两轮 issues 均非空）：</p>
      * <ul>
-     *     <li><b>主判据（2026-10-03 双条件）</b>：「本轮评分未严格提升（curr ≤ prev）」<b>且</b>
+     *     <li><b>主判据（双条件）</b>：「本轮评分未严格提升（curr ≤ prev）」<b>且</b>
      *     「两轮 issues 字符 bigram 相似度 ≥ {@code helloai.dispatch.auto-review-repeat-failure-similarity}」
      *     两者<b>同时成立</b>才判「同一结构性失败」。<br>
      *     <b>为什么加相似度第二条件</b>：原「评分未提升」单判据过强——评分是 1~5 粗粒度，
@@ -896,11 +896,11 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      *
      * <p>处置（复用 §6.52 熔断范式，与 {@link #doReview} 的 rework_limit 熔断对称）：
      * 跳过事件 → 显式入死信事件 → 判决落 review_record → {@code changeStatus(DEAD_LETTER)}
-     * → 人工介入标记；返回 true 表示已短路（调用方不再走返工重派）。事件 / 死信 / 人工
+     * → 人工介入标记；返回 true 表示已短路（用方不再走返工重派）。事件 / 死信 / 人工
      * 介入 payload 均携带 {@code basis}（{@code score_stall_and_text_repeat} / {@code text_repeat} /
      * {@code self_reported_stall}）与 {@code scoreTrend} 证据，DLQ 泳道可机读归因。</p>
      *
-     * <p><b>2026-10-16 增补（`LOG-20261011-007` B 收敛熔断）</b>：闸门新增先判的
+     * <p><b>增补（`LOG-20261011-007` B 收敛熔断）</b>：闸门新增先判的
      * {@code basis=self_reported_stall}（执行者自报未完成连续 N 轮，见
      * {@link RepeatedFailureGate}）。该 basis 随证据额外交付 {@code annotation}
      * = {@code executor_incapable_or_input_missing} ⇒ 本方法把它一并写入三处 payload
@@ -1022,7 +1022,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     }
 
     /**
-     * 核验「跳过 / 终态」分支的对话流留痕（2026-10-05 补做）。
+     * 核验「跳过 / 终态」分支的对话流留痕（做）。
      *
      * <p>背景：本类 5 个终态分支（返工超上限 / 执行密集无能力 / 无产出证据 / 双审分歧 / 重复失败熔断）
      * 此前只写 {@code taskTimelineService} 与 {@code markManualIntervention}，<b>不写对话流</b>，
@@ -1071,7 +1071,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     }
 
     /**
-     * 解析核验判定 JSON；不可解析返回 null（调用方据此停留 REVIEW）。
+     * 解析核验判定 JSON；不可解析返回 null（用方据此停留 REVIEW）。
      * 解析逻辑委托 {@link VerdictParser}（fence 剥离 + 未转义反斜杠修复）。
      */
     @Override

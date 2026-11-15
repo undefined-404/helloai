@@ -94,7 +94,7 @@ public final class AgentSkillDeriver {
      * {@link ModelCapabilities}；「已识别」判据由「白名单非空」改为 {@code caps != null}；
      * {@code reasoning=false} ⇒ 结果不含 {@code thinking}（裁定 ①），{@code webSearch=false} ⇒ 不含 {@code web-search}。</p>
      *
-     * <p><b>★⑤ `G-022` 技能包自动挂载（2026-10-15）</b>：选人处
+     * <p><b>★⑤ `G-022` 技能包自动挂载</b>：选人处
      * {@code AgentSelectionConstraints} 对 {@code required_skills} 做 AND 匹配，而拆解侧
      * （本地 PG 实测 34/34 行）产出的全是 {@code eng-*} 技能包标签、能力侧只有粗粒度能力标签
      * ⇒ 跨命名空间恒失败、子任务永久 PENDING。修法不是统一词表，而是<b>让能力侧

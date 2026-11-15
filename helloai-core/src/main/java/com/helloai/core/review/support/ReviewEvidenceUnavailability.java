@@ -13,14 +13,10 @@ import java.util.regex.Pattern;
 /**
  * 驳回侧「证据不可得」出口（`RV-11`，纯函数、零 token）。
  *
- * <p><b>要解决的错判</b>：reviewer 把「平台没给它看全」写成 `pass=false` 的驳回
- * （典型：155k CSV 被剪到约 5k，reviewer 判 `not_verifiable` 后仍给出驳回）。
- * 这类驳回会消耗返工预算，而返工方不可能补齐「平台注入不足」。</p>
- *
- * <p><b>四条同时成立才降级</b>：① `pass=false`；② 没有任何 `failed` 条目；
- * ③ 至少一条 `not_verifiable`；④ 平台侧存在可指认缺口（引用 id 在台账中不可读/被截断，
- * 或未引用 id时注入正文存在截断）。降级产出 `BLOCK`，由引擎走 `inconclusive()`，
- * 服务侧落 `INCONCLUSIVE` 且不返工。</p>
+ * <p>把「平台没给 reviewer 看全」导致的驳回降级为存疑，避免消耗返工预算去补「平台注入不足」。
+ * 四条同时成立才降级：① {@code pass=false}；② 无 {@code failed} 条目；③ 至少一条
+ * {@code not_verifiable}；④ 平台侧有可指认缺口（引用 id 在台账不可读/被截断，或未引用 id 但注入正文有截断）。
+ * 降级产出 {@code BLOCK} → 引擎 {@code inconclusive()} → 服务侧 {@code INCONCLUSIVE} 且不返工。</p>
  */
 public final class ReviewEvidenceUnavailability {
 

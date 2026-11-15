@@ -35,47 +35,29 @@ import java.util.Map;
 /**
  * 内部 LLM 执行者（{@code API_KEY_LLM}）的<b>进程内工具通道</b>（REF-8.1 M1）。
  *
- * <p><b>为什么存在</b>：内部 LLM 执行子任务走进程内 {@code AgentLoop}，无 MCP 会话上下文
- * （{@code McpAuthContext} 无 sessionId）。若把 {@link McpMcpServer} 那 13 个 {@code @Tool}
- * 注入，模型调用必 401（2026-10-06 已实测修复的 L3 P1-1 根因）。本类提供一组
- * <b>不依赖 session 鉴权</b>的进程内 {@code @Tool}：复用 {@link McpToolService} 的纯
- * {@code agentId} 入参业务方法（无 session 依赖），语义受控，只暴露内部执行者需要的子集。</p>
+ * <p><b>为什么存在</b>：内部执行走进程内 {@code AgentLoop}、无 MCP session（{@code McpAuthContext} 无 sessionId），
+ * 注入 {@link McpMcpServer} 的 13 个 {@code @Tool} 必 401（L3 P1-1 根因）。本类提供不依赖 session 鉴权的进程内
+ * {@code @Tool}，复用 {@link McpToolService} 纯 {@code agentId} 入参方法，只暴露内部执行者需要的子集。</p>
  *
- * <p><b>边界（REF-8.1，与平台职责对齐）</b>：
- * <ul>
- *   <li>工具名带 {@code internal_} 前缀，与外部 MCP 工具（{@link McpMcpServer}）区分，避免命名冲突；</li>
- *   <li><b>读型</b>工具（detail / deps / status）复用 {@link McpToolService} 同名方法，返回值原生透传；</li>
- *   <li><b>交付登记</b>工具 {@code register_output_attachment} 走 {@link AttachmentPort#register}，
- *       仅登记产出附件，<b>不触发状态机流转</b>——内部执行链的最终结果由消费侧
- *       {@code ExecutionResultHandler}（source=INTERNAL）统一回写，故<b>不</b>暴露
- *       {@code submitResult}（避免与 INTERNAL 回写双写冲突）、<b>不</b>暴露
- *       {@code uploadArtifact}（避免与平台侧自动物化 {@code ExecutionArtifactServiceImpl} 重复）；</li>
- *   <li><b>不</b>暴露生命周期工具（{@code claimSubTask} / {@code heartbeat} / {@code checkIn} /
- *       {@code checkOut} / {@code pullTasks} 认领语义）——它们服务于外部轮询 Agent 上岗，与内部
- *       已被平台派单的执行者场景冲突。</li>
- * </ul></p>
+ * <p><b>暴露边界（REF-8.1）</b>：工具名带 {@code internal_} 前缀与外部 MCP 区分；读型（detail/deps/status）
+ * 复用 {@link McpToolService} 同名方法原生透传；{@code register_output_attachment} 走 {@link AttachmentPort#register}
+ * 仅登记附件、<b>不触发状态机</b>（最终结果由 {@code ExecutionResultHandler} source=INTERNAL 统一回写）。
+ * <b>不</b>暴露 {@code submitResult}（与 INTERNAL 双写冲突）/ {@code uploadArtifact}（与平台自动物化重复）/
+ * 生命周期工具（{@code claimSubTask}/{@code heartbeat}/{@code checkIn}/{@code checkOut}/{@code pullTasks}，
+ * 服务外部轮询上岗，与内部已派单场景冲突）。</p>
  *
- * <p><b>接入方式</b>：经独立的 {@link ToolCallbackProvider} 注册进 spring-ai（与
- * {@code McpToolConfig.mcpToolCallbacks()} 并存），工具名进入 {@link ToolRegistry} 目录；
- * 内部 LLM 授权集（{@code AgentMcpServerServiceImpl} 对 {code API_KEY_LLM} 分支）返回这些名字，
- * 模型方可经 {@code RuntimeTurnExecutor} 的 {code resolve} 看到并调用。</p>
+ * <p><b>接入</b>：经独立 {@link ToolCallbackProvider} 注册进 spring-ai（与 {@code McpToolConfig.mcpToolCallbacks()} 并存），
+ * 工具名进 {@link ToolRegistry} 目录；内部 LLM 授权集（{@code AgentMcpServerServiceImpl} 的 {@code API_KEY_LLM} 分支）
+ * 返回这些名字，模型经 {@code RuntimeTurnExecutor} 的 {@code resolve} 看到并调用。</p>
  *
- * <p><b>鉴权纪律（REF-8.1 A1 接线，2026-10-12 订正）</b>：本类方法<b>不</b>做
- * {@code McpAuthContext.requireAuthId}——{@code agentId / subTaskId} 由执行链
- * {@code RuntimeTurnExecutor} 在 {@code agentLoop.run()} 前经
- * {@link com.helloai.core.agent.tool.ToolInvocationContext} 绑定，并由
- * {@code ToolCallbackToolExecutor} 在调用本类工具前<b>带外注入</b>调用参数
- * （{@code internal_} 前缀门控 + schema 字段门控；模型无从自报，注入值覆盖模型所给值）。
- * 合法性由执行链（进程内可信边界）负责，非外部持牌通道。故本类 {@code agentId / subTaskId}
- * 的 {@code @ToolParam} 均标注 {@code required = false}（「平台自动注入，无需填写」）——
- * 保留字段位供注入落点，但不再要求模型提供。</p>
+ * <p><b>鉴权纪律（REF-8.1 A1）</b>：本类<b>不</b>做 {@code McpAuthContext.requireAuthId}——{@code agentId/subTaskId}
+ * 由 {@code RuntimeTurnExecutor} 在 {@code agentLoop.run()} 前经 {@link com.helloai.core.agent.tool.ToolInvocationContext}
+ * 绑定，{@code ToolCallbackToolExecutor} 调用前<b>带外注入</b>（{@code internal_} 前缀 + schema 字段门控，注入值覆盖模型所给值）。
+ * 故 {@code @ToolParam} 均标 {@code required=false}（平台自动注入、保留字段位供落点，不要求模型提供）。</p>
  *
- * <p><b>强制闸门（REF-8.1 A1，2026-10-12）</b>：本类工具<b>仅</b>可由平台内部执行链调用——
- * 每个方法入口先 {@link #requireInternalChain()}，<b>未绑定执行链上下文即拒绝</b>，
- * 且一律使用<b>绑定的</b> {@code agentId / subTaskId}（不信任调用方入参）。这是对
- * 「{@code internal_} 工具此前因单 provider 合并而进入外部 MCP {@code tools/list}」
- * 的兜底：即便外部持牌调用方仍能看到工具名，也<b>无法执行</b>（无绑定 ⇒ 拒绝），
- * 消除「跨 agent 读子任务 / 读任意附件 / 往他人子任务登记产物」的越权面。</p>
+ * <p><b>强制闸门（REF-8.1 A1）</b>：每个方法入口先 {@link #requireInternalChain()}，未绑定执行链上下文即拒绝，
+ * 一律用<b>绑定的</b> {@code agentId/subTaskId}（不信任入参）。兜底「{@code internal_} 工具曾因单 provider 合并进入外部
+ * {@code tools/list}」：外部持牌方即便看到工具名也无法执行，消除跨 agent 读子任务/读任意附件/往他人子任务登记产物的越权面。</p>
  */
 @Slf4j
 @Component
@@ -123,12 +105,9 @@ public class InternalLlmExecutorTools {
     /**
      * 产物正文内联上限（<b>字符</b>，`SL-3` 起按字符计）：超过则只内联前 N 个字符并标 {@code truncated}。
      *
-     * <p>取 8000 的理由：一次工具返回要留在模型上下文里，820KB 的 HTML 内联会直接吃掉预算；
-     * 而 8000 字符足够覆盖回执 JSON、短日志、错误栈这些「模型确实需要读」的场景。</p>
-     *
-     * <p><b>为什么必须按字符而不是字节</b>：旧实现拿 {@code artifact.size()}（字节）比这个常量，
-     * 中文按 UTF-8 3 字节/字 ⇒ 2666 字就被判「过大不内联」，而验收场景的正文是 1800~3000 汉字，
-     * 正好卡在误伤区间。</p>
+     * <p><b>必须按字符而非字节</b>：旧实现拿 {@code artifact.size()}（字节）比本常量，中文 UTF-8 3 字节/字
+     * ⇒ 数千汉字正文被误判「过大不内联」，正好卡在验收正文区间。8000 字符够覆盖回执 JSON / 短日志 / 错误栈，
+     * 又不至于让大 HTML 全文吃掉上下文预算。</p>
      */
     private static final int MAX_INLINE_ARTIFACT_CHARS = 8_000;
 
@@ -144,8 +123,7 @@ public class InternalLlmExecutorTools {
     /**
      * 查询当前子任务详情（执行内容 / 交付物 / 验收标准 / 执行约束 / 不确定性申报 / 前置附件）。
      *
-     * <p>这是内部 LLM 执行子任务的核心上下文工具——拿到完整子任务四要素后才能正确开工。
-     * 等价于外部 MCP 的 {@code getSubTaskDetail}，但走进程内、无 session 鉴权。</p>
+     * <p>等价于外部 MCP 的 {@code getSubTaskDetail}，但走进程内、无 session 鉴权。</p>
      *
      * @param agentId   内部执行链鉴定的执行者 Agent ID（进程内可信注入）
      * @param subTaskId 目标子任务 ID
@@ -207,16 +185,12 @@ public class InternalLlmExecutorTools {
     }
 
     /**
-     * 登记一个产出附件（受控交付登记，<b>不触发状态机流转</b>）。
+     * 登记一个产出附件（受控交付登记，<b>不触发状态机流转</b>，REF-8.2 写产物目录的受控版）。
      *
-     * <p>内部执行者在循环内产出了<b>独立交付文件</b>时，用本工具登记为当前子任务的产物附件。
-     * 仅登记元数据（走 {@link AttachmentPort#register} 的归属校验 + 地址白名单 + 同名字去活），
-     * <b>不</b>推进子任务状态——最终提交由平台侧 {@code ExecutionResultHandler}（source=INTERNAL）
-     * 在循环结束后统一回写。</p>
-     *
-     * <p><b>为什么有这个工具</b>：内部 LLM 需要"交付一个文件"的能力（REF-8.2 写产物目录的受控版）。
-     * 但 <b>不</b>暴露外部 {@code uploadArtifact}（会与平台自动物化重复）与 {@code submitResult}
-     * （会触发 EXTERNAL 回写、与 INTERNAL 双写冲突）。本工具只登记，状态由现有内部回写链接管。</p>
+     * <p>内部执行者在循环内产出<b>独立交付文件</b>时登记为当前子任务产物附件。仅登记元数据
+     * （走 {@link AttachmentPort#register} 的归属校验 + 地址白名单 + 同名字去活），<b>不</b>推进状态——
+     * 最终提交由 {@code ExecutionResultHandler}（source=INTERNAL）循环结束后统一回写
+     * （故不暴露 {@code uploadArtifact}/{@code submitResult}，见类 javadoc 边界）。</p>
      *
      * @param agentId   执行者 Agent ID
      * @param subTaskId 目标子任务 ID
@@ -253,21 +227,18 @@ public class InternalLlmExecutorTools {
     /**
      * 自报阻塞（REF-8.1.1：「做不到」的结构化通道）。
      *
-     * <p><b>为什么存在</b>：本类此前的工具面<b>没有任何「做不到」出口</b>——模型确认自己无法完成时，
-     * 唯一表达方式是把「做不到」写进正文，而正文会被平台物化成交付物并进入评审 ⇒ 必然被打回
-     * （`prompts/subtask-review.md:51-52` fail-close）⇒ 返工至死信（`LOG-20261012-007` 实测复现）。
-     * 外部通道有 {@code reportBlocked}（13 工具之一），内部通道此前缺等价物。</p>
+     * <p><b>为什么存在</b>：此前内部工具面无「做不到」出口，模型只能把「做不到」写进正文，
+     * 而正文被物化成交付物进评审必被打回（`prompts/subtask-review.md:51-52` fail-close）⇒ 返工至死信
+     * （`LOG-20261012-007`）；外部通道有 {@code reportBlocked}，内部缺等价物。</p>
      *
-     * <p><b>形状（借鉴 DSH {@code update_goal.blocked}，见研究文档 §1.5.3）</b>：
-     * 结构化原因 → 落 ⓐ 子任务状态 {@code BLOCKED}（{@link SubTaskCommandPort#block}，内含 PLANNER 通知）
-     * ⓑ 人工介入标记（{@link SubTaskCommandPort#markManualIntervention}，防兜底任务反复重派）。
-     * 阻塞一旦生效，循环结束后的 INTERNAL 回写因「状态非 IN_PROGRESS」被
-     * {@code ExecutionResultHandler} 丢弃 ⇒ <b>不再进入评审</b>。</p>
+     * <p><b>形状</b>（借鉴 DSH {@code update_goal.blocked}，研究文档 §1.5.3）：结构化原因 →
+     * ⓐ {@code BLOCKED}（{@link SubTaskCommandPort#block}，内含 PLANNER 通知）+ ⓑ 人工介入标记
+     * （{@link SubTaskCommandPort#markManualIntervention}，防兜底反复重派）。阻塞生效后 INTERNAL 回写因
+     * 「状态非 IN_PROGRESS」被 {@code ExecutionResultHandler} 丢弃 ⇒ <b>不再进入评审</b>。</p>
      *
-     * <p><b>防滥用（「连续 N 轮门槛」在本域的等价物）</b>：DSH 数的是 goal 轮（同一目标反复尝试），
-     * 本域一次执行只有一条执行链，故等价物取「<b>知情拒绝</b>」——必须先调用过
-     * {@code internal_get_sub_task_detail}（看过任务要求）才允许报阻塞，且原因不得敷衍（&ge; 10 字）。
-     * 不采用「先耗 N 轮再许拒绝」：那会把「一两轮就看清做不到」的诚实情形反过来拖长（与收敛意图相反）。</p>
+     * <p><b>防滥用 = 知情拒绝</b>：必须先调过 {@code internal_get_sub_task_detail}（看过要求）才许报阻塞，
+     * 原因 &ge; 10 字。不采用 DSH 的「先耗 N 轮再许拒绝」——本域一次执行只有一条链，耗轮会把「一两轮就看清做不到」
+     * 的诚实情形拖长，与收敛意图相反。</p>
      *
      * @param agentId 执行者 Agent ID（平台自动注入）
      * @param reason  阻塞原因：缺什么 / 已试过什么 / 需要什么才能继续
@@ -320,9 +291,8 @@ public class InternalLlmExecutorTools {
     /**
      * 读取一个平台可读产物的附件正文（字节 → UTF-8 文本）。
      *
-     * <p>命中 {@code LOG-20261011-007} 事故根因：此前内部执行者无法读原始附件字段，
-     * 只能吃平台预内联摘要，接错"需读原附件"的任务时无能为力。本工具走
-     * {@link AttachmentPort#loadContent} 读取正文。</p>
+     * <p>走 {@link AttachmentPort#loadContent} 读原始字段正文，补「只能吃平台预内联摘要、
+     * 接错需读原附件任务时无能为力」的缺口（{@code LOG-20261011-007}）。</p>
      *
      * @param agentId      执行者 Agent ID
      * @param attachmentId 附件主键
@@ -421,19 +391,15 @@ public class InternalLlmExecutorTools {
     }
 
     /**
-     * 附件惰性注入沙箱（`RV-14`，2026-11-15）：把 MinIO 附件字节写入<b>当前调用者自己的</b>
+     * 附件惰性注入沙箱（`RV-14`）：把 MinIO 附件字节写入<b>当前调用者自己的</b>
      * 沙箱容器，供随后 {@code internal_run_in_sandbox} 实测执行（脚本可执行性验证 / 数据处理）。
      *
-     * <p><b>为什么需要它</b>：附件事实源在对象存储，沙箱是易失执行环境且任务终态即销毁——
-     * 「执行时的沙箱」在审核时物理上已不存在。注入只能在「需要实测的那个 turn 内」现场完成
-     * （lazy stage-in），不可能也不应该让沙箱陪任务跨天存活（双事实源 + 生命周期无解）。</p>
+     * <p><b>为什么 lazy stage-in</b>：附件事实源在对象存储，沙箱易失且任务终态即销毁——执行时的沙箱审核时已不存在，
+     * 注入只能在「需要实测的那个 turn 内」现场完成，不应让沙箱陪任务跨天存活（双事实源 + 生命周期无解）。</p>
      *
-     * <p><b>归属硬校验</b>：仅允许注入<b>当前子任务的有效附件</b>（{@link AttachmentPort#listActive}
-     * 命中），越权 id 直接拒绝——比 read 类工具的软约束更严，因为写入将变成可执行内容。
-     * 上游产物附件（挂在上游子任务）本期不支持，需要时请按其所属子任务另行处理。</p>
-     *
-     * <p><b>完整性</b>：返回的 {@code sha256} 与 {@code internal_attachment_digest} 同源算法
-     * （UTF-8 字节 SHA-256），可直接对账——内容就是 MinIO 原件，无人能在注入环节掉包。</p>
+     * <p><b>归属硬校验</b>：仅注入<b>当前子任务的有效附件</b>（{@link AttachmentPort#listActive} 命中），越权 id 拒绝——
+     * 比 read 类软约束更严，因写入将变成可执行内容；上游产物附件本期不支持。返回 {@code sha256} 与
+     * {@code internal_attachment_digest} 同源（UTF-8 字节 SHA-256）可对账，证明内容是 MinIO 原件、注入环节未掉包。</p>
      *
      * @param agentId      执行者 Agent ID（平台自动注入）
      * @param subTaskId    目标子任务 ID（平台自动注入）
@@ -504,13 +470,10 @@ public class InternalLlmExecutorTools {
     /** SHA-256 已抽公共：{@link com.helloai.core.agent.runtime.sandbox.StagedPathUtil#sha256Hex}。 */
 
     /**
-     * 列出平台全部可调用技能（REF-8.3 全量目录注入）。
+     * 列出平台全部可调用技能（REF-8.3 全量目录注入，对齐 DSH {@code tool-skill} 全量目录 + 惰性加载）。
      *
-     * <p>与 DSH {@code tool-skill} 的「全量目录 + 惰性加载」对齐：本工具返回
-     * <b>全量健康技能目录</b>（{@code name + description} 封顶，不含正文），让模型感知
-     * 「还有哪些技能可用」并自行判断哪些与当前任务相关；正文经 {@code internal_load_skill}
-     * 惰性加载。区别于任务注入的「速览」（只看得到被要求命中的那几个），本工具是
-     * <b>模型可见的全量视野</b>。</p>
+     * <p>返回<b>全量健康技能目录</b>（{@code name + description} 封顶、不含正文），正文经 {@code internal_load_skill}
+     * 惰性加载。区别于任务注入的「速览」（只见被要求命中的几个），本工具是模型可见的全量视野。</p>
      *
      * @return 技能目录列表（按技能 name 排序），每项含 name / version / description / requiredTools（缩写）
      */
@@ -567,18 +530,15 @@ public class InternalLlmExecutorTools {
     /**
      * 在 OpenSandbox 沙箱内执行验证命令或脚本（S-8，沙箱执行链设计方案 §3.2）。
      *
-     * <p><b>为什么存在</b>：内部 LLM 自检（{@code REF-8.2.2} 验证证据围栏）与 Reviewer
-     * 核验（{@code subtask-review.md}）此前的「验证」只能是<b>声称</b>——模型把
-     * 「已跑通 / 无错误」写进报告，平台无从核实，只能依赖 {@code FinalReportFidelityChecker}
-     * 的静态文本检查。本工具把 OpenSandbox 沙箱接成<b>受控执行通道</b>：模型可在容器内
-     * 实际执行验证命令，拿到 {@link com.helloai.core.agent.runtime.sandbox.ExecuteResponse}
-     * 的 <b>一手证据</b>（stdout/stderr + exitCode + truncated），自检证据围栏从声称变实证。</p>
+     * <p><b>为什么存在</b>：自检（{@code REF-8.2.2} 验证证据围栏）与 Reviewer 核验（{@code subtask-review.md}）
+     * 此前的「验证」只能是<b>声称</b>，平台无从核实、只能靠 {@code FinalReportFidelityChecker} 静态文本检查。
+     * 本工具接成受控执行通道，模型在容器内实跑拿到 {@link com.helloai.core.agent.runtime.sandbox.ExecuteResponse}
+     * 一手证据（stdout/stderr + exitCode + truncated），证据围栏从声称变实证。</p>
      *
-     * <p><b>安全边界（沙箱执行链设计方案 §3.4）</b>：命令在 OpenSandbox 容器内执行——
-     * 默认禁网（egress 白名单外不可达）、零平台凭据 env（{@code credential=ISOLATED}）、
-     * 文件系统/资源/进程受容器隔离；<b>不</b>执行技能包正文（只执行本调用传入的命令/脚本）；
-     * 沙箱未启用（{@code helloai.sandbox.opensandbox.enabled=false}）时本工具经
-     * {@code toolAvailability()} 从模型可见列表<b>摘除</b>（fail-closed，不静默降级）。</p>
+     * <p><b>安全边界（§3.4）</b>：容器内执行——默认禁网（egress 白名单外不可达）、零平台凭据 env
+     * （{@code credential=ISOLATED}）、文件系统/资源/进程隔离；<b>不</b>执行技能包正文（只执行传入命令/脚本）；
+     * 沙箱未启用（{@code helloai.sandbox.opensandbox.enabled=false}）时经 {@code toolAvailability()} 从模型可见列表
+     * <b>摘除</b>（fail-closed，不静默降级）。</p>
      *
      * @param agentId        执行者 Agent ID（平台自动注入）
      * @param subTaskId      目标子任务 ID（平台自动注入）
@@ -636,11 +596,9 @@ public class InternalLlmExecutorTools {
     /**
      * 列出本子任务最近的沙箱调用记录（`SL-5`，只读）。
      *
-     * <p><b>为什么需要它</b>：`SL-5` 起 {@code EVIDENCE} 引用台账条目 ID（{@code callId}），
-     * 而模型在收尾轮未必记得历史轮返回的 ID。没有查询通道，模型只能凭记忆填或放弃证据——
-     * 前者产生 {@code self_reported_mismatch}，后者让真实执行过的证据被判 MISSING。</p>
-     *
-     * <p><b>只读、零副作用</b>：读内存台账快照，不执行命令、不占沙箱槽、不消耗收尾轮预算。</p>
+     * <p>{@code EVIDENCE} 引用台账 {@code callId}，模型收尾轮未必记得历史轮 ID；无查询通道则凭记忆填
+     * （{@code self_reported_mismatch}）或放弃证据（真实执行被判 MISSING）。读内存台账快照，
+     * 不执行命令、不占沙箱槽、不消耗收尾轮预算。</p>
      *
      * @param agentId   执行者 Agent ID（平台自动注入）
      * @param subTaskId 目标子任务 ID（平台自动注入）
@@ -688,17 +646,12 @@ public class InternalLlmExecutorTools {
     }
 
     /**
-     * 在沙箱内按<b>已入库技能包</b>执行命令（`SKX-8`，2026-10-26）。
+     * 在沙箱内按<b>已入库技能包</b>执行命令（`SKX-8`）。
      *
-     * <p><b>为什么需要它，而不是让模型自己 {@code npm install}</b>：沙箱默认禁出网（`SKX-5` 起
-     * 显式 {@code deny}），模型拿不到包；即便能出网，运行时下游下载也不可复现——同一任务今天跑通、
-     * 明天换个上游版本就可能失败。本工具把「包」变成平台的<b>构建产物</b>：随 jar 固化、版本可追溯、
-     * 注入幂等（`SKX-6`）。</p>
-     *
-     * <p><b>触发口径自证（2026-10-26 裁定，本次调查 §4.1 候选 A）</b>：本工具新增了「agent 可调用
-     * 工具」，但判据是<b>是否碰宿主</b>——命令在 OpenSandbox 容器内执行（{@code filesystem=ISOLATED}、
-     * 零平台凭据 env、egress deny、与 app 不共享 env / 网络 / 文件系统），执行的是<b>平台自己的包</b>
-     * 而非任意下载物 ⇒ <b>不碰宿主 ⇒ 不触发条件①</b>。勿因「新增了工具」就误判需重排期。</p>
+     * <p><b>为什么不让模型自己 {@code npm install}</b>：沙箱默认禁出网（`SKX-5` 起显式 {@code deny}）拿不到包；
+     * 即便能出网，运行时下游下载不可复现（换个上游版本就失败）。本工具把包变成平台<b>构建产物</b>：
+     * 随 jar 固化、版本可追溯、注入幂等（`SKX-6`）。命令在容器内执行（{@code filesystem=ISOLATED}、零凭据 env、
+     * egress deny、不共享 app env/网络/文件系统），跑的是平台自己的包而非任意下载物 ⇒ <b>不碰宿主</b>。</p>
      *
      * @param agentId        执行者 Agent ID（平台自动注入）
      * @param subTaskId      目标子任务 ID（平台自动注入）
@@ -762,16 +715,13 @@ public class InternalLlmExecutorTools {
     }
 
     /**
-     * 按<b>指定路径</b>回读沙箱内的产物字节摘要（`SKX-7` / `SKX-8`，2026-10-26）。
+     * 按<b>指定路径</b>回读沙箱内的产物字节摘要（`SKX-7` / `SKX-8`）。
      *
-     * <p><b>为什么要有这条通道</b>：技能跑出来的产物在容器里，而平台只采集对话正文。此前模型能
-     * 「声称」产物有多大、内容对不对，平台无从核实。本工具把「回读 + 算 sha256」接出来，
-     * 让「回执里的 {@code artifact.sha256}」与「平台实际读到的字节」可以对账——这是技能执行
-     * 从「声称」变「实证」的那一步。</p>
+     * <p><b>为什么有这条通道</b>：产物在容器里、平台只采集对话正文，模型「声称」的大小/内容无从核实。
+     * 本工具接出「回读 + 算 sha256」，让回执 {@code artifact.sha256} 与平台实际读到的字节对账（声称变实证）。</p>
      *
-     * <p><b>为什么默认只内联前 8000 字符</b>：一份 820KB 的 HTML 全文内联进对话会直接吃掉上下文预算。
-     * 内联按<b>字符</b>计（`SL-3`）：中文正文 3000 字仍可完整内联；超出部分截断并置
-     * {@code truncated=true}，要完整字节用 {@code size} / {@code sha256} 对账或传更小的 {@code maxBytes}。</p>
+     * <p>内联按<b>字符</b>计（`SL-3`，上限 {@link #MAX_INLINE_ARTIFACT_CHARS}）：超出截断并置 {@code truncated=true}，
+     * 完整字节用 {@code size}/{@code sha256} 对账或传更小 {@code maxBytes}。</p>
      *
      * @param agentId  执行者 Agent ID（平台自动注入）
      * @param subTaskId 目标子任务 ID（平台自动注入）
@@ -836,16 +786,13 @@ public class InternalLlmExecutorTools {
     }
 
     /**
-     * 把沙箱内的产物导出为当前子任务的<b>可下载附件</b>（`SKX-11`，2026-10-26）。
+     * 把沙箱内的产物导出为当前子任务的<b>可下载附件</b>（`SKX-11`）。
      *
-     * <p><b>为什么需要它</b>：{@link #internalReadArtifact} 只把字节读进<b>本次工具调用</b>里，
-     * 平台能对账、模型能自检，但用户界面上什么都看不到——沙箱文件随**任务终态**被销毁，
-     * 「产物」等于没交付。本工具补上最后一段：沙箱字节 → 对象存储 → 附件表，
-     * 用户随后在子任务附件里直接下载。</p>
+     * <p>{@link #internalReadArtifact} 只把字节读进本次调用（平台对账、模型自检），用户界面看不到，
+     * 且沙箱文件随任务终态销毁＝没交付。本工具补最后一段：沙箱字节 → 对象存储 → 附件表，用户可直接下载。</p>
      *
-     * <p><b>与 {@code internal_register_output_attachment} 的分工</b>：那个工具要求调用方
-     * <b>自己给 storageUrl</b>（适用于外部执行者已经上传好的场景）；本工具<b>只吃容器路径</b>，
-     * 由平台负责字节搬运。模型手里只有容器路径，所以技能产物必须走本工具。</p>
+     * <p><b>与 {@code internal_register_output_attachment} 分工</b>：那个要求调用方自己给 {@code storageUrl}
+     * （外部执行者已上传好的场景）；本工具只吃容器路径、由平台搬运字节，故技能产物必须走本工具。</p>
      *
      * @param agentId   执行者 Agent ID（平台自动注入）
      * @param subTaskId 目标子任务 ID（平台自动注入）

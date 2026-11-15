@@ -272,7 +272,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
             return;
         }
         // 3A-V2 机械前置门（确定性、零 token）：空壳引用 / 围栏失衡命中即机械驳回，
-        // 不给 LLM 放过的机会（实测「完整矩阵见分册」曾被 LLM 判 pass）
+        // 不给 LLM 放过的机会（「完整矩阵见分册」曾被 LLM 判 pass）
         GateDecision fidelity = fidelityGate.evaluate(task.finalReport());
         if (fidelity.blocks()) {
             log.info("最终报告机械校验命中硬违规，直接驳回: taskId={}, issues={}",
@@ -310,7 +310,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         if (verdict == null) {
             taskTimelineService.recordEvent(event.getTaskId(), null,
                     TimelineEventCode.TASK_FINAL_REPORT_REVIEW_UNPARSEABLE.code(), AgentRole.REVIEWER, reviewer.id(),
-                    // 证据留全（4000 字符；2026-10-16 事故教训）：原先只留 300 字符，
+                    // 证据留全（4000 字符； 事故教训）：原先只留 300 字符，
                     // 事后无法判断到底是「真读不懂」还是「JSON 有格式瑕疵」——事件成了不可诊断的。
                     Map.of("rawOutput", VerdictParser.summarize(result.getOutput(), UNPARSEABLE_RAW_EVIDENCE_LIMIT),
                             "attempt", event.getAttempt()));

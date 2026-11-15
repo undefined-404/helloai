@@ -23,7 +23,7 @@ import java.util.Set;
  * DeepSeek 的 {@code DeepSeekAssistantMessage.reasoningContent}（spring-ai-deepseek 将其
  * 映射为**独立字段**，不在 content / metadata）亦归入 thinking；其余 text 拼接为正文。</p>
  *
- * <p><b>工具调用同理走本类</b>（{@link #extractToolCalls}，2026-10-25 增补）：「正文被第 0 个
+ * <p><b>工具调用同理走本类</b>（{@link #extractToolCalls}，增补）：「正文被第 0 个
  * Generation 遮挡」与「工具调用被第 0 个 Generation 遮挡」是<b>同一个缺陷的两个面</b>，
  * 故两者共用同一处跨 Generation 归并，避免再次出现「改了一处、漏了另一处」。</p>
  */
@@ -47,7 +47,7 @@ public final class ChatResponseContentExtractor {
             if (message == null) {
                 continue;
             }
-            // B（2026-10-05）DeepSeek 推理模型分支：思维链在**独立字段** reasoningContent
+            // BDeepSeek 推理模型分支：思维链在**独立字段** reasoningContent
             // （既不在 getText()=content，也不在 Anthropic 的 signature/data metadata 里），
             // 归入 **thinking 通道**（下游 ExecutionResultHandler 落 conversation_message，
             // toolName=sub_task_execute_thinking，同一通道不新造）。
@@ -73,7 +73,7 @@ public final class ChatResponseContentExtractor {
     /**
      * 跨 Generation 汇总本轮模型声明的全部工具调用。
      *
-     * <p><b>为什么必须跨 Generation</b>（2026-10-25 MiniMax「从不调用工具」事故）：
+     * <p><b>为什么必须跨 Generation</b>（MiniMax「从不调用工具」事故）：
      * Spring AI {@code AnthropicChatModel.toChatResponse} 把文本块与 {@code tool_use} 块映射为
      * <b>两个独立的 Generation</b>——文本（或空占位）在索引 0，工具调用<b>追加在末尾</b>。
      * 而 {@link ChatResponse#getResult()} 恒取索引 0，故凡以 {@code getResult().getOutput()}

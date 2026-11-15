@@ -1204,7 +1204,7 @@ function fmtUncertainties(uncertainties?: Uncertainty[] | null): string {
 }
 
 /**
- * 草案自检结论（2026-11-08 草案实体化）：挂在 `sub_task.context.gateFindings`，
+ * 草案自检结论（草案实体化）：挂在 `sub_task.context.gateFindings`，
  * 形状 `{ findings: [{ruleId, severity, evidence, subject}], ruleVersion, checkedAt|clearedAt }`。
  * `findings` 为空 = 无问题或已清零；只有 `severity='block'` 会挡住确认/分发。
  *
@@ -1228,7 +1228,7 @@ function blockCountOf(row: SubTask): number {
 }
 
 /**
- * `TD-11` 验收前置未满足（2026-11-08 补首处读取方）：`context.acceptancePreconditions`
+ * `TD-11` 验收前置未满足（首处读取方）：`context.acceptancePreconditions`
  * 是拆解侧写下的缺口 `ref` 数组，含义是「这条草案的验收要求取回外部实证，但它依赖的事实
  * 仍是 UNCONFIRMED」。
  *
@@ -1253,7 +1253,7 @@ function preconditionsOf(row: SubTask): { ref: string; note: string }[] {
  * <p><b>为什么行首编号不能直接用 `draftSeq`</b>：`draftSeq` 是**批内序号**
  * （后端 `buildDrafts` 写死 `idx + 1`；`dependsOn` 里的整数与
  * `uk_sub_task_decompose_attempt` 都依赖这个语义，不能改全局号）。首拆一批 1..N、
- * 每次展开另起一批 1..N，于是同一张表里会出现两个 `#2`——2026-11-09 实测任务
+ * 每次展开另起一批 1..N，于是同一张表里会出现两个 `#2`——任务
  * `2119434200503037953` 即如此（根批 `...0002` 与展开批 `...0006-002`）。
  * `code` 才是任务内的位置身份，`-` 天然分层，故行首编号由它推导。</p>
  */
@@ -1473,7 +1473,7 @@ async function handleReject() {
   finally { rejecting.value = false }
 }
 
-// --- ADR-008 §5 草案派生（对话版，2026-11-12）：一条草案 → 先开派生会话 ---
+// --- ADR-008 §5 草案派生（对话版）：一条草案 → 先开派生会话 ---
 // 旧实现直接建 Y 并让 Y 立刻自拆：全程没人问过「仓库在哪 / 执行机有什么运行时 /
 // 数据源是哪种」，Y 拆出来的子任务只能写「仓库中」，执行侧必然因缺仓库检出而人工介入。
 // 现在改为进对话——把草案四要素 + 上下游草案 + 已声明的执行环境交给 Planner，

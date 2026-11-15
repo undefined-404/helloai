@@ -16,7 +16,7 @@ export const paths = {
   tasks: {
     list: '/tasks/list',
     getById: (id: string | number) => `/tasks/getById/${enc(id)}`,
-    // 实际参与成员（task_agent_member，2026-10-18）
+    // 实际参与成员（task_agent_member）
     members: (id: string | number) => `/tasks/getById/${enc(id)}/members`,
     create: '/tasks',
     update: (id: string | number) => `/tasks/updateById/${enc(id)}`,
@@ -113,7 +113,7 @@ export const paths = {
     // 平台技能包目录（REF-1.2c）：元数据来自 md frontmatter，label 由服务端派生。
     // 注意与 agents.skillZip（Agent 角色接入手册 ZIP）区分——两者不是一件事。
     catalog: '/skills/catalog',
-    // 需求对话「＋→技能」可选清单（2026-10-26）：只含能在沙箱里产出文件的技能包，
+    // 需求对话「＋→技能」可选清单：只含能在沙箱里产出文件的技能包，
     // 权限面是 conversation:add（不是 skill:view），普通需求方也能拉到。
     chatOptions: '/skills/chat-options'
   },
@@ -201,7 +201,7 @@ export const paths = {
     list: '/chat-attachments',
     deleteById: (id: string | number) => `/chat-attachments/deleteById/${enc(id)}`,
     previewById: (id: string | number) => `/chat-attachments/previewById/${enc(id)}`,
-    // 2026-10-27：产出型技能生成的产物，走 attachment 语义（浏览器落盘而不是内联渲染）
+    // 产出型技能生成的产物，走 attachment 语义（浏览器落盘而不是内联渲染）
     downloadById: (id: string | number) => `/chat-attachments/downloadById/${enc(id)}`
   },
   clarifications: {
@@ -209,10 +209,10 @@ export const paths = {
     send: (id: string | number) => `/requirement-conversations/sendMessageById/${enc(id)}`,
     // S1 Chat SSE 流式发送（fetch 流消费，不走 axios 拦截器）
     streamSend: (id: string | number) => `/requirement-conversations/streamSendById/${enc(id)}`,
-    // 2026-10-18：新建会话 + 首轮的流式入口（首帧 session 事件回传会话 id）
+    // 新建会话 + 首轮的流式入口（首帧 session 事件回传会话 id）
     streamCreate: '/requirement-conversations/streamCreate',
     retry: (id: string | number) => `/requirement-conversations/retryById/${enc(id)}`,
-    // 2026-10-19：编辑已发送的用户消息并重跑（对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）
+    // 编辑已发送的用户消息并重跑（对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）
     editMessage: (id: string | number, messageId: string | number) =>
       `/requirement-conversations/editMessageById/${enc(id)}/${enc(messageId)}`,
     toClarify: (id: string | number) => `/requirement-conversations/toClarifyById/${enc(id)}`,
@@ -234,7 +234,7 @@ export const paths = {
     // PA-11：助理对话（检索增强问答；不产出任务草案）
     assistantCreate: '/requirement-conversations/assistant/create',
     assistantSend: (id: string | number) => `/requirement-conversations/assistant/send/${enc(id)}`,
-    // PA-11 SSE 流式（2026-11-03）：与同步端点同参，事件协议与需求对话一致（含停止生成）
+    // PA-11 SSE 流式：与同步端点同参，事件协议与需求对话一致（含停止生成）
     assistantStreamCreate: '/requirement-conversations/assistant/streamCreate',
     assistantStreamSend: (id: string | number) =>
       `/requirement-conversations/assistant/streamSend/${enc(id)}`,
@@ -261,7 +261,7 @@ export const paths = {
   dashboard: {
     stats: '/dashboard/getStats'
   },
-  // 管理端收件箱（2026-10-18）：/agent/inbox 是「Agent 视角（按 _authId 取自己的）」，
+  // 管理端收件箱：/agent/inbox 是「Agent 视角（按 _authId 取自己的）」，
   // admin 没有 _authId ⇒ 恒返回空；管理端改用 /inbox（可看全部、可按 agent 过滤）。
   inbox: {
     list: '/inbox/list',

@@ -54,7 +54,7 @@ public class RabbitMQConfig {
         return QueueBuilder.durable(EXECUTOR_QUEUE)
                 .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
                 .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
-                // v1.2 §阶段3（MQ 容量治理）：x-max-length 容量阈值（起步值，按实测深度校准）
+                // v1.2 §阶段3（MQ 容量治理）：x-max-length 容量阈值（步值，按实测深度校准）
                 .withArgument("x-max-length", 50000)
                 // x-overflow=reject-publish（需 RabbitMQ ≥ 3.10）：队列满 broker 拒绝发布 → 快速失败
                 .withArgument("x-overflow", "reject-publish")

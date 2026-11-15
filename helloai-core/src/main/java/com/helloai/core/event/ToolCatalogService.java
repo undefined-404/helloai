@@ -7,7 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 工具名目录服务（2026-10-18，工具名 → 中文展示名的服务端单一来源）。
+ * 工具名目录服务（工具名 → 中文展示名的服务端单一来源）。
  *
  * <p>与 {@link EventCatalogService} 同范式：目录内容驱动自 {@link ToolDisplayName} 枚举
  * （唯一事实源），前端不保留硬编码副本，经 {@code /api/tools/catalog} 拉取。

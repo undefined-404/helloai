@@ -47,7 +47,7 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
      * {@link com.helloai.core.task.service.SubTaskDispatchService} 判定熔断
      * （坑点 3「单一权威」：同预算还供返工 / 超时后续并入）。</p>
      *
-     * <p><b>V102（2026-10-05）</b>：同批写入 {@code last_attempt_time}，作为重派退避窗口
+     * <p><b>V102</b>：同批写入 {@code last_attempt_time}，作为重派退避窗口
      * 时钟。退避时钟与「尝试」严格同源——只在本方法（唯一累加尝试处）写入，
      * {@code updateById} 一律不写，杜绝 block/resume/changeStatus 等状态流转自我刷新时钟。</p>
      *
@@ -57,7 +57,7 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
                               @Param("now") OffsetDateTime now);
 
     /**
-     * 重置 sub_task.attempt_total 为 0（死信人工兜底）。
+     * 重置 sub_task.attempt_total 为 0（人工兜底）。
      *
      * <p>仅由 {@link com.helloai.core.task.service.SubTaskDispatchService#redispatchDeadLetter}
      * 在人工指派 DEAD_LETTER 子任务前调用，避免重新投入调度链后立即再次熔断。</p>

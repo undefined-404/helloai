@@ -65,7 +65,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
     /** 每会话轮次互斥锁（RC-1）：同步前置段持锁、解锁后再入 LLM 流段。 */
     private final ConversationRoundLocker roundLocker;
 
-    /** 显式技能判定（2026-10-26）：技能消息不走流式，与 /task 同口径拒绝。 */
+    /** 显式技能判定：技能消息不走流式，与 /task 同口径拒绝。 */
     private final SkillDirective skillDirective;
 
     @Override
@@ -101,7 +101,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                 || skillDirective.isSkillCommand(trimmed)) {
             throw new BizException("命令与技能暂不支持流式，请使用普通发送");
         }
-        // 确认卡前置处理（2026-10-18）：与同步 runLlmRound 共用同一方法——确认即切 CLARIFY
+        // 确认卡前置处理：与同步 runLlmRound 共用同一方法——确认即切 CLARIFY
         // 并清标记（随后按 CLARIFY 分支流式出回复），非确认消息仅清标记继续对话。
         // 此前这里是「抛 BizException 要求走普通发送」，会把「确认卡点确认」误拦
         // （结构化卡提交已改走流式），故改为与同步路径同口径。
@@ -153,7 +153,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
      * CHAT 模式流式段（决策 → 搜索 → 流式主回复 → 落库 → done）：
      * 老会话 {@link #runStreamRound} 与 {@link #streamCreate} 首轮<b>共用同一段</b>。
      *
-     * <p>抽出的意义（2026-10-18）：新会话首条消息此前只能走同步 {@code create}，
+     * <p>抽出的意义：新会话首条消息此前只能走同步 {@code create}，
      * 用户要等完整一轮（含搜索）才见到回复且无思考过程。抽出后两条入口行为完全一致。</p>
      *
      * @param roundNo 本轮序号（仅日志用：老会话 = round_count+1，新会话 = 1）
@@ -162,7 +162,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                                                 String userPayload, int roundNo,
                                                 List<Long> attachmentIds) {
         Long conversationId = conversation.getId();
-        // ★过程数据（2026-10-18）：思考全文 + 检索步骤，随消息 payload 落库
+        // ★过程数据：思考全文 + 检索步骤，随消息 payload 落库
         // （done 后/刷新后仍可回看，对齐 DeepSeek「已深度思考」与 ChatGPT「Thinking」面板）
         StringBuilder thinking = new StringBuilder();
         List<String> steps = new ArrayList<>();
@@ -176,7 +176,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                     RoundDecision roundDecision = orchestrator.makeRoundDecision(conversation, userMessage);
                     if (roundDecision.decision().isClarify()) {
                         // 确认卡流式播放：question 分片打字机 → 落库确认卡 → done
-                        // 2026-10-27：用户已拒绝过（clarify_declined=1）时不再弹卡，
+                        // 用户已拒绝过（clarify_declined=1）时不再弹卡，
                         // 退回普通对话主回复（防「取消 → 再判 clarify → 再弹卡」死循环）。
                         // ★抑制判断必须无副作用（不落库）：确认卡由 playClarifyQuestion 内
                         //   applyClarifyDecision 唯一落库——这里再调一次会把确认卡消息落两条
@@ -322,7 +322,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
      */
     private Flux<ChatStreamEvent> runClarifyStream(RequirementConversation conversation,
                                                    String userMessage, String userPayload) {
-        // ★过程数据（2026-10-18）：思考全文 + 检索步骤随 payload 落库（done 后仍可回看）
+        // ★过程数据：思考全文 + 检索步骤随 payload 落库（done 后仍可回看）
         StringBuilder thinking = new StringBuilder();
         List<String> steps = new ArrayList<>();
         // ATT-8：CLARIFY 轮先规划候选词，再用真实检索词发进度帧（规划结果复用，不重跑）
@@ -366,7 +366,7 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
         return Flux.concat(resultSteps, platformAgentExecutionService.executeStream(planner.id(),
                         conversation.getModelType(), agentTask)
                 .map(chunk -> {
-                    // ★2026-10-18：思考过程走 reasoning 帧（前端实时展示），
+                    // ★思考过程走 reasoning 帧（前端实时展示），
                     // 绝不并入 buffer——buffer 参与 JSON 解析与落库，混入思考会毁掉解析
                     if (chunk.isReasoning()) {
                         thinking.append(chunk.text());

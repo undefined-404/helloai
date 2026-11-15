@@ -45,7 +45,7 @@ public class TextCharsetResolver {
 
     private static final Logger log = LoggerFactory.getLogger(TextCharsetResolver.class);
 
-    /** 低于该置信度的探测结果不采信（实测纯 ASCII 会被报成 windows-1252/0.1）。 */
+    /** 低于该置信度的探测结果不采信（纯 ASCII 会被报成 windows-1252/0.1）。 */
     static final float MIN_CONFIDENCE = 0.5f;
 
     private static final Charset GB18030 = Charset.forName("GB18030");
@@ -64,7 +64,7 @@ public class TextCharsetResolver {
      * 判定字符集。
      *
      * @param bytes    文件字节（空数组返回 UTF-8）
-     * @param fileName 文件名，供 Tika 做类型/编码判定（缺了会退化成二进制判定，实测）
+     * @param fileName 文件名，供 Tika 做类型/编码判定（缺了会退化成二进制判定）
      */
     public Charset resolve(byte[] bytes, String fileName) {
         if (bytes == null || bytes.length == 0) {

@@ -23,7 +23,7 @@ import java.util.HexFormat;
  * <p>口径：取摘要**前 12 字节**转小写十六进制，即 {@value #HEX_LENGTH} 个字符。
  * API Key 属高熵随机串，无需加盐或迭代 KDF。</p>
  *
- * <p><b>★与 magpie 的关系（2026-10-14 订正）</b>：magpie 存在**两个同名「指纹」、语义不同** ——
+ * <p><b>★与 magpie 的关系（订正）</b>：magpie 存在**两个同名「指纹」、语义不同** ——
  * {@code internal/provider/keys.go:69-70} 用「SHA-256 前 5 字节 / 10 字符」标识**供应商 API Key**
  * （{@code AddKeys} 去重即用该值比对，{@code keys.go:194,198}）；而
  * {@code internal/access/access.go:417-419} 的 {@code legacyLANKey} 用「前 12 字节 / 24 字符」

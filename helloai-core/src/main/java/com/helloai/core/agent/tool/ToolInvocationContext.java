@@ -10,7 +10,7 @@ import java.util.Set;
 
 /**
  * 内部执行链的「工具调用上下文」——把执行者的真实标识<b>带外</b>注入内部工具的调用参数
- * （REF-8.1 A1 接线，2026-10-12）。
+ * （REF-8.1 A1 接线）。
  *
  * <p><b>为什么存在</b>：内部 LLM（{@code API_KEY_LLM}）走进程内 {@code AgentLoop}，模型
  * <b>无从得知</b>自己本轮的执行者 {@code agentId} 与当前 {@code subTaskId}（这两个值不进入
@@ -48,7 +48,7 @@ public final class ToolInvocationContext {
     private static final String PARAM_AGENT_ID = "agentId";
 
     /**
-     * 平台注入字段名（{@code taskId}）——**预留通路，当前零消费方**（2026-11-14 审计确认）。
+     * 平台注入字段名（{@code taskId}）——**预留通路，当前零消费方**（审计确认）。
      *
      * <p>全仓无任何内部工具声明 {@code @ToolParam(…) Long taskId}，故正常路径下
      * {@link #inject} 的 schema 门控恒为 false、本常量不被写入。保留理由与移除代价见
@@ -79,10 +79,10 @@ public final class ToolInvocationContext {
     /**
      * 本轮工具调用的执行者标识四元组 + 执行轮次；任一项可为 null（该字段则不注入）。
      *
-     * <p>{@code taskId} 由 `SL-8` 透传（2026-11-13）：沙箱槽键是任务级的，执行链本来就知道
+     * <p>{@code taskId} 由 `SL-8` 透传：沙箱槽键是任务级的，执行链本来就知道
      * 子任务属于哪个任务；把它一并绑定后，工具层构造任务级工作区句柄不再需要二次查库。</p>
      *
-     * <p>{@code reviewer} 由 `SL-10` 注入（2026-11-13）：reviewer 走业务面
+     * <p>{@code reviewer} 由 `SL-10` 注入：reviewer 走业务面
      * （{@code subtask_review}/{@code task_final_report_review} 场景），其沙箱命令应选
      * {@code SandboxCallOrigin.REVIEWER} 且工作区句柄只读挂载——只有 {@code bind} 时
      * 按场景显式声明，不从 agent 角色反推（对齐 `SL-4` origin 显式声明纪律）。</p>
@@ -183,7 +183,7 @@ public final class ToolInvocationContext {
     }
 
     /**
-     * 执行链上下文的**可跨线程快照**（2026-10-18 修复）。
+     * 执行链上下文的**可跨线程快照**。
      *
      * <p><b>为什么必须能跨线程</b>：{@code CancellableToolExecutor}（REF-8.6 单工具超时装饰器）
      * 把工具调用提交到独立线程池（线程名 {@code agent-tool-timeout-N}）后
@@ -204,7 +204,7 @@ public final class ToolInvocationContext {
 
     /**
      * 捕获当前线程的执行链上下文；未绑定返回 {@code null}
-     * （调用方可据此决定「原样直调」而不必关心细节）。
+     * （用方可据此决定「原样直调」而不必关心细节）。
      */
     public static Scope capture() {
         Ids ids = CURRENT.get();
@@ -255,7 +255,7 @@ public final class ToolInvocationContext {
     /**
      * 把平台标识注入内部工具的调用参数（两道门控见类 javadoc）。
      *
-     * <p><b>三支的消费现状（2026-11-14 审计）</b>：{@code agentId} / {@code subTaskId} 各有多个
+     * <p><b>三支的消费现状（审计）</b>：{@code agentId} / {@code subTaskId} 各有多个
      * 内部工具以 {@code @ToolParam} 声明，属<b>在用</b>；{@code taskId}<b>零消费方</b>，属<b>预留</b>
      * ——它的实际去向是 {@link #currentTaskId()} 的 ThreadLocal 直读（任务级工作区句柄）。
      * 保留该支的理由（而非删除）见方法体内同点注释，核心是「不为『ID 只能带外注入』开例外」。</p>
@@ -277,7 +277,7 @@ public final class ToolInvocationContext {
         if (ids.agentId() != null && declares(inputSchema, PARAM_AGENT_ID)) {
             node.put(PARAM_AGENT_ID, ids.agentId());
         }
-        // taskId：预留通路，当前零消费方（2026-11-14 审计确认）。
+        // taskId：预留通路，当前零消费方（审计确认）。
         // 现状：没有任何内部工具声明 `@ToolParam(…) Long taskId`，且内部工具的 inputSchema
         // 正常可达（取自 ToolCallback.getToolDefinition()），故 declares() 恒为 false，本分支
         // 在正常路径上不生效（唯一的例外是 schema 取不到时的 fail-open 放行，此时多写的键

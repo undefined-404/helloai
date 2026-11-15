@@ -23,7 +23,7 @@ public final class TeamValidator {
     }
 
     /**
-     * Team 是否至少含 1 名 EXECUTOR（发布前校验：执行角色是 Team 的可用下限）。
+     * Team 是否至少含 1 名 EXECUTOR（前校验：执行角色是 Team 的可用下限）。
      */
     public static boolean hasExecutorMember(List<TeamMember> members) {
         return members != null

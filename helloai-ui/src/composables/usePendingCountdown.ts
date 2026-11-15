@@ -48,7 +48,7 @@ export function readNoCandidate(
 
 /**
  * 距 nextDispatchAt 的剩余秒数（向上取整，N ≤ 0 表示已到点）。
- * 时间字符串不可解析时返回 null（调用方据此降级，不显示倒计时）。
+ * 时间字符串不可解析时返回 null（用方据此降级，不显示倒计时）。
  */
 export function remainingSeconds(
   nextDispatchAt: string | null | undefined,

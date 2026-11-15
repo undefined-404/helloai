@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * 技能执行的编排门面（`SKX-8`，2026-10-26）：把「解析技能包 → 确保已注入 → 在技能根目录执行」三步
+ * 技能执行的编排门面（`SKX-8`）：把「解析技能包 → 确保已注入 → 在技能根目录执行」三步
  * 收在一处，供进程内工具（{@code internal_run_skill}）与将来的其它入口共用。
  *
  * <p><b>为什么单独一层而不是写进工具方法</b>：工具类（{@code InternalLlmExecutorTools}）的职责是

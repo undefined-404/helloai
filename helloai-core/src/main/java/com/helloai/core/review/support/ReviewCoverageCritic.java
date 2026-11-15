@@ -16,25 +16,15 @@ import java.util.regex.Pattern;
 /**
  * 静态覆盖批评器（`RV-3`，纯函数、零 token、无 Spring 依赖）。
  *
- * <p><b>职责</b>：核对「reviewer 宣称通过」与「验收点逐条有覆盖声明」是否自洽，
- * 以及执行侧申报的 {@code UNCONFIRMED} 缺口有没有在判定里<b>无声消失</b>。
- * 它<b>不重新核验产出</b>（那是 reviewer 的活，也是本项刻意不引入第二个 LLM 的原因），
- * 只核对<b>声明的结构完整性</b>——所以它抓的是「漏判可发现」，不是「漏判不发生」
- * （实施计划 §1 边界：模型不填或填错时只能判「未覆盖 → INCONCLUSIVE」）。</p>
+ * <p>核对「宣称通过」与「验收点逐条有覆盖声明」是否自洽、执行侧 {@code UNCONFIRMED} 缺口有无在判定里消失；
+ * 只核对声明的结构完整性，<b>不重新核验产出</b>（抓「漏判可发现」，不引入第二个 LLM）。</p>
  *
- * <p><b>为什么只在 {@code pass=true} 侧生效</b>：驳回侧已有明确结论（返工 + 缺失证据清单），
- * 把它升级成 {@code INCONCLUSIVE} 会<b>丢掉一个明确的驳回</b>、换成一条需要人工重新判的存疑记录，
- * 判错代价方向是负的。通过侧才是「放水」风险所在，也是 {@code INCONCLUSIVE}（转人工）设计的目标场景。</p>
+ * <p>只在 {@code pass=true} 侧生效：驳回侧已有明确结论，升级 {@code INCONCLUSIVE} 会丢掉一个明确驳回。
+ * 覆盖判据用 {@code criterionRef} 子串归属而非条数相等（{@code acceptance} 分隔符风格不统一，按条数比必失败），
+ * 复用 {@link ReviewVerdictValidator#isGroundedIn} 与 {@code missingEvidence.acceptanceRef} 同一事实源。</p>
  *
- * <p><b>覆盖判据 = {@code criterionRef} 子串归属</b>（实施计划 §4 决策 D2），不用「条数相等」：
- * 真机 {@code acceptance} 的分隔符风格不统一（圈号 / 全角分号 / 整段无分隔并存），按条数比必然
- * 大面积失败。归属匹配复用 {@link ReviewVerdictValidator#isGroundedIn}——与
- * {@code missingEvidence.acceptanceRef} 同一事实源，避免两份判定漂移。</p>
- *
- * <p><b>判错方向</b>：所有 {@code BLOCK} 命中都只把「通过」改成「存疑转人工」，
- * <b>不会</b>把不合格的放行；{@code WARN} 只观测。{@code coverage} 整段缺失同样判
- * {@code BLOCK}（契约要求必填，缺失即「没有任何验收点被声明覆盖」），处置方式是关掉
- * {@code helloai.review.coverage-critic-enabled} 而非放宽判据。</p>
+ * <p>{@code BLOCK} 只把「通过」改「存疑转人工」，不放行不合格；{@code WARN} 只观测。
+ * {@code coverage} 整段缺失判 {@code BLOCK}，处置关 {@code helloai.review.coverage-critic-enabled} 而非放宽判据。</p>
  */
 public final class ReviewCoverageCritic {
 
@@ -272,14 +262,11 @@ public final class ReviewCoverageCritic {
     }
 
     /**
-     * {@code UNCONFIRMED} 消音判定（实施计划 §3：只对 {@code UNCONFIRMED} 生效，
-     * {@code ASSUMPTION} 不判——提示词第 10 条明写它不构成驳回理由，判它即假阳性）。
+     * {@code UNCONFIRMED} 消音判定（只对 {@code UNCONFIRMED} 生效，{@code ASSUMPTION} 不判——提示词第 10 条明写它不构成驳回理由，判它即假阳性）。
      *
-     * <p><b>「提及」的认定取宽口径</b>：缺口引用标签（{@code ref}，形如 {@code U1}）、
-     * 申报原文、或申报前 {@value #MENTION_ANCHOR_CHARS} 字符锚点，任一出现在
-     * {@code issues / analysis / comment / missingEvidence.acceptanceRef / coverage} 即算已处理。
-     * 取宽是因为 reviewer 会改写措辞——从严会把「处理了但换了说法」误判成消音（假阳性），
-     * 判错方向由此固定为<b>少拦</b>而不是<b>误杀</b>。</p>
+     * <p>「提及」取宽口径：缺口引用标签（{@code ref}，如 {@code U1}）、申报原文、或申报前 {@value #MENTION_ANCHOR_CHARS} 字符锚点，
+     * 任一出现在 {@code issues/analysis/comment/missingEvidence.acceptanceRef/coverage} 即算已处理。reviewer 会改写措辞，从严会把「处理了但换说法」误判消音，
+     * 故判错方向固定为<b>少拦</b>而非<b>误杀</b>。</p>
      */
     private static Finding unconfirmedSilentlyDropped(ReviewVerdict verdict,
                                                       List<CoverageItem> coverage,

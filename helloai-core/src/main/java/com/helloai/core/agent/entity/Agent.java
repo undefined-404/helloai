@@ -79,7 +79,7 @@ public class Agent extends BaseEntity {
     @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> capabilities;
 
-    /** 标签（specialty / runtime / region 等，调度标签过滤用） */
+    /** 标签（specialty / runtime / region 等，度标签过滤用） */
     @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> labels;
 

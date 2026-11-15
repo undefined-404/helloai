@@ -83,7 +83,7 @@ public class WebSearchProperties {
     /**
      * 触发缺口补搜所需的最小剩余预算（毫秒，默认 8 秒）。
      *
-     * <p><b>为什么必须有这道闸</b>（2026-10-18 实测）：原判据只检查「首轮是否超预算」，
+     * <p><b>为什么必须有这道闸</b>：原判据只检查「首轮是否超预算」，
      * 首轮 21s / 预算 30s ⇒ 剩 9s 也照样启动补搜，而补搜单次请求仍按
      * {@link #aiSearchTimeoutMs}（25s）跑 ⇒ 必然超时，白等 25s（实测总耗时 47s、
      * 补搜 0 命中）。改为「剩余 ≥ max(minGapSearchBudgetMs, ...) 才补搜」后，
@@ -98,7 +98,7 @@ public class WebSearchProperties {
      * 博查 AI Search 请求超时（毫秒，默认 25 秒）。
      *
      * <p>独立于 {@link #timeoutMs}（基础搜索 8 秒）：AI Search 是「检索 + 博查侧大模型总结」
-     * 两步，开启 {@link #aiSearchAnswer} 后耗时显著高于基础搜索（实测 8 秒超时全量降级），
+     * 两步，开启 {@link #aiSearchAnswer} 后耗时显著高于基础搜索（8 秒超时全量降级），
      * 需放宽到 25 秒量级；仍失败则降级空列表，不阻断澄清主流程。</p>
      */
     private long aiSearchTimeoutMs = 25_000L;

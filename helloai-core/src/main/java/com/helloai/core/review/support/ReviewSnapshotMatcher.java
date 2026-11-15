@@ -10,16 +10,11 @@ import java.util.Set;
 /**
  * 判定快照对账器（`RV-5`，纯静态）。
  *
- * <p><b>判什么</b>：当前可读附件集合与执行产出摘要，是否与「原判定时的快照」一致。
- * 一致 ⇒ 复判对象就是原判对象，照常抽检；不一致 ⇒ 复判测到的已是返工后的另一份产出，
- * 本轮抽检不构成有效度量（调用方按 `snapshot_drift` 跳过，不写 `review_recheck_log`）。</p>
+ * <p>核对当前可读附件集合与产出摘要是否与原判快照一致：一致照常抽检；不一致说明复判测到的是返工后另一份产出，
+ * 调用方按 {@code snapshot_drift} 跳过（不写 {@code review_recheck_log}）。无快照的历史行按「一致」处理（不上溯改写既有行为）。</p>
  *
- * <p><b>没有快照（历史行）按「一致」处理</b>：历史记录无从对账，跳过会把所有老数据排除出抽检；
- * 这里的取舍与 `RV-1`「先只标不拒」同向——新增能力不上溯改写既有行为。</p>
- *
- * <p><b>比对口径</b>：附件按 {@code id|fileSize} 集合比（JSONB 读回的数字类型可能是
- * Integer/Long，统一转字符串避免类型差误判）；快照被截断（{@code attachmentsTruncated=true}）时
- * 只校验「快照里列出的条目当前仍在」，不要求两边集合相等。</p>
+ * <p>附件按 {@code id|fileSize} 集合比（JSONB 数字统一转字符串避免 Integer/Long 类型差）；
+ * 快照截断（{@code attachmentsTruncated=true}）时只校验快照所列条目当前仍在，不要求集合相等。</p>
  */
 public final class ReviewSnapshotMatcher {
 

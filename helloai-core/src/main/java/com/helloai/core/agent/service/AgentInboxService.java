@@ -67,11 +67,11 @@ public interface AgentInboxService extends IService<AgentInbox> {
     int archiveExpired(int batchLimit);
 
     // ══════════════════════════════════════════════════════════════
-    //  管理端视角（2026-10-18）
+    //  管理端视角
     //  ------------------------------------------------------------
     //  为什么需要：原接口全部以 @RequestAttribute("_authId") 取 Agent 身份，
     //  只回答「我这个 Agent 的收件箱」。admin 不是 Agent、没有 _authId
-    //  ⇒ 页面永远空（实测 agent_inbox 有 53 条，接口返回 []）。
+    //  ⇒ 页面永远空（agent_inbox 有 53 条，接口返回 []）。
     //  管理端语义不同（可看全部 / 可按 agent 过滤 / 可跨 agent 标记），
     //  故独立一组方法，**不改动上面 Agent 侧契约**（避免越权面扩大）。
     // ══════════════════════════════════════════════════════════════
@@ -93,9 +93,9 @@ public interface AgentInboxService extends IService<AgentInbox> {
     /** 管理端未读数统计（可按 Agent 过滤；{@code agentId=null} = 全平台）。 */
     long countUnreadForAdmin(Long agentId);
 
-    /** 管理端标记已读：按主键直接改，不做 Agent 归属校验（调用方负责鉴权）。 */
+    /** 管理端标记已读：按主键直接改，不做 Agent 归属校验（用方负责鉴权）。 */
     void markReadById(Long inboxId);
 
-    /** 管理端归档：按主键直接改，不做 Agent 归属校验（调用方负责鉴权）。 */
+    /** 管理端归档：按主键直接改，不做 Agent 归属校验（用方负责鉴权）。 */
     void markArchivedById(Long inboxId);
 }

@@ -29,7 +29,7 @@ export interface SkillOptions {
 
 /**
  * M-9 模型能力谓词：键名与后端 JSON 一字不差（input / output / reasoning / toolCalling / webSearch）。
- * 模态数组可能出现词表外 token（实测有 pdf），故用 string[] 而非字面量联合类型。
+ * 模态数组可能出现词表外 token（有 pdf），故用 string[] 而非字面量联合类型。
  */
 export interface LlmModelCapabilities {
   input: string[]

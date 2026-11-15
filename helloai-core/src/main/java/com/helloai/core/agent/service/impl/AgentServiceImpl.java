@@ -59,7 +59,7 @@ import java.util.stream.Collectors;
  * SubTaskCommandPort / RewardService / ActivityLogService），自身直捅 Mapper 仅限于 agent
  * 域内部（含 §6.140 承接的 task 域跨域收口方法）。
  *
- * <p><b>§7.8 类规模拆分评审结论（2026-08-23）</b>：本类为 agent 域聚合汇聚点，
+ * <p><b>§7.8 类规模拆分评审结论</b>：本类为 agent 域聚合汇聚点，
  * 超 500 行 / 8 依赖红线，按 §7.8 选项二书面声明不继续拆分：</p>
  * <ul>
  *     <li>已剥离：技能策略（AgentSkillPolicyService）、生命周期（AgentLifecycleService）、
@@ -93,7 +93,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     private final AgentExecutionRecordMapper agentExecutionRecordMapper;
     private final ConversationArchiveMapper conversationArchiveMapper;
     private final ConversationMessageMapper conversationMessageMapper;
-    // D-1（2026-10-05）：task_id/sub_task_id/agent_id 语义列但无外键的漏删表，按域收口在此清理
+    // D-1：task_id/sub_task_id/agent_id 语义列但无外键的漏删表，按域收口在此清理
     private final AgentEventMapper agentEventMapper;
     private final AgentSessionMapper agentSessionMapper;
     private final BrowserSessionMapper browserSessionMapper;
@@ -623,11 +623,11 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         // agent_inbox / agent_duty_lease 对 agent.id 有外键约束，必须先于 agent 行删除
         agentInboxMapper.physicalDeleteByAgentId(agentId);
         agentDutyLeaseMapper.physicalDeleteByAgentId(agentId);
-        // P2-4（2026-10-05）：task_agent_member 的 agent_id 亦有外键
+        // P2-4：task_agent_member 的 agent_id 亦有外键
         // （task_agent_member_agent_id_fkey），漏清会撞 FK → HTTP 500。
         // task 域表经端口收口（agent 域不得直捅 task.mapper）。
         taskTeamMemberPort.physicalDeleteByAgentId(agentId);
-        // D-1（2026-10-05）：以下 4 表带 agent_id 语义列但**无外键**，原 Agent 级联被静默漏删
+        // D-1：以下 4 表带 agent_id 语义列但**无外键**，原 Agent 级联被静默漏删
         // （全库孤儿实测：agent_event 91、agent_quality_profile 1；agent_session/browser_session 现网 0）。
         // 均须先于 agent 行删除。
         agentEventMapper.physicalDeleteByAgentId(agentId);
@@ -738,7 +738,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         total += agentExecutionRecordMapper.physicalDeleteByTaskId(taskId);
         total += conversationArchiveMapper.physicalDeleteByTaskId(taskId);
         total += conversationMessageMapper.physicalDeleteByTaskId(taskId);
-        // D-1（2026-10-05）：以下 5 表带 task_id/sub_task_id 语义列但**无外键**，原任务级联被静默漏删
+        // D-1：以下 5 表带 task_id/sub_task_id 语义列但**无外键**，原任务级联被静默漏删
         // （全库孤儿实测：agent_event 211、agent_session 10、reward_log 2；activity_log/browser_session 现网 0）。
         // 均须在 sub_task 行删除之前执行（子查询依赖 sub_task）。
         total += agentEventMapper.physicalDeleteByTaskId(taskId);

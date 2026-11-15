@@ -17,7 +17,7 @@ public interface LlmProviderCatalogService {
     }
 
     /**
-     * 模型候选项（个人工作台 Composer 的「选模型」数据源，2026-11-05）。
+     * 模型候选项（个人工作台 Composer 的「选模型」数据源）。
      *
      * <p><b>与 {@link ProviderCatalogItem} 的分工</b>：前者是「供应商」维度的可用性，
      * 本项是「<b>已注册的纯 LLM 模型</b>」维度——一个供应商下有多个模型，

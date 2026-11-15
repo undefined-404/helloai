@@ -9,7 +9,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
- * 任务终态 ⇒ 回收该任务全部复用沙箱（`SL-2`，2026-11-12；`ADR-005` §6）。
+ * 任务终态 ⇒ 回收该任务全部复用沙箱（`SL-2`，；`ADR-005` §6）。
  *
  * <p><b>为什么由事件驱动、而不是在三个终态入口直接调 {@code releaseByTask}</b>：终态出口
  * 分布在 task 域三个类（自动收尾 / 改状态 / 级联删除），直接调用会让 task 域逐个感知

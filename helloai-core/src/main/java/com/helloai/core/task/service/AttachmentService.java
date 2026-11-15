@@ -118,7 +118,7 @@ public interface AttachmentService extends IService<Attachment> {
     void assertDeletable(Attachment attachment, Long agentId);
 
     /**
-     * 删除附件（P2 删除通道，2026-10-07）：<b>软删</b> DB 行（{@code @TableLogic}）+ 事务提交后
+     * 删除附件（P2 删除通道）：<b>软删</b> DB 行（{@code @TableLogic}）+ 事务提交后
      * best-effort 回收对象存储 + 写入 timeline 事件 {@code attachment_deleted}。
      *
      * <p><b>幂等</b>：附件不存在 / 已逻辑删除时直接返回（不抛 404/500），使外部 Agent 重试安全。</p>

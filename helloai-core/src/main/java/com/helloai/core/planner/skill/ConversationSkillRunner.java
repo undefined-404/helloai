@@ -33,7 +33,7 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
- * 对话内技能执行（2026-10-27）：用户选一个产出型技能 → 当场跑出文件 → 落成会话附件。
+ * 对话内技能执行：用户选一个产出型技能 → 当场跑出文件 → 落成会话附件。
  *
  * <p><b>为什么不是「建任务派子任务」</b>：那是 `/task` 的语义（把需求变成可交付的多步计划）。
  * 用户选 archify 说「画一张支付生命周期图」，要的是<b>这一轮就拿到图</b>，不是拿到一个待拆解的任务。
@@ -47,7 +47,7 @@ import java.util.regex.Pattern;
  * 把 CLI 的错误输出回给模型重产一次，成功率明显提升；仍失败就如实报错并附首条错误——
  * 无限重试会把一次「模型没理解 schema」拖成几十秒的空转。</p>
  *
- * <p><b>两级作用域（2026-10-27 修正）</b>：<b>沙箱</b>按会话复用，槽键 {@code -conversationId}
+ * <p><b>两级作用域</b>：<b>沙箱</b>按会话复用，槽键 {@code -conversationId}
  * （会话 ID 取负，子任务 ID 是雪花正数不会撞车；复用只为省掉 2.2s 的包注入）；
  * <b>工作目录</b>按<b>每次执行</b>隔离，落 {@code /workspace/runs/<runId>/}。
  * 必须分开的理由：槽级锁只保证「单条命令」串行，挡不住
@@ -83,8 +83,8 @@ public class ConversationSkillRunner {
      * 单次注入的「全文 schema」份数上限（其余命中类型只给必填摘要）。
      *
      * <p>预算来源：单份 schema 约 10KB，三份以上 prompt 过长，模型反而抓不住重点
-     * （2026-10-26 实测）。注意这个上限只约束<b>注入多少全文</b>，不约束<b>初判命中多少</b>
-     * ——截断发生在注入层，不在识别层（2026-10-29 修正，见 {@link #guessTypes}）。</p>
+     * 。注意这个上限只约束<b>注入多少全文</b>，不约束<b>初判命中多少</b>
+     * ——截断发生在注入层，不在识别层（见 {@link #guessTypes}）。</p>
      */
     private static final int MAX_INJECTED_SCHEMAS = 2;
 
@@ -220,7 +220,7 @@ public class ConversationSkillRunner {
             SkillSpecExtractor.ChartSpec spec = produceSpec(conversationId, plannerAgentId, skillName, userNeed);
             checkAborted(control);
             Attempt attempt = renderAttempt(scopeId, skillName, spec, QUALITY_SHOWCASE, runDir, control);
-            // 第 1 次自动重试（2026-10-27）：布局门失败先「重新生成 spec 再渲染」。
+            // 第 1 次自动重试：布局门失败先「重新生成 spec 再渲染」。
             //   依据：同一段描述第一次 ambiguous-corridor 失败、用户手点重试就成功 —— spec 由
             //   LLM 生成，col 摆位/边集合每次都不同，成功率实际上取决于这次生成的布局输入。
             //   把用户手点的这一下搬进代码，并把失败原因回喂让它主动避开。
@@ -236,7 +236,7 @@ public class ConversationSkillRunner {
             }
             // 第 2 次兜底：仍不过则降档 standard —— 该档对本类诊断 return []（不报），
             //   保证用户拿到一张图而不是一句失败。宁可 90 分的图，也不要零产物。
-            //   降档必须留痕（2026-10-29，外部评审 §2 第 4 条）：这张图是「兼容布局」产出的，
+            //   降档必须留痕（外部评审 §2 第 4 条）：这张图是「兼容布局」产出的，
             //   用户有权知道，否则会把降档图当完全通过的结果用。
             String degradeReason = null;
             if (!attempt.ok() && attempt.retryable()) {
@@ -301,7 +301,7 @@ public class ConversationSkillRunner {
                             "fileSize", result.fileSize(),
                             "sha256", result.sha256() == null ? "" : result.sha256(),
                             "chartType", result.chartType() == null ? "" : result.chartType(),
-                            // 降档留痕（2026-10-29）：前端据此显示「兼容布局」标记，让用户知道
+                            // 降档留痕：前端据此显示「兼容布局」标记，让用户知道
                             // 这张图没过严格布局门，而不是把它当完全通过的结果用。
                             "qualityProfile", result.qualityProfile() == null ? "" : result.qualityProfile(),
                             "degraded", result.degraded(),
@@ -325,7 +325,7 @@ public class ConversationSkillRunner {
                 ? body.substring(0, BODY_LIMIT) + "\n\n（技能正文过长，已截断）" : body;
         // schema 注入是成功率的关键：技能正文只说「按 schemas/<type>.schema.json 写」，
         // 模型看不到那份文件就只能凭印象编字段，validate 必然失败。
-        // 识别与注入分开（2026-10-29）：guessTypes 保留全部命中，pickInjection 决定注入哪几份全文。
+        // 识别与注入分开：guessTypes 保留全部命中，pickInjection 决定注入哪几份全文。
         List<String> guesses = guessTypes(userNeed);
         List<String> injected = pickInjection(guesses);
         String schemaSection = schemaSection(skillName, injected, guesses);
@@ -411,7 +411,7 @@ public class ConversationSkillRunner {
      *
      * <p><b>为什么必须自检</b>：{@code skills/plugins/archify.md} 自己写着「渲染后必须 check 通过
      * （{@code provenance=current}、{@code issues} 为空）才算产出」，实现少跑这一步就是
-     * 违反自定契约（外部评审 2026-10-27 指出，见 {@code review/技能执行面代码审查…} §3）。</p>
+     * 违反自定契约（外部评审  指出，见 {@code review/技能执行面代码审查…} §3）。</p>
      */
     private Attempt renderAttempt(Long scopeId, String skillName, SkillSpecExtractor.ChartSpec spec,
                                   String quality, String runDir, SkillRunControl control) {
@@ -440,7 +440,7 @@ public class ConversationSkillRunner {
      * <p><b>{@code check} 不接受 {@code --quality}</b>（{@code COMMAND_USAGE.check} 只列
      * {@code --json} / {@code --require-provenance}），它读的是产物里已内嵌的
      * {@code composition.profile}。所以降档 {@code standard} 重渲后本方法依然能通过 ——
-     * 补 check 不会让「降档兜底」失效（2026-10-27 本地实跑确认）。</p>
+     * 补 check 不会让「降档兜底」失效（本地实跑确认）。</p>
      */
     private Attempt checkArtifact(Long scopeId, String skillName, String runDir, SkillRunControl control) {
         control.onPhase(SkillExecutionPhase.CHECK);
@@ -579,7 +579,7 @@ public class ConversationSkillRunner {
      * 失败对策、验收标准），但本链路只需要其中的<b>输入结构</b>。契约单列能覆盖正文里
      * 「用 internal_export_artifact 导出」这类对话轮并不存在的步骤，避免模型去调不存在的工具。</p>
      *
-     * <p><b>2026-10-27 关键约束显式化</b>：模型读 2 万字 schema 抓不住必填字段，真实失败里
+     * <p><b>关键约束显式化</b>：模型读 2 万字 schema 抓不住必填字段，真实失败里
      * 最典型的是 workflow 节点 {@code type} 填了动作词（action/task/step），而 archify 的
      * 枚举是组件类型（frontend/backend/...）。把「最容易错的三条」在契约段点名，
      * 而不是让模型自己从 schema 里找——schema 仍注入做兜底，但契约段是主参照。</p>
@@ -634,7 +634,7 @@ public class ConversationSkillRunner {
         boolean lifecycle = guessedTypes.contains("lifecycle");
         boolean sequence = guessedTypes.contains("sequence");
         StringBuilder sb = new StringBuilder();
-        // ── 公共段（2026-10-27）───────────────────────────────────────────────
+        // ── 公共段───────────────────────────────────────────────
         // 两类「模型猜不出来、只能靠告知」的知识，对所有图类型都成立：
         //   ① meta 的可选字段是重灾区——schema 里它们是 {"$ref": "common.schema.json#/$defs/.."}，
         //      模型跨文件查不到枚举就自己编，直接 schema/enum 失败（实测 /meta/visual_preset
@@ -698,7 +698,7 @@ public class ConversationSkillRunner {
      * <p><b>只为一件事服务</b>：决定把哪几份 schema 注入 prompt。模型仍可推翻这个初判——
      * 它输出的 {@code chartType} 才是最终事实。</p>
      *
-     * <p><b>2026-10-29 修正（外部评审 §2 第 3 条）</b>：原实现在这里硬截断到 2 份，于是
+     * <p><b>（外部评审 §2 第 3 条）</b>：原实现在这里硬截断到 2 份，于是
      * 「画一张支付审批的调用链时序图」命中 lifecycle + workflow + sequence 后<b>丢掉 sequence</b>，
      * 而 prompt 仍允许模型选 sequence ⇒「类型可选、schema 看不到」⇒ 只能凭印象编字段 ⇒
      * {@code validate} 必然失败 ⇒ 表现为「重试一次就好」，实质是白烧一轮 20~40s 生成。
@@ -774,7 +774,7 @@ public class ConversationSkillRunner {
      * 不需要改代码。包内没有 {@code schemas/} 目录（不是数据驱动型技能）时返回空串，
      * prompt 退化为「按正文自行组织字段」——不阻断执行。</p>
      *
-     * <p><b>两级注入（2026-10-29）</b>：{@code injected} 给全文（预算见
+     * <p><b>两级注入</b>：{@code injected} 给全文（预算见
      * {@link #MAX_INJECTED_SCHEMAS}），{@code allHits} 里没进全文的类型只给「顶层必填字段摘要」。
      * 摘要的作用不是替代 schema，而是让模型在选定这些类型时<b>至少把字段名写对</b>——
      * 真正的保证由 {@link #alignType} 的补产兜底。</p>
@@ -864,7 +864,7 @@ public class ConversationSkillRunner {
     /**
      * 取输出的首行（CLI 报错常常多行，消息里只放最关键的一句）。
      *
-     * <p><b>2026-10-27 改进</b>：archify 的 {@code --json} 失败输出是一份格式化的 JSON receipt
+     * <p><b>改进</b>：archify 的 {@code --json} 失败输出是一份格式化的 JSON receipt
      * （{@code {"schemaVersion":1,"ok":false,"error":...,"diagnostics":[...]}}），直接取首行
      * 只会得到孤零零的「{」。这里先尝试解析 receipt：命中 {@code error} 或首条
      * {@code diagnostics[].message} 就展示它们；解析不出（普通文本输出）再回落首行。</p>
@@ -917,7 +917,7 @@ public class ConversationSkillRunner {
         return text.length() > 800 ? text.substring(0, 800) + "…" : text;
     }
 
-    // ===== SKX-14 spec 预校验与自动纠偏（2026-10-31） =====
+    // ===== SKX-14 spec 预校验与自动纠偏 =====
 
     /**
      * 从 {@code $ref} 文本里取定义名：{@code common.schema.json#/$defs/visualPreset} ⇒

@@ -8,7 +8,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 沙箱空闲回收任务（`SL-7`，2026-11-13）。
+ * 沙箱空闲回收任务（`SL-7`）。
  *
  * <p><b>为什么需要</b>：复用槽池的淘汰只在同键再次访问时发生，任务被放弃 / 会话结束后的槽
  * 再也不会被访问，<b>保活多久就泄漏多久</b>。本任务周期触发 {@link SandboxIdleReaper#reapIdle()}，

@@ -3,14 +3,14 @@ package com.helloai.core.shared.util;
 import java.util.List;
 
 /**
- * 上游附件内容的「按预算渲染」工具（P-1 防御层 R2，2026-09-30 审计 §15.4 响应）。
+ * 上游附件内容的「按预算渲染」工具（P-1 防御层 R2，审计 §15.4 响应）。
  *
  * <p>背景：A1 修复后消费方拼接全部 ACTIVE 附件，但仍按单点 {@code DEP_CONTENT_MAX_CHARS}
  * 截断——拼接后总量（如 主文件 7809 + 附录 19294 ≈ 27K 字符）截到 4000 时，第二个及
  * 以后的附件整体落在截断线外，永远不可见。本工具把「拼接后单点截断」改为「逐附件配额
  * 渲染」：</p>
  * <ul>
- *     <li>主附件（列表首位，调用方按创建时间正序保证「主文件优先」）拿大头预算，
+ *     <li>主附件（列表首位，用方按创建时间正序保证「主文件优先」）拿大头预算，
  *     其余附件各得最低配额（既不挤掉主文件、也不让靠后附件整体消失）；</li>
  *     <li>每附件独立按行边界截断（{@link TextTruncator}），被截时附结构化标注
  *     {@code [TRUNCATED] file=... shown=... total=... reason=...}（与核验侧同口径，
@@ -58,7 +58,7 @@ public final class UpstreamAttachmentRenderer {
 
     /** 已成功读取的附件（名称 + 正文）；读取失败 / 不可加载的附件由调用方先过滤。
      *
-     *  <p>{@code attachmentId} 用于被截断时在标注行里给出**可寻址的 ref**（2026-10-10）：
+     *  <p>{@code attachmentId} 用于被截断时在标注行里给出**可寻址的 ref**：
      *  消费侧（外部 Agent）拿到它才能用既有
      *  {@code GET /api/attachments/downloadById/{attachmentId}} 取回被截掉的部分 ——
      *  此前标注行只有文件名，agent「知道被截了、也不知道拿什么去取」。
@@ -72,7 +72,7 @@ public final class UpstreamAttachmentRenderer {
     }
 
     /**
-     * 按预算渲染附件列表（调用方保证列表首位 = 主附件）。
+     * 按预算渲染附件列表（用方保证列表首位 = 主附件）。
      *
      * @param files       已读取成功的附件（null / 空列表 → 返回空串）
      * @param totalBudget 总字符预算（≤0 → 返回空串）

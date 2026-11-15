@@ -24,7 +24,7 @@ public final class TaskRunningSpecPromptRenderer {
     private TaskRunningSpecPromptRenderer() {
     }
 
-    /** 渲染 Prompt 段；spec 为空时返回空串（调用方无需判空）。 */
+    /** 渲染 Prompt 段；spec 为空时返回空串（用方无需判空）。 */
     public static String render(TaskRunningSpec spec) {
         if (spec == null || spec.isEmpty()) {
             return "";

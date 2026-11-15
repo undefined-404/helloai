@@ -6,7 +6,7 @@ import com.helloai.common.constant.TaskMemberStatus;
 import java.time.OffsetDateTime;
 
 /**
- * 任务实际参与成员（任务详情页展示，2026-10-18）。
+ * 任务实际参与成员（任务详情页展示）。
  *
  * <p><b>只代表「实际参与」（{@code task_agent_member}）</b>，不含团队编制成员
  * （{@code team_member}，后续演进为「专家团」概念）——两者语义不同，不混在同一列表。</p>

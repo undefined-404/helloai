@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * 沙箱执行适配层（`SL-8`，2026-11-13）：把老的「一个 {@code Long}」签名映射成 {@link WorkspaceRef}。
+ * 沙箱执行适配层（`SL-8`）：把老的「一个 {@code Long}」签名映射成 {@link WorkspaceRef}。
  *
  * <p><b>为什么存在</b>：{@link SandboxExecutionService} 的消费者传的是子任务 ID / 会话 ID /
  * {@code null}，语义由上下文决定。把「ID → 作用域」的猜测收拢到这一层，运行时实现
@@ -30,7 +30,7 @@ import java.util.List;
  * </ol>
  *
  * <p><b>作用域回滚</b>：{@code helloai.sandbox.opensandbox.scope=subtask} ⇒ 子任务级句柄，不查库
- * （行为回到 2026-11-11 前）。</p>
+ * （行为回到  前）。</p>
  *
  * <p><b>为什么 {@code taskId} 优先于查库</b>：`SL-1` 起槽键是任务级，若每条命令都查一次
  * 「子任务属于哪个任务」，一次 20 轮执行就是 20 次额外查询；执行链本来就知道 {@code taskId}

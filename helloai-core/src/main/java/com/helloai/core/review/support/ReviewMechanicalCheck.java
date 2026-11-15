@@ -11,16 +11,11 @@ import java.util.regex.Pattern;
 /**
  * 表格类机械预检（`RV-10`，纯函数、零 token、零 Spring 依赖）。
  *
- * <p>对 CSV / TSV 附件由平台做确定性计算：物理行数、CSV 记录数、数据行数、列数、
- * 列数不齐、族完整性。机械侧读<b>全文</b>，不受注入预算约束——这是把「平台没看清」
- * 与「执行方算错」分开的唯一事实源。</p>
+ * <p>对 CSV / TSV 附件做确定性计算（物理行数、记录数、数据行数、列数、列数不齐、族完整性），
+ * 读<b>全文</b>不受注入预算约束——区分「平台没看清」与「执行方算错」的事实源。
+ * 只输出实测值；声称值比对见 {@link ReviewClaimComparison}（verdict 解析后）。</p>
  *
- * <p><b>v1 只输出实测值，不输出 {@code claim} 行</b>：声称值来自 reviewer 的输出，
- * 而机械段在 LLM 调用之前装配（见实施计划 `RV-10` M2）。声称值比对由
- * {@link ReviewClaimComparison} 在解析 verdict 后完成。</p>
- *
- * <p><b>确定性</b>：同一输入必得同一输出；无时间/随机/环境依赖。非表格文件在入口被
- * {@link #isTabular} 拦掉，根本不产生 {@code file} 行（「本就不是表格」≠「表格算不出来」）。</p>
+ * <p>同一输入必得同一输出，无时间/随机/环境依赖；非表格文件经 {@link #isTabular} 拦掉，不产生 {@code file} 行。</p>
  */
 public final class ReviewMechanicalCheck {
 
@@ -89,7 +84,7 @@ public final class ReviewMechanicalCheck {
     /**
      * 构建机械预检文本。
      *
-     * @param sources 全部可直读文本附件（调用方在注入截断前取得全文）
+     * @param sources 全部可直读文本附件（用方在注入截断前取得全文）
      * @return {@code [MECHANICAL_CHECK]} 段；无表格类附件时返回空串
      */
     public static String build(List<Source> sources) {

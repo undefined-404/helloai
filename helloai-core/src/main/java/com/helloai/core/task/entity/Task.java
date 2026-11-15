@@ -48,10 +48,8 @@ public class Task extends BaseEntity {
     /**
      * 任务扩展上下文（JSONB）。
      *
-     * <p>历史用途：Task Running Spec 曾以 {@code runningSpec} 键存在本列（JSONB 过渡态）。
-     * B4'（2026-10-02）双轨二选一后，Running Spec 已迁至独立表
-     * （{@code task_running_spec} / {@code task_execution_record}），**不再写本键**；
-     * 存量数据由 {@code TaskRunningSpecDataMigrator} 搬迁，迁完应清理本键。</p>
+     * <p>Running Spec 已迁至独立表（{@code task_running_spec}/{@code task_execution_record}），本列不再写
+     * {@code runningSpec} 键；存量由 {@code TaskRunningSpecDataMigrator} 搬迁。</p>
      */
     @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> context;
@@ -99,35 +97,25 @@ public class Task extends BaseEntity {
     private String priority;
 
     /**
-     * 交付物原型（拆解维度，`TD-1` / `V124`）：{@code BUILD} / {@code DOCUMENT} /
-     * {@code RESEARCH} / {@code DATA} / {@code OPERATE} / {@code DECIDE}，默认 {@code BUILD}。
+     * 交付物原型（拆解维度，`TD-1`/`V124`）：{@code BUILD}/{@code DOCUMENT}/{@code RESEARCH}/
+     * {@code DATA}/{@code OPERATE}/{@code DECIDE}，默认 {@code BUILD}。
      *
-     * <p><b>它管的是「按什么维度拆」，与 {@code GRANULARITY}（拆多细）正交</b>——拆解提示词
-     * 按本值取用对应的拆分维度块（`TD-3`）。</p>
-     *
-     * <p><b>判定时机在澄清终稿产出（`TD-4`），不在拆解时判</b>：拆解阶段模型只见
-     * title + description，判不准（设计 §3.2）。判不出回落 {@code BUILD}，人工为权威输入。
-     * 在 {@code TD-3} 落地前本列恒为 {@code BUILD}，系统行为与改造前完全一致。</p>
+     * <p>管「按什么维度拆」，与 {@code GRANULARITY}（拆多细）正交，拆解提示词按本值取对应拆分维度块（`TD-3`）。
+     * 判定在澄清终稿产出时（`TD-4`）而非拆解时——拆解阶段模型只见 title+description 判不准（设计 §3.2）；
+     * 判不出回落 {@code BUILD}，人工为权威输入。</p>
      */
     @TableField("task_archetype")
     private TaskArchetype taskArchetype;
 
     /**
-     * 乐观锁版本号（`V114` 新增列，与 {@code SubTask} / {@code AgentExecutionRecord} 同口径）。
+     * 乐观锁版本号（`V114`，与 {@code SubTask}/{@code AgentExecutionRecord} 同口径）。
      *
-     * <p><b>存在理由</b>：{@code TaskServiceImpl} 的 {@code updateStatus} / {@code updatePriority} /
-     * 配置更新 / 重新发布四处都是「{@code getById} 载入 → 改字段 → {@code updateById}(整实体)」。
-     * 缺本字段时，两次读改写交错会让后写者用<b>陈旧的整行快照</b>覆盖前者刚写入的字段
-     * （丢失更新），且全程无报错。加 {@code @Version} 后由
-     * {@code OptimisticLockerInnerInterceptor} 自动完成 version 比较与自增（规范 §15），
-     * 冲突更新退化为 0 行受影响而不再静默覆盖。</p>
-     *
-     * <p><b>契约纪律</b>：本字段属持久层并发控制，按 {@code CODE_STYLE §7.2 / W10}
-     * <b>不得进入跨域契约</b>（{@code TaskView} / {@code TaskDraft} / {@code PlannerAgentRef}
-     * 等投影一律不携带），否则消费方会被迫复现 CAS 语义。</p>
-     *
-     * <p><b>兼容性</b>：{@code version} 为 null 时不触发 CAS 条件（MyBatis-Plus 行为），
-     * 故「新建实体后立即 {@code updateById}」的路径行为与迁移前一致。</p>
+     * <p>{@code TaskServiceImpl} 多处「{@code getById} 载入 → 改字段 → {@code updateById} 整实体」，
+     * 缺本字段时两次读改写交错会用陈旧整行快照覆盖前者刚写入的字段（丢失更新且无报错）；加 {@code @Version}
+     * 后由 {@code OptimisticLockerInnerInterceptor} 自动比较自增（规范 §15），冲突退化为 0 行受影响。
+     * 契约纪律：属持久层并发控制，按 {@code CODE_STYLE §7.2/W10} 不得进入跨域投影
+     * （{@code TaskView}/{@code TaskDraft}/{@code PlannerAgentRef}），否则消费方被迫复现 CAS。
+     * {@code version} 为 null 时不触发 CAS（MyBatis-Plus 行为），新建后立即 updateById 与迁移前一致。</p>
      */
     @Version
     private Integer version;
@@ -138,29 +126,20 @@ public class Task extends BaseEntity {
     /**
      * 拆解租约到期时刻（`V146`）。
      *
-     * <p><b>为什么不用 {@code update_time} 判活</b>：拆解线程调模型的十几分钟里一次库都不写，
-     * 它没有能力用「心跳」证明自己活着；用 {@code update_time} 判活等于「跑得比阈值久就判死」，
-     * 而 dev 环境的 provider 读超时（600000ms）与旧阈值（10 分钟）正好相等，误杀是必然的。</p>
-     *
-     * <p>改为「进入 PLANNING 时就写一个约定到期时刻」，巡检只扫「租约过期」。这与
-     * {@code OrderExpireTask} 扫 {@code expire_time}、{@code TccFreezeTimeoutTask} 扫
-     * {@code expire_time} 同构：<b>超时任务扫痕迹、不扫业务主体状态</b>。</p>
-     *
-     * <p>进入 {@code AWAITING_PLAN_CONFIRM} 后本字段无意义（巡检只看 PLANNING），不必清空。</p>
-     *
-     * <p><b>契约纪律</b>：与 {@code version} 同属持久层并发控制，不进入 {@code TaskView}
-     * 等跨域投影。</p>
+     * <p>不用 {@code update_time} 判活：拆解线程调模型的十几分钟里一次库都不写，无法用心跳证明活着，
+     * 用 update_time 判活等于「跑得比阈值久就判死」（dev provider 读超时与旧阈值相等，误杀必然）。
+     * 改为进入 PLANNING 时写约定到期时刻、巡检只扫租约过期，与 {@code OrderExpireTask}/{@code TccFreezeTimeoutTask}
+     * 扫 {@code expire_time} 同构（超时任务扫痕迹、不扫业务主体状态）。进入 {@code AWAITING_PLAN_CONFIRM} 后本字段无意义、不必清空。
+     * 契约纪律：与 {@code version} 同属持久层并发控制，不进入 {@code TaskView} 等跨域投影。</p>
      */
     private OffsetDateTime decomposeLeaseUntil;
 
     /**
      * 当前（或最近一次）拆解的 attemptId（`V146`）。
      *
-     * <p><b>必须在入口生成</b>：幂等的本质是「同一件事有同一个名字」。若由异步段现生成，
-     * 每次执行都得到新 UUID，暂存区 {@code batch_key} 每次都是新值，幂等形同虚设。</p>
-     *
-     * <p>与 {@link #decomposeLeaseUntil} 在同一条 UPDATE 里写入，避免「已 PLANNING 但
-     * attemptId 为空」的窗口。</p>
+     * <p>必须在入口生成：幂等的本质是「同一件事有同一个名字」，异步段现生成会每次得新 UUID、
+     * 暂存区 {@code batch_key} 每次新值，幂等形同虚设。与 {@link #decomposeLeaseUntil} 同一条 UPDATE 写入，
+     * 避免「已 PLANNING 但 attemptId 为空」的窗口。</p>
      */
     private String decomposeAttemptId;
 

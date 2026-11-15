@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * {@code sub_task.context.gateFindings} 的**唯一写入点**（`2026-11-08` 草案实体化）。
+ * {@code sub_task.context.gateFindings} 的**唯一写入点**（`` 草案实体化）。
  *
  * <p><b>为什么落在草案上而不是任务上</b>：findings 描述的是「这一条草案哪里不合格」。
  * 挂在 {@code task.context} 时带来三个必然后果——无法按草案过滤（清理只能整体清）、

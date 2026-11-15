@@ -32,7 +32,7 @@ public interface TaskMapper extends BaseMapper<Task> {
     /**
      * 查询拆解租约已过期的任务（按租约到期升序，limit 上限）。
      *
-     * <p><b>判据换过一次，改的是「判活类型」不是「阈值大小」</b>（2026-11-08，`V146`）：</p>
+     * <p><b>判据换过一次，改的是「判活类型」不是「阈值大小」</b>（`V146`）：</p>
      * <ul>
      *   <li><b>改前</b>：{@code update_time < deadline} + {@code NOT EXISTS (草案)}。
      *       这是<b>心跳判活</b>——「多久没动静就当死了」。可拆解线程在调模型的十几分钟里
@@ -114,7 +114,7 @@ public interface TaskMapper extends BaseMapper<Task> {
      *
      * <p>只选轻量列（不选 `final_report` / `context` 大字段），避免注解式查询绕开 typeHandler 映射。</p>
      *
-     * <p><b>必须排除「已被更新派生取代」的旧行</b>（2026-11-10 真机抓到）：同一父允许重复派生
+     * <p><b>必须排除「已被更新派生取代」的旧行</b>（真机抓到）：同一父允许重复派生
      * （§13.3），旧派生被 `CANCELLED` 后、新派生还在跑时，旧行仍满足「终态 + 父等派生」，
      * 对账会把父<b>反复翻回</b> `RESTRUCTURING`，新派生完成后再也传不回 `DONE`。
      * 判据：同父存在 id 更大且未取消的派生 ⇒ 本行已过期，不参与对账。</p>
@@ -154,7 +154,7 @@ public interface TaskMapper extends BaseMapper<Task> {
      * {@code parent_draft_code} 被清空（`chk_task_parent_anchor` 禁止双锚共存），
      * 故本查询只服务「确认前的重复派生」——同一条草案合法重派生时轮次递增。</p>
      *
-     * @return 最大轮次；无派生行时 0（调用方 +1 得到首次轮次）
+     * @return 最大轮次；无派生行时 0（用方 +1 得到首次轮次）
      */
     @Select("SELECT COALESCE(MAX(derivation_round), 0) FROM task "
             + "WHERE parent_task_id = #{parentTaskId} AND parent_draft_code = #{parentDraftCode} "

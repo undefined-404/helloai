@@ -154,7 +154,7 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
         return attachment;
     }
 
-    /** 扩展名 → MIME 兜底（产物由平台生成，调用方通常已给 mime；这里只处理缺省）。 */
+    /** 扩展名 → MIME 兜底（产物由平台生成，用方通常已给 mime；这里只处理缺省）。 */
     private static String mimeOfExtension(String fileName) {
         String ext = extensionOf(fileName);
         return switch (ext) {

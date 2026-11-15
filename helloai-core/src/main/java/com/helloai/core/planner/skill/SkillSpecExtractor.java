@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 import java.util.Set;
 
 /**
- * 从模型的自由输出里抽出「图表类型 + 输入 JSON」（2026-10-27）。
+ * 从模型的自由输出里抽出「图表类型 + 输入 JSON」。
  *
  * <p><b>为什么需要这一层</b>：对话内直接出图走的是「模型产结构化输入 → 平台跑技能 CLI」两段式。
  * 模型不会严格只输出 JSON（常见：先说一句「好的，我来画」，再给 ```json 围栏，末尾再补一段说明），

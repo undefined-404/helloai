@@ -1,7 +1,7 @@
 package com.helloai.core.agent.service;
 
 /**
- * 技能包执行通道（2026-10-27）：把「注入技能包 → 在技能根目录跑 CLI → 回读产物 → 释放工作区」
+ * 技能包执行通道：把「注入技能包 → 在技能根目录跑 CLI → 回读产物 → 释放工作区」
  * 收敛成一个对外契约。
  *
  * <p><b>为什么需要这层接口</b>：需求对话要在<b>对话轮</b>里直接跑技能（用户选了 archify 就当场出图），
@@ -34,7 +34,7 @@ public interface SkillPackageExecutionService {
      *
      * @param bytes     字节内容
      * @param sha256    内容哈希（供对账）
-     * @param truncated 是否因超过上限被截断（截断的产物<b>不可</b>当交付物，调用方应拒绝）
+     * @param truncated 是否因超过上限被截断（截断的产物<b>不可</b>当交付物，用方应拒绝）
      */
     record Artifact(byte[] bytes, String sha256, boolean truncated) {
     }

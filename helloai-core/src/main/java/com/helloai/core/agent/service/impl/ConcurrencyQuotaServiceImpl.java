@@ -24,7 +24,7 @@ import org.springframework.stereotype.Service;
  * <p>原子防线不在本类（查询侧），而在 {@code SubTaskService.assignNext}
  * 的 agent 行锁 + 锁内判定（见 SubTaskServiceImpl），保证并发派发不超发。</p>
  *
- * <p><b>命名（2026-10-17 命名整改）</b>：原名 {@code InFlightDbQuotaService}。按
+ * <p><b>命名（命名整改）</b>：原名 {@code InFlightDbQuotaService}。按
  * {@code HelloAI_CODE_STYLE.md §8.1}，{@code {domain}.service.impl} 内的实现类须以
  * {@code {接口名}ServiceImpl} 命名，故改为 {@code ConcurrencyQuotaServiceImpl}；
  * 「InFlightDb（DB 在飞数实时统计）」这一<b>策略限定词</b>改由本 javadoc 承载，

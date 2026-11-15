@@ -8,7 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * 核验互斥锁 TTL 解析器（`MED-3`，2026-10-15）。
+ * 核验互斥锁 TTL 解析器（`MED-3`）。
  *
  * <p><b>不变量</b>：核验锁在 LLM 调用期间持有，故「锁有效期」<b>不得短于</b>「单次核验
  * 期间全部 LLM 调用的最坏总时长」——后者由 provider 读超时 <b>× 调用次数</b>给出。若锁先过期，

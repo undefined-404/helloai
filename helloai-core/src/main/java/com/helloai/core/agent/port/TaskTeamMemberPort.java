@@ -10,7 +10,7 @@ package com.helloai.core.agent.port;
  * <p><b>存在理由</b>：{@code task_agent_member} 是 task 域表（V98），其 {@code agent_id}
  * 上有外键 {@code task_agent_member_agent_id_fkey} 指向 {@code agent.id}。Agent 级联删除
  * （{@code AgentServiceImpl#deleteAgentCascade}，agent 域）必须在删除 agent 本体前清空这些成员行，
- * 否则撞外键 → HTTP 500（P2-4，2026-10-05）。agent 域不得直捅 task 域 Mapper，
+ * 否则撞外键 → HTTP 500（P2-4）。agent 域不得直捅 task 域 Mapper，
  * 故收口为本端口。</p>
  *
  * <p>实现见 {@code task.adapter.TaskTeamMemberPortAdapter}。</p>

@@ -58,7 +58,7 @@ final class ToolResultPruner {
      * 就地对消息列表里的工具结果做剪枝。
      *
      * <p>只改 {@link ToolResponseMessage} 的 {@code responseData}（其余消息类型逐字不动），
-     * 返回被改写的消息条数（0 表示无变化，调用方据此判断是否需要替换列表）。</p>
+     * 返回被改写的消息条数（0 表示无变化，用方据此判断是否需要替换列表）。</p>
      */
     static int pruneMessages(List<Message> messages, int thresholdChars, int headChars, int tailChars) {
         if (messages == null || messages.isEmpty()) {

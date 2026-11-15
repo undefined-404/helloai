@@ -19,33 +19,16 @@ import java.util.Set;
 /**
  * 重复失败闸门（RM12 收口：把既有「重复失败短路判定」适配为统一 {@link QualityGate}）。
  *
- * <p><b>只收口「判定」，不搬「处置」</b>：本闸门只回答「本轮是否与上轮构成同一结构性失败」，
- * 事件落库 / 入死信 / 人工介入标记 / 状态流转仍留在 {@code SubTaskReviewServiceImpl} 原处——
- * 处置涉及 {@code SubTask} 等业务对象，属编排职责（§7.3 避免无谓搬运）。</p>
+ * <p>只收口「判定」不搬「处置」：事件落库/入死信/人工介入/状态流转仍留 {@code SubTaskReviewServiceImpl}（编排职责）。
+ * 形态：纯静态 {@link ReviewFailureSignature} 原样不动，本类持有它并补阈值判定。</p>
  *
- * <p><b>形态</b>：按用户拍板的「纯静态工具保持静态、由 Gate 持有」——
- * {@link ReviewFailureSignature} 原样不动（纯静态、零 Spring 依赖），本类持有它并补充阈值判定。</p>
+ * <p>主判据 {@code scoreStalled && textRepeated}：评分未严格提升<b>且</b>两轮 issues bigram 相似度 ≥ 阈值，同时成立才判同一结构性失败
+ * （单靠「评分未提升」过强会误伤全新问题）；{@code score} 任一轮缺失退回「文本高度相似」单条件兜底。</p>
  *
- * <p><b>判定逻辑（与既有实现逐字一致，R1 二次修订）</b>：</p>
- * <ul>
- *   <li>主判据：{@code scoreStalled && textRepeated} —— 评分未严格提升 <b>且</b>
- *       两轮 issues 字符 bigram 相似度 ≥ 阈值，<b>同时成立</b>才判「同一结构性失败」；</li>
- *   <li>真机 687 连续两次误伤（round6 sim=0.17 / round8 sim=0.236，均为全新问题）
- *       即因原「评分未提升」单判据过强所致，故加相似度第二条件；</li>
- *   <li>{@code score} 任一轮缺失 ⇒ 退回「两轮文本高度相似」单条件兜底。</li>
- * </ul>
- *
- * <p><b>2026-10-16 增补（`LOG-20261011-007` B 收敛熔断）</b>：新增<b>先判</b>的
- * 「执行者自报未完成连续 N 轮」判据（basis = {@link #BASIS_SELF_REPORTED_STALL}），
- * 专门补上面双条件判据的<b>盲区</b>——真停滞形态（评分恒定 + 驳回意见整篇重写）全文相似度仅
- * 0.18~0.25，恰不被 0.85 阈值短路，只能靠返工预算封顶（tku-e2e-01 空转 4 轮烧 346K tokens）。
- * 信号取执行者轮报的结构化 {@code STATUS}（{@code REF-8.2.2} 输出契约），属<b>句法级、零阈值标定</b>：
- * 连续 N 轮自认 {@code BLOCKED}/{@code PARTIAL} 且评分不提升 ⇒ 结构性做不到。
- * <b>刻意不走「驳回意见文本相似度」路</b>（含「换比较对象为 {@code [defect]} 标签」）——
- * 该路已被 `doc/review/HelloAI 架构V2进度与质量审计报告（2026-09-30）.md` §15.3
- * 用真实语料实测证伪（标签相似度比全文更低）。
- * 命中时随证据下发 {@link #ANNOTATION_CAPABILITY_OR_INPUT_GAP} 归因标注。
- * 未命中则<b>逐字落回</b>上述原判据 ⇒ 原行为零变化。</p>
+ * <p>增补（`LOG-20261011-007` B 收敛熔断）：先判「执行者自报未完成连续 N 轮」（{@link #BASIS_SELF_REPORTED_STALL}），
+ * 补双条件盲区——真停滞（评分恒定 + 驳回意见整篇重写）全文相似度低、不被阈值短路。信号取轮报结构化 {@code STATUS}（`REF-8.2.2`），
+ * 句法级零阈值：连续 N 轮自认 {@code BLOCKED}/{@code PARTIAL} 且评分不提升 ⇒ 结构性做不到。刻意不走驳回意见相似度路（真实语料已证伪标签相似度更低）；
+ * 命中下发 {@link #ANNOTATION_CAPABILITY_OR_INPUT_GAP} 归因，未命中逐字落回原判据。</p>
  *
  * @see ReviewFailureSignature
  * @see com.helloai.core.shared.util.VerificationFence
@@ -63,7 +46,7 @@ public class RepeatedFailureGate implements QualityGate<List<Map<String, Object>
     public static final String BASIS_TEXT_REPEAT = "text_repeat";
 
     /**
-     * 证据 basis：<b>执行者自报未完成连续 N 轮</b>（`LOG-20261011-007` B 收敛熔断，2026-10-16 新增）。
+     * 证据 basis：<b>执行者自报未完成连续 N 轮</b>（`LOG-20261011-007` B 收敛熔断）。
      *
      * <p>信号源 = 各轮 {@code reviewHistory[].executorStatus}（由执行者轮报
      * {@code VERIFICATION:}/{@code STATUS:} 围栏解析而来，见
@@ -159,38 +142,18 @@ public class RepeatedFailureGate implements QualityGate<List<Map<String, Object>
     /**
      * `LOG-20261011-007` B 收敛熔断判定：<b>执行者自报未完成连续 N 轮</b>是否成立。
      *
-     * <p><b>为什么不用「驳回意见相似度」判同因（重要，勿重蹈）</b>：既有两轮判据比较 issues 全文，
-     * 而真停滞形态下 LLM 每轮把四元组整篇重写，全文相似度实测仅 0.18~0.25 ⇒ 恰好不被短路。
-     * 曾考虑「换比较对象为 {@code [defect]} 标签」，但 `doc/review/HelloAI 架构V2进度与质量审计报告
-     * （2026-09-30）.md` §15.3 用<b>真实语料</b>实测该口径<b>更差</b>（首条 {@code [defect]} Jaccard
-     * 仅 0.1203 / 0.1620，低于全文的 0.2537 / 0.1927；根因 = 三轮用三套不同编号指代同一批缺失项，
-     * 字符级 bigram 捕捉不到语义相同）⇒ 该路已被证伪。本判据改用<b>句法级</b>信号。</p>
+     * <p>不用驳回意见相似度判同因：真停滞下 LLM 每轮整篇重写四元组，全文/标签相似度均低（真实语料已证伪），改用句法级信号。</p>
      *
-     * <p><b>信号与步骤</b>：</p>
-     * <ol>
-     *   <li>取末尾 N 轮（N = {@code autoReviewSelfStallRounds}，默认 3）；</li>
-     *   <li>逐轮读 {@code executorStatus}（执行者轮报 {@code STATUS:} 值，由
-     *       {@code SubTaskReviewServiceImpl.rejectAndRework} 解析写入）。
-     *       <b>任一轮缺失或空白 ⇒ 整条判据不适用，返回 {@code null}</b>（落回既有两轮判据）；</li>
-     *   <li>全部轮次的状态（大小写不敏感）∈ {@link #STALLED_EXECUTOR_STATUSES}
-     *       = {@code BLOCKED} / {@code PARTIAL} —— 即执行者自己连续 N 轮说「没做完」；</li>
-     *   <li>窗口级评分<b>未严格提升</b>（首轮 → 末轮；评分不可比时不作要求，与原判据同口径）
-     *       —— 有实质进展则放行，防误伤「正在收敛」的返工。</li>
-     * </ol>
+     * <p>信号与步骤：① 取末尾 N 轮（N = {@code autoReviewSelfStallRounds}，默认 3）；② 逐轮读 {@code executorStatus}（轮报 {@code STATUS:}，
+     * 由 {@code rejectAndRework} 解析写入），任一轮缺失/空白 ⇒ 整条不适用返回 {@code null}（落回两轮判据）；③ 全部状态（大小写不敏感）
+     * ∈ {@link #STALLED_EXECUTOR_STATUSES}（{@code BLOCKED}/{@code PARTIAL}）；④ 窗口级评分未严格提升（首→末，不可比时不作要求）。</p>
      *
-     * <p><b>为什么「任一状态缺失即整条不适用」</b>：本判据的<b>定义</b>建立在执行者显式自报之上——
-     * 状态缺失（外部 CLI_CLIENT 执行者不产出围栏、或旧数据无该字段）时不是「判定不成立」，
-     * 而是「判据不适用」。此时若勉强用其他信号替代，就是又回到被证伪的文本相似度路。
-     * 故直接让位给原判据。</p>
-     *
-     * <p><b>为什么要求 score 不提升</b>：本判据的动作是「提前转死信 + 人工介入」，
-     * 比返工预算（{@code autoReviewMaxRework}）更早。若评分仍在上升，说明执行者还在收敛，
-     * 提前熔断会掐掉本可自愈的返工 ⇒ 保留 score 条件作为「有进展即放行」的闸。
-     * 换言之本判据早于返工预算，但不早于「实质进展」。</p>
+     * <p>状态缺失即不适用：判据建立在执行者显式自报上，缺失（外部 CLI 不产围栏/旧数据无字段）是「不适用」非「不成立」，勉强替代又回到被证伪的相似度路。
+     * 要求 score 不提升：本判据提前转死信早于返工预算，评分仍升说明还在收敛，提前熔断会掐掉可自愈返工，故留 score 作「有进展即放行」闸。</p>
      *
      * @param history 核验历史（含本轮，按轮次升序）
      * @return 命中返回 BLOCK 决策（证据含 basis/round/rounds/scoreTrend/executorStatuses/annotation）；
-     *         <b>未命中或前提不足返回 {@code null}</b>（调用方落回既有两轮判据）
+     *         <b>未命中或前提不足返回 {@code null}</b>（用方落回既有两轮判据）
      */
     private GateDecision evaluateSelfReportedStall(List<Map<String, Object>> history) {
         if (!dispatchProperties.isAutoReviewSelfStallEnabled()) {

@@ -3,11 +3,11 @@ import { paths } from './paths'
 import type { PageResult } from '@/types'
 
 /**
- * 管理端收件箱（2026-10-18）。
+ * 管理端收件箱。
  *
  * <p><b>为什么从 /agent/inbox 切到 /inbox</b>：前者语义是「我（Agent）的收件箱」，
  * 用 {@code @RequestAttribute("_authId")} 取身份；admin 不是 Agent ⇒ 恒返回空数组
- * （实测 agent_inbox 有 53 条，页面却是空）。管理端改用 /inbox：可看全部、可按 Agent 过滤。</p>
+ * （agent_inbox 有 53 条，页面却是空）。管理端改用 /inbox：可看全部、可按 Agent 过滤。</p>
  */
 
 /** 收件箱行（管理端投影：agentName 已由后端补全，Long ID 为字符串）。 */

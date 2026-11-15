@@ -16,7 +16,7 @@ public class CreateTaskRequest {
     private Integer slaMinutes;
 
     /**
-     * 任务级 Agent 指定策略（ 透传；可空，null=不设置）。
+     * 任务级 Agent 指定策略（透传；可空，null=不设置）。
      *
      * <p>键结构见 {@code TaskAgentPolicy}：plannerAgentId / executorAgentIds[] /
      * reviewerAgentId / fallbackPolicy / difficulty；编辑时传空 Map 表示清空。</p>
@@ -24,7 +24,7 @@ public class CreateTaskRequest {
     private Map<String, Object> agentPolicy;
 
     /**
-     * 任务要求的能力列表（ 透传；可空，null=不设置；编辑时空列表表示清空）。
+     * 任务要求的能力列表（透传；可空，null=不设置；编辑时空列表表示清空）。
      *
      * <p>非空时执行者必须全部具备（AND 语义）。</p>
      */

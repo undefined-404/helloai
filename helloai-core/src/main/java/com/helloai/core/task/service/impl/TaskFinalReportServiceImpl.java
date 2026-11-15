@@ -260,14 +260,14 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                 if (report == null || report.isBlank()) {
                     throw new BizException("Planner LLM 返回空报告");
                 }
-                // ★ 结构性 fail-close：报告必须含正文，不得只有自检围栏（2026-10-16 实测事故：
+                // ★ 结构性 fail-close：报告必须含正文，不得只有自检围栏（事故：
                 //   收尾轮把整篇报告顶替成 793 字符的 VERIFICATION 段，本方法只判「非空白」故放行，
                 //   脏报告一路以 DONE 交付。判据 = 剥掉围栏段后仍有正文，非空白即通过、零阈值）。
                 if (VerificationFence.bodyWithoutFence(report).isBlank()) {
                     throw new BizException("Planner 返回的整合报告缺失正文（仅含自检围栏）: length="
                             + report.length());
                 }
-                // 交付物净化（2026-10-16）：剥离结尾的自检围栏段。围栏是「提交前自审」的行为契约，
+                // 交付物净化：剥离结尾的自检围栏段。围栏是「提交前自审」的行为契约，
                 // 不是报告内容——报告模板与报告审查提示词均未要求它，但收尾轮（FinalReportFenceHook）
                 // 会把它追加到末尾，前端/归档原样展示（用户实测反馈「报告末尾怎么还有 VERIFICATION…」）。
                 // 剥离放在完整性判据之后：判据看的是「原文有没有正文」，净化看的是「交付物是否干净」。
@@ -503,7 +503,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                 .replace("{{SUB_TASK_OUTLINE_INPUTS}}", sb.toString().trim());
     }
 
-    /** 解析大纲 JSON；剥离可能的 Markdown 围栏，解析失败或章节为空返回 null（调用方降级单次调用）。 */
+    /** 解析大纲 JSON；剥离可能的 Markdown 围栏，解析失败或章节为空返回 null（用方降级单次调用）。 */
     private static OutlinePlan parseOutline(String raw) {
         if (raw == null || raw.isBlank()) {
             return null;
@@ -702,7 +702,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
     /**
      * 物化附件正文拼接（与核验链同口径）：仅平台可直读且文本族附件注入正文；
      * 限额常量单源 {@link AttachmentContentPolicy}（每附件 / 总计上限超限截断并以结构化标注行收尾）；
-     * 无可用附件返回空串（调用方以 displayText 兜底）。
+     * 无可用附件返回空串（用方以 displayText 兜底）。
      */
     private String buildAttachmentText(Long subTaskId) {
         List<Attachment> attachments = attachmentService.listActive(subTaskId);

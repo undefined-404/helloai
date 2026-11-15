@@ -20,7 +20,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * 技能包资源加载器（`SKX-6`，2026-10-26）：把 classpath 里的技能包读成「待注入的文件列表」。
+ * 技能包资源加载器（`SKX-6`）：把 classpath 里的技能包读成「待注入的文件列表」。
  *
  * <p><b>包从哪来</b>：随 jar 固化在 {@code classpath:skills/packages/<name>/<version>/}（`SKX-4`
  * 入库，122 文件 / 4.13MB）。刻意<b>不</b>走对象存储 / 挂载卷：离线部署可用、版本随构建可追溯，
@@ -69,7 +69,7 @@ public class SkillPackageLoader {
     /**
      * 目录索引的定位锚：包根下的 {@code <name>/<version>/MANIFEST.json}。
      *
-     * <p><b>为什么不用「列目录」</b>（2026-10-26 实测，jar 内）：对「两级目录通配」这种模式，
+     * <p><b>为什么不用「列目录」</b>（jar 内）：对「两级目录通配」这种模式，
      * jar 里返回的是<b>目录 URL</b>而不是两级条目（Spring 的 jar 遍历只枚举文件、不枚举目录），
      * 于是「按目录名解析 name/version」在 IDE 目录形态能跑、打进 jar 就得到空表。改成<b>以文件结尾</b>
      * 的模式后，匹配器走全条目枚举，三种形态结果一致（IDE / 普通 jar / Boot 嵌套 fat jar）。</p>
@@ -374,7 +374,7 @@ public class SkillPackageLoader {
         return value.trim();
     }
 
-    /** 内容哈希树：{@code sha256( Σ "<fileSha256>  <relativePath>\n" )}，行序为路径字节序。 */
+    /** 内容哈希树：{@code sha256(Σ "<fileSha256>  <relativePath>\n")}，行序为路径字节序。 */
     private static String sha256Tree(List<LoadedSkillPackage.Entry> entries, byte[][] digests) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");

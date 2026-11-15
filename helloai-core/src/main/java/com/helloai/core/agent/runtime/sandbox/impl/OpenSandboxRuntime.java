@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
- * OpenSandbox 运行时（`SL-9`，2026-11-13）：把一条命令 / 一次读写交给容器执行。
+ * OpenSandbox 运行时（`SL-9`）：把一条命令 / 一次读写交给容器执行。
  *
  * <p><b>本类只回答「命令怎么跑、文件怎么读写」</b>。容器何时建、复用多久、何时销毁归
  * {@link SandboxWorkspaceRegistry}；ID → 句柄的映射归 {@code SandboxRuntimeAdapter}；
@@ -106,7 +106,7 @@ public class OpenSandboxRuntime implements SandboxRuntime {
                     executeOneShot(contextId, effective, command, timeoutSec, start, ref.readOnly()),
                     origin, round);
         }
-        // opener 返回 null 只表达「创建失败」，真实原因经 errorSink 带出（2026-10-27）
+        // opener 返回 null 只表达「创建失败」，真实原因经 errorSink 带出
         AtomicReference<String> createFailure = new AtomicReference<>();
         SandboxSlotPool.Slot<SandboxWorkspaceRegistry.SlotKey, Sandbox> slot =
                 registry.open(ref, effective, createFailure);

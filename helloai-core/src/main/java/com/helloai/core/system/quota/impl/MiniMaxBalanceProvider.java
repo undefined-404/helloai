@@ -17,7 +17,7 @@ import java.util.Optional;
  * {@code model_remains[]}，取 {@code model_name="general"} 项。MiniMax 是**额度型
  * 非金额**：写 {@code quotaPercent}/{@code rawUnit}，不写 amount。</p>
  *
- * <p>额度两档（2026-10-26 实测）：{@code current_interval_remaining_percent}
+ * <p>额度两档：{@code current_interval_remaining_percent}
  * （周期内剩余）+ {@code current_weekly_remaining_percent}（周内剩余）。overview 展示
  * 取更紧张一档（两者取小），更贴合「快没了」判断。</p>
  *
@@ -89,7 +89,7 @@ public class MiniMaxBalanceProvider extends AbstractBalanceProvider {
     /**
      * 单档剩余百分比：状态字段为 {@link #STATUS_UNLIMITED} 表示该档不限量 → 100%；
      * 否则读 percent 字段。真实状态字段为 {@code current_interval_status} /
-     * {@code current_weekly_status}（2026-11-02 真机核对，非顶层 {@code status}）。
+     * {@code current_weekly_status}（真机核对，非顶层 {@code status}）。
      */
     private BigDecimal windowPercent(JsonNode general, String statusField, String percentField) {
         if (general.path(statusField).asInt(0) == STATUS_UNLIMITED) {

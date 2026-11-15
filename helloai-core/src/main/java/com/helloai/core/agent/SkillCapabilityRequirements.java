@@ -31,7 +31,7 @@ import java.util.Set;
  * <p>{@code toolCalling} 谓词<b>已备但暂不消费</b>（实测 false 仅 8 行，纳入会新增拒绝面，
  * 超出「无损重放」范围）——仅在 {@link #PROVIDES} 口径内登记。</p>
  *
- * <p><b>★本类承担两个正交关系，不可合并为一张表</b>（`G-022`，2026-10-15）：</p>
+ * <p><b>★本类承担两个正交关系，不可合并为一张表</b>（`G-022`）：</p>
  * <ul>
  *   <li><b>标准技能 ←→ 谓词</b>（{@link #REQUIRED} / {@link #satisfies}）：粗粒度，
  *       8 项标准词表是<b>模型能力标签</b>，落{@code agent.skills}；</li>

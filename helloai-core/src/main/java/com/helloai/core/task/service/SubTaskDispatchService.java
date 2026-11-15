@@ -18,11 +18,10 @@ import java.util.regex.Pattern;
 public interface SubTaskDispatchService {
 
     /**
-     * 重派/改派结果 —— 把「闸门拦截导致的静默跳过」显式化（2026-10-05 修 804）。
+     * 重派/改派结果 —— 把「闸门拦截导致的静默跳过」显式化（804）。
      *
-     * <p>退避/熔断拦截不再返回 void 让调用方无从辨识：接口据此回传明确语义
-     * （{@code applied=false} + {@code reason} + {@code nextAllowed}），
-     * 同时闸门拦截会落 {@code sub_task_redispatch_skipped} 时间线。</p>
+     * <p>退避/熔断拦截回传明确语义（{@code applied=false} + {@code reason} + {@code nextAllowed}），
+     * 并落 {@code sub_task_redispatch_skipped} 时间线，调用方据此辨识闸门拦截。</p>
      *
      * @param applied     是否真正进入调度链（false=被闸门拦截，未改动子任务状态）
      * @param reason      拦截原因：{@code backoff}（退避窗口未过）/ {@code circuit_open}
@@ -53,10 +52,8 @@ public interface SubTaskDispatchService {
     /**
      * 对 BLOCKED 子任务执行**自动**重派（plan §10.7.6 方案 b：巡检接线）。
      *
-     * <p><b>存在理由</b>：{@link #dispatchBlockedSubTask} 此前只有人工入口
-     * （{@code SubTaskController#reassignById} 需 {@code subtask:reassign}、{@link #redispatchInProgress}），
-     * 而 BLOCKED 恰是「重启撞上在途任务」与「执行者自报无能力」两条路径的落点
-     * ⇒ 无人干预时下游依赖恒 PENDING、流水线永久停摆。本方法补上**自动触发**这一环，
+     * <p><b>存在理由</b>：BLOCKED 是「重启撞上在途任务」与「执行者自报无能力」两条路径的落点，
+     * 无人干预时下游依赖恒 PENDING、流水线永久停摆，故需自动触发入口；
      * <b>不改状态机</b>（BLOCKED → PENDING 早已在 {@code SubTaskStateMachine} 中允许）。</p>
      *
      * <p><b>与人工入口的分工</b>：人工入口由用户指定目标 Agent；自动入口先按角色选人
@@ -88,18 +85,15 @@ public interface SubTaskDispatchService {
      * <p>这里故意把离线 Agent 作为首选目标交给 {@link TaskDispatchPort}，
      * 由其 fast-fail + fallback 选择替代 Agent，保持角色与熔断逻辑一致。</p>
      *
-     * <p>依赖守卫：与 {@link #dispatchPendingSubTaskAuto} 对齐——离线重分配
-     * 曾绕过依赖检查，导致"依赖未 DONE 的子任务被直接重派执行"（实测：trae 离线
-     * 时依赖 REVIEW 的子任务被直接分给无本机能力的 inner 执行）。未就绪时保持
-     * PENDING，等依赖 DONE 后由正常自动分发链接管。</p>
+     * <p>依赖守卫：与 {@link #dispatchPendingSubTaskAuto} 对齐——依赖未 DONE 时保持 PENDING，
+     * 等依赖 DONE 后由正常自动分发链接管，不直接重派执行。</p>
      */
     void redispatchOfflineSubTask(Long subTaskId, Long offlineAgentId);
 
     /**
      * 初始分配：对 PENDING 子任务执行自动选人并进入弹性调度链。
      *
-     * <p>该入口用于"初始分配也按外部优先选人"的目标态演进：
-     * 先按角色/策略挑选首选 Agent，再交给 {@link TaskDispatchPort#assignNext(Long, Long)}
+     * <p>先按角色/策略挑选首选 Agent，再交给 {@link TaskDispatchPort#assignNext(Long, Long)}
      * 执行 fast-fail + 熔断 + fallback 的最终分配。</p>
      *
      * @param subTaskId 子任务 ID
@@ -114,10 +108,9 @@ public interface SubTaskDispatchService {
      * <p>与 {@link #dispatchPendingSubTaskAuto} 同流程（依赖守卫 → 重派闸门 → 选人 → assignNext），
      * 唯一区别是**不再累加共享重派预算** {@code sub_task.attempt_total}。</p>
      *
-     * <p>存在理由：离线重派的首选路径（{@link #redispatchOfflineSubTask}）已消耗本轮预算，
-     * 二次自动选人是对**同一次**重派的补偿尝试（原 Agent 不在白名单 / Selector 无候选时兜底）。
-     * 若二次路径也计数，单轮对同一子任务最多累加 2 次，会在 3 轮内打满 5 次预算直入死信
-     * （v3 实测：长耗时任务因心跳抖动快速死信、下游 DAG 级联卡死）。</p>
+     * <p>存在理由：离线重派首选路径（{@link #redispatchOfflineSubTask}）已消耗本轮预算，二次自动选人是
+     * 对<b>同一次</b>重派的补偿（原 Agent 不在白名单 / Selector 无候选时兜底）。若二次也计数，单轮最多累加 2 次，
+     * 3 轮内即打满 5 次预算直入死信。</p>
      *
      * <p>注意：补偿路径仍然复用完整的重派闸门（熔断 + 退避 + 终态判定），
      * 因此不会绕过熔断、也不会在退避窗口内强行改派。</p>
@@ -202,14 +195,11 @@ public interface SubTaskDispatchService {
     /**
      * 改派执行中（IN_PROGRESS）或暂停后（PAUSED）的子任务给新 Agent。
      *
-     * <p><b>两个调用方</b>：① 人工一键改派（前端入口）；② G-015 B2.3 起由
-     * `AgentHealthCheckTask` 用于回收「离线 Agent 名下 PAUSED 超过在飞宽限」的子任务——
-     * 离线在飞的 IN_PROGRESS 任务会先被置 PAUSED 保留归属，超过宽限仍无心跳才经本方法改派，
-     * 避免长耗时任务在 5 分钟心跳窗口内被判死重派。</p>
+     * <p><b>两个调用方</b>：① 人工一键改派（前端入口）；② {@code AgentHealthCheckTask} 回收
+     * 「离线 Agent 名下 PAUSED 超在飞宽限」的子任务（G-015 B2.3）——离线在飞的 IN_PROGRESS 先置 PAUSED
+     * 保留归属，超宽限仍无心跳才经本方法改派，避免长耗时任务在心跳窗口内被判死重派。</p>
      *
-     * <p>背景：外部 Agent 心跳正常但任务停滞（磨洋工/静默卡住）时，IN_PROGRESS 任务
-     * 只能等 {@code SubTaskTimeoutTask} 2 小时超时自动 BLOCKED，前端无人工换人入口。
-     * 本方法提供人工一键改派，两个入口共用同一条改派链：
+     * <p>两个入口共用同一条改派链：
      * <ol>
      *   <li>IN_PROGRESS —— 执行中卡死直接换人；</li>
      *   <li>PAUSED —— 暂停后处置窗口换人：先自动恢复（PAUSED 到 IN_PROGRESS），
@@ -232,30 +222,22 @@ public interface SubTaskDispatchService {
      * @param subTaskId         待改派的 IN_PROGRESS 或 PAUSED 子任务 ID
      * @param preferredAgentId  首选目标 Agent ID（不满足时由调度链 fallback）
      * @return 改派结果；被退避/熔断闸门拦截时 {@code applied=false} 且**不改动子任务状态**
-     *         （闸门判定已提到 block() 之前，见实现），并落 {@code sub_task_redispatch_skipped}
+     *         （闸门判定在 block() 之前），并落 {@code sub_task_redispatch_skipped}
      * @throws BizException 子任务不存在或状态不是 IN_PROGRESS/PAUSED 时抛出
      */
     RedispatchResult redispatchInProgress(Long subTaskId, Long preferredAgentId);
 
     // ══════════════════════════════════════════════════════════════
-    //  §6.52 执行密集判定（public static：供 SubTaskDispatchServiceImpl /
-    //  SubTaskReviewService / ReviewEvidenceAssembler 复用，避免各入口
-    //  各自实现导致判定不一致）。
-    //  注：原同组的 hasLocalExecutionCapability 已于 2026-10-01（W8）归位到
-    //  agent 域 {@code AgentCapability}——其判定依据全部是 Agent 自身字段。
+    //  §6.52 执行密集判定（public static 单源：供调度/核验各入口复用，
+    //  避免各自实现导致判定不一致）。
     // ══════════════════════════════════════════════════════════════
 
     /**
      * §6.52 执行密集信号词表：内容/验收/交付物含本机操作关键词（脚本、服务启动、容器等）。
      *
-     * <p><b>★2026-10-25 误判修正（子任务 {@code 2114355728453206020}「字数与合规机器终检」）</b>：
-     * 原文案里「对定稿<b>执行脚本</b>化终检」命中了旧的裸词条 {@code 执行脚本}，被当成执行密集
-     * 任务，接连在派发侧与核验侧被拒，产出虽已完整物化（3 次沙箱实测 {@code exitCode=0}）
-     * 却永远停在 REVIEW。实际语义是「<b>用脚本方式</b>做终检」——「脚本」是形容词而非可执行本体。</p>
-     *
-     * <p><b>收窄口径</b>：脚本类信号改成「动词 + 脚本」形式，并用负向先行断言排除
-     * {@code 脚本化 / 脚本方式} 这类<b>形容词化</b>用法；真正的信号仍是文件后缀
-     * （{@code .ps1/.sh/.bat/.py/.jar}，无歧义），故上表未收窄。</p>
+     * <p><b>★ 收窄口径</b>：「脚本」可能是形容词而非可执行本体（「执行脚本化终检」= 用脚本方式做终检，
+     * 不是要跑脚本），故脚本类信号用「动词 + 脚本」形式 + 负向先行断言排除 {@code 脚本化 / 脚本方式}，
+     * 避免误判为执行密集而卡在 REVIEW；文件后缀（{@code .ps1/.sh/.bat/.py/.jar}）无歧义，未收窄。</p>
      */
     Pattern EXECUTION_DENSE_PATTERN = Pattern.compile(
             "(?i)(\\.ps1|\\.sh|\\.bat|\\.py|\\.jar)\\b|docker|kubectl|npm run|mvn |gradle "
@@ -279,7 +261,7 @@ public interface SubTaskDispatchService {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  LOG-20261011-007 **A 能力闸**信号词表（2026-10-16 新增）：
+    //  LOG-20261011-007 **A 能力闸**信号词表：
     //  「需读原始附件」判定。与 §6.52 执行密集判定**并列同风格**——
     //  单源在本接口，消费方（agent 域 `ResilientDispatcher`）不得复现。
     //  ⚠️ 两类信号语义不同、不可互相替代：
@@ -306,19 +288,14 @@ public interface SubTaskDispatchService {
     /**
      * LOG-20261011-007 A 能力闸判定：子任务是否「<b>需读原始附件</b>」。
      *
-     * <p><b>为什么用「两侧信号共现」而不是单侧</b>：单侧命中太松——
-     * 「导出文件」单独出现可能只是产出物命名，「逐项核对」单独出现可能核对的是上游文本。
-     * 只有「源侧（原始文件 / 原始字段）」<b>且</b>「动作侧（逐项核对类）」同时出现，
-     * 才构成「必须打开文件本体逐项比对」这一不可绕过的能力要求。</p>
+     * <p><b>为什么两侧信号共现而非单侧</b>：单侧太松——「导出文件」可能只是产出物命名，「逐项核对」可能核对的是
+     * 上游文本；只有源侧（原始文件/原始字段）<b>且</b>动作侧（逐项核对类）共现，才构成「必须打开文件本体逐项比对」
+     * 这一不可绕过的能力要求。</p>
      *
      * <p><b>词表刻意从窄</b>（宁可漏判、不可误拦）：本判定命中后的动作是
      * 「不把该子任务派给无本机能力的 Agent」（走 fallback；无替代则停留 PENDING + 人工介入），
      * 误拦会造成合法任务停摆，代价高于漏判 ⇒ 只收窄到高置信措辞。
      * 扩展词表时按同源单点修改（勿在消费方另写一份）。</p>
-     *
-     * <p>命中样例（`LOG-20261011-007` 事故原文）：
-     * 「盘点数据文件字段：对实际数据文件逐项标注存在/缺失/命名不一致，全部<b>源字段</b>为 PENDING」
-     * —— 源侧「源字段」+ 动作侧「逐项标注」共现 ⇒ 命中。</p>
      *
      * @param subTask 子任务实体；null 返回 {@code false}
      * @return 需读原始附件返回 {@code true}

@@ -21,7 +21,7 @@ import java.util.List;
  * 外置为同域工具类（与 RM9-a「{@code parseInboxId} 随唯一调用方 {@code ack} 迁移」同族判据）。
  * 本类为<b>纯函数</b>（零状态、零依赖），不是 §9.2 所禁的「{@code FooHelper} 相互转发」。</p>
  *
- * <p><b>命名（2026-10-17 命名整改）</b>：原名 {@code SubTaskProjectionMapper}。§17 将 {@code *Mapper} 保留给
+ * <p><b>命名（命名整改）</b>：原名 {@code SubTaskProjectionMapper}。§17 将 {@code *Mapper} 保留给
  * MyBatis 持久化映射，本类与 DB 无关（纯内存投影），故去 {@code Mapper} 后缀并迁出 {@code service.impl}
  * （该包只应容纳 {@code *ServiceImpl}），置入 {@code task.projection}。</p>
  *
@@ -81,7 +81,7 @@ public final class SubTaskProjection {
                     entity.setNote(u.note());
                     // TD-11：`ref` 必须一起落库——`acceptancePreconditions` 存的是标签（U1/U2），
                     // 标签本身不落到 JSONB 里，核验侧就永远「解析不到引用 ⇒ 不豁免」，
-                    // 等于把「fail-safe 保持严格」变成常态。2026-10-25 实测发生（`LOG-20261025-016`）。
+                    // 等于把「fail-safe 保持严格」变成常态。发生（`LOG-20261025-016`）。
                     entity.setRef(u.ref());
                     // TD-13 S2：「这个缺口卡住哪几条草案」。纯 JSONB 键、零迁移；
                     // 归一化（越界 / 自引用 / 去重）已在落库侧完成，这里只做逐字段投影。

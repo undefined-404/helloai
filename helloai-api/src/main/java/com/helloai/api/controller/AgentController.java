@@ -82,10 +82,10 @@ public class AgentController {
         // 注册前预校验 modelType（格式/可用性/角色唯一性）与 skills 白名单：两类校验都前置于
         // 创建 Agent，失败时库里不留任何痕迹。skills 是后补的一项——此前只预校验了 modelType，
         // skills 校验留在 applyRegistrationExtras 内，抛错时 register() 已提交，会残留
-        // access_type=CLI_CLIENT / model_type=NULL 的脏 Agent（2026-10-10 修复）。
+        // access_type=CLI_CLIENT / model_type=NULL 的脏 Agent。
         // 幂等复用（idempotent=true）须先定位既有 Agent 并把「自身」排除出唯一性校验：
         // 该 Agent 本身就占着 (角色, 模型) 这一格，不排除就会「被自己挡下」报 409
-        // （G-011 技术债，2026-10-10 修复）。定位是只读查询，不产生副作用。
+        // （G-011 技术债）。定位是只读查询，不产生副作用。
         String modelType = (String) body.get("modelType");
         agentService.validateModelType(modelType, role, idempotent ? resolveReuseAgentId(name) : null);
         agentService.validateAgentSkills(modelType, resolveExplicitSkills(body));
@@ -115,10 +115,10 @@ public class AgentController {
         // 注册前预校验 modelType（格式/可用性/角色唯一性）与 skills 白名单：两类校验都前置于
         // 创建 Agent，失败时库里不留任何痕迹。skills 是后补的一项——此前只预校验了 modelType，
         // skills 校验留在 applyRegistrationExtras 内，抛错时 register() 已提交，会残留
-        // access_type=CLI_CLIENT / model_type=NULL 的脏 Agent（2026-10-10 修复）。
+        // access_type=CLI_CLIENT / model_type=NULL 的脏 Agent。
         // 幂等复用（idempotent=true）须先定位既有 Agent 并把「自身」排除出唯一性校验：
         // 该 Agent 本身就占着 (角色, 模型) 这一格，不排除就会「被自己挡下」报 409
-        // （G-011 技术债，2026-10-10 修复）。定位是只读查询，不产生副作用。
+        // （G-011 技术债）。定位是只读查询，不产生副作用。
         String modelType = (String) body.get("modelType");
         agentService.validateModelType(modelType, role, idempotent ? resolveReuseAgentId(name) : null);
         agentService.validateAgentSkills(modelType, resolveExplicitSkills(body));
@@ -139,7 +139,7 @@ public class AgentController {
      * {@link com.helloai.api.advice.GlobalExceptionHandler} 透出 HTTP 400，与 {@link #resolveRole}
      * 同口径）：此前空 name 会正常建库，生成一个「无名 Agent」，而删除入口
      * {@code deleteById} 的 confirmName 校验会因 {@code isBlank()} 直接拒绝，
-     * 导致该空名 Agent <b>无法删除</b>（2026-10-05 修复）。</p>
+     * 导致该空名 Agent <b>无法删除</b>。</p>
      */
     private static String resolveName(Map<String, Object> body) {
         Object raw = body.get("name");
@@ -155,7 +155,7 @@ public class AgentController {
      * <p>缺失/空白/非法取值一律抛 {@code BizException(400, ...)}（经
      * {@link com.helloai.api.advice.GlobalExceptionHandler} 透出 HTTP 400）：
      * 此前 {@code AgentRole.valueOf} 的 {@code IllegalArgumentException} 在 role 为 null 时
-     * 退化为 NPE → 500，且非法枚举值会把枚举类路径泄漏进错误消息（2026-10-05 修复）。</p>
+     * 退化为 NPE → 500，且非法枚举值会把枚举类路径泄漏进错误消息。</p>
      */
     private static AgentRole resolveRole(Map<String, Object> body) {
         Object raw = body.get("role");
@@ -213,7 +213,7 @@ public class AgentController {
         if (modelType != null && !modelType.isBlank()) {
             int colonIdx = modelType.indexOf(':');
             // 入参校验失败属客户端错误，显式 code=400（BizException 单参构造默认 500；
-            // 2026-10-05 修复：Agent 注册非法入参由 500 收敛为 400，经 GlobalExceptionHandler 透出）。
+            // Agent 注册非法入参由 500 收敛为 400，经 GlobalExceptionHandler 透出）。
             if (colonIdx <= 0 || colonIdx == modelType.length() - 1) {
                 throw new com.helloai.common.base.BizException(400,
                         "modelType 格式错误，应为 providerCode:modelName，例如 deepseek:deepseek-v4-flash");
@@ -226,7 +226,7 @@ public class AgentController {
             }
             // 同一模型在同一角色下全局唯一（与 registerWithExtras 路径的 validateModelType 对齐）。
             // 必须排除自身：幂等复用场景下该 Agent 已占着 (角色, 模型) 这一格，不排除会把
-            // 「自己」判成冲突（G-011，2026-10-10 修复）。
+            // 「自己」判成冲突（G-011）。
             agentService.validateModelUniqueInRole(providerCode, modelName, agent.getRole(), agent.getId());
             agent.setModelType(modelType);
         }

@@ -31,7 +31,7 @@ import java.util.Map;
 /**
  * MCP 工具只读簇：前置产出摘要（{@code getDepsSummary}）与子任务详情（{@code getSubTaskDetail}）。
  *
- * <p><b>来源</b>：由 {@code McpToolServiceImpl}（RM9-a，2026-10-16）按职责抽取 —— 本簇两个入口
+ * <p><b>来源</b>：由 {@code McpToolServiceImpl}（RM9-a）按职责抽取 —— 本簇两个入口
  * 均为<b>纯只读组装</b>（零状态变更、零事务写入），是 {@code RM计划 §4.3.1} 三类中最小且最安全的一簇。</p>
  *
  * <p><b>守卫不在此层</b>：{@code assertAgentActive} / {@code assertToolEnabled} /
@@ -121,7 +121,7 @@ public class McpReadModelServiceImpl implements McpReadModelService {
                         item.setTruncated(true);
                         truncatedCount++;
                     } else if (render.contains("[TRUNCATED] file=")) {
-                        // R2（2026-09-30 审计 §15.4）：附件路径逐附件截断标注已在 render 内
+                        // R2（审计 §15.4）：附件路径逐附件截断标注已在 render 内
                         // （总长受控故顶层不触发）——布尔位与计数如实反映「存在不可见内容」
                         item.setTruncated(true);
                         truncatedCount++;
@@ -160,11 +160,11 @@ public class McpReadModelServiceImpl implements McpReadModelService {
      * 优先，失败/无附件回退 {@code context.lastExecution.output} 原始产出；两者均无返回 null。
      * 与执行链侧的上游产出装载逻辑同源但**消费方隔离**（各自持有，避免渲染逻辑耦合）。
      *
-     * <p><b>P-1 修复（2026-09-30）</b>：反转 {@code listActive} 倒序为正序（最早创建在前，
+     * <p><b>P-1 修复</b>：反转 {@code listActive} 倒序为正序（最早创建在前，
      * 主文件优先）+ 拼接全部可加载 ACTIVE 附件（各带 {@code 【文件：xxx】} 来源标题行）——
      * 原实现只取倒序第一个可加载附件，后创建的附录会把主文件挤出（tku-e2e-01 事故根因）。</p>
      *
-     * <p><b>P-1 修复 R2（2026-09-30 审计 §15.4）</b>：拼接改为
+     * <p><b>P-1 修复 R2（审计 §15.4）</b>：拼接改为
      * {@link UpstreamAttachmentRenderer} 逐附件配额渲染（主附件保底 + 次要最低配额 +
      * 逐附件 {@code [TRUNCATED] file=...} 标注）——替代「拼接后单点 4000 截断」，
      * 第二个及以后附件不再整体不可见。</p>

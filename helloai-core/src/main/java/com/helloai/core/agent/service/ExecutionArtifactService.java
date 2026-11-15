@@ -6,7 +6,7 @@ import com.helloai.core.agent.output.ParsedOutput;
  * 执行产出物化服务：解析 LLM 产出中的 artifact 声明，将内嵌内容落盘为平台附件
  * （物化附件作为执行证据供自动核验与下游读取）。
  *
- * <p><b>契约为「ID 契约」（2026-10-01 W6 改造）</b>：本接口此前以
+ * <p><b>契约为「ID 契约」（W6 改造）</b>：本接口此前以
  * {@code com.helloai.core.task.entity.SubTask} 为形参，构成 CODE_STYLE §6 反向依赖
  * {@code agent → task}。现改为只接收 {@code subTaskId}，由实现侧经
  * {@link com.helloai.core.agent.port.SubTaskQueryPort} 读取 agent 域自有快照。</p>

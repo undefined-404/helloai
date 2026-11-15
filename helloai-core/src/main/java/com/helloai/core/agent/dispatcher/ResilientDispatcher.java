@@ -34,7 +34,7 @@ import java.util.Map;
  *
  * <p>实现 {@link TaskDispatchPort}（<b>agent 域</b>提供的子任务分发端口）：
  * 端口按 §7.2 判据落在提供方 agent 域（消费方 task 高于提供方 agent），
- * task 域依赖它属顺向合法的 {@code task → agent}（2026-10-01 W8 由 {@code task.port} 归位）。</p>
+ * task 域依赖它属顺向合法的 {@code task → agent}（W8 由 {@code task.port} 归位）。</p>
  *
  * <p>为任务分配提供熔断降级保护：
  * <ul>
@@ -46,7 +46,7 @@ import java.util.Map;
  *   <li>分配前执行密集能力预检——执行密集任务（需本机 shell/文件/服务操作）
  *       不分配给无本机执行能力的 Agent，避免"无能力执行 → 幻觉交付 → 审核放行"，
  *       覆盖初始分配 / 离线重分配 / ASSIGNED 超时 / 熔断降级等所有入口</li>
- *   <li>分配前「需读原始附件」能力预检（`LOG-20261011-007` A 能力闸，2026-10-16 新增）
+ *   <li>分配前「需读原始附件」能力预检（`LOG-20261011-007` A 能力闸）
  *       ——验收要求「逐项核对导出文件原始列 / 原始字段」的任务不分配给
  *       无结构化附件解析能力的 Agent（内部 LLM 的 `internal_read_attachment`
  *       只做 UTF-8 解码，二进制 xlsx/docx/pdf 读不出结构化列）。
@@ -303,7 +303,7 @@ public class ResilientDispatcher implements TaskDispatchPort {
      *
      * <p>注意：fallback 参数类型必须与原方法保持一致（{@code TaskDispatchPort.DispatchConstraints}），
      * 否则 Resilience4j 按签名匹配不到 fallback（日志 WARN "No fallback method match found"），
-     * 降级静默失效、原异常直接冒泡（2026-09-04 blocked_reassign 500 根因，契约测试锁定）。</p>
+     * 降级静默失效、原异常直接冒泡（blocked_reassign 500 根因，契约测试锁定）。</p>
      *
      * @param agentId   原始分配目标 Agent ID
      * @param subTaskId 待分配的子任务 ID
@@ -331,7 +331,7 @@ public class ResilientDispatcher implements TaskDispatchPort {
         Agent alternative = agentSelector.pickAlternative(agentId, role, constraints);
 
         if (alternative == null) {
-            // REF-5.1（2026-10-10）：此分支此前只 log.error 后抛**默认 500** 的 BizException ——
+            // REF-5.1：此分支此前只 log.error 后抛**默认 500** 的 BizException ——
             // ① 用户拿到的是「服务器错误」，看不到可读原因；② 与紧邻的**成功降级**路径
             //（{@link #recordDispatchFallback} 落 sub_task_dispatch_fallback）不对称，
             // 改派失败在时间线上**无痕**。现改为两件事：
@@ -362,7 +362,7 @@ public class ResilientDispatcher implements TaskDispatchPort {
             return;
         }
 
-        // 落 sub_task_dispatch_fallback 时间线（2026-10-05 修 804 根因③）：
+        // 落 sub_task_dispatch_fallback 时间线（804 根因③）：
         // 此前 fallback 只 log.warn、不落 timeline —— 前端时间线只看得到「首选/preferred Agent」，
         // 看不到「实际执行者」，用户选了 trae 却被静默换成内置 Agent 且无任何痕迹。
         // 此处补 preferred → actual + reason 留痕，让「实际执行者」可观测。

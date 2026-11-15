@@ -147,7 +147,7 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
      * 「平台内在飞记录」的唯一匹配器（{@link #hasPendingOrRunning} 与 {@link #closeInFlight} 共用）。
      *
      * <p><b>必须共用一处</b>：这两件事是同一判定的正反两面——「判得出有没有」却「清不掉」，
-     * 就会出现「改派被永久挡住」的僵尸态（2026-10-25 实测现场）。各写一份条件必然漂移。</p>
+     * 就会出现「改派被永久挡住」的僵尸态（现场）。各写一份条件必然漂移。</p>
      */
     private LambdaQueryWrapper<AgentExecutionRecord> inFlightFilter(Long subTaskId) {
         return new LambdaQueryWrapper<AgentExecutionRecord>()
@@ -214,7 +214,7 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
     /**
      * DB Poller 扫描：查找「长时间未被消费的 PENDING」记录。
      *
-     * <p><b>2026-10-05（804 双消费假阻塞）</b>：新增 {@code create_time < cutoff} 条件——
+     * <p><b>（804 双消费假阻塞）</b>：新增 {@code create_time < cutoff} 条件——
      * 此前 {@code last_attempt_time IS NULL} 分支会把「<b>刚创建、MQ 主路径即将消费</b>」的
      * PENDING 也纳入兜底，导致 Poller 与 MQ 同时消费同一 {@code recordId}（同一命令双消费）。
      * 现要求记录创建时间早于阈值，只兜底<b>长期滞留</b>的记录，不再抢占新鲜 PENDING。</p>

@@ -27,7 +27,7 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
      * 物理删除某 Agent 的质量画像（cascade）。
      *
      * <p>2026-10-05 D-1：{@code agent_quality_profile.agent_id} 语义列无外键，
-     * Agent 级联删除时被静默漏删（实测 1 行孤儿）。供 Agent 级联删除使用。</p>
+     * Agent 级联删除时被静默漏删（1 行孤儿）。供 Agent 级联删除使用。</p>
      */
     @Delete("DELETE FROM agent_quality_profile WHERE agent_id = #{agentId}")
     int physicalDeleteByAgentId(@Param("agentId") Long agentId);
@@ -95,7 +95,7 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
      * reviewer_reviewed_count / reviewer_disagreement_count 单条 UPDATE 累加，
      * 并发由 PG 行锁串行化；调用方（review 域经 Service 接口）best-effort 包裹。
      *
-     * <p>画像行不存在时返回 0（调用方决定是否 INSERT 兜底）。</p>
+     * <p>画像行不存在时返回 0（用方决定是否 INSERT 兜底）。</p>
      */
     @Update("""
             UPDATE agent_quality_profile SET
@@ -113,7 +113,7 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
      * 重算数据源：该执行者（sub_task.assigned_agent_id 当前归属）名下全部
      * review_record，按记录 id 升序（保证重算顺序与历史落库顺序一致）。
      *
-     * <p>返回具体 DTO 而非 List&lt;Map&gt;：强类型投影最佳实践（2026-10-27 起全局
+     * <p>返回具体 DTO 而非 List&lt;Map&gt;：强类型投影最佳实践（全局
      * Map→JacksonTypeHandler 注册已移除，不再存在整行按 JSON 解析首列的劫持）。</p>
      */
     @Select("""
@@ -131,7 +131,7 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
      * 全局质量概览（看板 overview）：画像表存量聚合，单行必返回。
      *
      * <p>COALESCE 兜底保证空表也返回一行 0 值；投影 record（非 Map）——强类型投影最佳实践
-     * （2026-10-27 起全局 Map→JacksonTypeHandler 注册已移除）。</p>
+     * （全局 Map→JacksonTypeHandler 注册已移除）。</p>
      */
     @Select("""
             SELECT COALESCE(SUM(reviewed_count), 0) AS totalReviewed,
@@ -148,7 +148,7 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
      * Agent 质量排行（看板 agents）：一次通过率降序 → 审查数降序 → agentId 升序。
      *
      * <p>agentName/qualityScore 为占位：前者由 Service 层经 AgentService 批量补名，
-     * 后者由 Service 层逐行调 {@code computeQualityScore} 重算（口径唯一，防 SQL 漂移）。
+     * 后者由 Service 层逐行调 {@code computeQualityScore} 重算（唯一，防 SQL 漂移）。
      * limit &lt;= 0 返回全部（LIMIT 子句动态拼接）。</p>
      */
     @Select("""

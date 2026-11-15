@@ -24,7 +24,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 技能包注入（`SL-9`，2026-11-13）：把 classpath 里的技能包写进复用工作区。
+ * 技能包注入（`SL-9`）：把 classpath 里的技能包写进复用工作区。
  *
  * <p><b>为什么这是独立职责</b>：装包是「技能的安装步骤」，不是「运行时能力」。它需要与
  * {@link OpenSandboxRuntime} <b>同一个槽</b>（装完紧接着 {@code node bin/xxx.mjs} 必须命中同一容器），
@@ -69,7 +69,7 @@ public class SkillPackageInstaller {
      * <p><b>为什么走「同一槽」而不是「新建一个沙箱装包」</b>：技能执行的形态是
      * 「装包 → 跑 {@code node bin/xxx.mjs}」（`SKX-9`），两步必须在<b>同一个容器</b>里。
      * 槽键与 {@link OpenSandboxRuntime#exec} 完全一致（作用域 + 规格指纹），所以装完包紧接着
-     * 执行命令时直接命中这个已装好的槽，省掉一次建沙箱（实测 0.7~1.2s）也保证文件在。</p>
+     * 执行命令时直接命中这个已装好的槽，省掉一次建沙箱（0.7~1.2s）也保证文件在。</p>
      *
      * @param ref         工作区句柄（必须可入池：一次性沙箱装完即销毁，包无处可用）
      * @param spec        建槽规格；{@code null} ⇒ 全局默认（技能应显式传目标运行时规格）

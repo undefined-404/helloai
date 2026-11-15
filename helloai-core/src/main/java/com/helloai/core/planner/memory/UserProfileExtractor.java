@@ -20,7 +20,7 @@ import java.util.ArrayList;
  *
  * <p><b>字段约定</b>（profile_json 键）：{@code name}=用户称呼、
  * {@code role}=身份/角色、{@code preferences}=偏好列表（String[]）、
- * {@code style}=沟通风格、{@code note}=其他备注。无命中任何句式时返回空 Map（调用方跳过）。</p>
+ * {@code style}=沟通风格、{@code note}=其他备注。无命中任何句式时返回空 Map（用方跳过）。</p>
  */
 public final class UserProfileExtractor {
 

@@ -37,7 +37,7 @@ public final class AssistantWorkBriefFormatter {
     /**
      * 渲染概览。
      *
-     * @param tasks    任务摘要（调用方已按上限取好）
+     * @param tasks    任务摘要（用方已按上限取好）
      * @param maxChars 整段字符上限（&lt;=0 视为不限）
      * @return 文本；无任务返回空串
      */

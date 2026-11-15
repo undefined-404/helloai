@@ -17,8 +17,8 @@ import java.util.List;
  *
  * <p>append-only：只插入，不提供业务更新入口。</p>
  *
- * <p><b>2026-10-05 D-1 修订</b>：{@code agent_event} 带 {@code task_id}/{@code sub_task_id}/{@code agent_id}
- * 语义列但<b>无外键</b>，任务/Agent 级联删除时会被<b>静默漏删</b>（实测 211+91 行孤儿）。
+ * <p><b>D-1 修订</b>：{@code agent_event} 带 {@code task_id}/{@code sub_task_id}/{@code agent_id}
+ * 语义列但<b>无外键</b>，任务/Agent 级联删除时会被<b>静默漏删</b>（211+91 行孤儿）。
  * 现补两个物理删除入口专供级联删除使用（对账删除等运维操作仍可走 SQL 直连）。</p>
  */
 @Mapper
@@ -98,7 +98,7 @@ public interface AgentEventMapper extends BaseMapper<AgentEvent> {
      * 时间参数要求 {@link OffsetDateTime} 类型（不可为 {@code String}）—— 否则 MyBatis 会以
      * VARCHAR 形式发送给 PostgreSQL 的 {@code timestamptz} 列，触发
      * {@code operator does not exist: timestamp with time zone >= character varying}
-     * 错误（实测：http-nio 500，PG 报 ERROR）。时间字符串由调用方在 controller/service 层
+     * 错误（http-nio 500，PG 报 ERROR）。时间字符串由调用方在 controller/service 层
      * 用 {@link OffsetDateTime#parse} 解析，避免在 mapper 里重复同一解析口径。</p>
      *
      * @param page      分页参数（页码/页大小由调用方校验）

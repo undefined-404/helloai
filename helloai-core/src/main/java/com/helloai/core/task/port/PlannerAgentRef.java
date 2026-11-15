@@ -1,7 +1,7 @@
 package com.helloai.core.task.port;
 
 /**
- * Planner Agent 只读引用（RM6 端口契约去实体，2026-10-04）。
+ * Planner Agent 只读引用（RM6 端口契约去实体）。
  *
  * <p><b>为什么是值对象而非实体</b>（CODE_STYLE §7.2 值对象纪律）：{@link TaskPlannerPickerPort}
  * 的消费方（task 域）只需要「选中的 Planner 是谁」的只读投影（id + name），不需要 agent 域实体

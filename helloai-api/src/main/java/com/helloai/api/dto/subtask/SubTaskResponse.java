@@ -61,7 +61,7 @@ public class SubTaskResponse {
      * {@code SubTaskServiceImpl} 的隐式评分），未完成 / 已取消 / 未指派执行者时为空
      * <b>属预期</b>，不是「没算出来」。前端据此区分「空态」与「待评分」。</p>
      *
-     * <p>2026-10-18 补：此前该字段<b>只存在于实体与库表</b>，响应 DTO 未携带 ⇒
+     * <p>此前该字段<b>只存在于实体与库表</b>，响应 DTO 未携带 ⇒
      * 子任务列表「评分」列恒空，而详情页（走 review 接口）有分，形成对不上的观感。</p>
      */
     private Integer compositeScore;

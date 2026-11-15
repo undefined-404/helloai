@@ -27,7 +27,7 @@ public interface PlannerDecomposeAsyncService {
      * <p>幂等防御：仅当任务仍处 PLANNING 时才执行，否则直接跳过（覆盖超时回收后
      * 慢线程迟到、重复提交等边界）。任何失败都会回退 PENDING 并记录 timeline。</p>
      *
-     * @param taskId 任务 ID（调用前已由同步守卫推进至 PLANNING）
+     * @param taskId 任务 ID（用前已由同步守卫推进至 PLANNING）
      */
     void executeDecompose(Long taskId);
 

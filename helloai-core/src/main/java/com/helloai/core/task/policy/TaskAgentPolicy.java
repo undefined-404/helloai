@@ -67,7 +67,7 @@ public final class TaskAgentPolicy {
         return asLong(raw(policy, KEY_PLANNER_AGENT_ID));
     }
 
-    /** 执行者白名单；未指定返回空列表（调用方视为不限定）。 */
+    /** 执行者白名单；未指定返回空列表（用方视为不限定）。 */
     public static List<Long> executorAgentIds(Map<String, Object> policy) {
         Object raw = raw(policy, KEY_EXECUTOR_AGENT_IDS);
         if (!(raw instanceof List<?> list)) {

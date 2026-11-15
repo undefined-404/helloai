@@ -61,15 +61,9 @@ import java.util.Set;
  * （{@code SubTaskLeaseService} 的过期回收经 {@link #reclaimToPending(SubTask)}）与 SQL 级原子写
  * （{@link #claimAtomic(Long, Long)}）在内（RM9-b 微调④，§4.3.2 验收口径 ii）。</p>
  *
- * <p><b>对 2026-08-23「§7.8 选项二不继续拆分」声明的正面回应</b>：该声明的顾虑是
- * 「状态流转各入口共享同一状态机与事件发布链，拆分会造成<b>事件序与事务边界在类间漂移</b>」——
- * 本笔把<b>整条状态流转链原样整体搬迁</b>到本类（{@code changeStatus} 的
+ * <p><b>事件序与事务边界不漂移（§7.8）</b>：整条状态流转链原样整体在本类——{@code changeStatus} 的
  * 「读现状 → 校验 → 写上下文/租约 → 落库 → outbox → 收件箱 → 交接通知 → 领域事件 → 心跳」
- * 顺序与事务边界一字未改），故事件序与事务边界<b>仍在同一个类里</b>，声明所指的漂移风险未被引入；
- * 被剥离的只有声明中判为「无独立可测职责」的三簇，而它们<b>已各自拥有独立单测</b>
- * （{@code SubTaskServiceIsReadyTest} / {@code ...MergeSkillsTest} / {@code ...LeaseReclaimTest} /
- * {@code ...QuotaTest} / {@code ...ReworkBudgetTest} / {@code ...HandoverTest}）
- * ⇒ 原「无独立可测职责」的判断据实测不再成立。</p>
+ * 顺序与事务边界一字未改，故事件序与事务边界仍在同一个类里。</p>
  *
  * <p><b>依赖方向（无环）</b>：本类 → {@link SubTaskNotificationService} → {@link SubTaskQueryService}；
  * 本类<b>不</b>依赖 {@link SubTaskQueryService}（行读取一律经同域 {@code SubTaskMapper} 直读），
@@ -165,8 +159,7 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
             subTask.setLeaseUntil(OffsetDateTime.now().plusSeconds(watchdogProperties.getTtlSeconds()));
         }
 
-        // ⚠️ 事件序契约（与原 SubTaskServiceImpl 逐字一致，不得调整）：
-        // 落库 → outbox → 收件箱 → 交接通知 → 领域事件 → 心跳
+        // ⚠️ 事件序契约（不得调整）：落库 → outbox → 收件箱 → 交接通知 → 领域事件 → 心跳
         boolean updated = subTaskMapper.updateById(subTask) > 0;
         if (!updated) {
             throw new BizException("并发修改，请重试");
@@ -338,9 +331,7 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
      * 原子认领（PENDING → ASSIGNED 的单语句 SQL 级状态迁移）。
      *
      * <p><b>为何在本类（RM9-b 微调④）</b>：它是<b>状态写入</b>（{@code SET status='ASSIGNED'}
-     * 且带 {@code status='PENDING'} 前置条件），按 §4.3.2 验收口径 (ii)「所有状态写入仍须经状态机类」
-     * 归位本类；原切分线把它并入租约簇是按其「调度侧原子认领」调用场景归类，本笔按「写状态」判据订正，
-     * 对外契约与 SQL 口径均不变。</p>
+     * 且带 {@code status='PENDING'} 前置条件），按 §4.3.2 验收口径 (ii)「所有状态写入仍须经状态机类」归位本类。</p>
      */
     @Transactional(rollbackFor = Exception.class)
     public boolean claimAtomic(Long subTaskId, Long agentId) {
@@ -357,12 +348,11 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
     /**
      * 租约过期回收的<b>状态写入</b>半段（IN_PROGRESS → PENDING + 清执行者/租约）。
      *
-     * <p><b>为何在本类（RM9-b 微调④）</b>：原切分线把 {@code reclaimExpiredLeases} 整体归
-     * {@code SubTaskLeaseService}，但其中包含一次状态写入，会使「状态迁移唯一入口」被稀释
-     * （§4.3.2 验收口径 ii）。故把「校验 + 置状态 + 清 owner/lease + 落库」下沉本类，
-     * 租约类只保留「挑候选 + 回收副作用编排（timeline / session 中断点）」，行为逐字不变。</p>
+     * <p><b>为何在本类（RM9-b 微调④）</b>：回收含一次状态写入，若留在 {@code SubTaskLeaseService}
+     * 会稀释「状态迁移唯一入口」（§4.3.2 验收口径 ii）。故「校验 + 置状态 + 清 owner/lease + 落库」在本类，
+     * 租约类只保留「挑候选 + 回收副作用编排（timeline / session 中断点）」。</p>
      *
-     * @param subTask 已加载的过期租约实体（复用调用方实例，保持原「先捕获 oldOwner/taskId 再改写」时序）
+     * @param subTask 已加载的过期租约实体（复用调用方实例，保持「先捕获 oldOwner/taskId 再改写」时序）
      * @return true = 回收写入成功；false = 与 Watchdog 续期并发竞争失败（version 已变更），调用方跳过即可
      */
     @Transactional(rollbackFor = Exception.class)

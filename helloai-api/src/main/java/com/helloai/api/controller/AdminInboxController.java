@@ -23,7 +23,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * 管理端收件箱（2026-10-18）。
+ * 管理端收件箱。
  *
  * <p><b>为什么单独一套端点</b>：原 {@code /api/agent/inbox} 的四个接口都以
  * {@code @RequestAttribute("_authId")} 取 Agent 身份，语义是「我（Agent）的收件箱」。
@@ -57,7 +57,7 @@ public class AdminInboxController {
     public R<PageResult<Map<String, Object>>> list(
             @RequestParam(value = "agentId", required = false) Long agentId,
             @RequestParam(value = "isRead", required = false) Integer isRead,
-            // ★不传 = 全部（2026-10-18 修正）：实测库中 53 条**全部已归档**（过期自动归档），
+            // ★不传 = 全部：实测库中 53 条**全部已归档**（过期自动归档），
             // 若默认排除归档，admin 打开页面依然是空的。管理端语义是「看全部」，
             // 归档与否交筛选显式控制，不默认藏起来。
             @RequestParam(value = "isArchived", required = false) Integer isArchived,

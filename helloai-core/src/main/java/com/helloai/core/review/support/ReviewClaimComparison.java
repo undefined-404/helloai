@@ -13,13 +13,9 @@ import java.util.regex.Pattern;
 /**
  * 声称值 ↔ 实测值比对（`RV-11` 承接 `RV-10` M2，纯函数、零 token）。
  *
- * <p><b>为什么不在机械段做</b>：机械段在 LLM 调用<b>之前</b>装配，而声称值来自 reviewer 的
- * 输出，首轮注入里没有来源（时序约束）。本类在解析 verdict 后执行，只读
- * {@code coverage[].evidenceRef} 里模型写的 {@code claim=<整数>}，<b>不</b>从报告正文抽数字。</p>
- *
- * <p><b>为什么双口径差值</b>：同一文件 {@code claim=199080} 对 {@code lines=198899} 的差值是
- * {@code +181}，对 {@code data=198897} 是 {@code +183}。只输出一种口径会把金标准断言打偏，
- * 故 {@code delta_lines} 与 {@code delta_data} 恒并列输出，并要求模型用 {@code basis=} 指明口径。</p>
+ * <p>解析 verdict 后读 {@code coverage[].evidenceRef} 的 {@code claim=}，不从报告正文抽数字
+ * （机械段在 LLM 调用前装配，拿不到声称值，故分离）；{@code delta_lines} 与 {@code delta_data}
+ * 双口径恒并列，模型用 {@code basis=} 指明口径。</p>
  */
 public final class ReviewClaimComparison {
 

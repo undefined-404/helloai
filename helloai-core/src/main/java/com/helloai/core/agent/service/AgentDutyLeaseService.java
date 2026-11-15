@@ -51,7 +51,7 @@ public interface AgentDutyLeaseService extends IService<AgentDutyLease> {
     /**
      * 查询 Agent 最近一条值班租约（任意状态，按开始时间倒序取第一条）。
      *
-     * <p>：checkOut 幂等返回当前状态时使用——租约已过期或从未打卡时
+     * <p>checkOut 幂等返回当前状态时使用——租约已过期或从未打卡时
      * 也能给出可自检的语义（EXPIRED / NONE），而不是只给 closedCount=0。</p>
      *
      * @return null 如果该 Agent 从未有过租约

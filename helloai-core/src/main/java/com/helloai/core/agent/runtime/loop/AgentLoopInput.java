@@ -23,7 +23,7 @@ import java.util.List;
  * （{@link CancellableChatModel} / {@link CancellableToolExecutor}）。
  * 这里是全平台把可取消性装进循环的<b>唯一咽喉</b>——任何调用方（现有两个 + 未来新增）
  * <b>都无法绕过</b>；若改为「各调用方自行包装饰器」，就会重现已登记缺陷模式
- * 「<b>规则存在 ≠ 全路径强制</b>」（新增调用方漏包 ⇒ 取消静默失效）。
+ * 「<b>规则存在 ≠ 全路径强制</b>」（调用方漏包 ⇒ 取消静默失效）。
  * 循环本体（{@code ChatModelToolLoop}）因此一行不改（§10.8 红线：不动循环逻辑、只动入参 / 出口）。</p>
  *
  * <p><b>边界</b>：协作式取消——检查点＝每次模型调用前后 + 每次工具调用前（覆盖循环内全部动作
@@ -46,7 +46,7 @@ import java.util.List;
  * @param accessType           接入类型（REF-8.4 ② 收尾轮 internal-only 门控；null = 非内部）
  * @param cancellation         可取消上下文（REF-8.6；null = {@link LoopCancellation#none()} 不限）
  * @param scene                业务面场景标识（{@code AgentTask.context.scene} 透传；null = 子任务执行链）。
- *                             `TD-9` 事故修复（2026-10-24）：{@code FinalReportFenceHook} 收尾轮只对
+ *                             `TD-9` 事故修复：{@code FinalReportFenceHook} 收尾轮只对
  *                             子任务执行链生效，业务面循环（planner_decompose / subtask_review /
  *                             task_final_report / task_final_report_review，产出为 JSON 结构化结果）
  *                             不得追加 VERIFICATION 围栏——场景判定经本字段透传。

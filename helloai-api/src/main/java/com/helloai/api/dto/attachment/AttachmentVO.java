@@ -14,7 +14,7 @@ import java.util.List;
  * 塞进响应体的写法，以保证 {@code id}/{@code subTaskId}/{@code taskId} 等 <b>ID</b> 字段的
  * 线上格式不变（字符串 ⇒ 前端雪花 ID 不丢精度），前端零改动、无接口版本迁移成本。</p>
  *
- * <p><b>{@code fileSize} 的格式（2026-10-07 口径变更）</b>：{@code fileSize} <b>不是 ID</b>，
+ * <p><b>{@code fileSize} 的格式</b>：{@code fileSize} <b>不是 ID</b>，
  * 按 {@code JacksonConfig} 的「两层口径」由属性修饰器自动改为 JSON <b>数字</b>（非 ID 命名的
  * {@code Long} 属性一律回退为数字）。真正决定线上格式的是全局序列化口径而非 Java 字段类型
  * （{@code Long} 与 {@code long} 都会命中默认层），故此处保留 {@code Long} 以与实体一致、

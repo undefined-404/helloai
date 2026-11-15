@@ -31,7 +31,7 @@ public interface SandboxExecutionService {
     ExecuteResponse execute(Long subTaskId, String command, Integer timeoutSeconds);
 
     /**
-     * 按<b>显式规格</b>执行一次命令（`SKX-5`，2026-10-26）。
+     * 按<b>显式规格</b>执行一次命令（`SKX-5`）。
      *
      * <p>与三参版本的唯一差别是「用哪个规格建沙箱」：{@code spec == null} ⇒ 全局默认
      * （{@code helloai.sandbox.opensandbox.spec}）；非 null ⇒ 按该规格建，且复用槽的键带上
@@ -51,7 +51,7 @@ public interface SandboxExecutionService {
     }
 
     /**
-     * 带<b>来源与轮次</b>执行一次命令（`SL-4`，2026-11-13）。
+     * 带<b>来源与轮次</b>执行一次命令（`SL-4`）。
      *
      * <p>台账条目需标明「谁跑的、第几轮」：自审证据只接受执行者本人条目（`SL-5`），
      * 轮次用于旧格式证据的「本轮优先」。来源由<b>调用侧</b>声明——沙箱层不推断角色。</p>
@@ -71,9 +71,9 @@ public interface SandboxExecutionService {
     }
 
     /**
-     * 释放某子任务作用域下的<b>复用</b>工作沙箱（`ADR-005` 生命周期出口，2026-10-25）。
+     * 释放某子任务作用域下的<b>复用</b>工作沙箱（`ADR-005` 生命周期出口）。
      *
-     * <p><b>默认已不参与主链路</b>（`SL-2`，2026-11-12）：任务级作用域下工作区须跨 turn /
+     * <p><b>默认已不参与主链路</b>（`SL-2`）：任务级作用域下工作区须跨 turn /
      * 跨子任务保留，回收统一走 {@link #releaseByTask(Long)}（由任务终态事件触发）。本方法仅在
      * {@code helloai.sandbox.opensandbox.scope=subtask} 灰度回滚模式下由命令消费侧于 turn 末
      * 调用，用于恢复「一次执行尝试结束即释放」的旧语义（见 `LocalExecutionCommandConsumer`
@@ -92,7 +92,7 @@ public interface SandboxExecutionService {
     }
 
     /**
-     * 释放某<b>任务</b>的全部复用工作沙箱（`SL-1`/`SL-2`，2026-11-12）。
+     * 释放某<b>任务</b>的全部复用工作沙箱（`SL-1`/`SL-2`）。
      *
      * <p><b>为什么需要按任务释放</b>：`SL-1` 起复用槽键为 {@code task:{taskId}} + 规格指纹，
      * 同一任务的多个子任务共享同一规格的沙箱。任务进入终态（{@code DONE}/{@code CANCELLED}/
@@ -116,7 +116,7 @@ public interface SandboxExecutionService {
     }
 
     /**
-     * 列出工作区内某目录的条目（`SL-9`，2026-11-13；<b>不创建</b>沙箱）。
+     * 列出工作区内某目录的条目（`SL-9`，；<b>不创建</b>沙箱）。
      *
      * <p><b>为什么在通道上</b>：{@code SL-9} 把「哪一份文件算交付物」的策略（最新 {@code .md} 优先、
      * 体积兜底）移到了消费侧 {@code DeliverableReader}，但消费侧仍需要一眼看见目录里有什么。
@@ -134,7 +134,7 @@ public interface SandboxExecutionService {
     }
 
     /**
-     * 把 classpath 里的技能包注入该子任务的复用工作区（`SKX-6`，2026-10-26）。
+     * 把 classpath 里的技能包注入该子任务的复用工作区（`SKX-6`）。
      *
      * <p><b>为什么是「注入」而不是「让模型自己下载」</b>：沙箱默认禁出网（`SKX-5` 起显式
      * {@code deny}），模型无法 {@code npm install} / {@code curl} 取包；且执行依赖必须
@@ -179,7 +179,7 @@ public interface SandboxExecutionService {
     }
 
     /**
-     * 按<b>指定路径</b>回读沙箱内的一份产物（`SKX-7`，2026-10-26）。
+     * 按<b>指定路径</b>回读沙箱内的一份产物（`SKX-7`）。
      *
      * <p><b>与 {@link #listWorkspaceFiles} 的分工</b>：列举只回答「目录里有什么」；本方法按
      * <b>调用方给定的确切路径</b>取字节（如 {@code /workspace/out/x.html}），且必须是字节级原样
@@ -224,7 +224,7 @@ public interface SandboxExecutionService {
     }
 
     /**
-     * 按<b>显式 reviewer 身份</b>把字节写入审核工作区（`RV-15`，2026-11-15：审核证据自动物化）。
+     * 按<b>显式 reviewer 身份</b>把字节写入审核工作区（`RV-15`，：审核证据自动物化）。
      *
      * <p><b>与 {@link #writeArtifact} 的分工（为什么需要显式身份）</b>：
      * {@code writeArtifact} 经 {@code toRef} 的<b>身份分面</b>解析句柄——reviewer 场景靠

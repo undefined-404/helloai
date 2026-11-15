@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 枚举字典服务（2026-10-18，**服务端单一事实源**）。
+ * 枚举字典服务（**服务端单一事实源**）。
  *
  * <p><b>为什么集中出字典</b>：前端多处把后端枚举/码值硬编码成本地映射
  * （如 {@code types/dialog.ts} 的 {@code INBOX_EVENT_TYPE_MAP}），必然漂移 ——

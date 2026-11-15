@@ -12,7 +12,7 @@ import java.util.concurrent.ThreadPoolExecutor;
  * 对话内技能执行线程池（{@code @Async("skillExecutionExecutor")} 的目标）。
  *
  * <p><b>不复用 {@code chatStreamExecutor}</b>：那是 SSE 长连接的池（每条连接占用到流结束），
- * 技能执行是<b>长任务</b>（实测 377s）——混在一起，一条长技能就能把流式连接的线程全占掉，
+ * 技能执行是<b>长任务</b>（377s）——混在一起，一条长技能就能把流式连接的线程全占掉，
  * 用户会看到「别的会话全卡住」。</p>
  *
  * <p><b>不复用 {@code chatAttachmentParseExecutor}</b>：那是 CPU/内存型短任务，

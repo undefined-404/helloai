@@ -55,7 +55,7 @@ public class WebSearchOutcome {
     @Builder.Default
     private List<WebPageContent> fetchedPages = Collections.emptyList();
 
-    /** 搜索是否失败（调用抛异常时为 true，主流程不阻断）。 */
+    /** 搜索是否失败（用抛异常时为 true，主流程不阻断）。 */
     private boolean failed;
 
     /** 失败原因摘要（failed=true 时填充，异常 message 截断）。 */

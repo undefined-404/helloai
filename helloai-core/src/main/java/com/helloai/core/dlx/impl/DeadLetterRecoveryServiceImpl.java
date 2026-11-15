@@ -150,7 +150,7 @@ public class DeadLetterRecoveryServiceImpl implements DeadLetterRecoveryService 
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    /** 从消息体快照解析 eventId（ExecutionCommandMqMessage 载荷）；取不到返回 null（调用方 fail-close）。 */
+    /** 从消息体快照解析 eventId（ExecutionCommandMqMessage 载荷）；取不到返回 null（用方 fail-close）。 */
     private String extractMessageId(String body) {
         if (body == null || body.isBlank()) {
             return null;

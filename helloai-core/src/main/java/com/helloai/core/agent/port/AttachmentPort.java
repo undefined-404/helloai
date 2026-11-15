@@ -45,7 +45,7 @@ public interface AttachmentPort {
      *
      * <p>语义与 {@code AttachmentService#listActive(Long)} 一致：只返回当前有效版本
      * （同名文件至多一条 —— 再次上传会把历史版本置为 INACTIVE），按创建时间<b>倒序</b>；
-     * 入参为 {@code null} 表示不限子任务（调用方不做此用法，保留原语义）；绝不返回 {@code null}。</p>
+     * 入参为 {@code null} 表示不限子任务（用方不做此用法，保留原语义）；绝不返回 {@code null}。</p>
      *
      * <p>返回 {@link AttachmentRef}，其中的 {@code contentLoadable} 由提供方在映射时
      * 顺带算好（判定责任留在提供方、消费方零判定，且不暴露 {@code storageUrl}）。</p>

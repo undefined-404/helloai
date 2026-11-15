@@ -75,7 +75,7 @@ public class AgentSkillPolicyService {
             // 技能超出模型能力属可自纠入参错误：显式 code=400 而非单参构造的默认 500，
             // 与同族修复同口径（本类 validateModelType 格式/可用性 → 400、validateModelUniqueInRole → 409，
             // 以及 AgentController 的 name/role 校验 → 400）。单参构造会让 GlobalExceptionHandler
-            // 把「你请求了一个该模型不支持的技能」也报成服务端故障（2026-10-10 修复）。
+            // 把「你请求了一个该模型不支持的技能」也报成服务端故障。
             throw new BizException(400, "模型 " + modelType + " 不支持技能: " + String.join(", ", invalid));
         }
     }
@@ -86,7 +86,7 @@ public class AgentSkillPolicyService {
      * <p>API_KEY_LLM 且 modelType 已识别 → 能力驱动推导（能力锁定 + 谓词过滤 + 自定义豁免+
      * <b>技能包自动挂载</b>）；其他接入类型或未识别模型 → 走基础推导（显式优先）。</p>
      *
-     * <p><b>★技能包自动挂载（`G-022`，2026-10-15）</b>：内部 LLM Agent 的
+     * <p><b>★技能包自动挂载（`G-022`）</b>：内部 LLM Agent 的
      * {@code skills} 由模型谓词派生（粗粒度），而拆解侧 {@code required_skills}
      * 全是 {@code eng-*} 技能包（细粒度）⇒ 选人处 AND 匹配跨命名空间恒失败。
      * 本方法把「本模型谓词可承接的技能包标签」并入落库值，
@@ -166,7 +166,7 @@ public class AgentSkillPolicyService {
         int colonIdx = modelType.indexOf(':');
         // 入参校验失败属客户端错误：显式 code=400（BizException 单参构造默认 500，
         // 会让 GlobalExceptionHandler 把「格式错误」这类可自纠的问题也返 500；
-        // 2026-10-05 修复：Agent 注册接口非法 modelType 一律 500 → 现 400）。
+        // Agent 注册接口非法 modelType 一律 500 → 现 400）。
         if (colonIdx <= 0 || colonIdx == modelType.length() - 1) {
             throw new BizException(400, "modelType 格式错误，应为 providerCode:modelName");
         }
@@ -199,7 +199,7 @@ public class AgentSkillPolicyService {
                 .eq(Agent::getDeleted, 0)
                 .ne(excludeAgentId != null, Agent::getId, excludeAgentId));
         if (exists != null && exists > 0) {
-            // 唯一性冲突属资源冲突：显式 code=409（原单参构造默认 500，2026-10-05 修复）
+            // 唯一性冲突属资源冲突：显式 code=409（原单参构造默认 500）
             throw new BizException(409, "角色 " + role + " 已存在使用模型 " + modelName + " 的Agent，同一模型在同一角色下只能注册一个");
         }
     }

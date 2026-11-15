@@ -20,7 +20,7 @@ public interface AgentEventRecorder {
     /**
      * 记录一次事件。
      *
-     * <p><b>★事务语义（2026-10-15 订正，务必读完再决定是否 try-catch）</b>：
+     * <p><b>★事务语义（订正，务必读完再决定是否 try-catch）</b>：
      * 本方法 {@code @Transactional(REQUIRED)}，与调用方事务<b>合并为同一个事务</b>
      * （同线程传播；调用方无事务时自开）。
      * 任一遍写失败 ⇒ <b>整个共享事务被标记 rollback-only</b> ⇒ 调用方提交时抛

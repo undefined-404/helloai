@@ -29,13 +29,12 @@ import java.util.List;
  *
  * <p><b>分层约束（§8.1 / §11.3）</b>：本类只依赖 {@link AttachmentService} 契约 ——
  * 可见性判据（{@code task.policy.AttachmentVisibilityPolicy}）由 Service 内部调用，
- * Controller <b>不再直接 import 策略组件</b>；响应体一律经 {@link AttachmentVO} 投影，
- * <b>不直接暴露数据库 Entity</b>。下载 / 预览端点内部虽仍持有实体（取文件名、大小、存储地址），
+ * Controller <b>不直接 import 策略组件</b>；响应体一律经 {@link AttachmentVO} 投影，
+ * <b>不直接暴露数据库 Entity</b>。下载 / 预览端点内部虽持有实体（取文件名、大小、存储地址），
  * 但实体不出现在任何响应体中，故不违反 §11.3。</p>
  *
- * <p>Mapper 调用已全部下沉至 {@link AttachmentService}；
- * 缺失值与"附件不存在 / 存储地址不可用"两类失败统一由 Service
- * 抛 {@code BizException}，由全局异常处理转换为 R.fail。</p>
+ * <p>Mapper 调用归 {@link AttachmentService}；缺失值与"附件不存在 / 存储地址不可用"两类失败
+ * 统一由 Service 抛 {@code BizException}，由全局异常处理转换为 R.fail。</p>
  */
 @Slf4j
 @RestController
@@ -48,9 +47,8 @@ public class AttachmentController {
     /**
      * 附件列表。
      *
-     * <p><b>2026-10-02（Task-Team 可见性）</b>：由「按 subTaskId 整表放行/拦截」改为
-     * <b>按附件粒度过滤</b> —— 同一子任务下的附件可能具有不同 {@code visibility}，
-     * 故 Agent 通道下逐条过滤，不可读者从结果中剔除（而非整表 403）。
+     * <p><b>（Task-Team 可见性）</b>：<b>按附件粒度过滤</b>——同一子任务下的附件可能具有不同
+     * {@code visibility}，故 Agent 通道逐条过滤，不可读者从结果剔除（而非整表 403）；
      * 平台账号 / 无主体请求放行（由管理侧鉴权覆盖）。</p>
      */
     @GetMapping
@@ -75,9 +73,9 @@ public class AttachmentController {
     }
 
     /**
-     * 附件下载：方案2 本地物化产物（local://）由平台读取内容流式返回
+     * 附件下载：本地物化产物（local://）由平台读取内容流式返回
      * （Content-Disposition 用 RFC 5987 filename* 承载中文文件名）；
-     * 外部对象存储地址仍保持 302 重定向。
+     * 外部对象存储地址走 302 重定向。
      */
     @GetMapping("/downloadById/{id}")
     public ResponseEntity<byte[]> downloadById(@PathVariable("id") Long id,
@@ -127,9 +125,9 @@ public class AttachmentController {
     }
 
     /**
-     * 删除附件（P2 删除通道，2026-10-07）。
+     * 删除附件（P2 删除通道）。
      *
-     * <p><b>动词用 POST 而非 DELETE</b>：本平台部分端点已实证 {@code DELETE} 动词返 405
+     * <p><b>动词用 POST 而非 DELETE</b>：本平台 {@code DELETE} 动词返 405
      * （见 {@code /api/tasks/deleteById/{id}} 既有约定），故对齐为 {@code POST}。</p>
      *
      * <p><b>权限（比读更严）</b>：Agent 通道仅<b>上传者本人</b>可删（判据收口在
@@ -157,14 +155,9 @@ public class AttachmentController {
      * {@code AttachmentVisibilityPolicy}）。本类不做任何可见性判断，只负责
      * "通道判定"这一 HTTP 关注点。</p>
      *
-     * <p><b>历史（G-014 T04b）</b>：此前四端点无任何归属校验，任意有效 Agent API Key 可凭
-     * {@code attachmentId} 读取任意子任务的附件正文。当时的修复是"仅可读自己名下子任务"——
-     * 那属于 sub_task 级硬隔离，导致<b>同任务团队内无法互通产出物</b>。</p>
-     *
-     * <p><b>2026-10-02（Task-Team 可见性）</b>：放宽为「声明范围 × 任务成员关系」
-     * （PERSONAL=仅上传者 / TASK=上传者+所属根任务团队 / PUBLIC 预留未启用）。
-     * 宽松度提高但<b>边界仍是任务级</b>，不会回退到"任意 key 可读任意附件"——
-     * 判据分散是漂移与越权的根源，故必须收口在 Service 的唯一入口。</p>
+     * <p><b>（Task-Team 可见性，G-014 T04b）</b>：判据为「声明范围 × 任务成员关系」
+     * （PERSONAL=仅上传者 / TASK=上传者+所属根任务团队 / PUBLIC 预留未启用），<b>边界是任务级</b>，
+     * 不是"任意 key 可读任意附件"——判据分散是漂移与越权的根源，故必须收口在 Service 的唯一入口。</p>
      *
      * <p><b>通道判定以 {@code _authType} 为准而非 {@code _authId} 是否为空</b>：
      * {@code AuthInterceptor} 对两条通道都会注入 {@code _authId}——平台账号写

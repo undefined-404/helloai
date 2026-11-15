@@ -136,7 +136,7 @@ public class PlannerAgentPicker implements TaskPlannerPickerPort {
     }
 
     /**
-     * 校验「本轮钉住的模型」是否有效（2026-11-05，与 {@link #validateSelectable} 同口径）。
+     * 校验「本轮钉住的模型」是否有效（与 {@link #validateSelectable} 同口径）。
      *
      * <p><b>为什么在服务端复检</b>：{@code modelType} 由前端提交，若不校验就落库并进入执行链，
      * 用户的错误输入会一路带到 LLM 调用才报错（甚至静默回落到供应商默认模型，看起来「选了没生效」）。

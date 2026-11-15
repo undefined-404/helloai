@@ -43,7 +43,7 @@ public class ChatAttachmentVO {
     private String parser;
 
     /**
-     * 附件来源（2026-10-27）：{@code user}=用户上传（输入框上方胶囊条）；
+     * 附件来源：{@code user}=用户上传（输入框上方胶囊条）；
      * {@code platform}=平台生成产物（右侧「产物」侧栏）。
      *
      * <p>判定依据：用户上传端点有登录态、必写 {@code uploader_user_id}；

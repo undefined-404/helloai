@@ -11,7 +11,7 @@ import java.util.List;
  * （即存量 {@code agent->task} 的一笔）。按完整判据（「让依赖落在顺向那一侧；
  * 端口放在顺向依赖的被依赖方」）归位到<b>提供方</b> {@code agent.port}：由 {@code agent}
  * 自身（{@code ResilientDispatcher}）实现，消费方 {@code task} 依赖它 = {@code task → agent}，
- * 属<b>顺向合法</b>（2026-10-01 W8 归位）。</p>
+ * 属<b>顺向合法</b>（W8 归位）。</p>
  *
  * <p>实现侧语义（{@code ResilientDispatcher}）：首选 Agent fast-fail（SLEEPING/OFFLINE/
  * 心跳陈旧/执行密集不匹配）+ per-agent 熔断 + fallback 同角色替代选人。</p>

@@ -33,7 +33,7 @@ import java.util.Map;
  * afterCommit 回调中触发（此时行锁已释放、REVIEW 推进已提交），物化失败仅记
  * 日志与告警级 log，绝不回滚/阻断执行结果主链路。</p>
  *
- * <p><b>跨域访问（2026-10-01 W6）</b>：本类不再持有任何 {@code task} 域类型——
+ * <p><b>跨域访问（W6）</b>：本类不再持有任何 {@code task} 域类型——
  * 子任务数据经 {@link SubTaskQueryPort} 读快照（含 {@code title}），附件登记经
  * {@link AttachmentPort} 不透明命令端口完成（归属/地址/存在性校验与同名去活整体留在
  * task 侧 {@code AttachmentService#register}）。事务边界与「先校验再落库」的判定

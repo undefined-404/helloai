@@ -58,7 +58,7 @@ import java.util.Map;
 /**
  * MCP 工具上报簇：Agent 心跳 / 值班打卡 / 自身状态 / 产物登记 / 结果提交 / 阻塞上报。
  *
- * <p><b>来源</b>：由 {@code McpToolServiceImpl}（RM9-a，2026-10-16）按职责抽取 ——
+ * <p><b>来源</b>：由 {@code McpToolServiceImpl}（RM9-a）按职责抽取 ——
  * 内聚依据为「<b>Agent 上报自身状态与结果</b>」，共享 {@code HeartbeatService} /
  * {@code AgentDutyLeaseService}。</p>
  *
@@ -77,12 +77,12 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
     private final AgentDutyLeaseService agentDutyLeaseService;
     private final AttachmentPort attachmentPort;
     private final ExecutionResultHandler executionResultHandler;
-    /** 活动日志（2026-10-18：外部 Agent 提交结果时由平台兜底补写，不依赖 Agent 主动上报）。 */
+    /** 活动日志（外部 Agent 提交结果时由平台兜底补写，不依赖 Agent 主动上报）。 */
     private final ActivityLogService activityLogService;
     /**
-     * 活动日志独立事务写入器（2026-10-21）：{@code submitResult} 处于外层事务中，
+     * 活动日志独立事务写入器：{@code submitResult} 处于外层事务中，
      * 活动日志若以 REQUIRED 加入，一旦写失败会把 PG 事务标记 aborted，
-     * 导致「best-effort 不影响提交」变成假象（实测抛 UnexpectedRollbackException 整体回滚）。
+     * 导致「best-effort 不影响提交」变成假象（抛 UnexpectedRollbackException 整体回滚）。
      */
     private final SubmissionActivityRecorder submissionActivityRecorder;
     private final SubTaskQueryPort subTaskQueryPort;
@@ -92,7 +92,7 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
     /** 对话流写入（LOG-20261112）：外部 CLI 自报阻塞后补对话结论，与内部通道对齐，避免执行轮悬空。 */
     private final ConversationService conversationService;
     /**
-     * `QA-M9-03`（2026-10-15）：checkIn 自报技能的能力校验依赖。
+     * `QA-M9-03`：checkIn 自报技能的能力校验依赖。
      *
      * <p>{@code skillPackageCatalog} 供技能包引用边（{@code requiredBaseCapabilities}）解析；
      * {@code llmProviderModelQueryService} 供模型能力谓词读取。两者只服务
@@ -280,9 +280,9 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
 
         heartbeatService.active(agentId);
 
-        // 平台兜底补写活动日志（2026-10-18）
+        // 平台兜底补写活动日志
         // 背景：MCP 工具集没有「写活动」的工具，接入手册又把活动日志归为「低频、按需、不展开」
-        //     ⇒ 外部 Agent 执行完从不产生 activity_log（实测 TeleAgent-executor 历史 0 条）。
+        //     ⇒ 外部 Agent 执行完从不产生 activity_log（TeleAgent-executor 历史 0 条）。
         // 口径：只记「已被接受」的提交（isApplied），幂等重放不重复记；
         //     失败的提交也记（level=WARN），便于在活动流里看到「提交了但被拒」的情形。
         // best-effort：写失败只告警，绝不影响提交流程本身。
@@ -337,7 +337,7 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
     }
 
     /**
-     * 平台兜底写「提交产出」活动日志（2026-10-18）。
+     * 平台兜底写「提交产出」活动日志。
      *
      * <p><b>为什么由平台写而不是等 Agent 写</b>：MCP 工具集没有「写活动」的工具，
      * 接入手册（{@code onboarding/executor/guide.md:566}）又把活动日志归为
@@ -493,7 +493,7 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
      * 只增不减——某次打卡漏报不会清掉历史已声明技能；无新增时不写库。
      * 失败仅告警并返回 null（打卡主链不受影响）。</p>
      *
-     * <p><b>★能力校验（2026-10-15，`QA-M9-03` 收口）</b>：自报技能此前<b>完全绕过</b>
+     * <p><b>★能力校验（`QA-M9-03` 收口）</b>：自报技能此前<b>完全绕过</b>
      * 模型能力校验——任一持牌 Agent 可经本工具把标准技能（含模型不支持的）与技能包
      * 写进 {@code agent.skills}，选人处随即按这些标签派发 ⇒ 「声明不越出模型实际能力」
      * 被本入口绕过（实测：{@code inner-deepseek-flash-excutor} 被塞了

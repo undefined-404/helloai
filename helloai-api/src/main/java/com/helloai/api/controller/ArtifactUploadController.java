@@ -45,7 +45,7 @@ public class ArtifactUploadController {
             @RequestParam("file") MultipartFile file,
             @RequestParam("subTaskId") Long subTaskId,
             @RequestParam(value = "mimeType", required = false) String mimeType) {
-        // P1-1（2026-10-06）：客户端校验错误一律用带码 BizException → HTTP 400，
+        // P1-1：客户端校验错误一律用带码 BizException → HTTP 400，
         // 不再用单参构造（默认 code=500）把「参数错误」误报成「服务故障」。
         if (file == null || file.isEmpty()) {
             throw new BizException(400, "file 不能为空");

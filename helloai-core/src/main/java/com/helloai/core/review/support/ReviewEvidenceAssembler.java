@@ -23,19 +23,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 自动核验证据装配器：把子任务的"产出证据"装配为核验 Prompt 可消费的内容。
+ * 自动核验证据装配器：把子任务产出证据装配为核验 Prompt 可消费的内容（自 {@code SubTaskReviewServiceImpl} 拆分）。
  *
- * <p>职责边界（自 {@code SubTaskReviewServiceImpl} 拆分）：</p>
- * <ul>
- *     <li>证据硬检查 {@link #checkEvidence(SubTaskView)}：fail-close 判定声称的交付物
- *         是否有物化附件/可读产出支撑，含执行密集任务物化竞态补偿；</li>
- *     <li>产出提取 {@link #extractExecutionOutput(SubTaskView)} / {@link #extractRawOutput(SubTaskView)}
- *         与围栏证据信号 {@link #verificationSignal(String)}；</li>
- *     <li>附件族装配 {@link #buildAttachmentList(SubTaskView)} / {@link #buildEvidenceContent(SubTaskView)}：
- *         清单 + 文本正文限额注入 + 媒体可见性标注（方案3 F2 与硬化条款）。</li>
- * </ul>
+ * <p>三块职责：证据硬检查 {@link #checkEvidence(SubTaskView)}（fail-close，含物化竞态补偿）、
+ * 产出提取与围栏信号、附件族装配 {@link #buildEvidenceContent(SubTaskView)}（清单 + 文本限额注入 + 媒体可见性标注）。</p>
  *
- * <p>纯装配无状态：不触发任何状态变更，只读附件/子任务数据并渲染文本。</p>
+ * <p>纯装配无状态：不触发状态变更，只读附件/子任务数据并渲染文本。</p>
  */
 @Slf4j
 @Component
@@ -516,7 +509,7 @@ public class ReviewEvidenceAssembler {
      * 证据顺序（`RV-9`）：族级排序键 `!hasMain → maxPart 降序 → 族名升序`（含主件的族整体排前，
      * 族间仍按分片数降序）；族内按主件优先、分片编号升序、文件名升序。
      *
-     * <p>与实施计划 §`RV-9`「顺序与台账」逐字同源，改这里必须同批改计划（已于 2026-11-14 分叉过一次）。</p>
+     * <p>与实施计划 §`RV-9`「顺序与台账」逐字同源，改这里必须同批改计划（已于  分叉过一次）。</p>
      */
     private static List<AttachmentView> priorityOrder(List<AttachmentView> attachments) {
         Map<String, List<AttachmentView>> groups = new LinkedHashMap<>();

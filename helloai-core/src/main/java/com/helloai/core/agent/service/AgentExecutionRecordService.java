@@ -53,7 +53,7 @@ public interface AgentExecutionRecordService extends IService<AgentExecutionReco
     /**
      * 收口子任务<b>在飞</b>的平台执行记录（PENDING/RUNNING → FAILED，落 {@code errorMsg}）。
      *
-     * <p><b>为什么需要（2026-10-25 实测 2113947248843329537）</b>：人工把停滞子任务
+     * <p><b>为什么需要（2113947248843329537）</b>：人工把停滞子任务
      * {@code block()} 后改派，{@code SubTaskAutoExecutionDispatcher} 建命令时被
      * {@link #hasPendingOrRunning} 挡下——旧记录仍是 {@code RUNNING}（模型进程还在跑，4 分 45 秒），
      * 于是「改派」100% 失败，子任务停在 ASSIGNED 无命令可消费，只能干等 10 分钟
@@ -103,11 +103,11 @@ public interface AgentExecutionRecordService extends IService<AgentExecutionReco
     boolean markPolled(Long id);
 
     // ══════════════════════════════════════════════════════════════
-    //  §7.1 helloai-job 去 Mapper 直连收口（补偿扫描出口）
+    //  §7.1 helloai-job 去 Mapper 直连收口（偿扫描出口）
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * 扫描指定状态且 create_time 早于 before 的执行记录（补偿扫描：PENDING 卡死）。
+     * 扫描指定状态且 create_time 早于 before 的执行记录（偿扫描：PENDING 卡死）。
      *
      * <p>承接 helloai-job {@code ExecutionCompensationTask} 直捅
      * {@code AgentExecutionRecordMapper.selectByStatusAndCreateTimeBefore}，SQL 语义不变。</p>
@@ -119,7 +119,7 @@ public interface AgentExecutionRecordService extends IService<AgentExecutionReco
     List<AgentExecutionRecord> listByStatusCreatedBefore(ExecutionStatus status, OffsetDateTime before);
 
     /**
-     * 扫描指定状态且 start_time 早于 before 的执行记录（补偿扫描：RUNNING 卡死）。
+     * 扫描指定状态且 start_time 早于 before 的执行记录（偿扫描：RUNNING 卡死）。
      *
      * <p>承接 helloai-job {@code ExecutionCompensationTask} 直捅
      * {@code AgentExecutionRecordMapper.selectByStatusAndStartTimeBefore}，SQL 语义不变。</p>

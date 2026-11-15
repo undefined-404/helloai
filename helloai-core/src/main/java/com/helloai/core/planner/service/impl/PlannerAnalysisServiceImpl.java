@@ -155,7 +155,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         // （回写时引用未落库 ID，导致后续 PENDING 子任务依赖校验永不就绪），
         // 直接物理删除避免新草案再次被污染。
         //
-        // 2026-11-08：删除条件从「该任务下全部子任务」收窄为「CANCELLED 且从未执行」
+        // 删除条件从「该任务下全部子任务」收窄为「CANCELLED 且从未执行」
         // （`physicalDeleteNeverExecutedCancelled`）。原实现依赖本方法上方那句
         // `countByTaskIdExcludingStatus` 保证「此刻全是 CANCELLED」——那是**调用方不变量**，
         // 换个调用点就失效；收窄后写在 SQL 里，对任何调用方都成立。
@@ -378,7 +378,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
      * 收进一个事务并提交；这里两步都是 {@code REQUIRES_NEW} 且**写同一批 `sub_task` 行**
      * （{@code planGateRunner.clear} 走 {@code updateContextInNewTx}），若塞进 T2 事务里，
      * 内层 REQUIRES_NEW 要等外层释放行锁、外层又在等内层返回 ⇒ 连接级死锁
-     * （2026-11-08 真机 90 秒挂死同型）。放在提交后执行，两者各拿各的锁。</p>
+     * （真机 90 秒挂死同型）。放在提交后执行，两者各拿各的锁。</p>
      *
      * <p>代价是「草案已 PENDING 但任务还没 IN_PROGRESS」的窗口。这个方向是安全的：
      * 派发只在本方法末尾触发，窗口内没有任何消费者；重试 confirm 会因草案为空走
@@ -406,7 +406,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         }
         // 草案已全部转正、任务已离开 PLANNING ⇒ findings 描述的草案状态已不存在，必须清。
         // 不清的后果：后续读侧按 findings 非空判定「仍有未解阻断」，把已确认的任务标成待修，
-        // 而它此刻已经 IN_PROGRESS、草案也已 PENDING（2026-11-07 真机确认路径复现过）。
+        // 而它此刻已经 IN_PROGRESS、草案也已 PENDING（真机确认路径复现过）。
         planGateRunner.clear(confirmed);
 
         // `TD-16d-4` 读侧换源前置：暂存区行标 CONFIRMED + 软删，草案页从暂存区读后不再把
@@ -485,7 +485,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
      * {@code PENDING}，使该任务可重新拆解。
      *
      * <p><b>为什么必须清暂存区</b>：`rejectPlan` 原来只动执行表。真机验证
-     * （2026-11-08 23:13）reject 后重拆时，第一轮的 9 条 `ACTIVE` 行仍在，第二轮产出的
+     * （23:13）reject 后重拆时，第一轮的 9 条 `ACTIVE` 行仍在，第二轮产出的
      * code 与之重叠 ⇒ 顶在唯一索引上 ⇒ `DuplicateKeyException` 被上层当成「幂等命中」吞掉
      * ⇒ 任务永久卡在 `PLANNING`，且用户看不到任何错误。</p>
      *

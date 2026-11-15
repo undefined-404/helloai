@@ -3,7 +3,7 @@ package com.helloai.core.agent.runtime.sandbox;
 import java.util.Objects;
 
 /**
- * 沙箱工作区句柄（`SL-8`，2026-11-13）：把「调用方给的一个 {@code Long}」拆成<b>身份 + 隔离 + 访问 + 寿命</b>。
+ * 沙箱工作区句柄（`SL-8`）：把「调用方给的一个 {@code Long}」拆成<b>身份 + 隔离 + 访问 + 寿命</b>。
  *
  * <p><b>为什么需要</b>：此前同一个 {@code Long} 承载三种含义——子任务 ID（执行链）、会话 ID
  * （技能执行 {@code scope:{id}}）、{@code null}（一次性校验）。沙箱层只能靠「查库看它是不是
@@ -77,7 +77,7 @@ public record WorkspaceRef(Kind kind, Long ownerId, Long contextId, String specF
     public enum Access {
         /** 读写。 */
         READ_WRITE,
-        /** 只读意图（平台层声明；`SL-8` 阶段不阻止命令写文件）。 */
+        /** 只读意图（平台层声明；容器级只读由 `SL-10` volume 挂载承载）。 */
         READ_ONLY
     }
 

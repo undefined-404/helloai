@@ -8,7 +8,7 @@ import java.time.OffsetDateTime;
 import java.util.Map;
 
 /**
- * 子任务执行时间线条目（ 派发控制台）。
+ * 子任务执行时间线条目（派发控制台）。
  *
  * <p>用于 GET /api/sub-tasks/{id}/timeline 返回结构，按 id 升序排列。
  * 字段命名遵循字段命名规范；role 由实体 {@code AgentRole} 枚举转为字符串，

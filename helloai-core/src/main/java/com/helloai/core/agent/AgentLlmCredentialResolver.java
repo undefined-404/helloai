@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
 /**
  * API_KEY_LLM Agent 执行凭证解析器（平台级优先，Agent 级兜底）。
  *
- * <p>设计约束（修复"更换平台 API Key 后内部 LLM Agent 仍用旧 Key"缺陷）：</p>
+ * <p>设计约束（"更换平台 API Key 后内部 LLM Agent 仍用旧 Key"缺陷）：</p>
  * <ul>
  *   <li>内部 LLM Agent 不再持有 AGENT 级 API Key 快照：注册链路不再向
  *       credential_vault 复制平台密钥（见 LlmProviderCatalogService），

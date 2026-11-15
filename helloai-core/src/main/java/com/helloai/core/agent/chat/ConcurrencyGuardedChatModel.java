@@ -7,7 +7,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
 /**
- * 带 LLM 并发限流的 {@link ChatModel} 装饰器（`G8`，2026-10-15）。
+ * 带 LLM 并发限流的 {@link ChatModel} 装饰器（`G8`）。
  *
  * <p><b>修的缺陷</b>：平台有 {@link LlmCallConcurrencyGuard}（默认 8 许可）用于防上游 429，
  * 但其 javadoc 声称覆盖「对话澄清 / 拆解 / 审查 / <b>执行</b>」，

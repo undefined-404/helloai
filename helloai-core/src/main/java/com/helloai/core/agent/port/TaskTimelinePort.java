@@ -16,7 +16,7 @@ import java.util.Map;
  * 故端口落消费方 {@code agent.port}，实现落提供方 {@code task} 侧
  * （{@code TaskTimelinePortAdapter}），实现侧依赖 {@code task → agent} 属 <b>顺向合法</b>。</p>
  *
- * <p><b>为什么是端口而非领域事件</b>（2026-10-01 决策）：本端口形参全为基础类型与 {@link Map}，
+ * <p><b>为什么是端口而非领域事件</b>（决策）：本端口形参全为基础类型与 {@link Map}，
  * 不存在实体泄漏；改造后调用语义与原 {@code TaskTimelineService.recordEvent} <b>逐字相同</b>
  * （同事务同步写、append-only 审计），<b>零语义变更</b>。领域事件方案会把「同事务写」改为
  * 「提交后 best-effort 写」，属语义变更且需端到端回归，故本批不采用。</p>

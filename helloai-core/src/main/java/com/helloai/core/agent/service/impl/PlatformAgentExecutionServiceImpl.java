@@ -23,7 +23,7 @@ import com.helloai.core.agent.service.AgentService;
  *
  * <p>先作为统一 service 入口，避免未来把执行编排逻辑散落到 Controller / MQ consumer 中。</p>
  *
- * <p><b>REF-8.5 覆盖面收敛（2026-10-16）</b>：本类是全部业务 LLM 面的<b>唯一咽喉</b>
+ * <p><b>REF-8.5 覆盖面收敛</b>：本类是全部业务 LLM 面的<b>唯一咽喉</b>
  * （4 个已裁定进循环面全经 {@link #executeSync} 到 {@link #execute(Agent, AgentTask)}）。
  * 故循环化插点落在此处一处，而非散改 4 个调用点：白名单内的 {@code scene} 交由
  * {@link BusinessSurfaceLoopRunner} 以工具循环执行；不命中 / 循环不可用时静默走原有

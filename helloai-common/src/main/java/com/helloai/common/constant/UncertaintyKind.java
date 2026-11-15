@@ -17,7 +17,7 @@ package com.helloai.common.constant;
  *       执行者须先确认再动手，确认不了走既有 BLOCKED 链上报；</li>
  *   <li>{@link #TO_LOOK_UP}：待检索事实——**知道去哪儿查**（联网 / 附件 / 知识库），
  *       即 Magentic-One Task Ledger 的 {@code facts-to-look-up}；执行者应先检索再动手；</li>
- *   <li>{@link #TO_DERIVE}：待推导事实——**知道怎么算 / 怎么推**（口径计算、依赖分析、对照实验），
+ *   <li>{@link #TO_DERIVE}：待推导事实——**知道怎么算 / 怎么推**（计算，依赖分析，对照实验），
  *       即 {@code facts-to-derive}；执行者应先推导出中间结论再动手。</li>
  * </ul>
  *

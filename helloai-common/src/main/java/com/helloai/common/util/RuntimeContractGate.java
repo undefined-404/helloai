@@ -11,7 +11,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 执行期整改的确定性契约门 {@code G5_RUNTIME_CONTRACT_BREAK}（`ADR-008` §12.2，2026-11-10）。
+ * 执行期整改的确定性契约门 {@code G5_RUNTIME_CONTRACT_BREAK}（`ADR-008` §12.2）。
  *
  * <p><b>为什么在 {@code common}</b>：与 {@link DraftGateChecker} 同置——纯文本判定、不依赖任何
  * 领域实体或 Mapper，唯一的输入是「下游契约文本」，属 §4.1「基础工具」；放 task 域会让将来

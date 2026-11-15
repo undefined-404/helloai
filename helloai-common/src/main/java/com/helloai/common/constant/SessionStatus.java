@@ -10,7 +10,7 @@ package com.helloai.common.constant;
  *   <li>{@link #ACTIVE}：执行中（上下文装配完成 / LLM 在飞）</li>
  *   <li>{@link #COMPLETED}：执行成功（结果已回写）</li>
  *   <li>{@link #FAILED}：执行失败（结果回写失败路径）</li>
- *   <li>{@link #TIMEOUT}：执行超时（补偿路径预留）</li>
+ *   <li>{@link #TIMEOUT}：执行超时（偿路径预留）</li>
  *   <li>{@link #ABORTED}：被回收/重派中断（幂等防重入）</li>
  * </ul>
  */

@@ -13,7 +13,7 @@ import java.util.Map;
  * 解析并注入 {@link AgentContext#environment}；DockerSandbox 推迟到 P2、K8sSandbox
  * 推迟到 P3（执行方案坑 4 结论：当前真正缺的不是沙箱隔离，而是「谁在执行」的显式定义）。</p>
  *
- * <p><b>env 注入契约（Paperclip 阶段一·1，2026-10-22）</b>：本接口新增
+ * <p><b>env 注入契约（Paperclip 阶段一·1）</b>：本接口新增
  * {@link #environmentOverrides()} —— 实现类可声明<b>静态配置 env</b>（非运行时 key）。
  * 任何实现类的 overrides 在装配前<b>必须</b>经 {@link EnvironmentBlacklist} 过滤
  * （黑名单键丢弃 + 告警，不拒绝整个执行），且<b>运行时 key 恒优先</b>（合并顺序
@@ -46,7 +46,7 @@ public interface ExecutionEnvironment {
      *   <li>装配侧合并顺序固定为 {@code base < overrides < 运行时 key}，本方法返回值
      *       恒低于运行时 key 优先级。</li>
      * </ul>
-     * 返回的 Map 应不可变（调用方只读）。
+     * 返回的 Map 应不可变（用方只读）。
      */
     default Map<String, String> environmentOverrides() {
         return Collections.emptyMap();

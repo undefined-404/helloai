@@ -75,7 +75,7 @@ public final class LlmJsonSanitizer {
     /**
      * 修复「字符串内部裸写」导致的 JSON 结构错乱（{@link #fixInvalidEscapes} 的第二级修复）。
      *
-     * <p><b>要解决的实测故障</b>（2026-10-18）：LLM 在 {@code description} / {@code message}
+     * <p><b>要解决的实测故障</b>：LLM 在 {@code description} / {@code message}
      * 里写了未转义的英文双引号（或裸换行），字符串提前结束，Jackson 报
      * {@code Unexpected character ('下'): was expecting comma to separate Object entries}。
      * 这类输出**内容是完整的**，只是不符合 JSON 转义规范——直接抛错等于让用户白等一次
@@ -93,7 +93,7 @@ public final class LlmJsonSanitizer {
      * 结构结束引号。该形态在中文技术文本里罕见，且本方法只在严格解析已失败时兜底使用。</p>
      *
      * @param json 已过 {@link #fixInvalidEscapes} 的 JSON 文本（可为 null）
-     * @return 修复后的文本；无法改进时原样返回（调用方据「是否变化」决定是否重试）
+     * @return 修复后的文本；无法改进时原样返回（用方据「是否变化」决定是否重试）
      */
     public static String repairBrokenStrings(String json) {
         if (json == null || json.isEmpty()) {

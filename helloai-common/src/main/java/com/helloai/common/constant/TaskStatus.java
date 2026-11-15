@@ -3,7 +3,7 @@ package com.helloai.common.constant;
 /**
  * 任务主状态。
  *
- * <p><b>{@code PLANNING} 与 {@code AWAITING_PLAN_CONFIRM} 必须分开</b>（2026-11-08）：
+ * <p><b>{@code PLANNING} 与 {@code AWAITING_PLAN_CONFIRM} 必须分开</b>：
  * 改前两者共用 {@code PLANNING}，同一字段同时表达「机器正在拆解（应超时回收）」与
  * 「草案等用户确认（可以等一周）」两种相反的生命周期。所有判定只能靠
  * {@code NOT EXISTS (草案)} 打补丁，而补丁的假设（有草案 = 拆解成功）在「回收发生在

@@ -1,7 +1,7 @@
 package com.helloai.core.shared.util;
 
 /**
- * 「草稿是否构成<b>可交付正文</b>」的判据（唯一事实源，2026-10-25）。
+ * 「草稿是否构成<b>可交付正文</b>」的判据（唯一事实源）。
  *
  * <p><b>为什么需要单独一个类</b>：这条判据曾以两处独立实现存在——{@code FinalReportFenceHook}
  * 判断「耗尽时草稿值不值得救」、{@code LocalExecutionCommandConsumer} 判断「turn 末要不要用
@@ -11,7 +11,7 @@ package com.helloai.core.shared.util;
  * <p><b>判据形状（为什么是「或」而不是「且」）</b>：</p>
  * <ul>
  *   <li><b>有 Markdown 骨架 ⇒ 可交付</b>：实测「# 手册 - 最终整合报告\n\n## 执行摘要…」剔除空白
- *       后仅 30 余字符，但它<b>确实</b>是交付物的开头（2026-10-16 事故：完整草稿被收尾轮顶替）。
+ *       后仅 30 余字符，但它<b>确实</b>是交付物的开头（完整草稿被收尾轮顶替）。
  *       标题标记是「草稿已有交付物骨架」的最廉价信号。</li>
  *   <li><b>篇幅达标 ⇒ 可交付</b>：无骨架但超过 {@value #MIN_BODY_CHARS} 字符的纯文本，
  *       亦视为正文（例如验收要求就是「一段连贯说明」而无须小标题）。</li>
@@ -64,7 +64,7 @@ public final class DeliverableDraft {
     /**
      * 文本（对话正文 / 沙箱文件）是否构成<b>可交付正文</b>：有骨架 <b>或</b> 篇幅达标。
      *
-     * <p><b>★判定必须先剥掉自检围栏</b>（2026-10-25 实测，`review_record` 三轮驳回原文）：
+     * <p><b>★判定必须先剥掉自检围栏</b>（`review_record` 三轮驳回原文）：
      * MiniMax 的假成功交付物形状是「几行过程自述 + {@code VERIFICATION:} + {@code - 核实说明：…}
      * + {@code STATUS: BLOCKED}」。围栏里的 {@code - 核实说明} 是<b>无序列表项</b>，若不剥围栏
      * 就会被 {@link #looksLikeDraftBody} 判成「有骨架 ⇒ 可交付」，兜底与回传双双失灵——

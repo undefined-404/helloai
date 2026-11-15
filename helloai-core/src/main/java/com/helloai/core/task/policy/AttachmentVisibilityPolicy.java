@@ -45,7 +45,7 @@ public class AttachmentVisibilityPolicy {
      * {@link #canRead(Long, Long, Long, AttachmentVisibility)} 的 ④ 分支即可 —— **逻辑零复制**
      * （本仓库对"判据分散"零容忍，见类注释）。</p>
      *
-     * <p><b>2026-10-10 统一（实测依据）</b>：改动前视图侧用的是另一套更窄的规则
+     * <p><b>（依据）</b>：改动前视图侧用的是另一套更窄的规则
      * （{@code sub_task.assigned_agent_id == agentId}）—— 实测把**合法团队成员也挡在门外**：
      * 同一个 Agent 加入 team 后读附件已是 200，而读同任务的时间线 / 对话流**仍 403**；
      * 同时 {@code /api/sub-tasks/getById} **完全没有校验**（任何有效 Agent API Key 可读任意子任务详情）。
@@ -75,7 +75,7 @@ public class AttachmentVisibilityPolicy {
     }
 
     /**
-     * 判某 agent 是否可<b>删除</b>某附件（P2 删除通道，2026-10-07）。
+     * 判某 agent 是否可<b>删除</b>某附件（P2 删除通道）。
      *
      * <p><b>删除判据比读判据更严</b>：读侧 {@link #canRead} 允许 TASK 团队成员互通产出，
      * 若删除照搬读判据会退化成「同任务他人可互删产出」。故删除<b>只认第①条
@@ -135,7 +135,7 @@ public class AttachmentVisibilityPolicy {
         if (taskAgentMemberService.isMember(taskId, agentId)) {
             return true;
         }
-        // derive-on-miss（2026-10-02）：成员表写入是"事件驱动派生"，涉及 ≥3 条独立写入路径
+        // derive-on-miss：成员表写入是"事件驱动派生"，涉及 ≥3 条独立写入路径
         // （SubTaskServiceImpl 归属变更 / rework、TaskDispatchPort#assignNext 调度改派）。
         // 若只信成员表，漏挂任一条即"静默缺行"—— 与今日反复出现的"写入/判据分散导致漂移"同类隐患。
         // 权威源 sub_task.assigned_agent_id 是**所有**写入路径的最终落点，故以其兜底后

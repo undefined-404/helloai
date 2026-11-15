@@ -13,11 +13,11 @@ import java.util.function.Supplier;
 import java.util.function.ToLongFunction;
 
 /**
- * 「按 key 复用的执行资源槽池」（2026-10-25，`ADR-005` / `LOG-20261025-005`）。
+ * 「按 key 复用的执行资源槽池」（`ADR-005` / `LOG-20261025-005`）。
  *
  * <p><b>为什么需要它</b>：沙箱实现此前的调用模型是「每次调用都新建沙箱、
  * 跑一条命令、{@code finally} 无条件 {@code kill()}」⇒ <b>文件不跨调用保留</b>，模型只能
- * 整篇重写正文（实测 MiniMax 20 轮把 3820 字压到 2787 字仍不达标、轮次耗尽）。对齐
+ * 整篇重写正文（MiniMax 20 轮把 3820 字压到 2787 字仍不达标，轮次耗尽）。对齐
  * deepseek-harness 的产品级口径（`dsh-tool-bash-persistent`：同一 agent 的 shell 状态与
  * <b>文件系统</b>跨调用持久），改为「同一子任务复用同一沙箱」。</p>
  *
@@ -29,7 +29,7 @@ import java.util.function.ToLongFunction;
  * 由 {@link Slot#lock()} 保证；槽级别的创建竞态下可能多建一个，胜出者保留、败者由
  * 调用方按「未使用即视为空闲」回收——本类不为此引入全局锁（消费者本就按子任务串行）。</p>
  *
- * <p><b>key 为什么是泛型</b>（`SKX-5`，2026-10-26）：引入「按调用分层规格」后，同一个
+ * <p><b>key 为什么是泛型</b>（`SKX-5`）：引入「按调用分层规格」后，同一个
  * {@code subTaskId} 可能要同时持有<b>不同镜像</b>的沙箱（先 python 验算、再 node 出图）。
  * 若 key 仍是裸 {@code Long}，第二次调用会命中第一次的槽，拿到<b>没有 node 的 python 容器</b>。
  * 故 key 交给调用方组合（生产 = {@code (subTaskId, specFingerprint)}），本类只做相等性比较。</p>
@@ -46,7 +46,7 @@ final class SandboxSlotPool<K, T> {
      *
      * @param key           作用域键（生产 = {@code (subTaskId, specFingerprint)}）
      * @param idleTtlMillis 空闲上限（毫秒）；{@code <=0} 表示不做过期判定（恒复用）
-     * @param opener        创建资源的工厂；返回 {@code null} 表示创建失败（不登记，调用方降到结构化失败）
+     * @param opener        创建资源的工厂；返回 {@code null} 表示创建失败（不登记，用方降到结构化失败）
      * @param closer        销毁资源的回调（过期淘汰 / 显式移除 / 替换时调用）
      * @return 可用槽；创建失败返回 {@code null}
      */
@@ -122,7 +122,7 @@ final class SandboxSlotPool<K, T> {
     }
 
     /**
-     * 移除并销毁所有匹配、且<b>当前无人持有槽锁</b>的槽（`SL-2`，2026-11-12：任务终态回收）。
+     * 移除并销毁所有匹配、且<b>当前无人持有槽锁</b>的槽（`SL-2`，：任务终态回收）。
      *
      * <p><b>为什么不能直接复用 {@link #removeMatching}</b>：任务终态事件到达时，该任务可能
      * 仍有命令在跑（如最后一个子任务的收尾轮）。无条件摘除并 {@code closer} 会 kill 正在执行的
@@ -171,7 +171,7 @@ final class SandboxSlotPool<K, T> {
     }
 
     /**
-     * 后台回收：销毁「空闲超过阈值」的槽（`SL-7`，2026-11-13）。
+     * 后台回收：销毁「空闲超过阈值」的槽（`SL-7`）。
      *
      * <p><b>为什么必须有它</b>：{@link #acquire} 的空闲淘汰只在<b>同键再次访问</b>时发生——
      * 一个再也不会被访问的键（任务被放弃、会话结束）永远不会触发淘汰，<b>大 TTL 等于泄漏</b>。
@@ -259,7 +259,7 @@ final class SandboxSlotPool<K, T> {
     }
 
     /**
-     * 找出<b>全部</b>匹配的在册键（**不创建**；`SL-3`，2026-11-13）。
+     * 找出<b>全部</b>匹配的在册键（**不创建**；`SL-3`）。
      *
      * <p>回读需要它而不是 {@link #findKey}：同一任务可能有多个规格槽，先拿到全部候选
      * 才能按「同规格优先 / 唯一才回退 / 多规格拒绝」的规则选，避免读到另一个规格的容器。</p>

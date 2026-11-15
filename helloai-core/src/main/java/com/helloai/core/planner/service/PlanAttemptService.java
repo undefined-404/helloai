@@ -51,7 +51,7 @@ public interface PlanAttemptService {
      * <p>同一 {@code batchKey} 已登记过则直接返回已有行，不重复插入——它对应
      * {@code uk_plan_attempt_key(batch_key, attempt_no)} 的唯一约束。</p>
      *
-     * @param leaseUntil 本次尝试的租约到期时刻（调用方按任务级超时配置计算）
+     * @param leaseUntil 本次尝试的租约到期时刻（用方按任务级超时配置计算）
      */
     PlanAttempt begin(Long taskId, String batchKey, PlanAttemptAction action, OffsetDateTime leaseUntil);
 

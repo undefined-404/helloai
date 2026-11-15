@@ -206,7 +206,7 @@ async function render() {
     // 而是把「Syntax error in text」错误图当正常 SVG 返回——之前的实现会把它 sanitize 后
     // 塞进画布，用户看到的是一张写着版本号的错误图而不是告警。
     // suppressErrors: true ⇒ 不往 DOM 插错误图、也不抛错，而是<b>返回 false</b>；
-    // 因此必须判返回值（实测：传 true 时完全不会 throw，只判异常等于没校验）。
+    // 因此必须判返回值（传 true 时完全不会 throw，只判异常等于没校验）。
     const parsed = await mermaid.parse(syntax, { suppressErrors: true })
     if (parsed === false) {
       throw new Error('mermaid 语法校验未通过（详见下方源代码）')

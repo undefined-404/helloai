@@ -106,7 +106,7 @@ public class ReviewExecutionEngine {
 
     /**
      * 单次核验（不改状态不落库）：渲染 Prompt → LLM 调用 → 对话流双写 → 解析判定；
-     * 失败/不可解析返回 null（内部已记日志/timeline，调用方据此停留 REVIEW 等人工）。
+     * 失败/不可解析返回 null（内部已记日志/timeline，用方据此停留 REVIEW 等人工）。
      *
      * <p>默认走单审链路（{@link ReviewChannel#SINGLE}），双审/抽检显式传链路来源，
      * 对话流消息类型随链路切换（subtask_review_* / subtask_dual_review_* /

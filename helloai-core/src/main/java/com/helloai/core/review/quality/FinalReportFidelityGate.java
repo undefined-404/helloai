@@ -21,34 +21,15 @@ import java.util.regex.Pattern;
 /**
  * 最终报告交付保真闸门（RM12 收口：把既有机械前置门适配为统一 {@link QualityGate}）。
  *
- * <p><b>形态</b>：按用户拍板的「纯静态工具<b>保持静态</b>、由 Gate 持有」——
- * {@link FinalReportFidelityChecker}（纯静态、零 Spring 依赖）<b>原样不动</b>，
- * 本类仅持有它并把其 {@code Result} 适配为统一 {@link GateDecision}。</p>
+ * <p>纯静态 {@link FinalReportFidelityChecker} 原样不动，本类持有它并把 {@code Result} 适配为 {@link GateDecision}：
+ * 含 HARD ⇒ {@link GateOutcome#BLOCK}；无 HARD 有 SOFT ⇒ {@link GateOutcome#ADVISE}；无违规 ⇒ {@link GateOutcome#PASS}；
+ * 发现项顺序与渲染同 {@code Result.issueList}（{@link GateDecision#detailList}）。</p>
  *
- * <p><b>行为等价</b>（收口不改变任何判定）：</p>
- * <ul>
- *   <li>含 HARD 违规 ⇒ {@link GateOutcome#BLOCK}（等价原 {@code hasHard()}）；</li>
- *   <li>无 HARD 但有 SOFT ⇒ {@link GateOutcome#ADVISE}（等价原 {@code hasSoft()}）；</li>
- *   <li>无任何违规 ⇒ {@link GateOutcome#PASS}；</li>
- *   <li>发现项顺序与渲染格式与 {@code Result.issueList} 逐字一致（见 {@link GateDecision#detailList}）。</li>
- * </ul>
+ * <p>S-9 沙箱机械判定：报告正文声明脚本类交付物（含 {@code ```sh/bash/python/py/ps1/powershell} 围栏）时，提取脚本送
+ * {@link SandboxExecutionService#execute} 实测，交 {@link FinalReportFidelityChecker#checkScriptExecutability} 判定：
+ * exitCode=0 且未截断 ⇒ 不新增违规；沙箱未启用/不可达/exitCode!=0/截断 ⇒ HARD 驳回（声明脚本可执行却拿不出证据）。</p>
  *
- * <p><b>S-9 沙箱执行链机械判定接入（沙箱执行链设计方案 §3.5/§4，2026-10-17）</b>：
- * 报告正文<b>声明脚本类交付物</b>（存在可执行语言围栏 {@code ```sh / bash / python / py / ps1 / powershell}）
- * 时，把围栏内脚本正文提取送 {@link SandboxExecutionService#execute} 实测可执行性，
- * 结果交 {@link FinalReportFidelityChecker#checkScriptExecutability}（纯静态）判定：</p>
- * <ul>
- *   <li><b>证据有效</b>（exitCode=0 且未截断）⇒ 不新增违规（脚本确实跑通，作为 Reviewer 一手证据）；</li>
- *   <li><b>证据不足 / 执行失败</b>（沙箱未启用 / 不可达 / exitCode!=0 / 截断）⇒ HARD 机械驳回，
- *       同 {@code shell_reference} 语义——「报告声明脚本可执行却拿不出可执行证据」不给 LLM 放过机会。</li>
- * </ul>
- *
- * <p><b>零行为变化边界（方案 C 承诺）</b>：</p>
- * <ul>
- *   <li>沙箱未接线（{@code sandboxExecutionService == null}，本类无参构造 / 测试路径）⇒ S-9 不触发；</li>
- *   <li>报告正文<b>无</b>可执行语言围栏（非脚本交付物）⇒ 不调用沙箱，既有判定逐字不变；</li>
- *   <li>脚本围栏验证失败时降级为「不验证」（catch 后返回空），不阻断审查主链。</li>
- * </ul>
+ * <p>零行为变化边界：沙箱未接线（{@code sandboxExecutionService==null}）或正文无可执行围栏 ⇒ 不触发 S-9；脚本验证失败降级为不验证（catch 返回空），不阻断主链。</p>
  */
 @Slf4j
 @Component

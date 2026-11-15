@@ -1,7 +1,7 @@
 package com.helloai.api.dto.skill;
 
 /**
- * 需求对话「＋→技能」里的产出型技能选项（2026-10-26）。
+ * 需求对话「＋→技能」里的产出型技能选项。
  *
  * <p><b>为什么单独一个 DTO</b>：完整目录（{@link SkillPackageResponse}）带 schema / 校验规则 /
  * 拆解依赖，是给 Agent 配置页用的；对话菜单只需要「名字 + 一句说明」。

@@ -1438,7 +1438,7 @@ const producedTaskId = computed(() => conversation.value?.derivedTaskId ?? conve
 const isChatMode = computed(() => conversation.value?.mode === 'CHAT')
 
 // 输入框占位文案按会话模式区分（三态口径统一：新建 / 自由对话 / 方案澄清）。
-// 2026-10-22：斜杠语法不再出现在文案里——能力入口收进输入框左下角「＋」菜单的「技能」组，
+// 斜杠语法不再出现在文案里——能力入口收进输入框左下角「＋」菜单的「技能」组，
 // 命令本身仍是同一套后端协议（/plan 与 /task），只作为高级别名保留、不再对外宣传。
 const inputPlaceholder = computed(() => {
   // 已挂载技能：占位直接说明「补需求 + Enter 会发生什么」，用户不用猜胶囊是什么意思
@@ -1460,7 +1460,7 @@ const PLANNER_COMMAND_RE = /^(?:\/planner|\/plan)(?:\s+([\s\S]+))?$/i
 const input = ref('')
 // 待发用户气泡文本：按会话隔离（键同 sendingSet，null/'' = 新建占位），读写见 setPendingText
 const pendingTexts = ref<Record<string, string>>({})
-// S1 发送态（2026-10-30 RC-5）：改为「每会话」布尔表，而非单份全局 sending —— 否则一个会话
+// S1 发送态（RC-5）：改为「每会话」布尔表，而非单份全局 sending —— 否则一个会话
 // 在跑会把「切到别的会话发送」也拦掉。写入按目标会话 id 合并（只动自己那位）。
 const sendingSet = ref<Record<string, boolean>>({})
 const finalizing = ref(false)
@@ -1622,16 +1622,16 @@ watch(plusMenuVisible, (visible) => {
   if (visible) void loadPackageSkills()
 })
 
-// 已挂载的技能（2026-10-22，对齐 WorkBuddy「技能 chip + 光标」）：
+// 已挂载的技能（对齐 WorkBuddy「技能 chip + 光标」）：
 // 选技能 ≠ 立即发送——挂成输入框里的胶囊，用户补完需求再 Enter；
 // 发送时才翻译成后端既有协议（planner → /planner，task → /task 前缀），语法始终不外露。
-// 2026-10-26：新增产出型技能（`pkg:<技能包名>`），发送时翻译成 `[skill:<name>] ` 前缀，
+// 新增产出型技能（`pkg:<技能包名>`），发送时翻译成 `[skill:<name>] ` 前缀，
 // 后端据此把技能写进任务 required_skills（子任务里真跑技能 CLI 并导出可下载产物）。
 const activeSkill = ref<string | null>(null)
 const composerRef = ref<any>(null)
 
 /**
- * 菜单里可选的「产出型技能」（2026-10-26）：服务端只下发「能独立出产物」的健康技能包
+ * 菜单里可选的「产出型技能」：服务端只下发「能独立出产物」的健康技能包
  * （`internal_run_skill` ∧ 无依赖）——archify 出 HTML；依赖别人的规范补充包（如
  * biz-process-lifecycle）不进菜单，改为被依赖时由执行链自动并入。
  *
@@ -1820,7 +1820,7 @@ watch(() => conversation.value?.status, (s) => {
 const attachments = ref<ChatAttachmentItem[]>([])
 
 /**
- * 胶囊条只展示「用户上传」的附件（2026-10-27）：平台产物（source === 'platform'，
+ * 胶囊条只展示「用户上传」的附件：平台产物（source === 'platform'，
  * uploader_user_id 为 null）一律不进输入框，只出现在右侧「产物」侧栏。
  * 后端 list 已带 source 字段；极少数老数据无 source 时按用户上传处理（不误伤）。
  */
@@ -2035,13 +2035,13 @@ function attachmentChipTitle(item: ChatAttachmentItem): string {
   return `${item.fileName}${size ? ' · ' + size : ''}${reason} · ${participation}`
 }
 
-// 编辑已发送消息（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）：
+// 编辑已发送消息（对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）：
 // editingMsgId 非空 = 该消息气泡处于行内编辑态；editingDraft 为 textarea 草稿；editingSaving 防重复提交
 const editingMsgId = ref<string>('')
 const editingDraft = ref('')
 const editingSaving = ref(false)
 /**
- * 编辑态携带的技能名（2026-10-27）。
+ * 编辑态携带的技能名。
  *
  * <p>为什么必须有它：`editMessage` 后端只解析正文里的 `[skill:name] ` 前缀，
  * <b>不读</b>消息 payload（`target.getPayload()` 只作为普通轮次的上下文透传）。
@@ -2054,7 +2054,7 @@ const enhancing = ref(false)
 const enhancePanelVisible = ref(false)
 const enhancedDraft = ref('')
 
-// S1 Chat SSE 流式（2026-10-30 RC-4）：流式态按「会话」隔离成 Map，随 activeId 惰性取用。
+// S1 Chat SSE 流式（RC-4）：流式态按「会话」隔离成 Map，随 activeId 惰性取用。
 // 原先这些是单份全局 ref（RequirementChat.vue:1711-1727），切换会话时下一轮会直接把上一会话
 // 的流式内容覆盖掉；Map 化后各会话的流式过程互不串扰，切走再切回仍能继续看（流收尾后保留）。
 // 模板统一经 computed `currentStream` 投影当前激活会话的实例，模板绑定改动最小。
@@ -2071,7 +2071,7 @@ interface PerConversationStream {
   // reasoningActive 标记「当前是否仍处于思考阶段」（正文首帧到达即置 false）
   reasoningActive: boolean
   thinkingExpanded: boolean
-  // 过程步骤（2026-10-18）：联网检索等平台动作，与思考内容按到达顺序混排展示
+  // 过程步骤：联网检索等平台动作，与思考内容按到达顺序混排展示
   // （对齐 DeepSeek「已搜索 N 个网页」/ ChatGPT「Searching the web」）
   processSteps: string[]
   // 停止生成：该会话当前流式发送的 AbortController 句柄；非空 = 本会话流在跑
@@ -2113,7 +2113,7 @@ function getOrCreateStream(convId: string): PerConversationStream {
 // 首帧到达后由 migratePlaceholderState 迁到真实 id。
 const PLACEHOLDER_KEY = ''
 
-/** 会话级发送态（2026-10-30 RC-5）：仅当 targetId 对应的会话正在跑时置 true；null = 新建窗口的占位键。 */
+/** 会话级发送态（RC-5）：仅当 targetId 对应的会话正在跑时置 true；null = 新建窗口的占位键。 */
 function sendingOf(targetId: string | number | null | undefined): boolean {
   return !!sendingSet.value[String(targetId ?? '')]
 }
@@ -2187,7 +2187,7 @@ watch(
 function onWebSearchToggle() { /* 占位：保留供后续埋点/提示扩展 */ }
 
 // 上轮 LLM 失败后可重试：ACTIVE 且最后一条是 user 消息（数据驱动，刷新后仍可重试）。
-// 技能执行例外（2026-10-30 SKX 修复）：技能请求是「当场执行」而非 LLM 澄清轮——异步执行期间
+// 技能执行例外（SKX 修复）：技能请求是「当场执行」而非 LLM 澄清轮——异步执行期间
 // （skillRunId ≠ null）、以及结束后最后一条 user 消息仍带 skill（已取消 / 未出新消息）时，
 // 都不该算「回复生成失败」。否则整轮执行会叠一条「回复生成失败」假行，把真实占位 / 结果盖掉。
 const canRetry = computed(() => {
@@ -2246,7 +2246,7 @@ function userSelectionsOf(msg: RequirementMessage): ClarifySelection[] | null {
 /**
  * 用户消息 payload 里的技能名（键名与后端 `SkillDirective.PAYLOAD_KEY = "skill"` 对齐）。
  *
- * 2026-10-27：技能名此前只被后端用于路由，前端完全看不见——于是「历史对话看不出这条消息
+ * 技能名此前只被后端用于路由，前端完全看不见——于是「历史对话看不出这条消息
  * 用了技能」与「编辑重发时技能丢失」两个问题同时无解。把它读出来这两件事一次解决。
  */
 function skillOf(msg: RequirementMessage): string | null {
@@ -2259,7 +2259,7 @@ function skillOf(msg: RequirementMessage): string | null {
 }
 
 /**
- * 会话列表/头部的标题展示（2026-10-27）：剥掉内部的技能前缀。
+ * 会话列表/头部的标题展示：剥掉内部的技能前缀。
  *
  * <p>标题由后端按「用户发送原文」截断生成，而原文带 `[skill:archify] ` 前缀 ⇒ 列表里
  * 直接露出内部协议语法。只在<b>展示层</b>剥离，库里的标题一字不动——它还被
@@ -2295,12 +2295,12 @@ const renderMessages = computed(() => {
     const p = assistantPayloadOf(msg)
     const structured = p?.mode === 'structured' && p.questions?.length ? p : null
     const webSearch: WebSearchTrace | null = p?.webSearch ?? null
-    // 2026-10-18：过程数据（思考 + 检索步骤）随 payload 落库 ⇒ 历史消息也能回看，
+    // 过程数据（思考 + 检索步骤）随 payload 落库 ⇒ 历史消息也能回看，
     // 这是「思考过程在回复完成后消失」的根治点（此前只存在于 SSE 流里）
     const process: RoundProcessTrace | null = p?.process ?? null
-    // 2026-10-27：技能产物（选 archify 等产出型技能时，后端在对话轮内直接跑出文件）
+    // 技能产物（选 archify 等产出型技能时，后端在对话轮内直接跑出文件）
     const artifact: ClarifyArtifactRef | null = p?.artifact ?? null
-    // 2026-10-27：user 消息用了哪个技能（展示态显示 chip、编辑态回填）
+    // user 消息用了哪个技能（展示态显示 chip、编辑态回填）
     const skill = msg.role === 'user' ? skillOf(msg) : null
     if (!structured) return { msg, structured: null, intro: msg.content, selections: null, webSearch, process, artifact, skill, liked: false }
     const interactive = i === msgs.length - 1 && activeStructured.value != null
@@ -2325,7 +2325,7 @@ const renderMessages = computed(() => {
   return rows
 })
 
-// 2026-10-27：会话内平台生成的产物集合（技能执行产出；从全部消息 payload 收集，
+// 会话内平台生成的产物集合（技能执行产出；从全部消息 payload 收集，
 // 含来源消息 id 用于侧栏定位；按生成顺序倒序展示，最新产物在前）。
 // 与「用户上传附件」（attachments，输入框上方胶囊条）严格分离：产物是 AI 输出，进右侧侧栏。
 const conversationArtifacts = computed(() => {
@@ -2472,7 +2472,7 @@ function previewArtifactInPanel(item: { artifact: ClarifyArtifactRef; msgId: str
 }
 
 /**
- * 下载产物（2026-10-27）：必须走 blob 通道 —— 裸 <a href> 的浏览器导航请求
+ * 下载产物：必须走 blob 通道 —— 裸 <a href> 的浏览器导航请求
  * 不带 X-Admin-Token，会被 AuthInterceptor 401 拒（已实测 11:39:07 日志）。
  * 经 request 拦截器带鉴权头拉 blob → 临时 <a download> 落盘 → revokeObjectURL。
  */
@@ -2490,7 +2490,7 @@ function downloadArtifact(item: { artifact: ClarifyArtifactRef; msgId: string; m
 }
 
 /**
- * 新标签页打开产物（2026-10-27）：同样走 blob 通道避免 401。
+ * 新标签页打开产物：同样走 blob 通道避免 401。
  * 拉 blob → createObjectURL → window.open（Content-Type 已由响应头决定，text/html 会正常渲染）
  * → 延迟 revoke（给新标签页留出加载时间）。
  */
@@ -2675,7 +2675,7 @@ function closeEnhancePanel() {
 }
 
 /**
- * `/技能名 需求` 快捷（2026-10-27，对齐既有的 `/plan`、`/planner`）。
+ * `/技能名 需求` 快捷（对齐既有的 `/plan`、`/planner`）。
  *
  * <p><b>为什么动态匹配而不是写死正则</b>：可用技能由服务端下发（`packageSkills`），
  * 写死意味着每加一个技能就得改前端。这里按「首段 `/xxx` 在菜单里存在」判定，
@@ -2758,7 +2758,7 @@ async function handleSend() {
       await sendSyncCreate(text, plannerId)
       return
     }
-    // 流式分流（2026-10-18 补全新会话）：
+    // 流式分流（全新会话）：
     //   已有会话 → streamSend 通道
     //   新会话  → streamCreate 通道（首帧 session 回传 id，再增量渲染）
     //   原同步 create 必须等「意图决策 + 联网搜索 + 完整 LLM」才一次性返回，
@@ -2822,7 +2822,7 @@ function isTaskCommand(text: string): boolean {
  * 成功后按 FINALIZED/taskId 联动打开草案审阅（§6.169）。
  */
 async function sendSyncCreate(text: string, plannerId: string | null) {
-  // 2026-10-27 修：此前无条件走 create —— 在同一个对话里连画第二张图时会被弹到一个新会话，
+  // 此前无条件走 create —— 在同一个对话里连画第二张图时会被弹到一个新会话，
   // 历史上下文、产物侧栏、技能 chip 全部断掉，用户看到的是「又开了一个对话」。
   // 判据：已有 activeId 就在当前会话 continue（send），只有真正的新会话才 create。
   // 注：create 才需要 clientToken / plannerId / 搜索开关（首句前附件认领、选人、开关初值），
@@ -2938,7 +2938,7 @@ async function settleStream(id: LongId, success: boolean, cs: PerConversationStr
 }
 
 // 已有会话：普通消息与结构化卡提交统一走 SSE 流式（token 增量渲染 + done 后收敛）
-// ★2026-10-18 修复：结构化卡提交此前走同步 clarifyApi.send —— 而同步链路要先跑完
+// ★：结构化卡提交此前走同步 clarifyApi.send —— 而同步链路要先跑完
 // 联网搜索（数秒~数十秒）+ 完整 LLM 输出才一次性返回，用户全程无反馈；改走同一 SSE
 // 通道后可见打字机增量（后端 runStreamRound 早已支持 selections 参数）。
 async function streamSendActiveMessage(id: LongId, text: string,
@@ -2968,7 +2968,7 @@ async function streamSendActiveMessage(id: LongId, text: string,
 }
 
 /**
- * 流式发送「自适应」入口（2026-10-18）：activeId 为空走 streamCreate（首帧 session 拿新 id），
+ * 流式发送「自适应」入口：activeId 为空走 streamCreate（首帧 session 拿新 id），
  * 否则走 streamSend。两条通道共用同一套流式状态与收敛逻辑，避免「新会话无流式」的分叉。
  */
 async function streamSendOrCreate(text: string, plannerId: string | null,
@@ -3104,7 +3104,7 @@ function cleanupStreamState(cs: PerConversationStream, targetId: string | null |
 }
 
 /**
- * 停止生成（2026-10-19）：abort 当前流式连接。前端中断 SSE → 后端 dispose LLM 订阅，
+ * 停止生成：abort 当前流式连接。前端中断 SSE → 后端 dispose LLM 订阅，
  * 生成立即停止且未完成回复不落库；随后 settleStream 拉详情（user 消息已落库 → 出现重试条）。
  */
 function stopGenerating() {
@@ -3114,7 +3114,7 @@ function stopGenerating() {
   ElMessage.info('已停止生成')
 }
 
-// ── 编辑已发送消息（2026-10-19，对齐 ChatGPT/DeepSeek/Kimi）──
+// ── 编辑已发送消息（对齐 ChatGPT/DeepSeek/Kimi）──
 
 /** 进入编辑态：预填原文与技能。发送中/终稿中/已放弃不可编辑。 */
 function startEdit(msg: RequirementMessage) {
@@ -3251,7 +3251,7 @@ async function handleRetry() {
 }
 
 // V33 结构化选项提交：可读文本走 content（LLM 上下文），选择快照走 payload（回显）
-// 2026-10-18：改走 SSE 流式（与普通消息同一通道）——原同步链路要等搜索 + 完整 LLM 输出，
+// 改走 SSE 流式（与普通消息同一通道）——原同步链路要等搜索 + 完整 LLM 输出，
 // 用户体感是「卡住很久然后一次性刷出」，且看不到思考过程。
 async function handleStructuredSubmit(payload: { text: string; selections: ClarifySelection[] }) {
   const id = activeId.value
@@ -4035,7 +4035,7 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 降档标记（2026-10-29）：用信息态色而非危险色——它是「请核对」的提示，不是失败 */
+/* 降档标记：用信息态色而非危险色——它是「请核对」的提示，不是失败 */
 .artifact-item-degraded {
   color: var(--ha-info-text);
 }
@@ -4252,7 +4252,7 @@ onBeforeUnmount(() => {
   max-width: 100%;
   box-sizing: border-box;
 }
-/* 产物生成提示条（2026-10-27）：产物已移入右侧侧栏，消息流内仅留一条轻提示，
+/* 产物生成提示条：产物已移入右侧侧栏，消息流内仅留一条轻提示，
    点击「查看」展开侧栏 —— 平台生成的附件不再内联在气泡里（与用户上传附件分离） */
 .msg-artifact-tip {
   display: flex;
@@ -4292,7 +4292,7 @@ onBeforeUnmount(() => {
   opacity: 0.9;
 }
 /*
- * 助手回复 = **文档流**，不是卡片（2026-10-18 对齐 DeepSeek / Kimi）
+ * 助手回复 = **文档流**，不是卡片（对齐 DeepSeek / Kimi）
  *
  * 原实现：消息外面套「浅底 + 1px 描边 + 10/14 内边距」的卡片，正文字号 14px。
  * 两个后果：① 长文被边框切成一格一格，越读越像「卡片列表」而不是「一篇文章」；
@@ -4375,7 +4375,7 @@ onBeforeUnmount(() => {
 }
 .msg-actions .final-shortcut:hover { background: var(--ha-primary-muted); }
 
-/* 编辑消息（2026-10-19，对齐 ChatGPT/DeepSeek）：
+/* 编辑消息（对齐 ChatGPT/DeepSeek）：
    用户消息行是 row-reverse 镜像（气泡靠右），铅笔放气泡左侧外缘 */
 .msg-edit-hover {
   position: absolute;
@@ -4455,7 +4455,7 @@ onBeforeUnmount(() => {
 /* A2：技能执行占位里的「停止生成」——与阶段文案同行，不另起一行 */
 .skill-cancel-btn { margin-left: 4px; }
 
-/* 思考过程区（2026-10-23 重做）：
+/* 思考过程区（重做）：
    改前三处问题——① 用 Element Plus 默认值而非品牌 token：`border-left: 3px solid var(--el-color-info-light-5)`
    是**蓝色**侧条（蓝是已废弃的旧主色，且侧条强调是禁用的装饰手法）；② 正文用 --ha-muted(#8B96AB)
    压在 #FAFAFA 上实测只有 **2.85:1**，远低于 WCAG AA 的 4.5:1 —— 这就是「发灰、发糊」的来源；
@@ -4603,7 +4603,7 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
-/* 技能清单加载中的等量骨架：尺寸与真实卡片一致（实测两行各 114 / gap 12 ⇒ 总高 240），
+/* 技能清单加载中的等量骨架：尺寸与真实卡片一致（两行各 114 / gap 12 ⇒ 总高 240），
    就绪后替换成成品卡时布局零位移 */
 .cw-card-skeleton {
   min-height: 114px;

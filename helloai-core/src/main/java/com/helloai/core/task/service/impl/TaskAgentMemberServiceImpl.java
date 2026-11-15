@@ -107,7 +107,7 @@ public class TaskAgentMemberServiceImpl
      * 正常情况下差集为空，零写入。写失败只告警，不影响本次展示（鉴权侧另有
      * {@link #isCurrentExecutorOfTask} 兜底，不依赖本次回填成功）。</p>
      *
-     * @return 是否发生过补齐（调用方据此决定是否重查）
+     * @return 是否发生过补齐（用方据此决定是否重查）
      */
     private boolean backfillFromAuthoritative(Long taskId, List<TaskAgentMember> members) {
         List<TaskAgentMember> authorities = baseMapper.selectAuthoritativeAssignmentsByTask(taskId);

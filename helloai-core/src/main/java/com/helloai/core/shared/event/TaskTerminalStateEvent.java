@@ -4,7 +4,7 @@ import com.helloai.common.constant.TaskStatus;
 import lombok.Getter;
 
 /**
- * 任务进入终态事件（任务级资源回收触发源，`SL-2`，2026-11-12）。
+ * 任务进入终态事件（任务级资源回收触发源，`SL-2`）。
  *
  * <p><b>为什么不复用 {@link TaskAutoCompletedEvent}</b>：后者语义是「自动收口完成 →
  * 触发最终整合报告」，只覆盖 {@code DONE} 且消费方是报告服务；本事件的语义是

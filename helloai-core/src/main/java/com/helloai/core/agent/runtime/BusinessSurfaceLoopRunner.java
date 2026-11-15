@@ -38,7 +38,7 @@ import java.util.Map;
 /**
  * 业务面循环入口（REF-8.5 覆盖面收敛）。
  *
- * <p><b>为什么存在（实测事实，2026-10-16）</b>：内部 LLM 的工具循环此前<b>只</b>存在于子任务
+ * <p><b>为什么存在（事实）</b>：内部 LLM 的工具循环此前<b>只</b>存在于子任务
  * 执行链——全仓生产代码 {@code agentLoop.run()} 唯一调用点是 {@link RuntimeTurnExecutor}。
  * 业务 LLM 面（拆解 / 子任务核验 / 终报告整合 / 终报告审查）全部经
  * {@code PlatformAgentExecutionService#executeSync} 走 {@code ApiKeyAgentExecutor} 的

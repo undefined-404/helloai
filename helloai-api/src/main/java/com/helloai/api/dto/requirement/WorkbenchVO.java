@@ -11,7 +11,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
- * 个人工作台聚合响应（PA-4，2026-11-02 晚改版为三段式）。
+ * 个人工作台聚合响应（PA-4，晚改版为三段式）。
  *
  * <p>任务概况（计数 + 活跃 Agent）/ 最近任务（进行中）/ 最近产物（会话单源）一次下发。
  * 产物条目复用 {@link ArtifactItemVO}，下载/预览仍走既有 {@code /chat-attachments/*} 端点。</p>

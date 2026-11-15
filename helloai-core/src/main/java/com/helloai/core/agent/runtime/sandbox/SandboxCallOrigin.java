@@ -1,7 +1,7 @@
 package com.helloai.core.agent.runtime.sandbox;
 
 /**
- * 沙箱调用的来源方（`SL-4`，2026-11-13）。
+ * 沙箱调用的来源方（`SL-4`）。
  *
  * <p><b>为什么需要</b>：任务级复用后同一子任务的台账里会混入执行者、核验者与平台内部
  * （{@code FinalReportFidelityGate}）三方的命令。自审证据只应接受<b>执行者本人</b>跑出来的

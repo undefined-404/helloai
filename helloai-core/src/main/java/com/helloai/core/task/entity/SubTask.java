@@ -16,7 +16,7 @@ import java.util.Map;
 @Data
 @EqualsAndHashCode(callSuper = true)
 // autoResultMap：让 @TableField(typeHandler) 参与 SELECT 结果映射。uncertainties 强类型读取依赖
-// （2026-10-27 起全局 List→JacksonTypeHandler 注册已移除；uncertainties 读侧改由 autoResultMap 驱动，见该字段 Javadoc）
+// （全局 List→JacksonTypeHandler 注册已移除；uncertainties 读侧改由 autoResultMap 驱动，见该字段 Javadoc）
 @TableName(value = "sub_task", autoResultMap = true)
 public class SubTask extends BaseEntity {
 
@@ -140,7 +140,7 @@ public class SubTask extends BaseEntity {
     /**
      * 上次重派尝试时刻（G-015 B2.2 退避窗口时钟，V102）。
      *
-     * <p><b>为什么独立于 {@code update_time}</b>（2026-10-05 修 804 换人静默失败）：
+     * <p><b>为什么独立于 {@code update_time}</b>（804 换人静默失败）：
      * 退避窗口原以 {@code update_time} 为时钟，但 {@code block()}/{@code resume()}/
      * {@code changeStatus()}/{@code resetToPendingForDispatch()} 全走 {@code updateById}
      * 会刷新 {@code update_time}——「换人」入口先 {@code block()} 再重派，闸门读到被自身
@@ -196,7 +196,7 @@ public class SubTask extends BaseEntity {
      * MyBatisPlusConfig 全局把 {@code List.class} 注册为 JacksonTypeHandler，自动映射
      * 按擦除后的 List 读取会把 JSON 数组反序列化为 {@code List<LinkedHashMap>}，
      * 强类型消费点（sendInboxNotification 统计 UNCONFIRMED 等）ClassCastException，
-     * 导致派单 inbox 通知失败、调度链死锁（2026-09-10 排查修复）。</p>
+     * 导致派单 inbox 通知失败、调度链死锁（排查修复）。</p>
      */
     @TableField(typeHandler = UncertaintyListTypeHandler.class)
     private List<Uncertainty> uncertainties;

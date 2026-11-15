@@ -1,7 +1,7 @@
 package com.helloai.common.constant;
 
 /**
- * 工具名 → 中文展示名目录（**服务端单一事实源**，2026-10-18）。
+ * 工具名 → 中文展示名目录（**服务端单一事实源**）。
  *
  * <p><b>为什么需要</b>：时间线/时序图里直接展示 {@code internal_run_in_sandbox}、
  * {@code internal_get_sub_task_detail} 这类英文标识，非技术用户无法理解其含义。
@@ -79,7 +79,7 @@ public enum ToolDisplayName {
 
     /**
      * 反向查：工具名 → 中文短名；未知工具返回 {@code null}
-     * （调用方回退显示原英文名，绝不显示「未知工具」掩盖事实）。
+     * （用方回退显示原英文名，绝不显示「未知工具」掩盖事实）。
      */
     public static String labelOf(String toolName) {
         if (toolName == null) {

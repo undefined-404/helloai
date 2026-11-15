@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import request from '@/api/request'
 
 /**
- * 枚举字典（2026-10-18，服务端单一事实源）。
+ * 枚举字典（服务端单一事实源）。
  *
  * <p>解决「页面裸露 sub_task.approved / coding 这类英文码」：前端不再硬编码映射
  * （原 `types/dialog.ts` 的 INBOX_EVENT_TYPE_MAP 只覆盖 8 个键，后端实际发 10 种）。
