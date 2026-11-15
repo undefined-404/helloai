@@ -30,8 +30,8 @@ import java.util.stream.Collectors;
 /**
  * 单次核验执行引擎（§7.8 拆分：核验执行与编排分离，SubTaskReviewServiceImpl 迁出）。
  *
- * <p>职责边界：渲染核验 Prompt → 平台 LLM 调用 → 对话流双写 → 判定解析。
- * <b>不改状态不落库</b>：失败/不可解析返回 null（内部已记日志/timeline），
+ * <p>职责边界：渲染核验 Prompt → 平台 LLM 调用 → 对话流双写 → 判定解析（不可解析时<b>即时重试一次</b>）。
+ * <b>不改状态不落库</b>：失败/（重试后仍）不可解析返回空 outcome（内部已记日志/timeline），
  * 由调用方决定停留 REVIEW 或按共识落地。</p>
  *
  * <p>单审（doReview）、双审（doDualReview）、抽检复审（ReviewRecheckExecutor）
@@ -46,6 +46,24 @@ public class ReviewExecutionEngine {
 
     /** 自审信号注入上限（防止失败原因列表撑大核验 Prompt）。 */
     private static final int SELF_REVIEW_SIGNAL_MAX_CHARS = 800;
+
+    /**
+     * 不可解析即时重试的追加段：只重申输出契约，<b>不改判定规则</b>。
+     *
+     * <p>真机实测的失败形态是「先吐自然语言思维链」或「工具轮次后丢 JSON」（两场景各命中一次），
+     * 故把「只输出一个 JSON 对象 + 首尾必须是花括号」显式压到 prompt 末尾 —— 贴近失败点，
+     * 而不是在 systemPrompt 里加一条通用纪律（{@code AgentTask.systemPrompt} 当前为空串，
+     * 且该段被多个进循环面共用，改它会影响执行侧）。</p>
+     */
+    private static final String UNPARSEABLE_RETRY_SUFFIX = String.join("\n",
+            "",
+            "---",
+            "**上一轮你的输出无法解析为核验判定，本轮只输出一个 JSON 对象**：",
+            "- 不要输出任何自然语言说明、思考过程、Markdown 代码块围栏或前后缀；"
+                    + "首个字符必须是 `{`，最后一个字符必须是 `}`。",
+            "- 字段：pass(布尔) / score(1~5 整数) / issues(字符串，不通过时必填四元组) / comment(一句话结论) /"
+                    + " analysis(逐条核验分析) / missingEvidence(数组) / coverage(数组，每条验收标准一个对象)。",
+            "- 判定规则与核验要求完全按下文执行，本轮不得因为「只是重述格式」而改变结论。");
 
     /**
      * 单次核验结果（`RV-2`）：结构化判定 + 静态校验 findings。
@@ -84,6 +102,7 @@ public class ReviewExecutionEngine {
     private final ReviewEvidenceAssembler reviewEvidenceAssembler;
     private final SubTaskService subTaskService;
     private final ReviewProperties reviewProperties;
+    private final ReviewEvidenceMaterializer evidenceMaterializer;
 
     /**
      * 单次核验（不改状态不落库）：渲染 Prompt → LLM 调用 → 对话流双写 → 解析判定；
@@ -95,7 +114,7 @@ public class ReviewExecutionEngine {
      *
      * @param subTask  待核验子任务
      * @param reviewer 核验 Reviewer Agent
-     * @return 结构化判定 + 静态校验 findings；LLM 调用失败/超时/输出不可解析时 verdict 为 null
+     * @return 结构化判定 + 静态校验 findings；LLM 调用失败/超时、或不可解析且即时重试仍失败时 verdict 为 null
      */
     public ExecutionOutcome execute(SubTaskView subTask, AgentProfileSnapshot reviewer) {
         return execute(subTask, reviewer, ReviewChannel.SINGLE);
@@ -105,24 +124,37 @@ public class ReviewExecutionEngine {
      * 单次核验（不改状态不落库）：同 {@link #execute(SubTaskView, AgentProfileSnapshot)}，按链路来源
      * 切换对话流消息类型前缀（单审/双审/抽检三态可分辨）。
      *
+     * <p>本入口走<b>当前证据路径</b>（`RV-15`）：渲染 Prompt 前后台自动把受审附件物化进
+     * reviewer 沙箱（{@link ReviewEvidenceMaterializer}），物化结果以「证据就位清单」段拼进
+     * Prompt —— 模型零操作拿到可执行证据，不需要再「想起」stage 工具。</p>
+     *
      * @param subTask  待核验子任务
      * @param reviewer 核验 Reviewer Agent
      * @param channel  链路来源（SINGLE / DUAL / RECHECK），决定消息类型前缀
-     * @return 结构化判定 + 静态校验 findings；LLM 调用失败/超时/输出不可解析时 verdict 为 null
+     * @return 结构化判定 + 静态校验 findings；LLM 调用失败/超时、或不可解析且即时重试仍失败时 verdict 为 null
      */
     public ExecutionOutcome execute(SubTaskView subTask, AgentProfileSnapshot reviewer, ReviewChannel channel) {
-        return execute(subTask, reviewer, channel, buildEvidenceView(subTask));
+        return execute(subTask, reviewer, channel, buildEvidenceView(subTask),
+                materializeEvidenceQuietly(subTask));
     }
 
     /**
      * 用冻结证据复判（`RV-6`）：证据五段由调用方提供（通常来自 `review_record.snapshot.frozenEvidence`），
      * 不再读当前附件/产出——驳回记录返工后原件已失效，读当前视图必然漂移。
      *
+     * <p><b>F3：冻结证据路径不物化</b>。冻结复判重放的是驳回时冻结的<b>文本</b>证据做漂移检测，
+     * 返工后当前附件可能已被替换——若同时物化当前文件，模型会「Prompt 看冻结文本、沙箱跑当前文件」
+     * 自相矛盾，且给漂移检测注入未冻结的活通道。{@code evidence == null} 时回落当前证据路径
+     * （等价 {@link #execute}，此时照常物化）。</p>
+     *
      * @param evidence 冻结证据；null ⇒ 回退到当前证据装配（与 {@link #execute} 等价）
      */
     public ExecutionOutcome executeWithEvidence(SubTaskView subTask, AgentProfileSnapshot reviewer,
                                                 ReviewChannel channel, ReviewEvidenceView evidence) {
-        return execute(subTask, reviewer, channel, evidence != null ? evidence : buildEvidenceView(subTask));
+        if (evidence != null) {
+            return execute(subTask, reviewer, channel, evidence, null);
+        }
+        return execute(subTask, reviewer, channel);
     }
 
     /**
@@ -130,18 +162,96 @@ public class ReviewExecutionEngine {
      * 驳回侧冻结（`RV-6`）共用同一来源，避免三处各读一遍附件正文。
      */
     public ReviewEvidenceView buildEvidenceView(SubTaskView subTask) {
+        ReviewEvidenceAssembler.EvidenceContent content =
+                reviewEvidenceAssembler.buildEvidenceContent(subTask);
         return new ReviewEvidenceView(
                 reviewEvidenceAssembler.extractExecutionOutput(subTask),
                 reviewEvidenceAssembler.buildAttachmentList(subTask),
-                reviewEvidenceAssembler.buildAttachmentContent(subTask),
+                content.attachmentContent(),
                 reviewEvidenceAssembler.verificationSignal(reviewEvidenceAssembler.extractRawOutput(subTask)),
-                renderSelfReviewSignal(subTask));
+                renderSelfReviewSignal(subTask),
+                content.mechanicalCheck(),
+                content.evidenceLedger());
     }
 
     private ExecutionOutcome execute(SubTaskView subTask, AgentProfileSnapshot reviewer,
-                                     ReviewChannel channel, ReviewEvidenceView evidence) {
-        Long subTaskId = subTask.id();
+                                     ReviewChannel channel, ReviewEvidenceView evidence,
+                                     String materializationNote) {
         String prompt = renderPrompt(subTask, evidence);
+        if (materializationNote != null && !materializationNote.isBlank()) {
+            prompt = prompt + "\n" + materializationNote;
+        }
+        Attempt attempt = runOnce(subTask, reviewer, channel, prompt, false);
+        if (attempt == null) {
+            // 调用异常 / 超时 / 结果失败：已记 execution_failed，**不重试**
+            // （重试会再吃一次读超时，把单次核验的最坏时长从 1 倍推到 2 倍，而这类失败与输出格式无关）
+            return ExecutionOutcome.empty();
+        }
+        VerdictParser.ParseResult parsed = attempt.parsed();
+        if (parsed.verdict() == null) {
+            if (!reviewProperties.isUnparseableRetryEnabled()) {
+                recordUnparseable(subTask, reviewer.id(), attempt.rawOutput(), 1);
+                return ExecutionOutcome.empty();
+            }
+            log.warn("自动核验输出不可解析，立即重试一次: subTaskId={}, rawOutput={}",
+                    subTask.id(), VerdictParser.summarize(attempt.rawOutput(), 300));
+            Attempt retried = runOnce(subTask, reviewer, channel,
+                    prompt + UNPARSEABLE_RETRY_SUFFIX, true);
+            if (retried == null) {
+                return ExecutionOutcome.empty();
+            }
+            if (retried.parsed().verdict() == null) {
+                recordUnparseable(subTask, reviewer.id(), retried.rawOutput(), 2);
+                return ExecutionOutcome.empty();
+            }
+            log.info("自动核验不可解析重试成功: subTaskId={}", subTask.id());
+            parsed = retried.parsed();
+        }
+        SubTaskReviewService.ReviewVerdict verdict = parsed.verdict();
+        List<ReviewVerdictValidator.Finding> findings = collectFindings(
+                subTask, verdict, parsed.looseParse(), evidence.executionOutput(), evidence.attachmentContent(),
+                evidence.mechanicalCheck(), evidence.evidenceLedger());
+        recordVerdictFindings(subTask, reviewer.id(), channel, verdict, parsed.looseParse(), findings);
+        return new ExecutionOutcome(verdict, findings);
+    }
+
+    /**
+     * 审核证据自动物化（`RV-15`）——<b>fail-open</b>：物化器整体抛异常不阻断核验，
+     * 降级为「物化失败」提示段（引导模型 stage 补拉 / 退回读工具）。
+     *
+     * <p>只被<b>当前证据路径</b>（三参 {@link #execute}）调用；冻结复判（{@code executeWithEvidence}）
+     * 传 {@code null} 跳过（F3）。返回的「证据就位清单」段随不可解析重试轮自动保留——物化一次
+     * 够首轮 + 重试轮共用（写入是覆盖语义）。</p>
+     */
+    private String materializeEvidenceQuietly(SubTaskView subTask) {
+        try {
+            ReviewEvidenceMaterializer.MaterializationResult result =
+                    evidenceMaterializer.materialize(subTask.taskId(), subTask.id());
+            return result.renderPromptNote();
+        } catch (Exception e) {
+            log.warn("审核证据自动物化异常（核验继续，按未物化处理）: subTaskId={}, err={}",
+                    subTask.id(), e.getMessage());
+            return "---\n**证据物化失败**（平台异常，未注入证据文件）：需要实测时请用 "
+                    + "internal_stage_attachment_to_sandbox 按需注入；无法执行时退回 "
+                    + "internal_read_attachment_range 分段核对附件内容。";
+        }
+    }
+
+    /** 单次「调用 → 双写 → 解析」的结果；{@code parsed.verdict()==null} 即「输出不可解析」。 */
+    private record Attempt(VerdictParser.ParseResult parsed, String rawOutput) {
+    }
+
+    /**
+     * 单次「平台 LLM 调用 → 对话流双写 → 判定解析」。
+     *
+     * @param retry 是否为不可解析后的即时重试：真则在对话流消息类型上加 {@code _retry} 后缀，
+     *              使同一子任务的两次尝试在前端可分辨（否则会看到两条同类型 prompt / verdict）
+     * @return 解析结果 + 原始输出；调用异常 / 超时 / 结果失败时返回 {@code null}（已记 execution_failed 事件）
+     */
+    private Attempt runOnce(SubTaskView subTask, AgentProfileSnapshot reviewer,
+                            ReviewChannel channel, String prompt, boolean retry) {
+        Long subTaskId = subTask.id();
+        String kindSuffix = retry ? "_retry" : "";
         AgentResult result;
         try {
             AgentTask agentTask = AgentTask.builder()
@@ -161,7 +271,7 @@ public class ReviewExecutionEngine {
             log.warn("自动核验 LLM 调用异常，子任务停留 REVIEW: subTaskId={}, err={}", subTaskId, e.getMessage());
             recordExecutionFailureQuietly(subTask, reviewer.id(), channel, "exception",
                     e.getClass().getSimpleName() + ": " + e.getMessage());
-            return ExecutionOutcome.empty();
+            return null;
         }
         if (result == null || !result.isSuccess()) {
             log.warn("自动核验 LLM 调用失败，子任务停留 REVIEW: subTaskId={}, err={}",
@@ -169,43 +279,48 @@ public class ReviewExecutionEngine {
             recordExecutionFailureQuietly(subTask, reviewer.id(), channel,
                     result == null ? "null_result" : "result_failed",
                     result != null ? result.getErrorMessage() : "");
-            return ExecutionOutcome.empty();
+            return null;
         }
 
         // 对话流双写：核验 Prompt + REVIEWER 分析原文全量落 conversation_message
-        // （消息类型随链路来源切换：subtask_review_* / subtask_dual_review_* / subtask_recheck_*），
-        // 不可解析时同样保留原始输出（正是人工兜底最需要看的内容）；失败不阻断核验主链路。
+        // （消息类型随链路来源切换：subtask_review_* / subtask_dual_review_* / subtask_recheck_*，
+        // 重试轮再加 _retry 后缀），不可解析时同样保留原始输出（正是人工兜底最需要看的内容）；
+        // 失败不阻断核验主链路。
         // 三条消息经 writeConversationQuietly 逐条独立 try-catch：单条偶发写入失败
         // （如连接短暂不可用）不连带丢失其余消息，避免复盘只见结论不见请求/思考/分析
         writeConversationQuietly(subTaskId, null,
-                "user", "platform", prompt, channel.toolName("prompt"));
+                "user", "platform", prompt, channel.toolName("prompt" + kindSuffix));
         // 推理模型的思考过程单独落一条消息（保留 thinking，供前端动态展示）
         if (result.getThinking() != null && !result.getThinking().isBlank()) {
             writeConversationQuietly(subTaskId, reviewer.id(),
                     "assistant", "agent",
                     result.getThinking(),
-                    channel.toolName("thinking"));
+                    channel.toolName("thinking" + kindSuffix));
         }
+        String rawOutput = result.getOutput() != null ? result.getOutput() : "";
         writeConversationQuietly(subTaskId, reviewer.id(),
-                "assistant", "agent",
-                result.getOutput() != null ? result.getOutput() : "",
-                channel.toolName("verdict"));
+                "assistant", "agent", rawOutput, channel.toolName("verdict" + kindSuffix));
 
-        VerdictParser.ParseResult parsed = verdictParser.parseWithMeta(result.getOutput());
-        SubTaskReviewService.ReviewVerdict verdict = parsed.verdict();
-        if (verdict == null) {
-            log.warn("自动核验输出不可解析，子任务停留 REVIEW 等人工: subTaskId={}, rawOutput={}",
-                    subTaskId, VerdictParser.summarize(result.getOutput(), 300));
-            taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                    TimelineEventCode.SUB_TASK_AUTO_REVIEW_UNPARSEABLE.code(), AgentRole.REVIEWER,
-                    reviewer.id(),
-                    Map.of("rawOutput", VerdictParser.summarize(result.getOutput(), 300)));
-            return ExecutionOutcome.empty();
-        }
-        List<ReviewVerdictValidator.Finding> findings = collectFindings(
-                subTask, verdict, parsed.looseParse(), evidence.executionOutput(), evidence.attachmentContent());
-        recordVerdictFindings(subTask, reviewer.id(), channel, verdict, parsed.looseParse(), findings);
-        return new ExecutionOutcome(verdict, findings);
+        return new Attempt(verdictParser.parseWithMeta(rawOutput), rawOutput);
+    }
+
+    /**
+     * 「输出不可解析」事件（与 {@code execution_failed} 区分：这里 LLM 调用是<b>成功</b>的，只是格式不对）。
+     *
+     * <p><b>只在最终不可解析时落事件</b>（重试成功不落）——否则时间线会同时出现「核验异常」与
+     * 「核验通过」，看起来自相矛盾。两次尝试的可见性由对话流 {@code *_retry} 消息与
+     * {@code log.warn} 承担。</p>
+     *
+     * @param attempts 本次核验已尝试的调用次数（1=未开重试或首轮即终局，2=重试后仍不可解析）
+     */
+    private void recordUnparseable(SubTaskView subTask, Long reviewerAgentId, String rawOutput, int attempts) {
+        log.warn("自动核验输出不可解析，子任务停留 REVIEW 等人工: subTaskId={}, attempts={}, rawOutput={}",
+                subTask.id(), attempts, VerdictParser.summarize(rawOutput, 300));
+        taskTimelineService.recordEvent(subTask.taskId(), subTask.id(),
+                TimelineEventCode.SUB_TASK_AUTO_REVIEW_UNPARSEABLE.code(), AgentRole.REVIEWER,
+                reviewerAgentId,
+                Map.of("rawOutput", VerdictParser.summarize(rawOutput, 300),
+                        "attempts", attempts));
     }
 
     /**
@@ -219,13 +334,27 @@ public class ReviewExecutionEngine {
      */
     private List<ReviewVerdictValidator.Finding> collectFindings(
             SubTaskView subTask, SubTaskReviewService.ReviewVerdict verdict, boolean looseParse,
-            String executionOutput, String attachmentContent) {
+            String executionOutput, String attachmentContent,
+            String mechanicalCheck, String evidenceLedger) {
         List<ReviewVerdictValidator.Finding> findings = new ArrayList<>();
         if (reviewProperties.isVerdictValidatorEnabled()) {
             findings.addAll(ReviewVerdictValidator.validate(verdict, subTask.acceptance(), looseParse));
             if (reviewProperties.isCoverageCriticEnabled()) {
                 findings.addAll(ReviewCoverageCritic.critique(verdict, subTask.acceptance(),
-                        subTask.uncertainties()));
+                        subTask.uncertainties(), mechanicalCheck));
+            }
+            // `RV-11`：声称值 ↔ 实测值（确定性，容忍度为 0）+ 驳回侧证据不可得出口
+            findings.addAll(ReviewClaimComparison.compare(verdict, mechanicalCheck));
+            ReviewVerdictValidator.Finding unavailable =
+                    ReviewEvidenceUnavailability.detect(verdict, evidenceLedger);
+            if (unavailable != null) {
+                findings.add(unavailable);
+            }
+            // 编造附件 id 只留痕、不构成缺口（`gap` 已按三态收敛），否则「编 id 换转人工」成为奖励
+            ReviewVerdictValidator.Finding unknownRef =
+                    ReviewEvidenceUnavailability.unknownIds(verdict, evidenceLedger);
+            if (unknownRef != null) {
+                findings.add(unknownRef);
             }
         }
         if (reviewProperties.isEncodingDetectionEnabled()) {
@@ -371,7 +500,15 @@ public class ReviewExecutionEngine {
                 .replace("{{EXECUTION_OUTPUT}}", evidence.executionOutput())
                 .replace("{{ATTACHMENT_LIST}}", evidence.attachmentList())
                 .replace("{{ATTACHMENT_CONTENT}}", evidence.attachmentContent())
+                .replace("{{MECHANICAL_CHECK}}", blankToPlaceholder(evidence.mechanicalCheck(),
+                        "（无机械预检结论）"))
+                .replace("{{EVIDENCE_LEDGER}}", blankToPlaceholder(evidence.evidenceLedger(),
+                        "（无附件注入台账）"))
                 .replace("{{VERIFICATION_SIGNAL}}", evidence.verificationSignal());
+    }
+
+    private static String blankToPlaceholder(String value, String placeholder) {
+        return value == null || value.isBlank() ? placeholder : value;
     }
 
     /** D7：执行约束渲染——非空注入「执行约束：…」，空时「（无）」（G-010 缺口③清偿）。 */
@@ -511,7 +648,7 @@ public class ReviewExecutionEngine {
         return texts;
     }
 
-    /** D7：不确定性申报渲染——逐条「[kind] note」，空时「（无）」（空白 note 条目跳过）。 */
+    /** D7：不确定性申报渲染——有 ref（U1/U4）时逐条「[ref][kind] note」，空时「（无）」（空白 note 条目跳过）。 */
     private String renderUncertainties(SubTaskView subTask) {
         if (subTask.uncertainties() == null || subTask.uncertainties().isEmpty()) {
             return "（无）";
@@ -521,7 +658,12 @@ public class ReviewExecutionEngine {
             if (u.note() == null || u.note().isBlank()) {
                 continue;
             }
-            sb.append("- [").append(u.kind()).append("] ").append(u.note()).append('\n');
+            sb.append("- [");
+            // ref 必须进 Prompt：覆盖批评器优先按 ref 认定「已处理」，模型看不到编号就只能逐字复述长 note
+            if (u.ref() != null && !u.ref().isBlank()) {
+                sb.append(u.ref().trim()).append("][");
+            }
+            sb.append(u.kind()).append("] ").append(u.note()).append('\n');
         }
         return sb.length() > 0 ? sb.toString().trim() : "（无）";
     }

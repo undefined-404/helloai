@@ -28,11 +28,13 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -65,6 +67,7 @@ class ReviewExecutionEngineTest {
     private TaskTimelineService taskTimelineService;
     private ReviewEvidenceAssembler reviewEvidenceAssembler;
     private SubTaskService subTaskService;
+    private ReviewEvidenceMaterializer evidenceMaterializer;
 
     @BeforeEach
     void setUp() {
@@ -73,10 +76,16 @@ class ReviewExecutionEngineTest {
         taskTimelineService = mock(TaskTimelineService.class);
         reviewEvidenceAssembler = mock(ReviewEvidenceAssembler.class);
         subTaskService = mock(SubTaskService.class);
+        evidenceMaterializer = mock(ReviewEvidenceMaterializer.class);
+        // 物化：默认「关闭」空结果，避免既有用例的 prompt 断言被物化段干扰
+        //（新用例显式 stub 成已就位/失败/异常三种形态）
+        lenient().when(evidenceMaterializer.materialize(anyLong(), anyLong()))
+                .thenReturn(ReviewEvidenceMaterializer.MaterializationResult.disabled("单测默认关闭"));
         // renderPrompt 会用返回值做 String.replace，null 会 NPE ⇒ 全部给占位串
         lenient().when(reviewEvidenceAssembler.extractExecutionOutput(any())).thenReturn("（产出）");
         lenient().when(reviewEvidenceAssembler.buildAttachmentList(any())).thenReturn("（清单）");
-        lenient().when(reviewEvidenceAssembler.buildAttachmentContent(any())).thenReturn("（正文）");
+        lenient().when(reviewEvidenceAssembler.buildEvidenceContent(any())).thenReturn(
+                new ReviewEvidenceAssembler.EvidenceContent("（正文）", "（台账）", "（机械预检）"));
         lenient().when(reviewEvidenceAssembler.extractRawOutput(any())).thenReturn("（原始输出）");
         lenient().when(reviewEvidenceAssembler.verificationSignal(anyString())).thenReturn("（证据信号）");
         lenient().when(subTaskService.mergeSkills(anyLong())).thenReturn(List.of());
@@ -86,7 +95,7 @@ class ReviewExecutionEngineTest {
     private ReviewExecutionEngine newEngine(ReviewProperties properties) {
         return new ReviewExecutionEngine(platformAgentExecutionService, conversationService,
                 taskTimelineService, new VerdictParser(new ObjectMapper()),
-                reviewEvidenceAssembler, subTaskService, properties);
+                reviewEvidenceAssembler, subTaskService, properties, evidenceMaterializer);
     }
 
     private SubTaskView subTask() {
@@ -452,6 +461,149 @@ class ReviewExecutionEngineTest {
         assertThat(capturedPrompt())
                 .contains("自审降级")
                 .doesNotContain("本轮自审已通过");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  不可解析即时重试（2026-11-15 真机暴露：两场景各命中一次不可解析，
+    //  原实现只能等 L3 孤儿兜底 60s，且可能停在 REVIEW）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("★不可解析即时重试：首轮非 JSON、重试拿到判定 ⇒ 不落 unparseable，调用 2 次")
+    void shouldRetryOnceWhenFirstOutputUnparseable() {
+        ReviewProperties properties = new ReviewProperties();
+        properties.setCoverageCriticEnabled(false);
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success("我先看看附件内容，再给出结论。", "STOP", "executor", 10))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        ReviewExecutionEngine.ExecutionOutcome outcome = newEngine(properties).execute(subTask(), reviewer());
+
+        assertThat(outcome.verdict()).isNotNull();
+        assertThat(outcome.verdict().getPass()).isTrue();
+        verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), any());
+        // 重试成功不落「核验异常」：否则时间线会同时出现「异常」与「通过」，看起来自相矛盾
+        verify(taskTimelineService, never()).recordEvent(anyLong(), anyLong(),
+                eq(TimelineEventCode.SUB_TASK_AUTO_REVIEW_UNPARSEABLE.code()),
+                any(), any(), anyMap());
+    }
+
+    @Test
+    @DisplayName("★重试 prompt 追加输出契约强化段（只重申格式，不改判定规则）")
+    void shouldAppendOutputContractToRetryPrompt() {
+        ReviewProperties properties = new ReviewProperties();
+        properties.setCoverageCriticEnabled(false);
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success("没有 JSON。", "STOP", "executor", 10))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        newEngine(properties).execute(subTask(), reviewer());
+
+        ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), captor.capture());
+        String retryPrompt = captor.getAllValues().get(1).getUserPrompt();
+        assertThat(retryPrompt)
+                .contains("上一轮你的输出无法解析为核验判定")
+                .contains("首个字符必须是 `{`")
+                .contains("不得因为「只是重述格式」而改变结论");
+    }
+
+    @Test
+    @DisplayName("★两轮都不可解析 ⇒ 落 unparseable 且 attempts=2，判定仍为 null")
+    void shouldRecordUnparseableWithAttemptsWhenRetryAlsoFails() {
+        ReviewProperties properties = new ReviewProperties();
+        properties.setCoverageCriticEnabled(false);
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success("我先看看附件内容，再给出结论。", "STOP", "executor", 10));
+
+        ReviewExecutionEngine.ExecutionOutcome outcome = newEngine(properties).execute(subTask(), reviewer());
+
+        assertThat(outcome.verdict()).isNull();
+        verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), any());
+        Map<String, Object> payload = captureSingleEvent(
+                TimelineEventCode.SUB_TASK_AUTO_REVIEW_UNPARSEABLE.code());
+        assertThat(payload.get("attempts")).isEqualTo(2);
+        assertThat((String) payload.get("rawOutput")).contains("我先看看附件内容");
+    }
+
+    @Test
+    @DisplayName("★回滚面：关闭重试开关 ⇒ 只调 1 次即落 unparseable（attempts=1，行为回到改造前）")
+    void shouldNotRetryWhenRetryDisabled() {
+        ReviewProperties properties = new ReviewProperties();
+        properties.setCoverageCriticEnabled(false);
+        properties.setUnparseableRetryEnabled(false);
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success("我先看看附件内容，再给出结论。", "STOP", "executor", 10));
+
+        ReviewExecutionEngine.ExecutionOutcome outcome = newEngine(properties).execute(subTask(), reviewer());
+
+        assertThat(outcome.verdict()).isNull();
+        verify(platformAgentExecutionService, times(1)).executeSync(anyLong(), any());
+        Map<String, Object> payload = captureSingleEvent(
+                TimelineEventCode.SUB_TASK_AUTO_REVIEW_UNPARSEABLE.code());
+        assertThat(payload.get("attempts")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("RV-15 当前证据路径：证据物化清单段拼进 Prompt（含就位路径）")
+    void shouldAppendMaterializationNoteToPrompt() {
+        ReviewEvidenceMaterializer.MaterializationResult result =
+                new ReviewEvidenceMaterializer.MaterializationResult(true, null, List.of(
+                        new ReviewEvidenceMaterializer.MaterializedAttachment(
+                                300L, "check_data.py", "/tmp/staged/300-check_data.py",
+                                120, "abc123", ReviewEvidenceMaterializer.Status.MATERIALIZED, null)),
+                        List.of(), 1, 120);
+        when(evidenceMaterializer.materialize(anyLong(), anyLong())).thenReturn(result);
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        newEngine(new ReviewProperties()).execute(subTask(), reviewer());
+
+        String prompt = capturedPrompt();
+        assertThat(prompt)
+                .contains("**证据物化清单（平台自动注入")
+                .contains("/tmp/staged/300-check_data.py")
+                .contains("sha256=abc123");
+    }
+
+    @Test
+    @DisplayName("RV-15 fail-open：物化器抛异常不阻断核验，Prompt 注入降级提示段")
+    void shouldNotBlockReviewWhenMaterializerThrows() {
+        when(evidenceMaterializer.materialize(anyLong(), anyLong()))
+                .thenThrow(new IllegalStateException("minio down"));
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        ReviewExecutionEngine.ExecutionOutcome outcome =
+                newEngine(new ReviewProperties()).execute(subTask(), reviewer());
+
+        assertThat(outcome.verdict()).isNotNull();
+        assertThat(outcome.verdict().getPass()).isTrue();
+        assertThat(capturedPrompt()).contains("**证据物化失败**");
+    }
+
+    @Test
+    @DisplayName("RV-15 F3：冻结证据复判（executeWithEvidence 带 evidence）跳过物化")
+    void shouldSkipMaterializationOnFrozenEvidence() {
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+        ReviewEvidenceView frozen = new ReviewEvidenceView("（产出）", "（清单）", "（正文）",
+                "（信号）", "（自审）", "（机械）", "（台账）");
+
+        newEngine(new ReviewProperties()).executeWithEvidence(
+                subTask(), reviewer(), ReviewChannel.SINGLE, frozen);
+
+        verify(evidenceMaterializer, never()).materialize(anyLong(), anyLong());
     }
 
     private String capturedPrompt() {

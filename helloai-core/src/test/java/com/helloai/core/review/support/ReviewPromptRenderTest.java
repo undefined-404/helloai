@@ -37,7 +37,8 @@ class ReviewPromptRenderTest {
         ReviewEvidenceAssembler assembler = mock(ReviewEvidenceAssembler.class);
         when(assembler.extractExecutionOutput(any())).thenReturn("（产出）");
         when(assembler.buildAttachmentList(any())).thenReturn("（清单）");
-        when(assembler.buildAttachmentContent(any())).thenReturn("（正文）");
+        when(assembler.buildEvidenceContent(any())).thenReturn(
+                new ReviewEvidenceAssembler.EvidenceContent("（正文）", "（台账）", "（机械预检）"));
         when(assembler.extractRawOutput(any())).thenReturn("（原始输出）");
         when(assembler.verificationSignal(anyString())).thenReturn("（证据信号）");
         return new ReviewExecutionEngine(
@@ -47,7 +48,8 @@ class ReviewPromptRenderTest {
                 mock(VerdictParser.class),
                 assembler,
                 mock(SubTaskService.class),
-                new ReviewProperties());
+                new ReviewProperties(),
+                mock(ReviewEvidenceMaterializer.class));
     }
 
     /** 26 位全量构造：只有 requiredSkills 是本次被测字段，其余取最小可用值。 */

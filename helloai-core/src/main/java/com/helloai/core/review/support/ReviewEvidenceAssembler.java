@@ -15,6 +15,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,7 +31,7 @@ import java.util.Map;
  *         是否有物化附件/可读产出支撑，含执行密集任务物化竞态补偿；</li>
  *     <li>产出提取 {@link #extractExecutionOutput(SubTaskView)} / {@link #extractRawOutput(SubTaskView)}
  *         与围栏证据信号 {@link #verificationSignal(String)}；</li>
- *     <li>附件族装配 {@link #buildAttachmentList(SubTaskView)} / {@link #buildAttachmentContent(SubTaskView)}：
+ *     <li>附件族装配 {@link #buildAttachmentList(SubTaskView)} / {@link #buildEvidenceContent(SubTaskView)}：
  *         清单 + 文本正文限额注入 + 媒体可见性标注（方案3 F2 与硬化条款）。</li>
  * </ul>
  *
@@ -46,6 +49,25 @@ public class ReviewEvidenceAssembler {
      * 证据五段本身已按核验口径截断（附件总限额 200000 字符），本上限只防异常数据把 JSONB 撑大。
      */
     static final int FROZEN_EVIDENCE_MAX_CHARS = 300_000;
+
+    /** 每文件保底注入字符数（`RV-9`：头 3/4 + 尾 1/4），防「先到的分片吃光预算」。 */
+    static final int EVIDENCE_FILE_FLOOR_CHARS = 4_096;
+
+    /** 区间注入时头尾切分比例（头 3 / 尾 1）。 */
+    private static final int EVIDENCE_HEAD_PARTS = 3;
+
+    /** 区间注入时尾部最小字符数（低于此值不再切尾，避免正文只剩几个字符）。 */
+    private static final int EVIDENCE_MIN_TAIL_CHARS = 32;
+
+    /**
+     * 证据正文装配结果（`RV-8` / `RV-9` / `RV-10` 的同源产物）。
+     *
+     * @param attachmentContent 注入正文（按族配额截断）
+     * @param evidenceLedger    注入台账（与正文同一次分配循环产出）
+     * @param mechanicalCheck   表格类机械预检结论（无表格附件时为空串）
+     */
+    public record EvidenceContent(String attachmentContent, String evidenceLedger, String mechanicalCheck) {
+    }
 
     /** 显式全参构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在 IDE 增量编译里漏抓新增
      * final 字段的坑：显式列为 Spring DI 唯一依据）。 */
@@ -137,7 +159,7 @@ public class ReviewEvidenceAssembler {
      * 构建判定快照，并在**驳回时可冻结原判证据**（`RV-6`）。
      *
      * <p>驳回记录返工后附件失效、产出被覆盖，只存引用/摘要无法复判；这里把核验 Prompt 实际
-     * 消费的五段证据文本（见 {@link ReviewEvidenceView}）原样冻结进 JSONB，复判直接复用。
+     * 消费的七段证据文本（见 {@link ReviewEvidenceView}）原样冻结进 JSONB，复判直接复用。
      * 仅在 {@code result == REJECTED} 且证据非空时冻结——通过记录原对象不会失效，不需要额外存储。</p>
      *
      * <p>冻结体积超过 {@link #FROZEN_EVIDENCE_MAX_CHARS} 时不冻结（快照仍落，复判按
@@ -180,7 +202,8 @@ public class ReviewEvidenceAssembler {
             return null;
         }
         return new ReviewEvidenceView(text(executionOutput), text(attachmentList), text(attachmentContent),
-                text(frozen.get("verificationSignal")), text(frozen.get("selfReviewSignal")));
+                text(frozen.get("verificationSignal")), text(frozen.get("selfReviewSignal")),
+                text(frozen.get("mechanicalCheck")), text(frozen.get("evidenceLedger")));
     }
 
     private Map<String, Object> freezeEvidence(SubTaskView subTask, ReviewEvidenceView evidence) {
@@ -200,6 +223,9 @@ public class ReviewEvidenceAssembler {
         frozen.put("attachmentContent", evidence.attachmentContent());
         frozen.put("verificationSignal", evidence.verificationSignal());
         frozen.put("selfReviewSignal", evidence.selfReviewSignal());
+        // `RV-10` M1 决策① / `RV-8`：机械段与台账随原判证据一起冻结，复判直接复用
+        frozen.put("mechanicalCheck", evidence.mechanicalCheck());
+        frozen.put("evidenceLedger", evidence.evidenceLedger());
         frozen.put("chars", chars);
         return frozen;
     }
@@ -242,101 +268,302 @@ public class ReviewEvidenceAssembler {
      * 注入核验 Prompt，让 Reviewer 基于真实文件内容核对"声称交付物 ↔ 文件正文 ↔ 验收标准"，
      * 而非仅凭文件名猜测（消除"Reviewer 审查靠摘要+文件名"的幻觉缺口）。
      *
-     * <p>限额策略：每附件 64000 字符、总计 200000 字符（常量单源见 {@link AttachmentContentPolicy}，
-     * 2026-10-03 由 8000/24000 上调以匹配官方 DeepSeek 64K 上下文），
-     * 超限截断并标注；不可直读/读取失败/
-     * 空内容附件不注入正文（清单仍全量展示）；开关 {@code helloai.dispatch.attachment-content-enabled}
-     * 关闭时退化为仅清单（与开关引入前行为一致）。</p>
+     * <p>限额策略（`RV-9` 起）：单文件 64000、总计 200000（常量单源见
+     * {@link AttachmentContentPolicy}）为<b>硬上限</b>，分配顺序为「每文件保底 4096（保底无法
+     * 普惠时降为等额分享 total/N）→ 剩余按证据族均分 → 族内均分 → 余量按容量再分配」，避免
+     * 靠前的分片吃光预算、交付物主件与后续分片消失；N>195 时保底自动降级，保证注入总量
+     * 永不超过预算上限（超限会击穿冻结证据上限 {@link #FROZEN_EVIDENCE_MAX_CHARS}）。
+     * 超限文件按表格/非表格分别做「头尾区间」或「行边界前缀」注入，并带结构化
+     * {@code [TRUNCATED]} 标注行；不可直读/读取失败/空内容附件不注入正文（清单仍全量展示）；
+     * 开关 {@code helloai.dispatch.attachment-content-enabled} 关闭时退化为仅清单
+     * （与开关引入前行为一致）。</p>
      *
      * <p>文本硬化：仅对文本类附件注入正文，图片/音频/视频等二进制附件绝不按文本读取
      * （避免二进制乱码进 Prompt 并吞占限额）；提交含媒体附件时前置注入媒体可见性标注
      * （独立于注入开关），告知核验 LLM 原内容不可见、文字声称从严核验。</p>
      */
-    public String buildAttachmentContent(SubTaskView subTask) {
+    public EvidenceContent buildEvidenceContent(SubTaskView subTask) {
         String mediaNote = buildMediaVisibilityNote(subTask.id());
         if (!dispatchProperties.isAttachmentContentEnabled()) {
-            return mediaNote + "（附件内容注入已关闭，仅见清单）";
+            return new EvidenceContent(mediaNote + "（附件内容注入已关闭，仅见清单）",
+                    ReviewEvidenceLedger.render(List.of(), 0), "");
         }
-        List<AttachmentView> attachments = readableAttachments(subTask.id());
-        if (attachments.isEmpty()) {
-            return mediaNote + "（无平台可直读附件，无法核对文件正文）";
+        List<AttachmentView> all = attachmentService.listActiveViews(subTask.id());
+        if (all == null) {
+            all = List.of();
         }
-        StringBuilder sb = new StringBuilder();
-        int totalChars = 0;
-        boolean truncated = false;
-        boolean totalExceeded = false;
-        for (AttachmentView att : attachments) {
-            if (!AttachmentContentPolicy.isTextual(att.mimeType(), att.fileName())) {
-                // 非文本附件（图片/音频/视频等）不注入正文，避免二进制乱码；媒体可见性标注已覆盖
+        List<AttachmentView> ordered = priorityOrder(all);
+        Map<Long, String> contents = new HashMap<>();
+        List<ReviewMechanicalCheck.Source> sources = new ArrayList<>();
+        for (AttachmentView att : ordered) {
+            if (!att.contentLoadable()
+                    || !AttachmentContentPolicy.isTextual(att.mimeType(), att.fileName())) {
                 continue;
             }
             String content = readAttachmentContent(att);
-            if (content == null) {
-                sb.append("### ").append(att.fileName())
-                        .append("（").append(att.fileType() != null ? att.fileType() : "other")
-                        .append("，内容不可读/为空）\n");
+            if (content != null) {
+                contents.put(att.id(), content);
+                sources.add(new ReviewMechanicalCheck.Source(att.id(), att.fileName(), content));
+            }
+        }
+        String mechanicalCheck = ReviewMechanicalCheck.build(sources);
+        List<AttachmentView> textFiles = ordered.stream()
+                .filter(att -> contents.containsKey(att.id()))
+                .toList();
+        if (textFiles.isEmpty()) {
+            String text = ordered.isEmpty()
+                    ? "（无物化附件）" : "（无平台可直读附件，无法核对文件正文）";
+            return new EvidenceContent(mediaNote + text, ledgerForNoContent(ordered), mechanicalCheck);
+        }
+
+        Map<Long, Integer> shown = allocate(textFiles, contents);
+
+        StringBuilder sb = new StringBuilder();
+        List<ReviewEvidenceLedger.Entry> entries = new ArrayList<>();
+        int totalShown = 0;
+        boolean anyTruncated = false;
+        boolean quotaTruncated = false;
+        for (AttachmentView att : ordered) {
+            String attName = att.fileName() != null ? att.fileName() : "unknown";
+            if (!AttachmentContentPolicy.isTextual(att.mimeType(), att.fileName())) {
+                entries.add(new ReviewEvidenceLedger.Entry(att.id(), attName, 0,
+                        ReviewEvidenceLedger.STATUS_NOT_TEXTUAL, "", 0, ""));
                 continue;
             }
-            String attName = att.fileName() != null ? att.fileName() : "unknown";
+            String content = contents.get(att.id());
+            if (content == null) {
+                entries.add(new ReviewEvidenceLedger.Entry(att.id(), attName, 0,
+                        ReviewEvidenceLedger.STATUS_ABSENT, "", 0, "unreadable"));
+                continue;
+            }
             int originalChars = content.length();
-            boolean perFileTruncated = false;
-            if (content.length() > AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT) {
-                // ★2026-10-03 R2 修复：截断前先基于**全文**提取 Markdown 章节结构，
-                // 让 Reviewer 即使看不到后半段正文，也能知道该文件还有哪些章节——
-                // 避免「目录树/教程大纲」等验收标准直接依赖的章节因排在后半段被静默丢弃
-                // （真机复现：fastapi_contract.md 2.9 万字符被截到 §7.3，目录树/教程大纲不可见 → 误判驳回）。
-                String structureOutline = buildStructureOutline(content);
-                // P-1 防御：行边界回退截断（避免拦腰切断 URL/代码行）
-                content = TextTruncator.truncateAtLineBoundary(
-                        content, AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT);
-                if (structureOutline != null) {
-                    content = content + structureOutline;
+            int want = shown.getOrDefault(att.id(), 0);
+            String range = ReviewEvidenceLedger.RANGE_FULL;
+            String status = ReviewEvidenceLedger.STATUS_INJECTED;
+            appendAttachmentContentHeader(sb, att);
+            if (want >= originalChars) {
+                sb.append(content).append('\n');
+                totalShown += originalChars;
+            } else {
+                anyTruncated = true;
+                String reason = truncationReason(originalChars, want);
+                quotaTruncated |= "evidence_budget".equals(reason);
+                boolean tabular = ReviewMechanicalCheck.isTabular(att.mimeType(), att.fileName());
+                if (tabular && want > EVIDENCE_MIN_TAIL_CHARS) {
+                    range = ReviewEvidenceLedger.RANGE_HEAD_TAIL;
+                    int head = (want * EVIDENCE_HEAD_PARTS + 3) / 4;
+                    int tail = want - head;
+                    sb.append(content, 0, head).append('\n');
+                    appendOmission(sb, att.id(), originalChars - head - tail, head);
+                    sb.append(content, originalChars - tail, originalChars).append('\n');
+                    totalShown += want;
+                } else {
+                    range = ReviewEvidenceLedger.RANGE_HEAD;
+                    String partial = TextTruncator.truncateAtLineBoundary(content, want);
+                    sb.append(partial).append('\n');
+                    if (!tabular) {
+                        String structureOutline = buildStructureOutline(content);
+                        if (structureOutline != null) {
+                            sb.append(structureOutline);
+                        }
+                    }
+                    appendOmission(sb, att.id(), originalChars - partial.length(), partial.length());
+                    totalShown += partial.length();
+                    want = partial.length();
                 }
-                truncated = true;
-                perFileTruncated = true;
-            }
-            if (totalChars + content.length() > AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT) {
-                int remaining = AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT - totalChars;
-                if (remaining > 0) {
-                    String partial = TextTruncator.truncateAtLineBoundary(content, remaining);
-                    appendAttachmentContent(sb, att, partial);
-                    // P1-4-c：结构化标注行——让核验模型精确知道「哪些字节不可见」，
-                    // 而非仅凭自然语言标记（后者无法被消费方机器读取）。
-                    sb.append("[TRUNCATED] file=").append(attName)
-                            .append(" shown=").append(partial.length())
-                            .append(" total=").append(originalChars)
-                            .append(" reason=total_limit\n");
-                    truncated = true;
-                }
-                totalExceeded = true;
-                break;
-            }
-            totalChars += content.length();
-            appendAttachmentContent(sb, att, content);
-            if (perFileTruncated) {
-                // P1-4-c：单附件超限的结构化标注行
                 sb.append("[TRUNCATED] file=").append(attName)
-                        .append(" shown=").append(content.length())
+                        .append(" shown=").append(want)
                         .append(" total=").append(originalChars)
-                        .append(" reason=per_file_limit\n");
+                        .append(" reason=").append(reason)
+                        .append(" range=").append(range).append('\n');
+                status = ReviewEvidenceLedger.STATUS_TRUNCATED;
             }
+            entries.add(new ReviewEvidenceLedger.Entry(att.id(), attName, originalChars,
+                    status, range, want, ""));
         }
-        if (truncated) {
+        if (anyTruncated) {
             sb.append("（部分附件内容已截断至限额）\n");
         }
-        if (totalExceeded) {
-            sb.append("（附件内容总计超出限额，后续附件仅见清单）");
+        if (quotaTruncated) {
+            sb.append("（附件内容按证据族配额分配，部分附件仅注入头尾区间）\n");
         }
-        return (mediaNote + sb).trim();
+        String attachmentContent = (mediaNote + sb).trim();
+        return new EvidenceContent(attachmentContent,
+                ReviewEvidenceLedger.render(entries, totalShown), mechanicalCheck);
     }
 
-    /** 单附件内容段：标题行（文件名/类型/大小）+ 正文。 */
-    private void appendAttachmentContent(StringBuilder sb, AttachmentView att, String content) {
+    /** 无正文注入时的台账：二进制标 not_textual，文本但不可读标 absent。 */
+    private static String ledgerForNoContent(List<AttachmentView> attachments) {
+        List<ReviewEvidenceLedger.Entry> entries = new ArrayList<>();
+        for (AttachmentView att : attachments) {
+            String name = att.fileName() != null ? att.fileName() : "unknown";
+            if (!AttachmentContentPolicy.isTextual(att.mimeType(), att.fileName())) {
+                entries.add(new ReviewEvidenceLedger.Entry(att.id(), name, 0,
+                        ReviewEvidenceLedger.STATUS_NOT_TEXTUAL, "", 0, ""));
+            } else {
+                entries.add(new ReviewEvidenceLedger.Entry(att.id(), name, 0,
+                        ReviewEvidenceLedger.STATUS_ABSENT, "", 0, "unreadable"));
+            }
+        }
+        return ReviewEvidenceLedger.render(entries, 0);
+    }
+
+    /**
+     * 预算分配（`RV-9`）：每文件保底 → 族均分剩余 → 族内均分 → 余量按容量再分配。
+     *
+     * <p>族键来自 {@link AttachmentFamilies}（与 `RV-10` 同一事实源）；顺序与正文/台账一致。</p>
+     */
+    private static Map<Long, Integer> allocate(List<AttachmentView> textFiles,
+                                               Map<Long, String> contents) {
+        Map<Long, Integer> shown = new HashMap<>();
+        if (textFiles.isEmpty()) {
+            return shown;
+        }
+        int fileCount = textFiles.size();
+        int totalBudget = AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT;
+        // 总预算为硬上限：保底无法普惠（4,096×N 超越 200k）时降为等额分享 totalBudget/N，
+        // 不再额外设 1_024 下限，否则 N>195 时仅保底即超过 200k（FROZEN_EVIDENCE_MAX_CHARS 被击穿）。
+        int floor = fileCount * EVIDENCE_FILE_FLOOR_CHARS <= totalBudget
+                ? EVIDENCE_FILE_FLOOR_CHARS : totalBudget / fileCount;
+        int used = 0;
+        for (AttachmentView att : textFiles) {
+            int cap = Math.min(contents.get(att.id()).length(),
+                    AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT);
+            int initial = Math.min(cap, floor);
+            shown.put(att.id(), initial);
+            used += initial;
+        }
+        int pool = totalBudget - used;
+        Map<String, List<AttachmentView>> groups = new LinkedHashMap<>();
+        for (AttachmentView att : textFiles) {
+            groups.computeIfAbsent(AttachmentFamilies.familyKeyOf(att.fileName()),
+                    ignored -> new ArrayList<>()).add(att);
+        }
+        if (groups.isEmpty() || pool <= 0) {
+            return shown;
+        }
+        int familyShare = pool / groups.size();
+        for (List<AttachmentView> group : groups.values()) {
+            int base = familyShare / group.size();
+            int remainder = familyShare % group.size();
+            for (int i = 0; i < group.size(); i++) {
+                AttachmentView att = group.get(i);
+                int want = base + (i < remainder ? 1 : 0);
+                pool -= addUpTo(att, want, contents, shown);
+            }
+        }
+        while (pool > 0) {
+            int capacityCount = 0;
+            for (AttachmentView att : textFiles) {
+                if (capacityOf(att, contents, shown) > 0) {
+                    capacityCount++;
+                }
+            }
+            if (capacityCount == 0) {
+                break;
+            }
+            int chunk = Math.max(1, pool / capacityCount);
+            int added = 0;
+            for (AttachmentView att : textFiles) {
+                added += addUpTo(att, chunk, contents, shown);
+            }
+            pool -= added;
+            if (added == 0) {
+                break;
+            }
+        }
+        return shown;
+    }
+
+    private static int addUpTo(AttachmentView att, int want, Map<Long, String> contents,
+                              Map<Long, Integer> shown) {
+        if (want <= 0) {
+            return 0;
+        }
+        int added = Math.min(want, capacityOf(att, contents, shown));
+        if (added > 0) {
+            shown.put(att.id(), shown.get(att.id()) + added);
+        }
+        return added;
+    }
+
+    private static int capacityOf(AttachmentView att, Map<Long, String> contents,
+                                  Map<Long, Integer> shown) {
+        int cap = Math.min(contents.get(att.id()).length(),
+                AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT);
+        return Math.max(0, cap - shown.getOrDefault(att.id(), 0));
+    }
+
+    private static String truncationReason(int originalChars, int shown) {
+        if (originalChars > AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT
+                && shown >= AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT) {
+            return "per_file_limit";
+        }
+        if (originalChars <= AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT) {
+            return "total_limit";
+        }
+        return "evidence_budget";
+    }
+
+    private static void appendOmission(StringBuilder sb, Long attachmentId, int omitted, int offset) {
+        sb.append("[... 剩余 ").append(Math.max(0, omitted))
+                .append(" 字符未注入；可用 internal_read_attachment_range id=").append(attachmentId)
+                .append(" offset=").append(offset)
+                .append(" length=4096 读取 ...]\n");
+    }
+
+    /**
+     * 证据顺序（`RV-9`）：族级排序键 `!hasMain → maxPart 降序 → 族名升序`（含主件的族整体排前，
+     * 族间仍按分片数降序）；族内按主件优先、分片编号升序、文件名升序。
+     *
+     * <p>与实施计划 §`RV-9`「顺序与台账」逐字同源，改这里必须同批改计划（已于 2026-11-14 分叉过一次）。</p>
+     */
+    private static List<AttachmentView> priorityOrder(List<AttachmentView> attachments) {
+        Map<String, List<AttachmentView>> groups = new LinkedHashMap<>();
+        for (AttachmentView att : attachments) {
+            groups.computeIfAbsent(AttachmentFamilies.familyKeyOf(att.fileName()),
+                    ignored -> new ArrayList<>()).add(att);
+        }
+        List<FamilyGroup> families = new ArrayList<>();
+        for (Map.Entry<String, List<AttachmentView>> group : groups.entrySet()) {
+            List<AttachmentView> files = new ArrayList<>(group.getValue());
+            boolean hasMain = false;
+            int maxPart = 0;
+            for (AttachmentView att : files) {
+                AttachmentFamilies.Membership membership = AttachmentFamilies.parse(att.fileName());
+                hasMain |= membership.main();
+                maxPart = Math.max(maxPart, membership.partIndex());
+            }
+            files.sort(Comparator
+                    .comparing((AttachmentView att) -> !AttachmentFamilies.parse(att.fileName()).main())
+                    .thenComparingInt(att -> AttachmentFamilies.parse(att.fileName()).partIndex())
+                    .thenComparing(att -> safeName(att)));
+            families.add(new FamilyGroup(group.getKey(), files, hasMain, maxPart));
+        }
+        families.sort(Comparator
+                .comparing((FamilyGroup group) -> !group.hasMain())
+                .thenComparing(Comparator.comparingInt(FamilyGroup::maxPart).reversed())
+                .thenComparing(FamilyGroup::key));
+        List<AttachmentView> ordered = new ArrayList<>();
+        for (FamilyGroup family : families) {
+            ordered.addAll(family.files());
+        }
+        return ordered;
+    }
+
+    private static String safeName(AttachmentView att) {
+        return att.fileName() == null ? "" : att.fileName();
+    }
+
+    private record FamilyGroup(String key, List<AttachmentView> files, boolean hasMain, int maxPart) {
+    }
+
+    /** 附件段标题行。 */
+    private void appendAttachmentContentHeader(StringBuilder sb, AttachmentView att) {
         String size = att.fileSize() != null ? att.fileSize() + " bytes" : "?";
         String type = att.fileType() != null ? att.fileType() : "other";
         sb.append("### ").append(att.fileName())
-                .append("（").append(type).append("，").append(size).append("）\n")
-                .append(content).append("\n");
+                .append("（").append(type).append("，").append(size).append("）\n");
     }
 
     /**

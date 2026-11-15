@@ -45,11 +45,11 @@ class ReviewEvidenceAssemblerFrozenTest {
 
     private ReviewEvidenceView evidence(String tag) {
         return new ReviewEvidenceView("产出-" + tag, "清单-" + tag, "附件正文-" + tag,
-                "验证信号-" + tag, "自审信号-" + tag);
+                "验证信号-" + tag, "自审信号-" + tag, "机械预检-" + tag, "注入台账-" + tag);
     }
 
     @Test
-    @DisplayName("REJECTED ⇒ 五段证据冻结进 snapshot，可原样读回")
+    @DisplayName("REJECTED ⇒ 七段证据冻结进 snapshot，可原样读回")
     void freezesEvidenceForRejected() {
         Map<String, Object> snapshot = assembler.buildReviewSnapshot(
                 subTask(), ReviewResult.REJECTED, evidence("ORIGINAL"));
@@ -61,6 +61,8 @@ class ReviewEvidenceAssemblerFrozenTest {
         assertThat(restored.attachmentContent()).isEqualTo("附件正文-ORIGINAL");
         assertThat(restored.verificationSignal()).isEqualTo("验证信号-ORIGINAL");
         assertThat(restored.selfReviewSignal()).isEqualTo("自审信号-ORIGINAL");
+        assertThat(restored.mechanicalCheck()).isEqualTo("机械预检-ORIGINAL");
+        assertThat(restored.evidenceLedger()).isEqualTo("注入台账-ORIGINAL");
     }
 
     @Test

@@ -26,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -80,6 +81,10 @@ class InternalLlmExecutorToolsTest {
         assertThatThrownBy(() -> tools.internalGetSubTaskDetail(11L, 22L))
                 .isInstanceOf(BizException.class).hasMessageContaining("仅可由平台内部执行链调用");
         assertThatThrownBy(() -> tools.internalReadAttachment(11L, 50L))
+                .isInstanceOf(BizException.class);
+        assertThatThrownBy(() -> tools.internalAttachmentDigest(50L))
+                .isInstanceOf(BizException.class);
+        assertThatThrownBy(() -> tools.internalReadAttachmentRange(50L, 0L, null))
                 .isInstanceOf(BizException.class);
         assertThatThrownBy(tools::internalListSkills)
                 .isInstanceOf(BizException.class);
@@ -187,7 +192,97 @@ class InternalLlmExecutorToolsTest {
     }
 
     @Test
-    @DisplayName("REF-8.3 internal_list_skills：返回全量技能目录（name/version/description/requiredTools）")
+    @DisplayName("internal_attachment_digest：chars 按码点、sha256 按 UTF-8 字节，只给头尾片段（总输出 ≤ 8192）")
+    void shouldDigestAttachmentWithinBudget() {
+        String content = "行".repeat(10_000);
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        when(attachmentPort.loadContent(50L)).thenReturn(bytes);
+
+        String result = (String) tools.internalAttachmentDigest(50L);
+
+        assertThat(result).contains("[ATTACHMENT_DIGEST] id=50 chars=10000 bytes=" + bytes.length);
+        assertThat(result).contains("sha256=");
+        assertThat(result).contains("[HEAD]");
+        assertThat(result).contains("[TAIL]");
+        assertThat(result).startsWith("[ATTACHMENT_DIGEST]");
+        assertThat(result.length()).isLessThanOrEqualTo(InternalLlmExecutorTools.RANGE_MAX_CHARS);
+        verify(attachmentPort).loadContent(50L);
+    }
+
+    @Test
+    @DisplayName("internal_attachment_digest：sha256 与已知摘要一致（算法口径不在工具里另造）")
+    void digestSha256MatchesKnownVector() {
+        byte[] bytes = "abc".getBytes(StandardCharsets.UTF_8);
+        when(attachmentPort.loadContent(51L)).thenReturn(bytes);
+
+        String result = (String) tools.internalAttachmentDigest(51L);
+
+        assertThat(result).contains("sha256=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
+
+    @Test
+    @DisplayName("internal_read_attachment_range：缺省读 4096 码点，返回 next 供续读")
+    void shouldReadAttachmentRangeWithDefaultLength() {
+        String content = "x".repeat(10_000);
+        when(attachmentPort.loadContent(52L)).thenReturn(content.getBytes(StandardCharsets.UTF_8));
+
+        String result = (String) tools.internalReadAttachmentRange(52L, 0L, null);
+
+        assertThat(result).startsWith("[RANGE] id=52 chars=10000 offset=0 length=4096 next=4096");
+        assertThat(result.length()).isLessThanOrEqualTo(InternalLlmExecutorTools.RANGE_MAX_CHARS);
+    }
+
+    @Test
+    @DisplayName("internal_read_attachment_range：offset/length 精确切片，next=offset+实际长度")
+    void shouldReadAttachmentRangeAtOffset() {
+        String content = "0123456789".repeat(1_000);
+        when(attachmentPort.loadContent(53L)).thenReturn(content.getBytes(StandardCharsets.UTF_8));
+
+        String result = (String) tools.internalReadAttachmentRange(53L, 5_000L, 1_000L);
+
+        assertThat(result).startsWith("[RANGE] id=53 chars=10000 offset=5000 length=1000 next=6000");
+        assertThat(result).contains(content.substring(5_000, 6_000));
+    }
+
+    @Test
+    @DisplayName("internal_read_attachment_range：单次长度钳到 8192 上限以内")
+    void shouldClampRangeLengthToUpperBound() {
+        String content = "y".repeat(20_000);
+        when(attachmentPort.loadContent(54L)).thenReturn(content.getBytes(StandardCharsets.UTF_8));
+
+        String result = (String) tools.internalReadAttachmentRange(54L, 0L, 50_000L);
+
+        assertThat(result).contains(" length=" + (InternalLlmExecutorTools.RANGE_MAX_CHARS - 80));
+        assertThat(result.length()).isLessThanOrEqualTo(InternalLlmExecutorTools.RANGE_MAX_CHARS);
+    }
+
+    @Test
+    @DisplayName("internal_read_attachment_range：offset 越界 ⇒ 夹到文件尾，length=0、next=chars")
+    void shouldClampOffsetToEnd() {
+        String content = "z".repeat(100);
+        when(attachmentPort.loadContent(55L)).thenReturn(content.getBytes(StandardCharsets.UTF_8));
+
+        String result = (String) tools.internalReadAttachmentRange(55L, 500L, 10L);
+
+        assertThat(result).startsWith("[RANGE] id=55 chars=100 offset=100 length=0 next=100");
+    }
+
+    @Test
+    @DisplayName("internal_read_attachment_range：offset / length 非法 ⇒ BizException（不静默夹值）")
+    void shouldRejectInvalidRangeParams() {
+        assertThatThrownBy(() -> tools.internalReadAttachmentRange(56L, -1L, 10L))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("offset");
+        assertThatThrownBy(() -> tools.internalReadAttachmentRange(56L, 0L, 0L))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("length");
+        assertThatThrownBy(() -> tools.internalReadAttachmentRange(56L, 0L, -5L))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("length");
+        verify(attachmentPort, never()).loadContent(56L);
+    }
+
+
     void shouldListSkills() {
         SkillPackage pkg = new SkillPackage("eng-code-review", "1.0.0", "代码评审规范",
                 List.of("search_knowledge"), List.of(), List.of(), Map.of(), Map.of(), List.of(), "eng-code-review.md");
@@ -560,5 +655,97 @@ class InternalLlmExecutorToolsTest {
         assertThatThrownBy(() -> tools.internalExportArtifact(11L, 22L, "/workspace/out/huge.html", null))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("单文件上限");
+    }
+
+    // ── RV-14 internal_stage_attachment_to_sandbox ─────────────────────────
+
+    @Test
+    @DisplayName("RV-14 stage-in：注入成功返回路径/size/sha256（与 digest 同源算法），写入绑定子任务的沙箱")
+    @SuppressWarnings("unchecked")
+    void stageAttachmentShouldWriteToSandbox() {
+        byte[] bytes = "abc".getBytes(StandardCharsets.UTF_8);
+        when(attachmentPort.listActive(22L)).thenReturn(List.of(
+                new com.helloai.core.agent.port.AttachmentRef(50L, "data.csv", "csv", "text/csv",
+                        (long) bytes.length, com.helloai.common.constant.AttachmentStatus.ACTIVE, true)));
+        when(attachmentPort.loadContent(50L)).thenReturn(bytes);
+        when(sandboxExecutionService.writeArtifact(eq(22L), eq("/tmp/staged/50-data.csv"), eq(bytes)))
+                .thenReturn(true);
+
+        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(11L, 22L, 50L);
+
+        assertThat(result.get("staged")).isEqualTo(true);
+        assertThat(result.get("path")).isEqualTo("/tmp/staged/50-data.csv");
+        assertThat(result.get("size")).isEqualTo(bytes.length);
+        // 与 internal_attachment_digest 同一 sha256 向量 ⇒ 对账口径一致
+        assertThat(result.get("sha256"))
+                .isEqualTo("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assertThat(result.get("fileName")).isEqualTo("data.csv");
+        assertThat(result.get("note").toString()).contains("internal_run_in_sandbox");
+        verify(sandboxExecutionService).writeArtifact(22L, "/tmp/staged/50-data.csv", bytes);
+    }
+
+    @Test
+    @DisplayName("RV-14 stage-in：越权 id（非当前子任务有效附件）⇒ 拒绝，不读内容不写沙箱")
+    void stageAttachmentShouldRejectForeignId() {
+        when(attachmentPort.listActive(22L)).thenReturn(List.of(
+                new com.helloai.core.agent.port.AttachmentRef(51L, "a.md", "md", "text/markdown",
+                        3L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true)));
+
+        assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 999L))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("拒绝注入");
+        verify(attachmentPort, never()).loadContent(any());
+        verify(sandboxExecutionService, never()).writeArtifact(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("RV-14 stage-in：平台不可直读附件 ⇒ 拒绝（contentLoadable=false）")
+    void stageAttachmentShouldRejectUnloadable() {
+        when(attachmentPort.listActive(22L)).thenReturn(List.of(
+                new com.helloai.core.agent.port.AttachmentRef(52L, "ext.csv", "csv", "text/csv",
+                        10L, com.helloai.common.constant.AttachmentStatus.ACTIVE, false)));
+
+        assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 52L))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("不可直读");
+        verify(sandboxExecutionService, never()).writeArtifact(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("RV-14 stage-in：沙箱写入失败 ⇒ staged=false 降级指引，不抛异常")
+    @SuppressWarnings("unchecked")
+    void stageAttachmentShouldDegradeOnWriteFailure() {
+        byte[] bytes = "x".getBytes(StandardCharsets.UTF_8);
+        when(attachmentPort.listActive(22L)).thenReturn(List.of(
+                new com.helloai.core.agent.port.AttachmentRef(53L, "s.sh", "sh", "text/x-sh",
+                        1L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true)));
+        when(attachmentPort.loadContent(53L)).thenReturn(bytes);
+        when(sandboxExecutionService.writeArtifact(any(), any(), any())).thenReturn(false);
+
+        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(11L, 22L, 53L);
+
+        assertThat(result.get("staged")).isEqualTo(false);
+        assertThat(result.get("path")).isNull();
+        assertThat(result.get("note").toString()).contains("internal_read_attachment_range");
+    }
+
+    @Test
+    @DisplayName("RV-14 stage-in：文件名消毒——路径分隔与父目录引用被剥离")
+    @SuppressWarnings("unchecked")
+    void stageAttachmentShouldSanitizeFileName() {
+        byte[] bytes = "x".getBytes(StandardCharsets.UTF_8);
+        when(attachmentPort.listActive(22L)).thenReturn(List.of(
+                new com.helloai.core.agent.port.AttachmentRef(54L, "../../etc/passwd", "txt", "text/plain",
+                        1L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true)));
+        when(attachmentPort.loadContent(54L)).thenReturn(bytes);
+        when(sandboxExecutionService.writeArtifact(any(), any(), any())).thenReturn(true);
+
+        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(11L, 22L, 54L);
+
+        String path = (String) result.get("path");
+        assertThat(path).startsWith("/tmp/staged/54-");
+        assertThat(path).doesNotContain("..");
+        assertThat(path).doesNotContain("/etc/");
+        assertThat(path).isEqualTo("/tmp/staged/54-passwd");
     }
 }

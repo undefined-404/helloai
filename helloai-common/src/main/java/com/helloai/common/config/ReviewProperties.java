@@ -44,7 +44,9 @@ public class ReviewProperties {
      *
      * <p><b>★本值语义 = 下限，不是精确值</b>：有效 TTL 由
      * {@code ReviewLockTtlResolver} 计算为
-     * {@code max(本值, 各 provider 读超时最大值 + 1s 余量)}。
+     * {@code max(本值, 各 provider 读超时最大值 × 单次核验 LLM 调用次数 + 1s 余量)}。
+     * 调用次数 = 1，或 **2（{@link #unparseableRetryEnabled} 开启时的即时重试）**——
+     * 重试是在一次<b>已成功返回</b>的调用之后再发一次，故最坏时长是读超时的 2 倍。
      * 之所以不采用「配置不对就 fail-fast」，是因为 {@code read-timeout-ms} <b>按 profile 分档</b>
      * （默认 180s、{@code application-dev.yml} 为整合报告长输出设 600s，且该文件是
      * {@code skip-worktree} 的本地私有件、不可提交）⇒ fail-fast 会导致 fresh clone 的
@@ -66,6 +68,26 @@ public class ReviewProperties {
      * 画像重复计数）。90s 保证整个双审窗口（等待 + 落库 + 时间线）落在锁内。</p>
      */
     private long dualReviewTimeoutSeconds = 90;
+
+    /**
+     * 核验输出不可解析时是否**即时重试一次**。默认 <b>true</b>。
+     *
+     * <p><b>为什么需要</b>：核验模型带工具轮次时，常见失败形态是「先输出自然语言思维链、
+     * 或在工具调用后丢失 JSON 格式」，此时 LLM 调用本身是<b>成功</b>的（{@code isSuccess=true}），
+     * 只是 {@code VerdictParser} 取不到 {@code pass}。原实现只能靠 L3 孤儿扫描（30s 扫描 / 60s
+     * 阈值）补偿，真机实测两个场景各命中一次，最坏要等 60s 且可能停在 REVIEW 无人接手。</p>
+     *
+     * <p><b>重试口径</b>：只对「调用成功但输出不可解析」重试，<b>不对调用失败/超时重试</b>
+     * （后者已落 {@code sub_task_auto_review_execution_failed}，重试会放大读超时窗口）。
+     * 重试 prompt 在原 prompt 末尾追加输出契约强化段（只重申格式，不改判定规则）；
+     * 重试仍不可解析才落 {@code sub_task_auto_review_unparseable}（payload 带 {@code attempts=2}），
+     * 重试成功则不落该事件、只留日志与对话流（第二轮 prompt/输出以 {@code *_retry} 类型落库，可复盘）。</p>
+     *
+     * <p><b>★开这个开关必须同时抬锁 TTL</b>：{@link #lockTtlSeconds} 的不变量是「锁不得短于
+     * 其守护的操作」，开启重试后单次核验最坏时长变为 <b>2 倍</b>读超时 ⇒
+     * {@code ReviewLockTtlResolver} 按 {@code 读超时 × attempts} 推导下限。关闭即回到单次口径。</p>
+     */
+    private boolean unparseableRetryEnabled = true;
 
     /**
      * 是否启用核验判定静态校验器（`RV-1`，<b>Warn 档</b>）。默认 true。
@@ -136,4 +158,49 @@ public class ReviewProperties {
 
     /** 抽检时间窗口（天）：只抽近 N 天内落库的 APPROVED / 有快照 REJECTED 记录。默认 7。 */
     private int recheckWindowDays = 7;
+
+    /**
+     * 审核证据自动物化护栏（`RV-15`，2026-11-15）。
+     *
+     * <p><b>为什么需要护栏</b>：物化把「受审附件从对象存储搬到 reviewer 沙箱」升为平台承诺
+     * （取代 RV-14 的模型命令式 stage——真机证明「工具可用 ≠ 模型会用」），但<b>有界</b>是承诺的
+     * 一部分：数量/单文件/总量三闸任一触顶即停，剩余转 {@code deferred} 由模型按需 stage 补拉，
+     * 而不是把整个任务的全部附件无界搬进容器。</p>
+     *
+     * <p><b>为什么 {@code maxFiles} 是 40 而非更小</b>：真实批回放场景是 35 附件（`G-034`），
+     * 若上限 20 会让近半批次退回模型手动补拉——正是 RV-14 实测判定不可靠的那条路，自动物化
+     * 自废一半。文件数上限只防「附件数量爆炸」的极端场景，真正的物理闸是字节
+     * （{@code /tmp} 容量）；35 个 CSV 大概率远在 {@code maxTotalBytes} 内。</p>
+     *
+     * <p>配置键：{@code helloai.review.evidence-materialization.*}（Spring relaxed binding 亦认
+     * {@code evidenceMaterialization.*}）。</p>
+     */
+    private EvidenceMaterialization evidenceMaterialization = new EvidenceMaterialization();
+
+    /** 审核证据自动物化配置（{@code helloai.review.evidence-materialization.*}）。 */
+    @Data
+    public static class EvidenceMaterialization {
+
+        /** 是否启用自动物化。默认 <b>true</b>。关闭 ⇒ 回到 RV-14 手动 stage 通道（模型命令式拉取）。 */
+        private boolean enabled = true;
+
+        /**
+         * 单次物化<b>文件数</b>上限。默认 <b>40</b>（覆盖 35 附件批并留余量）。
+         * 达到后剩余附件全部转 {@code deferred}，由模型凭证据清单按需 stage 补拉。
+         */
+        private int maxFiles = 40;
+
+        /**
+         * 单文件大小上限（字节）。默认 <b>5MB</b>（{@code 5 * 1024 * 1024}）。
+         * 超过的附件即使 {@code contentLoadable=true} 也不下载，按 {@code too_large} 跳过
+         * （先看台账快照大小，不产生实际读取）。
+         */
+        private long maxBytesPerFile = 5L * 1024 * 1024;
+
+        /**
+         * 单批物化字节总量上限（字节）。默认 <b>50MB</b>（{@code 50 * 1024 * 1024}）。
+         * 累计触顶后剩余附件全部转 {@code deferred}（总量是 `/tmp` 容量的真实闸）。
+         */
+        private long maxTotalBytes = 50L * 1024 * 1024;
+    }
 }

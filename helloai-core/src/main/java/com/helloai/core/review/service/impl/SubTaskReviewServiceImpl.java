@@ -21,6 +21,7 @@ import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.support.ReviewChannel;
 import com.helloai.core.review.support.ReviewCoverageParser;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
+import com.helloai.core.review.support.ReviewEvidenceUnavailability;
 import com.helloai.core.review.support.ReviewEvidenceView;
 import com.helloai.core.review.support.ReviewExecutionEngine;
 import com.helloai.core.agent.quality.gate.GateDecision;
@@ -107,6 +108,23 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      * 现作为拒收门限（{@code pass=true 且 score < 本值} ⇒ 结论不可用，转人工）。</p>
      */
     private static final int MIN_PASS_SCORE = 3;
+
+    /** 判定不可采信：静态校验命中逻辑矛盾。 */
+    private static final String INCONCLUSIVE_REASON_VERDICT_INVALID = "review_verdict_invalid";
+
+    /** 判定不可采信：驳回侧证据不可得（平台注入缺口，不得消耗返工预算）。 */
+    private static final String INCONCLUSIVE_REASON_EVIDENCE_UNAVAILABLE = "review_evidence_unavailable";
+
+    /**
+     * 评审侧写入的 manualIntervention 原因白名单：复核出口（通过/驳回）落库前清理，
+     * 避免「标记仍显示等待人工」与「平台已自动接手」自相矛盾。
+     *
+     * <p>只清评审侧原因；派单侧原因（如 {@code dispatch_skip_execution_dense}）不由评审链路清理，
+     * 避免越权改变派单语义。</p>
+     */
+    private static final Set<String> REVIEW_SIDE_MARKS = Set.of(
+            INCONCLUSIVE_REASON_VERDICT_INVALID, INCONCLUSIVE_REASON_EVIDENCE_UNAVAILABLE,
+            "reviewer_score_inconsistent", "reviewer_disagreement");
 
     private final SubTaskService subTaskService;
     private final AgentService agentService;
@@ -202,7 +220,9 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      *
      * <p>扫描间隔可通过 {@code helloai.dispatch.review-orphan-scan-interval-ms} 配置（默认 30s），
      * 扫描阈值通过 {@code helloai.dispatch.review-orphan-threshold-seconds} 配置（默认 60s），
-     * 表示子任务进入 REVIEW 超过该时间且无审查记录时才触发兜底核验。</p>
+     * 表示子任务进入 REVIEW 超过该时间<b>且未被标记人工介入</b>时才触发兜底核验
+     * （候选口径见 {@link SubTaskReviewService#scanReviewOrphans()}：只查状态 + 时间 + 无人工介入标记，
+     * <b>不查 {@code review_record}</b>）。</p>
      */
     @Override
     @Scheduled(fixedDelayString = "${helloai.dispatch.review-orphan-scan-interval-ms:30000}")
@@ -252,9 +272,10 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         try {
             // waitTime=0 保持"抢占失败即跳过"语义；显式 leaseTime 禁看门狗，TTL 兜底口径与旧 setIfAbsent 一致。
             // ★MED-3（2026-10-15）：TTL 改由 ReviewLockTtlResolver 提供「有效值」——
-            //   = max(helloai.review.lock-ttl-seconds, 各 provider 读超时最大值 + 余量)。
+            //   = max(helloai.review.lock-ttl-seconds, 各 provider 读超时最大值 × 调用次数 + 余量)。
             //   原硬编码 120s < 读超时（默认 180s / dev 档 600s）⇒ 单审可跑到读超时才结束，
             //   而锁已过期，留出并发核验窗口（重复 review_record / 画像重复计数）。
+            //   调用次数 = 1，或 2（helloai.review.unparseable-retry-enabled 开启时的即时重试）。
             boolean locked = lock.tryLock(0, reviewLockTtlResolver.effectiveTtlSeconds(), TimeUnit.SECONDS);
             if (!locked) {
                 log.debug("自动核验跳过：已有核验进行中（防双审）, subTaskId={}", subTaskId);
@@ -449,6 +470,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         // 现按既有「不可判定」口径处理（同双审分歧）：不改状态、停 REVIEW、转人工。
         int passScore = verdict.getScore() != null ? verdict.getScore() : 0;
         if (Boolean.TRUE.equals(verdict.getPass()) && passScore < MIN_PASS_SCORE) {
+            clearReviewSideMark(subTask);
             subTaskService.markManualIntervention(subTaskId, "reviewer_score_inconsistent",
                     new HashMap<>(Map.of(
                             "score", passScore,
@@ -465,6 +487,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         }
 
         if (Boolean.TRUE.equals(verdict.getPass())) {
+            clearReviewSideMark(subTask);
             subTaskService.complete(subTaskId);
             recordAutoReviewQuietly(subTask, reviewer.id(), ReviewResult.APPROVED, verdict);
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
@@ -479,6 +502,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                     subTaskId, reviewer.id(), verdict.getScore());
             recordReviewEventSafely(subTask, reviewer.id(), AgentEventType.REVIEW_APPROVED, verdict, channel);
         } else {
+            clearReviewSideMark(subTask);
             rejectAndRework(subTask, executorAgentId, reviewer.id(), verdict);
             recordReviewEventSafely(subTask, reviewer.id(), AgentEventType.REVIEW_REJECTED, verdict, channel);
         }
@@ -504,25 +528,51 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                     return item;
                 })
                 .toList();
+        String reason = outcome.blockFindings().stream()
+                .anyMatch(f -> ReviewEvidenceUnavailability.CODE.equals(f.code()))
+                ? INCONCLUSIVE_REASON_EVIDENCE_UNAVAILABLE : INCONCLUSIVE_REASON_VERDICT_INVALID;
         Map<String, Object> extra = new HashMap<>();
         extra.put("channel", channel != null ? channel.name() : "");
         extra.put("reviewerAgentId", reviewerAgentId);
         extra.put("score", verdict.getScore());
         extra.put("findings", items);
-        subTaskService.markManualIntervention(subTaskId, "review_verdict_invalid", extra);
+        // 先清旧评审标记再写新标记，避免同一子任务叠两条（派单侧标记不在清理范围）
+        clearReviewSideMark(subTask);
+        subTaskService.markManualIntervention(subTaskId, reason, extra);
         recordAutoReviewQuietly(subTask, reviewerAgentId, ReviewResult.INCONCLUSIVE, verdict);
         taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
                 TimelineEventCode.SUB_TASK_AUTO_REVIEW_INCONCLUSIVE.code(), AgentRole.REVIEWER, reviewerAgentId,
                 VerdictParser.safeMap("channel", channel != null ? channel.name() : null,
                         "score", verdict.getScore(), "findings", items,
-                        "reason", "review_verdict_invalid"));
+                        "reason", reason));
+        String cause = INCONCLUSIVE_REASON_EVIDENCE_UNAVAILABLE.equals(reason)
+                ? "平台证据不可得（附件被截断/不可读）导致无法独立复核"
+                : "静态校验命中 " + items.size() + " 条阻断项";
         recordReviewSkipConversation(subTaskId, reviewerAgentId,
-                "核验判定不可采信（reason=review_verdict_invalid）：静态校验命中 "
-                        + items.size() + " 条阻断项；已落 INCONCLUSIVE，子任务停留 REVIEW 等待人工裁决。"
+                "核验判定不可信（reason=" + reason + "）：" + cause
+                        + "；已落 INCONCLUSIVE，子任务停留 REVIEW 等待人工裁决。"
                         + "未触发返工，不消耗返工预算。",
                 TimelineEventCode.SUBTASK_REVIEW_INCONCLUSIVE.code());
-        log.warn("核验判定不可采信，落 INCONCLUSIVE 转人工: subTaskId={}, reviewerAgentId={}, blocks={}",
-                subTaskId, reviewerAgentId, items.size());
+        log.warn("核验判定不可采信，落 INCONCLUSIVE 转人工: subTaskId={}, reviewerAgentId={}, reason={}, blocks={}",
+                subTaskId, reviewerAgentId, reason, items.size());
+    }
+
+    /**
+     * 复核出口清理评审侧人工介入标记：只清 {@link #REVIEW_SIDE_MARKS} 白名单内的原因。
+     *
+     * <p>标记是「等待人工处置」的粘滞态；复核已经给出通过/驳回结论，评审侧原因即已失效。
+     * 派单侧原因（如执行密集跳派）不在此清理，避免越权改变派单语义。</p>
+     */
+    private void clearReviewSideMark(SubTaskView subTask) {
+        Map<String, Object> context = subTask.context();
+        Object node = context == null ? null : context.get("manualIntervention");
+        if (!(node instanceof Map<?, ?> mark)) {
+            return;
+        }
+        Object reason = mark.get("reason");
+        if (reason != null && REVIEW_SIDE_MARKS.contains(String.valueOf(reason))) {
+            subTaskService.clearManualIntervention(subTask.id());
+        }
     }
 
     /**

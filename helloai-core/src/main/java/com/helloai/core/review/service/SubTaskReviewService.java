@@ -39,7 +39,14 @@ public interface SubTaskReviewService {
      *
      * <p>扫描间隔可通过 {@code helloai.dispatch.review-orphan-scan-interval-ms} 配置（默认 30s），
      * 扫描阈值通过 {@code helloai.dispatch.review-orphan-threshold-seconds} 配置（默认 60s），
-     * 表示子任务进入 REVIEW 超过该时间且无审查记录时才触发兜底核验。</p>
+     * 表示子任务进入 REVIEW 超过该时间<b>且未被标记人工介入</b>时触发兜底核验。</p>
+     *
+     * <p><b>候选口径（勿按注释字面理解成「无 review_record」）</b>：实际过滤条件是
+     * {@code status=REVIEW} + {@code update_time <= now-阈值} + {@code context.manualIntervention == null}，
+     * <b>不查 {@code review_record}</b>。这样自洽是因为：通过/驳回后状态已离开 REVIEW，
+     * 记录在不在都不影响；真正残留下来的是「事件链丢失」与「核验失败/不可解析且无结论」两类，
+     * 它们都必须被重跑一次。而 {@code INCONCLUSIVE} / 返工达上限等已转人工的会被
+     * {@code markManualIntervention} 打标，从而<b>永久退出</b>本扫描（不会 30s 一次无限重跑）。</p>
      */
     void scanReviewOrphans();
 
@@ -79,7 +86,7 @@ public interface SubTaskReviewService {
         /**
          * 验收点覆盖清单（`RV-3`，防御承接）：数组元素形如
          * {criterionRef: 验收标准原文子串, status: covered|failed|not_verifiable,
-         *  method: attachment|sandbox, evidenceRef: 证据指向, note: 说明}。
+         *  method: attachment|sandbox|mechanical, evidenceRef: 证据指向, note: 说明}。
          * 与 {@code missingEvidence} 同一承接策略（JsonNode，非法形态降级空清单），
          * 消费前经 {@code ReviewCoverageParser.parse} 归一。
          */

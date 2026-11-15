@@ -16,6 +16,7 @@ import com.helloai.core.review.ReviewLockTtlResolver;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.service.impl.SubTaskReviewServiceImpl;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
+import com.helloai.core.review.support.ReviewEvidenceMaterializer;
 import com.helloai.core.review.support.ReviewExecutionEngine;
 import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.agent.service.ExecutionCommandService;
@@ -55,6 +56,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -171,7 +173,7 @@ class SubTaskReviewServiceTest {
                 new ReviewExecutionEngine(platformAgentExecutionService, conversationService,
                         taskTimelineService, new VerdictParser(new ObjectMapper()),
                         new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
-                        subTaskService, reviewProperties),
+                        subTaskService, reviewProperties, mock(ReviewEvidenceMaterializer.class)),
                 taskTimelineService, executionCommandService, dispatchProperties,
                 conversationService, recordReviewService, redissonClient,
                 reviewLockTtlResolver,
@@ -1211,7 +1213,7 @@ class SubTaskReviewServiceTest {
         subTask = withConstraints(subTask, "不得改动既有接口签名");
         subTask = withUncertainties(subTask, List.of(
                 new UncertaintyView("ASSUMPTION", "仅在线表参与统计"),
-                new UncertaintyView("UNCONFIRMED", "归档分区口径待确认")));
+                new UncertaintyView("UNCONFIRMED", "归档分区口径待确认", "U2")));
         when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
@@ -1224,7 +1226,7 @@ class SubTaskReviewServiceTest {
                 .contains("- 执行约束：不得改动既有接口签名")
                 .contains("- 不确定性申报：")
                 .contains("- [ASSUMPTION] 仅在线表参与统计")
-                .contains("- [UNCONFIRMED] 归档分区口径待确认");
+                .contains("- [U2][UNCONFIRMED] 归档分区口径待确认");
     }
 
     @Test
@@ -1406,10 +1408,10 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("方案3 F2: 多个附件总计超限（200000）时，靠后附件正文被截到剩余额度")
-    void shouldStopWhenTotalLimitExceeded() {
-        // 4 个 70000 字符附件：每个先被 per-file 截到 64000，前 3 个注入 192000 未超限；
-        // 第 4 个（d.log）注入时剩余额度不足 64000，被截到剩余额度（reason=total_limit）
+    @DisplayName("RV-9: 多个同量级附件按证据族配额均分（4×70000 ⇒ 各 50000，无附件被挤掉）")
+    void shouldDistributeEqualShareAcrossSameSizedAttachments() {
+        // 4 个 70000 字符附件、无家族关系：24000 保底后剩余额度按族均分，
+        // 每个族各拿 45904，最终每个附件注入 50000 字符（远高于 4096 保底，不再出现「靠后附件不可见」）
         AttachmentView a = attachmentWithMime(503L, "a.log", null, true);
         AttachmentView b = attachmentWithMime(504L, "b.log", null, true);
         AttachmentView c = attachmentWithMime(505L, "c.log", null, true);
@@ -1424,14 +1426,12 @@ class SubTaskReviewServiceTest {
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
         String prompt = captureReviewPrompt();
-        assertThat(prompt).contains("附件内容总计超出限额，后续附件仅见清单");
-        // 前三个附件以 per-file 上限（64000）注入，第四个附件因总量上限被截到剩余额度
-        assertThat(prompt).contains("reason=per_file_limit");
-        assertThat(prompt).contains("reason=total_limit");
-        // 总量上限截断标注落在 d.log：正文被截到剩余额度（shown < 64000），不再是完整 per-file 64000
-        assertThat(prompt).contains("file=d.log");
-        assertThat(prompt).contains("shown=");
-        assertThat(prompt).doesNotContain("[TRUNCATED] file=d.log shown=64000");
+        assertThat(prompt).contains("附件内容按证据族配额分配");
+        for (String name : List.of("a.log", "b.log", "c.log", "d.log")) {
+            assertThat(prompt).contains("[TRUNCATED] file=" + name + " shown=50000 total=70000 reason=evidence_budget");
+        }
+        assertThat(prompt).doesNotContain("reason=per_file_limit");
+        assertThat(prompt).doesNotContain("reason=total_limit");
     }
 
     @Test

@@ -64,4 +64,21 @@ class SandboxExecutionToolContributorTest {
                 .get(SandboxExecutionToolContributor.TOOL_INTERNAL_LIST_SANDBOX_CALLS).test(null))
                 .isTrue();
     }
+
+    @Test
+    @DisplayName("RV-14：附件注入沙箱与执行同源开关（关 ⇒ 摘除，避免模型反复尝试必然失败的注入）")
+    void stageAttachmentFollowsSameSwitch() {
+        SandboxExecutionToolContributor contributor = new SandboxExecutionToolContributor(properties);
+
+        assertThat(contributor.toolAvailability())
+                .containsKey(SandboxExecutionToolContributor.TOOL_INTERNAL_STAGE_ATTACHMENT);
+        assertThat(contributor.toolAvailability()
+                .get(SandboxExecutionToolContributor.TOOL_INTERNAL_STAGE_ATTACHMENT).test(null))
+                .isFalse();
+
+        properties.setEnabled(true);
+        assertThat(contributor.toolAvailability()
+                .get(SandboxExecutionToolContributor.TOOL_INTERNAL_STAGE_ATTACHMENT).test(null))
+                .isTrue();
+    }
 }

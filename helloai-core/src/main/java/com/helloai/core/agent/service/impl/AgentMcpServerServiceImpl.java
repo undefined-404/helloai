@@ -147,6 +147,11 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
             "internal_get_agent_status",
             "internal_register_output_attachment",
             "internal_read_attachment",
+            // RV-12（2026-11-14）：附件有界读取——大文件先取摘要，再按字符偏移续读。
+            "internal_attachment_digest",
+            "internal_read_attachment_range",
+            // RV-14（2026-11-15）：附件惰性注入沙箱——实测前先 stage，sha256 与 digest 对账。
+            "internal_stage_attachment_to_sandbox",
             "internal_list_skills",
             "internal_load_skill",
             "internal_report_blocked",

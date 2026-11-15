@@ -15,7 +15,7 @@ import java.util.Map;
  * <p><b>契约</b>（与 {@code prompts/subtask-review.md} 输出格式同源）：每条形如</p>
  * <pre>
  * {"criterionRef":"验收标准原文子串","status":"covered|failed|not_verifiable",
- *  "method":"attachment|sandbox","evidenceRef":"附件名/台账条目","note":"说明"}
+ *  "method":"attachment|sandbox|mechanical","evidenceRef":"附件名/台账条目","note":"说明"}
  * </pre>
  *
  * <p><b>承接策略与 {@code missingEvidence} 完全一致</b>：非数组 / 元素非对象 / 键缺失一律降级
@@ -45,6 +45,14 @@ public final class ReviewCoverageParser {
     public static final String METHOD_ATTACHMENT = "attachment";
     public static final String METHOD_SANDBOX = "sandbox";
 
+    /**
+     * 机械预检结论（`RV-10`）：平台对表格类附件做的确定性计算。
+     *
+     * <p>只有「有机械结论的附件相关验收点」才允许用该方式（由
+     * {@link ReviewCoverageCritic} 校验），防止拿机械结论冒充语义核验。</p>
+     */
+    public static final String METHOD_MECHANICAL = "mechanical";
+
     /** 覆盖清单条目上限（与 {@code missingEvidence} 同一防御口径）。 */
     public static final int MAX_COVERAGE_ITEMS = 20;
 
@@ -70,9 +78,10 @@ public final class ReviewCoverageParser {
             return STATUS_COVERED.equals(status);
         }
 
-        /** 证据方式是否落在「附件 / 沙箱」白名单内。 */
+        /** 证据方式是否落在「附件 / 沙箱 / 机械预检」白名单内。 */
         public boolean hasAdmissibleMethod() {
-            return METHOD_ATTACHMENT.equals(method) || METHOD_SANDBOX.equals(method);
+            return METHOD_ATTACHMENT.equals(method) || METHOD_SANDBOX.equals(method)
+                    || METHOD_MECHANICAL.equals(method);
         }
 
         /** 是否构成「这条验收点被合格证据覆盖」。 */

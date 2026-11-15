@@ -13,10 +13,25 @@ import java.util.List;
  * <ol>
  *     <li>圈号 {@code ①~⑳}：实测仅 5 条使用，但一旦使用就是<b>作者明确的条目边界</b>，
  *         条目内部出现的 {@code ；} 属句内停顿，不该再拆 ⇒ 圈号命中时只用圈号拆。</li>
+ *     <li>阿拉伯编号 {@code 1) / 1. / 1、}：与圈号同理，编号是作者明确的条目边界，条目内部的
+ *         {@code ；} 属句内停顿。真机样本（2026-11-13 dev 沙箱探针任务 A/B）：验收为
+ *         {@code AUTOMATED（逐条可执行核查）：1) …；2) …}，第 5 条内部含 {@code ；}，
+ *         走分号 fallback 会把该条拆成两截，左截带 {@code 5) } 前缀、reviewer 的合并引用
+ *         不带前缀 ⇒ 双向子串归属均不成立 ⇒ 误判 {@code acceptance_not_covered}。</li>
  *     <li>全角 {@code ；}：fallback，实测 9 条。</li>
  *     <li>半角 {@code ;}：<b>不参与</b>——真机 0 命中，且它高频出现在代码片段 / 枚举串里
  *         （如 {@code "SELECT a; SELECT b"}），按它拆必然过拆。</li>
  * </ol>
+ *
+ * <p><b>阿拉伯编号的边界判据（防过拆，四条同时满足）</b>：</p>
+ * <ul>
+ *     <li>括号外：括号内的编号是交叉引用（如「（见 1) 项）」），与圈号同口径；</li>
+ *     <li>前缀：编号前（跳过空白）只能是文本起始、{@code ；}、{@code 。} 或冒号——
+ *         冒号必须算，因为真机首条编号就紧跟「逐条可执行核查）：」；</li>
+ *     <li>形态：1~2 位数字 + {@code ) . 、} 之一，且编号后<b>不接数字</b>（排除 {@code 1.2} 版本号）；</li>
+ *     <li>数量：全文合法边界 <b>≥2</b> 才启用。单个 {@code 1)} 可能只是行文里的步骤引用，
+ *         不足以证明全文是编号清单，此时回退分号（对应「只在有明确边界信号时拆」）。</li>
+ * </ul>
  *
  * <p><b>判错方向</b>：拆分只影响「有几条要核」，覆盖判据用的是子串归属（
  * {@link ReviewVerdictValidator#isGroundedIn}），对分隔符风格不敏感。少拆一条 ⇒ 少核对一条
@@ -77,7 +92,7 @@ public final class AcceptanceItemSplitter {
         }
         List<String> items = hasCircledNumber(acceptance)
                 ? splitByCircled(acceptance)
-                : splitByFullWidthSemicolon(acceptance);
+                : splitByArabicNumbered(acceptance);
         List<String> normalized = new ArrayList<>(items.size());
         for (String item : items) {
             String cleaned = normalize(item);
@@ -183,6 +198,89 @@ public final class AcceptanceItemSplitter {
             items.add(current.toString());
         }
         return items;
+    }
+
+    /**
+     * 按阿拉伯编号拆：编号本身丢弃，条目内的 {@code ；} 原样保留；合法边界不足两个时回退分号。
+     *
+     * <p>不足两个即回退是刻意的：单个 {@code 1)} 可能只是行文里的步骤引用，
+     * 不足以证明全文是编号清单（判据见类注释）。</p>
+     */
+    private static List<String> splitByArabicNumbered(String text) {
+        List<Integer> boundaries = arabicNumberBoundaries(text);
+        if (boundaries.size() < 2) {
+            return splitByFullWidthSemicolon(text);
+        }
+        List<String> items = new ArrayList<>(boundaries.size() + 1);
+        int start = 0;
+        for (int boundary : boundaries) {
+            items.add(text.substring(start, boundary));
+            start = skipArabicNumber(text, boundary);
+        }
+        items.add(text.substring(start));
+        return items;
+    }
+
+    /** 收集合法编号边界的起始下标（括号外 + 前缀 + 形态 + 后接非数字，见类注释）。 */
+    private static List<Integer> arabicNumberBoundaries(String text) {
+        List<Integer> boundaries = new ArrayList<>();
+        int parenDepth = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '（' || c == '(') {
+                parenDepth++;
+                continue;
+            }
+            if (c == '）' || c == ')') {
+                parenDepth = Math.max(0, parenDepth - 1);
+                continue;
+            }
+            if (parenDepth > 0 || !Character.isDigit(c)) {
+                continue;
+            }
+            int marker = arabicNumberMarker(text, i);
+            if (marker < 0 || !isArabicBoundaryPrefix(text, i)) {
+                continue;
+            }
+            if (marker + 1 < text.length() && Character.isDigit(text.charAt(marker + 1))) {
+                continue;
+            }
+            boundaries.add(i);
+            i = marker;
+        }
+        return boundaries;
+    }
+
+    /** 编号符号下标（{@code ) . 、}）；不是合法 1~2 位编号时返回 -1（同时挡住 {@code 1.2}、{@code 100)}）。 */
+    private static int arabicNumberMarker(String text, int start) {
+        int i = start;
+        while (i < text.length() && i - start < 2 && Character.isDigit(text.charAt(i))) {
+            i++;
+        }
+        if (i >= text.length() || Character.isDigit(text.charAt(i))) {
+            return -1;
+        }
+        char marker = text.charAt(i);
+        return marker == ')' || marker == '.' || marker == '、' ? i : -1;
+    }
+
+    /** 编号前（跳过空白）必须是文本起始或 {@code ；}、{@code 。}、冒号。 */
+    private static boolean isArabicBoundaryPrefix(String text, int start) {
+        int i = start - 1;
+        while (i >= 0 && Character.isWhitespace(text.charAt(i))) {
+            i--;
+        }
+        if (i < 0) {
+            return true;
+        }
+        char c = text.charAt(i);
+        return c == '；' || c == '。' || c == '：' || c == ':';
+    }
+
+    /** 编号结束后的内容起点。 */
+    private static int skipArabicNumber(String text, int start) {
+        int marker = arabicNumberMarker(text, start);
+        return marker < 0 ? start : marker + 1;
     }
 
     /** 按全角分号拆（fallback：无圈号编号时）。 */

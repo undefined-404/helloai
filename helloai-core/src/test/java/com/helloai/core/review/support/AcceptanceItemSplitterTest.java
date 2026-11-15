@@ -20,6 +20,32 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("AcceptanceItemSplitter（RV-3 验收标准拆分）")
 class AcceptanceItemSplitterTest {
 
+    /** 真机原文（2026-11-13 dev 沙箱探针任务 A，`review_record` round=1 INCONCLUSIVE 的原判定对象）。 */
+    static final String REAL_ACCEPTANCE_A =
+            "AUTOMATED（逐条可执行核查）：1) 交付物内 cat 原始输出行匹配正则 ^HELLOAI_SANDBOX_[0-9]{19,}$，且文末保留换行（对应任务级验收条目 3）；"
+                    + "2) 交付物内 sha256sum 输出含 64 位十六进制摘要（^[0-9a-f]{64}$）且路径字段为 /workspace/probe.txt，"
+                    + "重跑 sha256sum /workspace/probe.txt 得到的摘要与之逐字符相同（对应条目 2）；"
+                    + "3) 交付物给出 wc -c 结果且数值等于对同一文件重跑 wc -c 的输出（该格式下预期为 36），"
+                    + "同时与 ls -l 显示的大小一致（对应条目 2）；"
+                    + "4) 交付物四段证据（cat 原文 / sha256 / 字节数 / 执行者标识与写入时刻）齐全，任一缺失即判 fail（对应条目 2）；"
+                    + "5) 交付物全文不含 /tmp、不含 xxd 调用；对交付物文本执行 grep -q 'HELLOAI_SANDBOX_' 命中且有实际数字（对应条目 7、8）；"
+                    + "6) 交付物正文为 UTF-8，grep -P '\\x{FFFD}|[\\x{E000}-\\x{F8FF}]' 无命中，且不出现 GBK/CP1252 双重解码乱码串。";
+
+    /** 真机原文（同一任务的探针子任务 B）。 */
+    static final String REAL_ACCEPTANCE_B =
+            "AUTOMATED（逐条可执行核查）：1) 交付物含 ls -l 原始输出行，匹配正则 ^-[-rwx]{9}.*? +[0-9]+ +.*?/workspace/probe\\.txt$"
+                    + "（含权限、大小、mtime、路径三要素）（对应任务级验收条目 4）；"
+                    + "2) 交付物含 cat 原文且与 A 交付物的 cat 原文逐字相同（哈希比对：两者 echo -n 后 sha256 一致，行尾换行保留），"
+                    + "且非「已读取/内容一致」式转述（对应条目 5）；"
+                    + "3) 交付物含 64 位十六进制摘要，与 A 的摘要逐字符相同，且一致性判定字段为 YES（对应条目 6）；"
+                    + "4) 四项（ls -l 行 / cat 原文 / sha256 / 判定）齐全，缺任一即 fail（对应条目 4）；"
+                    + "5) 本子任务命令记录中 grep 不到 > >> tee touch cp mv rm chmod truncate 等写动作，"
+                    + "且 probe.txt 在 B 执行前后 mtime 未变化（ls -l 的 mtime 与 A 申报写入时刻一致，误差 ≤1 分钟）（对应条目 9）；"
+                    + "6) 全流程路径仅 /workspace/probe.txt，grep 不到 /tmp，grep 不到 xxd（对应条目 7、8）；"
+                    + "7) 交付物同时含 A、B 两个执行者标识字段；若两者不同即 pass，若相同则须含 ≥1 条环境限制原因说明段落（对应条目 10）；"
+                    + "8) 计划结构核查：仅存在 A、B 两个顺序子任务，B 的 dependsOn 非空且指向 A，无第三个子任务（对应条目 1）；"
+                    + "9) 交付物正文为 UTF-8，grep -P '\\x{FFFD}|[\\x{E000}-\\x{F8FF}]' 无命中，且不出现 GBK/CP1252 双重解码乱码串。";
+
     @Test
     @DisplayName("圈号优先：条目内含全角分号属句内停顿，不误拆")
     void circledNumbersTakePriorityAndKeepInnerFullWidthSemicolon() {
@@ -220,5 +246,58 @@ class AcceptanceItemSplitterTest {
     void dropsStandaloneCrossReferenceParenthetical() {
         assertThat(AcceptanceItemSplitter.split("正文内容；（对应任务级验收条目 ②）"))
                 .containsExactly("正文内容");
+    }
+
+    @Test
+    @DisplayName("真机样本（2026-11-13 dev 探针 A）：6 条编号逐条拆开，条目内全角分号不再截断")
+    void splitsRealMachineAcceptanceA() {
+        List<String> items = AcceptanceItemSplitter.split(REAL_ACCEPTANCE_A);
+
+        assertThat(items).hasSize(6);
+        assertThat(items).noneMatch(item -> item.matches("^\\d{1,2}[).、].*"));
+        assertThat(items).noneMatch(item -> item.contains("逐条可执行核查"));
+        // 第 5 条内部含全角分号：修复前会被拆成「5) …」与「对交付物…」两截
+        assertThat(items.get(4)).startsWith("交付物全文不含 /tmp")
+                .contains("；对交付物文本执行 grep -q 'HELLOAI_SANDBOX_'");
+    }
+
+    @Test
+    @DisplayName("真机样本（2026-11-13 dev 探针 B）：9 条编号逐条拆开，引导句丢弃")
+    void splitsRealMachineAcceptanceB() {
+        List<String> items = AcceptanceItemSplitter.split(REAL_ACCEPTANCE_B);
+
+        assertThat(items).hasSize(9);
+        assertThat(items.get(7)).startsWith("计划结构核查");
+        assertThat(items).noneMatch(item -> item.contains("逐条可执行核查"));
+    }
+
+    @ParameterizedTest
+    @DisplayName("阿拉伯编号三种形态（1) / 1. / 1、）均作为条目边界")
+    @ValueSource(strings = {"1) 甲；2) 乙", "1. 甲；2. 乙", "1、甲；2、乙"})
+    void arabicNumberingVariantsSplit(String acceptance) {
+        assertThat(AcceptanceItemSplitter.split(acceptance)).containsExactly("甲", "乙");
+    }
+
+    @Test
+    @DisplayName("两个合法边界才启用：版本号 1.2 与三位编号（100)）不算边界")
+    void arabicNumberingRequiresAtLeastTwoRealBoundaries() {
+        assertThat(AcceptanceItemSplitter.split("交付 1.2 版本；附带说明"))
+                .containsExactly("交付 1.2 版本", "附带说明");
+        assertThat(AcceptanceItemSplitter.split("100) 甲；100) 乙"))
+                .containsExactly("100) 甲", "100) 乙");
+    }
+
+    @Test
+    @DisplayName("单个偶然编号不足以切换模式：回退分号并保留编号原文")
+    void singleIncidentalNumberFallsBackToSemicolon() {
+        assertThat(AcceptanceItemSplitter.split("注意事项：1) 仅这一项；后续说明"))
+                .containsExactly("注意事项：1) 仅这一项", "后续说明");
+    }
+
+    @Test
+    @DisplayName("括号内编号是交叉引用，不是条目边界")
+    void arabicNumberInsideParenthesesIsNotBoundary() {
+        assertThat(AcceptanceItemSplitter.split("（见 1) 项）；甲；乙"))
+                .containsExactly("（见 1) 项）", "甲", "乙");
     }
 }

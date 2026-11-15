@@ -10,6 +10,8 @@ import com.helloai.core.task.port.UncertaintyView;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 静态覆盖批评器（`RV-3`，纯函数、零 token、无 Spring 依赖）。
@@ -36,6 +38,9 @@ import java.util.List;
  */
 public final class ReviewCoverageCritic {
 
+    /** {@code evidenceRef} 里的附件 id（容忍千分位逗号）；`RV-10` 逐条命中与 `RV-11` 同一解析口径。 */
+    private static final Pattern EVIDENCE_ID = Pattern.compile("id\\s*=\\s*([,0-9]+)");
+
     /** 通过判定但 {@code coverage} 整段缺失（既无原文引用也无状态）：验收点无任何覆盖声明。 */
     public static final String COVERAGE_ABSENT = "coverage_absent";
 
@@ -45,8 +50,11 @@ public final class ReviewCoverageCritic {
     /** {@code criterionRef} 不是验收标准原文子串（疑似编造引用）。 */
     public static final String COVERAGE_REF_NOT_GROUNDED = "coverage_ref_not_grounded";
 
-    /** {@code status=covered} 但证据方式不在 {@code attachment|sandbox} 白名单内（自述当证据）。 */
+    /** {@code status=covered} 但证据方式不在 {@code attachment|sandbox|mechanical} 白名单内（自述当证据）。 */
     public static final String COVERAGE_SELF_REPORTED = "coverage_self_reported";
+
+    /** {@code method=mechanical} 但平台没有该附件的机械结论（拿机械结论冒充语义核验）。 */
+    public static final String COVERAGE_MECHANICAL_UNAVAILABLE = "coverage_mechanical_unavailable";
 
     /** 存在不指向任何拆分项的 {@code coverage} 条目（计数只作告警，不作拦截，见实施计划 §3）。 */
     public static final String COVERAGE_EXTRANEOUS = "coverage_extraneous";
@@ -76,6 +84,19 @@ public final class ReviewCoverageCritic {
      */
     public static List<Finding> critique(ReviewVerdict verdict, String acceptance,
                                         List<UncertaintyView> uncertainties) {
+        return critique(verdict, acceptance, uncertainties, "");
+    }
+
+    /**
+     * 覆盖批评（带机械预检原文，`RV-10`）：{@code method=mechanical} 只有**该条目引用的附件**
+     * 在机械段确有可测量结论时才计入覆盖，否则按未覆盖处理——防两件事：拿机械结论冒充语义核验、
+     * 以及拿 A 文件的结论给 B 文件作保（见 {@link #mechanicalCovers}）。
+     *
+     * @param mechanicalCheck {@code [MECHANICAL_CHECK]} 段（空 ⇒ 所有 mechanical 条目都不计入）
+     */
+    public static List<Finding> critique(ReviewVerdict verdict, String acceptance,
+                                        List<UncertaintyView> uncertainties,
+                                        String mechanicalCheck) {
         if (verdict == null || !Boolean.TRUE.equals(verdict.getPass())) {
             return List.of();
         }
@@ -84,14 +105,17 @@ public final class ReviewCoverageCritic {
             // 验收标准为空：没有可核对的验收点。判「未覆盖」会把「平台没给标准」算成「模型放水」。
             return List.of();
         }
+        // 机械段传原文而非布尔：`RV-10` 的命中判据是「这条引用的附件**自己有**机械结论」，
+        // 全局「机械段非空」会让 A 文件的结论给 B 文件作保。
+        String mechanical = mechanicalCheck == null ? "" : mechanicalCheck;
         List<CoverageItem> coverage = ReviewCoverageParser.parse(verdict.getCoverage());
         List<Finding> findings = new ArrayList<>();
         if (coverage.isEmpty()) {
             findings.add(new Finding(Severity.BLOCK, COVERAGE_ABSENT,
                     "判定通过但未输出 coverage 覆盖清单，" + items.size() + " 条验收标准无任何覆盖声明"));
         } else {
-            findings.addAll(contractFindings(coverage, acceptance));
-            findings.addAll(coverageGapFindings(items, coverage, acceptance));
+            findings.addAll(contractFindings(coverage, acceptance, mechanical));
+            findings.addAll(coverageGapFindings(items, coverage, acceptance, mechanical));
         }
         Finding silenced = unconfirmedSilentlyDropped(verdict, coverage, uncertainties);
         if (silenced != null) {
@@ -109,16 +133,23 @@ public final class ReviewCoverageCritic {
      * <p>{@code covered} + 非白名单 {@code method} 在 {@link CoverageItem#covers()} 里已不计入覆盖，
      * 这里再单列一条 WARN，是为了让「模型想用产出文本自述蒙过覆盖核对」在时间线上可读。</p>
      */
-    private static List<Finding> contractFindings(List<CoverageItem> coverage, String acceptance) {
+    private static List<Finding> contractFindings(List<CoverageItem> coverage, String acceptance,
+                                                  String mechanicalCheck) {
         List<Finding> findings = new ArrayList<>();
         List<String> ungrounded = new ArrayList<>();
         List<String> selfReported = new ArrayList<>();
+        List<String> mechanicalUnavailable = new ArrayList<>();
         for (CoverageItem item : coverage) {
             if (item.hasRef() && !ReviewVerdictValidator.isGroundedIn(acceptance, item.criterionRef())) {
                 ungrounded.add(item.criterionRef());
             }
             if (item.claimsCovered() && !item.hasAdmissibleMethod()) {
                 selfReported.add(item.criterionRef().isEmpty() ? "(无 criterionRef)" : item.criterionRef());
+            }
+            if (item.claimsCovered() && ReviewCoverageParser.METHOD_MECHANICAL.equals(item.method())
+                    && !mechanicalCovers(item, mechanicalCheck)) {
+                mechanicalUnavailable.add(item.criterionRef().isEmpty()
+                        ? "(无 criterionRef)" : item.criterionRef());
             }
         }
         if (!ungrounded.isEmpty()) {
@@ -128,7 +159,12 @@ public final class ReviewCoverageCritic {
         if (!selfReported.isEmpty()) {
             findings.add(new Finding(Severity.WARN, COVERAGE_SELF_REPORTED,
                     listDetail(selfReported.size(), selfReported,
-                            " 条 status=covered 但证据方式不是 attachment/sandbox（自述不计入覆盖）: ")));
+                            " 条 status=covered 但证据方式不是 attachment/sandbox/mechanical（自述不计入覆盖）: ")));
+        }
+        if (!mechanicalUnavailable.isEmpty()) {
+            findings.add(new Finding(Severity.WARN, COVERAGE_MECHANICAL_UNAVAILABLE,
+                    listDetail(mechanicalUnavailable.size(), mechanicalUnavailable,
+                            " 条 status=covered 用 mechanical 但该附件无平台机械结论（不计入覆盖）: ")));
         }
         return findings;
     }
@@ -145,12 +181,12 @@ public final class ReviewCoverageCritic {
      * 发两条告警是噪声）。</p>
      */
     private static List<Finding> coverageGapFindings(List<String> items, List<CoverageItem> coverage,
-                                                     String acceptance) {
+                                                     String acceptance, String mechanicalCheck) {
         List<String> uncovered = new ArrayList<>();
         for (String item : items) {
             boolean covered = false;
             for (CoverageItem entry : coverage) {
-                if (covers(entry, item)) {
+                if (covers(entry, item, mechanicalCheck)) {
                     covered = true;
                     break;
                 }
@@ -171,7 +207,8 @@ public final class ReviewCoverageCritic {
         List<Finding> findings = new ArrayList<>(2);
         if (!uncovered.isEmpty()) {
             findings.add(new Finding(Severity.BLOCK, ACCEPTANCE_NOT_COVERED,
-                    listDetail(uncovered.size(), uncovered, " 条验收标准无合格覆盖（需 covered + 附件/沙箱证据）: ")));
+                    listDetail(uncovered.size(), uncovered,
+                            " 条验收标准无合格覆盖（需 covered + 附件/沙箱/机械预检证据）: ")));
         }
         if (!extraneous.isEmpty()) {
             findings.add(new Finding(Severity.WARN, COVERAGE_EXTRANEOUS,
@@ -180,9 +217,43 @@ public final class ReviewCoverageCritic {
         return findings;
     }
 
-    /** 单个覆盖条目是否覆盖某个拆分项（须构成合格覆盖 + 文本归属）。 */
-    private static boolean covers(CoverageItem entry, String item) {
+    /** 单个覆盖条目是否覆盖某个拆分项（须构成合格覆盖 + 文本归属 + 该附件有机械结论）。 */
+    private static boolean covers(CoverageItem entry, String item, String mechanicalCheck) {
+        if (ReviewCoverageParser.METHOD_MECHANICAL.equals(entry.method())
+                && !mechanicalCovers(entry, mechanicalCheck)) {
+            return false;
+        }
         return entry.covers() && pointsAt(entry, item);
+    }
+
+    /**
+     * 机械结论是否落在**该条目引用的附件**上（`RV-10`，逐条命中）。
+     *
+     * <p>{@code evidenceRef} 必须写出 {@code id=<附件id>}，且该 id 在 {@code [MECHANICAL_CHECK]}
+     * 里有一行可测量的 {@code file id=… lines/rows/data} 结论。缺 id、id 查不到、或该附件只有
+     * {@code UNAVAILABLE}（算不出来）都<b>不计入覆盖</b>——否则「拿 A 文件的机械结论给 B 文件作保」
+     * 查不出来，而这正是「证据指向必须落地」的同一原则（与 {@code criterionRef} 必须是原文子串、
+     * {@code claim=} 必须能对上实测值一致）。</p>
+     */
+    private static boolean mechanicalCovers(CoverageItem entry, String mechanicalCheck) {
+        Long id = evidenceId(entry.evidenceRef());
+        return id != null && ReviewMechanicalCheck.hasMeasure(mechanicalCheck, id);
+    }
+
+    /** 从 {@code evidenceRef} 取附件 id（兼容 {@code id=123} / {@code id=123,456} / {@code id=123 claim=…}）。 */
+    private static Long evidenceId(String evidenceRef) {
+        if (evidenceRef == null || evidenceRef.isEmpty()) {
+            return null;
+        }
+        Matcher matcher = EVIDENCE_ID.matcher(evidenceRef);
+        if (!matcher.find()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(matcher.group(1).replace(",", ""));
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /** 文本归属（双向子串：允许整条抄写，也允许只引用片段）。 */

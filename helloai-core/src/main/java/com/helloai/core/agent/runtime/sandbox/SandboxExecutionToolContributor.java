@@ -41,6 +41,9 @@ public class SandboxExecutionToolContributor implements ToolCallbackContributor 
     /** 沙箱台账查询工具名（`SL-5`；同样只在沙箱启用时可见——台账只在有沙箱时非空）。 */
     public static final String TOOL_INTERNAL_LIST_SANDBOX_CALLS = "internal_list_sandbox_calls";
 
+    /** 附件注入沙箱工具名（`RV-14`；沙箱关着时注入必然失败，留着只会让模型看到恒 false）。 */
+    public static final String TOOL_INTERNAL_STAGE_ATTACHMENT = "internal_stage_attachment_to_sandbox";
+
     private final OpenSandboxProperties properties;
 
     public SandboxExecutionToolContributor(OpenSandboxProperties properties) {
@@ -58,17 +61,20 @@ public class SandboxExecutionToolContributor implements ToolCallbackContributor 
     }
 
     /**
-     * 「按条件可用」声明：沙箱执行未启用 ⇒ {@code internal_run_in_sandbox} 与
-     * {@code internal_list_sandbox_calls} 一并从模型可见列表摘除。
+     * 「按条件可用」声明：沙箱执行未启用 ⇒ {@code internal_run_in_sandbox}、
+     * {@code internal_list_sandbox_calls} 与 {@code internal_stage_attachment_to_sandbox}
+     * 一并从模型可见列表摘除。
      *
      * <p>台账查询依赖同一启用事实源：沙箱关着时台账必然为空，暴露一个恒返回空清单的工具
-     * 只会让模型误以为「历史执行都丢了」。</p>
+     * 只会让模型误以为「历史执行都丢了」。stage-in 同理：沙箱关着时写入必然 false，
+     * 暴露它只会诱导模型反复尝试注入（`RV-14`）。</p>
      */
     @Override
     public Map<String, Predicate<ToolContext>> toolAvailability() {
         Predicate<ToolContext> enabled = context -> properties.isEnabled();
         return Map.of(
                 TOOL_INTERNAL_RUN_IN_SANDBOX, enabled,
-                TOOL_INTERNAL_LIST_SANDBOX_CALLS, enabled);
+                TOOL_INTERNAL_LIST_SANDBOX_CALLS, enabled,
+                TOOL_INTERNAL_STAGE_ATTACHMENT, enabled);
     }
 }

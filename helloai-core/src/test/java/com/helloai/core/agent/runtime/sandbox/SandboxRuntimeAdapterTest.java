@@ -269,6 +269,59 @@ class SandboxRuntimeAdapterTest {
         assertThat(runtime.readCalls).isZero();
     }
 
+    @Test
+    @DisplayName("RV-15 writeReviewerArtifact：默认口径 ⇒ taskReadOnly 句柄（kind=TASK、readOnly=true、owner=taskId）")
+    void writeReviewerArtifactShouldMapToReadOnlyTaskRef() {
+        byte[] bytes = "abc".getBytes(StandardCharsets.UTF_8);
+
+        boolean ok = adapter(props()).writeReviewerArtifact(77L, 600L, "/tmp/staged/9-a.csv", bytes);
+
+        assertThat(ok).isTrue();
+        assertThat(runtime.lastWriteRef.kind()).isEqualTo(WorkspaceRef.Kind.TASK);
+        assertThat(runtime.lastWriteRef.ownerId()).isEqualTo(77L);
+        assertThat(runtime.lastWriteRef.contextId()).isEqualTo(600L);
+        assertThat(runtime.lastWriteRef.readOnly()).isTrue();
+        verifyNoInteractions(port);   // 编排层显式传 taskId，不查库
+        assertThat(runtime.lastWritePath).isEqualTo("/tmp/staged/9-a.csv");
+    }
+
+    @Test
+    @DisplayName("RV-15 F1：复用关闭 ⇒ 直接 false，不构造必然失败的写入（不碰运行时）")
+    void writeReviewerArtifactShouldFailWhenReuseOff() {
+        OpenSandboxProperties props = props();
+        props.setReuseEnabled(false);
+
+        boolean ok = adapter(props).writeReviewerArtifact(77L, 600L, "/tmp/staged/9-a.csv", new byte[1]);
+
+        assertThat(ok).isFalse();
+        assertThat(runtime.writeCalls).isZero();
+    }
+
+    @Test
+    @DisplayName("RV-15 scope=subtask 回滚模式 ⇒ 子任务级句柄（turn 末释放）")
+    void writeReviewerArtifactShouldMapToSubtaskRefOnRollback() {
+        OpenSandboxProperties props = props();
+        props.setScope("subtask");
+
+        boolean ok = adapter(props).writeReviewerArtifact(77L, 600L, "/tmp/staged/9-a.csv", new byte[1]);
+
+        assertThat(ok).isTrue();
+        assertThat(runtime.lastWriteRef.kind()).isEqualTo(WorkspaceRef.Kind.SUBTASK);
+        assertThat(runtime.lastWriteRef.ownerId()).isEqualTo(600L);
+    }
+
+    @Test
+    @DisplayName("RV-15 writeReviewerArtifact：null 入参短路（不构造句柄、不碰运行时）")
+    void writeReviewerArtifactShouldShortCircuitOnNull() {
+        SandboxRuntimeAdapter adapter = adapter(props());
+
+        assertThat(adapter.writeReviewerArtifact(null, 600L, "/tmp/staged/x", new byte[1])).isFalse();
+        assertThat(adapter.writeReviewerArtifact(77L, null, "/tmp/staged/x", new byte[1])).isFalse();
+        assertThat(adapter.writeReviewerArtifact(77L, 600L, null, new byte[1])).isFalse();
+        assertThat(adapter.writeReviewerArtifact(77L, 600L, "/tmp/staged/x", null)).isFalse();
+        assertThat(runtime.writeCalls).isZero();
+    }
+
     // ===== 捕获式假实现（只记录，不触碰 SDK） =====
 
     private static final class CapturingRuntime implements SandboxRuntime {
@@ -285,6 +338,9 @@ class SandboxRuntimeAdapterTest {
         int lastRound;
         int readCalls;
         int listCalls;
+        int writeCalls;
+        WorkspaceRef lastWriteRef;
+        String lastWritePath;
 
         @Override
         public ExecuteResponse exec(WorkspaceRef ref, SandboxSpec spec, String command,
@@ -322,7 +378,10 @@ class SandboxRuntimeAdapterTest {
 
         @Override
         public boolean writeFile(WorkspaceRef ref, String path, byte[] content) {
-            return false;
+            lastWriteRef = ref;
+            lastWritePath = path;
+            writeCalls++;
+            return true;
         }
 
         @Override

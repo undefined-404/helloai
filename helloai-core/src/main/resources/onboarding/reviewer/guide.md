@@ -20,7 +20,7 @@
 注册为 REVIEWER（或 PLANNER）角色、接入方式 `API_KEY_LLM` 的 agent 会被平台**自动调用**做内容级核验：
 
 - 子任务提交后，平台按「任务级指定核验 agent → 首选 REVIEWER（API_KEY_LLM）→ 任意 REVIEWER（API_KEY_LLM）→ 回退 PLANNER（API_KEY_LLM）」选出核验 agent（`pickReviewerAgent`，代码实证）。
-- 平台以**核验 Prompt**直接调用你的模型：Prompt 含验收标准、交付物、执行产出与物化附件正文（**2026-10-03 起每附件 64000 / 总计 200000 字符限额**，由 8000/24000 上调以匹配官方 DeepSeek 64K 上下文；正常产出不会触发截断），模板为平台内 `subtask-review` 规则。
+- 平台以**核验 Prompt**直接调用你的模型：Prompt 含验收标准、交付物、执行产出与物化附件正文（**2026-10-03 起每附件 64000 / 总计 200000 字符限额**，由 8000/24000 上调以匹配官方 DeepSeek 64K 上下文；正常产出不会触发截断），模板为平台内 `subtask-review` 规则。附件正文超限时按证据族预算分配注入，并给出 `[TRUNCATED] file=… shown=… total=… reason=per_file_limit|total_limit|evidence_budget range=head|head+tail` 标注；正文中另有 `[... 剩余 N 字符未注入；可用 internal_read_attachment_range id=… offset=… length=4096 读取 ...]` 续读指引。
 - 你只需按 Prompt 完成审查并返回结论（APPROVED / REJECTED + 评分 + issues），平台自动落库 `review_record` 并推进子任务状态。
 - **你不消费收件箱**（API_KEY_LLM 的收件箱投递被平台跳过），**不需要 pullTasks 轮询、不需要 checkIn/心跳**（选人过滤对 API_KEY_LLM 豁免在线与心跳新鲜度检查）。
 - 入选必要条件（代码实证）：REVIEWER（或 PLANNER）角色 + `API_KEY_LLM` 接入类型 + Agent 状态 **ACTIVE** + 托管凭证已启用；任务级指定核验 agent 时还要求该 agent 可用（ACTIVE + API_KEY_LLM，否则回退自动选择）。
@@ -44,6 +44,18 @@
 4. **证据复核**：交付物携带 `VERIFICATION` 段时，逐条复核其"命令/输出/结论"是否真实可信
    （实际重跑或核对文件），防止伪造证据蒙混。
 5. **写审查记录**：先写记录再变状态（`POST /api/reviews`，见第五节）。
+
+### 补充：证据预算、台账、机械预检与续读（2026-11-14 起）
+
+1. **注入台账**：核验 Prompt 的「附件注入台账」段以 `[EVIDENCE_LEDGER] v1 totalChars=… entries=… omitted=…` 开头，逐条形如 `entry id=… name=… chars=… status=injected|truncated|absent|not_textual [range] [shown] [reason]`。台账显示 `truncated` / `absent` 的附件，其不可见部分一律按「未提供证据」处理，**不得**用执行方自报数值补全。
+2. **机械预检**：表格类附件（`.csv` / `.tsv`）由平台**先读全文**再确定性计算，段首 `[MECHANICAL_CHECK] v1`；单文件行含 `lines`（物理行）/ `rows`（CSV 记录）/ `data`（数据行）/ `cols` 等，族行含 `parts/present/missing sum_data=… main_data=… MATCH|MISMATCH delta=±k`。`MISMATCH` 必须驳回；`UNAVAILABLE` 等价 `not_verifiable`（平台算不出，不是执行方做错，不得据此驳回）。该段上限 **1,200** 字符，超限以 `omitted=k` 标注。
+3. **声称值比对**：`coverage[].evidenceRef` 可写 `id=<附件id> claim=<整数> basis=lines|rows|data`；平台按机械实测值确定性比对，通过侧不符即转人工，驳回侧只记告警。
+4. **续读工具**（正文被截断时使用，单次输出均 ≤**8,192** 字符）：
+   - `internal_attachment_digest`：返回 `[ATTACHMENT_DIGEST] id=… chars=… bytes=… sha256=…` + 头部 4,096 / 尾部 1,024 字符；
+   - `internal_read_attachment_range`：返回 `[RANGE] id=… chars=… offset=… length=… next=…`，`offset` 为**码点**偏移，`length` 缺省 4,096 / 上限 8,192；读下一段直接用返回值里的 `next`。
+   - **★附件正文不在沙箱卷**（2026-11-15）：附件存在对象存储，**不是**沙箱工作目录下的文件。要在沙箱里 `find` / `ls` / `cat` 找或读附件一律无效（只会白跑工具轮次）。沙箱 (`internal_run_in_sandbox`) 只用于**执行交付物自身的脚本/命令**验行为；读附件正文与中段只能走上面两个工具。
+   - **★证据已自动物化**（`RV-15`，2026-11-15）：审核开始时平台已把受审附件自动写入 `/tmp/staged/<attachmentId>-<文件名>`——核验 Prompt 末尾的「证据物化清单」段给路径与 `sha256`（可与 `internal_attachment_digest` 对账）。需要**执行**某附件时：先 `cp /tmp/staged/<路径> /workspace/` 摆到同目录，再 `internal_run_in_sandbox` 执行。仅当清单标注该附件 `deferred` / `not_loadable` / `failed`、或清单显示「物化不可用」时，才调 `internal_stage_attachment_to_sandbox` 补拉（返回 `path` 与 `sha256`，仅支持当前子任务的有效附件）；补拉失败（`staged=false`）时退回分段读取核对，不得声称已实测。
+5. **证据不可得出口**：若平台自身注入缺口（台账 `truncated` / `absent`）导致某条验收点只能判 `not_verifiable`，且**没有任何 `failed` 条目**，平台会把驳回降级为 `INCONCLUSIVE`（转人工补证据，不消耗返工预算）。reviewer 应按 `coverage` 如实写 `not_verifiable` + `note`，不要为了「给出结论」把平台缺口写成执行方失败。
 
 ## 三、审查原则
 

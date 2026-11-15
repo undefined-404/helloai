@@ -201,4 +201,64 @@ public interface SandboxExecutionService {
     default SandboxArtifact readArtifact(Long subTaskId, String path, int maxBytes) {
         return null;
     }
+
+    /**
+     * 把字节写入沙箱内指定路径（`RV-14` stage-in：附件注入沙箱供实测执行）。
+     *
+     * <p><b>与 {@link #readArtifact} 互为逆操作、同一条通道哲学</b>：走 SDK 文件通道而非命令
+     * （命令通路的 100KB 输出截断与 ≈1s 固定开销对写入同样成立）；句柄解析复用
+     * {@code toRef} 的身份分面——reviewer 落任务级只读句柄对应的容器、executor 落可写容器，
+     * 写进的是<b>调用者自己随后要跑命令的那个沙箱</b>。</p>
+     *
+     * <p><b>失败语义</b>：沙箱未启用 / 句柄非法 / 写入失败一律降级为 {@code false}，
+     * 不抛异常（与 {@link #execute} / {@link #readArtifact} 同一条容错哲学）；
+     * 写入是覆盖语义，天然可重入。</p>
+     *
+     * @param subTaskId 子任务 ID（定位复用槽；{@code null} ⇒ {@code false}）
+     * @param path      容器内<b>绝对路径</b>（如 {@code /tmp/staged/12-data.csv}）；非绝对 ⇒ {@code false}
+     * @param content   文件字节（{@code null} ⇒ {@code false}）
+     * @return 写入成功为 true
+     */
+    default boolean writeArtifact(Long subTaskId, String path, byte[] content) {
+        return false;
+    }
+
+    /**
+     * 按<b>显式 reviewer 身份</b>把字节写入审核工作区（`RV-15`，2026-11-15：审核证据自动物化）。
+     *
+     * <p><b>与 {@link #writeArtifact} 的分工（为什么需要显式身份）</b>：
+     * {@code writeArtifact} 经 {@code toRef} 的<b>身份分面</b>解析句柄——reviewer 场景靠
+     * {@code ToolInvocationContext.currentReviewer()}（工具循环入口注入）落到任务级只读槽；
+     * 而平台编排层（{@code ReviewExecutionEngine} 等）<b>不在工具循环里</b>，ThreadLocal 未绑定，
+     * 此时 {@code toRef} 会把句柄解析成 {@code task()}（执行者可写槽）——证据会被写进
+     * <b>executor 的沙箱</b>而不是 reviewer 的。本方法由编排层<b>显式传 {@code taskId}</b>，
+     * 绕开 ThreadLocal 分面，恒定落到 reviewer 的任务级只读槽。</p>
+     *
+     * <p><b>★不变量（`F2`，与 {@code internal_run_in_sandbox} 同槽）</b>：reviewer 执行命令走
+     * {@code run_in_sandbox}（传 {@code spec=null} ⇒ 全局默认规格 + 默认规格指纹），本方法写文件
+     * 同样使用<b>默认规格</b>（{@code OpenSandboxRuntime.writeFile} 内部取 {@code properties.getSpec()}、
+     * 不加指纹）——两路同落 {@code task:{taskId}} 默认指纹槽，物化后的文件 reviewer 的后续命令
+     * 一定能看见。<b>任何一侧若改用显式规格/指纹，本不变量即被打破、物化静默失效</b>
+     * （症状正是 RV-14 消灭过的「find 白跑」）。由单测钉死（{@code ReviewEvidenceMaterializerTest}
+     * 断言「物化后 run_in_sandbox 能 ls 到该路径」）。</p>
+     *
+     * <p><b>F1 修正口径（不支持时不假装能写）</b>：{@code reuse=false}（一次性语义）时
+     * {@code EPHEMERAL_VERIFY} 句柄不 {@code pooled()}，{@code writeFile} 第一道闸即返回
+     * {@code false}——本方法<b>直接返回 false</b>，不构造必然失败的写入；物化器侧在调用前
+     * 自行判 {@code reuse-enabled} 并把「不支持」表达进证据清单（enabled=false + 原因），
+     * 引导模型退回 {@code internal_read_attachment_range} 分段核对。</p>
+     *
+     * <p><b>失败语义</b>：沙箱未启用 / 句柄非法 / 写入失败一律降级为 {@code false} 不抛异常
+     * （与 {@link #writeArtifact} 同一条容错哲学）；写入是覆盖语义，天然可重入（物化一次够
+     * 首轮 + 不可解析重试轮共用）。</p>
+     *
+     * @param taskId    任务 ID（锁定 reviewer 任务级只读槽；{@code null} ⇒ {@code false}）
+     * @param subTaskId 子任务 ID（观测归属；{@code null} ⇒ {@code false}）
+     * @param path      容器内<b>绝对路径</b>（如 {@code /tmp/staged/12-data.csv}）；非绝对 ⇒ {@code false}
+     * @param content   文件字节（{@code null} ⇒ {@code false}）
+     * @return 写入成功为 true
+     */
+    default boolean writeReviewerArtifact(Long taskId, Long subTaskId, String path, byte[] content) {
+        return false;
+    }
 }

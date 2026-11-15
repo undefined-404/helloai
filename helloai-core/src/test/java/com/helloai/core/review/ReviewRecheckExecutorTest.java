@@ -16,6 +16,7 @@ import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
+import com.helloai.core.review.support.ReviewEvidenceMaterializer;
 import com.helloai.core.review.support.ReviewExecutionEngine;
 import com.helloai.core.review.support.ReviewRecheckExecutor;
 import com.helloai.core.review.support.ReviewSnapshotBuilder;
@@ -51,6 +52,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -99,7 +101,7 @@ class ReviewRecheckExecutorTest {
                 platformAgentExecutionService, conversationService, taskTimelineService,
                 new VerdictParser(new ObjectMapper()),
                 evidenceAssembler,
-                subTaskService, new ReviewProperties());
+                subTaskService, new ReviewProperties(), mock(ReviewEvidenceMaterializer.class));
         executor = new ReviewRecheckExecutor(recordReviewService, subTaskService,
                 reviewerPicker, taskTimelineService, agentQualityProfileService, engine,
                 conversationService, evidenceAssembler);

@@ -117,6 +117,35 @@ public class SandboxRuntimeAdapter implements SandboxExecutionService {
         return runtime.readFile(toRef(subTaskId), path, maxBytes);
     }
 
+    @Override
+    public boolean writeArtifact(Long subTaskId, String path, byte[] content) {
+        if (subTaskId == null || path == null || content == null || !path.startsWith("/")) {
+            return false;
+        }
+        // `RV-14`：句柄走 toRef 同一身份分面（reviewer → 任务级只读槽容器、executor → 可写容器），
+        // stage-in 写进的是调用者本人随后执行命令的那个沙箱。
+        return runtime.writeFile(toRef(subTaskId), path, content);
+    }
+
+    @Override
+    public boolean writeReviewerArtifact(Long taskId, Long subTaskId, String path, byte[] content) {
+        if (taskId == null || subTaskId == null || path == null || content == null || !path.startsWith("/")) {
+            return false;
+        }
+        // `RV-15` F1 修正口径：复用关闭的一次性语义下没有可持久容器可写——
+        // EPHEMERAL_VERIFY 句柄不 pooled()，writeFile 首闸必然 false，直接判不支持（不假装能写）。
+        if (!properties.isReuseEnabled()) {
+            return false;
+        }
+        // `RV-15` F2 不变量：与 run_in_sandbox（spec=null）同用全局默认规格，落 task:{taskId} 默认指纹槽。
+        // scope=subtask 回滚模式：物化进子任务级槽（turn 末释放；该模式下审核/执行本就各自 turn 内）。
+        if (!taskScopeEnabled()) {
+            return runtime.writeFile(WorkspaceRef.subtask(subTaskId), path, content);
+        }
+        // 默认口径：reviewer 任务级只读槽（`SL-10` 只读卷只封 /workspace，/tmp/staged 四形态可写）
+        return runtime.writeFile(WorkspaceRef.taskReadOnly(taskId, subTaskId), path, content);
+    }
+
     /**
      * 上下文 ID → 工作区句柄（解析顺序见类 javadoc）。
      *

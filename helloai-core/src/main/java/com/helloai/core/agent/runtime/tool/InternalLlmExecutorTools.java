@@ -4,6 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.ManualInterventionReasons;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.port.AttachmentPort;
+import com.helloai.core.agent.port.AttachmentRef;
 import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
@@ -12,6 +13,7 @@ import com.helloai.core.agent.runtime.sandbox.SandboxCallLedger;
 import com.helloai.core.agent.runtime.sandbox.SandboxCallOrigin;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
 import com.helloai.core.agent.runtime.sandbox.SkillInstallResult;
+import com.helloai.core.agent.runtime.sandbox.StagedPathUtil;
 import com.helloai.core.agent.runtime.sandbox.impl.SkillExecutionSupport;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.service.SkillArtifactExportService;
@@ -101,6 +103,17 @@ public class InternalLlmExecutorTools {
     private static final String TOOL_GET_SUB_TASK_DETAIL = "internal_get_sub_task_detail";
     /** 阻塞原因最短长度（防敷衍式「做不到」）。 */
     private static final int MIN_BLOCKED_REASON_CHARS = 10;
+
+    /** 有界取全工具单次输出上限（`RV-12`）：与 {@code ToolResultPruner} 阈值一致，避免二次裁剪。 */
+    public static final int RANGE_MAX_CHARS = 8_192;
+    /** 摘要工具头部字符数（`RV-12`）。 */
+    public static final int DIGEST_HEAD_CHARS = 4_096;
+    /** 摘要工具尾部字符数（`RV-12`）。 */
+    public static final int DIGEST_TAIL_CHARS = 1_024;
+    /** 区间工具默认长度。 */
+    private static final int RANGE_DEFAULT_CHARS = 4_096;
+    /** 区间工具头部元数据预留（保证「元数据 + 正文」不超过 {@link #RANGE_MAX_CHARS}）。 */
+    private static final int RANGE_HEADER_RESERVE_CHARS = 80;
 
     /** 台账查询默认条数（`SL-5`）：覆盖一个子任务的常规验证次数，又不至于一次拉爆上下文。 */
     private static final int DEFAULT_SANDBOX_CALL_LIST_LIMIT = 20;
@@ -330,6 +343,165 @@ public class InternalLlmExecutorTools {
         byte[] content = attachmentPort.loadContent(attachmentId);
         return new String(content, java.nio.charset.StandardCharsets.UTF_8);
     }
+
+    /**
+     * 附件摘要（`RV-12`）：总字符数 + sha256 + 头尾片段，总输出 ≤ {@link #RANGE_MAX_CHARS}。
+     *
+     * <p>解决 {@code internal_read_attachment} 的大文件被 {@code ToolResultPruner} 剪到约 5k 后
+     * 模型无法判断「全文多大、首尾是什么」的问题；一次调用即得可引用的文件指纹。</p>
+     *
+     * @param attachmentId 附件主键
+     * @return 摘要文本
+     */
+    @Tool(name = "internal_attachment_digest", description = """
+            【何时使用】需要快速了解一个附件的大小、内容指纹与头尾片段时调用（尤其大 CSV / 日志）。
+            【Gotchas】
+            - 只返回头 4096 + 尾 1024 字符，不返回全文；看中段请用 internal_read_attachment_range
+            - chars 按 Unicode 码点计数；sha256 按 UTF-8 字节计算
+            【相关工具】internal_read_attachment / internal_read_attachment_range
+            """)
+    public Object internalAttachmentDigest(
+            @ToolParam(description = "附件主键（来自 internal_get_sub_task_detail 的 attachments）", required = true) Long attachmentId) {
+        requireInternalChain();
+        byte[] bytes = attachmentPort.loadContent(attachmentId);
+        String text = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        int chars = text.codePointCount(0, text.length());
+        String head = prefixByCodePoints(text, DIGEST_HEAD_CHARS);
+        String tail = suffixByCodePoints(text, DIGEST_TAIL_CHARS);
+        StringBuilder sb = new StringBuilder();
+        sb.append("[ATTACHMENT_DIGEST] id=").append(attachmentId)
+                .append(" chars=").append(chars)
+                .append(" bytes=").append(bytes.length)
+                .append(" sha256=").append(StagedPathUtil.sha256Hex(bytes))
+                .append('\n').append("[HEAD]\n").append(head)
+                .append('\n').append("[TAIL]\n").append(tail);
+        return sb.toString();
+    }
+
+    /**
+     * 附件区间读取（`RV-12`）：按码点偏移读取指定长度，单次输出 ≤ {@link #RANGE_MAX_CHARS}。
+     *
+     * @param attachmentId 附件主键
+     * @param offset       码点偏移（≥0；越界自动夹到文件尾部）
+     * @param length       读取长度（缺省 4096，上限 8,192，下限 1）
+     * @return {@code [RANGE]} 元数据行 + 切片正文
+     */
+    @Tool(name = "internal_read_attachment_range", description = """
+            【何时使用】附件被截断、需要读中段或按偏移续读时调用（尤其大 CSV 的行数核对）。
+            【Gotchas】
+            - offset / length 均按 Unicode 码点计；单次最多约 8000 字符，超出请按返回的 next 续读
+            - 附件必须平台可读；不可读时抛异常
+            【相关工具】internal_attachment_digest / internal_read_attachment
+            """)
+    public Object internalReadAttachmentRange(
+            @ToolParam(description = "附件主键（来自 internal_get_sub_task_detail 的 attachments）", required = true) Long attachmentId,
+            @ToolParam(description = "起始码点偏移（从 0 开始）", required = true) Long offset,
+            @ToolParam(description = "读取长度（可空，默认 4096）", required = false) Long length) {
+        requireInternalChain();
+        if (offset == null || offset < 0) {
+            throw new BizException("offset 必须为非负整数");
+        }
+        if (length != null && length < 1) {
+            throw new BizException("length 必须为正整数");
+        }
+        byte[] bytes = attachmentPort.loadContent(attachmentId);
+        String text = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        int chars = text.codePointCount(0, text.length());
+        int requested = length == null ? RANGE_DEFAULT_CHARS : (int) Math.min(Integer.MAX_VALUE, length);
+        int maxContent = Math.max(1, RANGE_MAX_CHARS - RANGE_HEADER_RESERVE_CHARS);
+        int wanted = Math.max(1, Math.min(requested, maxContent));
+        int start = (int) Math.min(offset, chars);
+        int actual = Math.min(wanted, chars - start);
+        int startChar = text.offsetByCodePoints(0, start);
+        int endChar = text.offsetByCodePoints(startChar, actual);
+        String slice = text.substring(startChar, endChar);
+        int next = start + actual;
+        return "[RANGE] id=" + attachmentId + " chars=" + chars + " offset=" + start
+                + " length=" + actual + " next=" + next + "\n" + slice;
+    }
+
+    /**
+     * 附件惰性注入沙箱（`RV-14`，2026-11-15）：把 MinIO 附件字节写入<b>当前调用者自己的</b>
+     * 沙箱容器，供随后 {@code internal_run_in_sandbox} 实测执行（脚本可执行性验证 / 数据处理）。
+     *
+     * <p><b>为什么需要它</b>：附件事实源在对象存储，沙箱是易失执行环境且任务终态即销毁——
+     * 「执行时的沙箱」在审核时物理上已不存在。注入只能在「需要实测的那个 turn 内」现场完成
+     * （lazy stage-in），不可能也不应该让沙箱陪任务跨天存活（双事实源 + 生命周期无解）。</p>
+     *
+     * <p><b>归属硬校验</b>：仅允许注入<b>当前子任务的有效附件</b>（{@link AttachmentPort#listActive}
+     * 命中），越权 id 直接拒绝——比 read 类工具的软约束更严，因为写入将变成可执行内容。
+     * 上游产物附件（挂在上游子任务）本期不支持，需要时请按其所属子任务另行处理。</p>
+     *
+     * <p><b>完整性</b>：返回的 {@code sha256} 与 {@code internal_attachment_digest} 同源算法
+     * （UTF-8 字节 SHA-256），可直接对账——内容就是 MinIO 原件，无人能在注入环节掉包。</p>
+     *
+     * @param agentId      执行者 Agent ID（平台自动注入）
+     * @param subTaskId    目标子任务 ID（平台自动注入）
+     * @param attachmentId 附件主键（必须是当前子任务的有效附件）
+     * @return {staged, path, size, sha256, fileName, note}
+     */
+    @Tool(name = "internal_stage_attachment_to_sandbox", description = """
+            【何时使用】需要在沙箱里**执行**某个附件时调用：先注入，再用 internal_run_in_sandbox 跑它
+            （Reviewer 实测脚本可执行性；执行者拿产物做二次加工）。
+            【关键认知】
+            - 附件在平台对象存储里，**不在沙箱**——`find`/`ls`/`cat` 在沙箱里永远找不到附件，
+              必须经本工具注入后才能按路径引用
+            - 注入目标是你**自己**的沙箱容器，随后你的 run_in_sandbox 命令即可看到该文件
+            - 返回的 sha256 与 internal_attachment_digest 一致，证明内容就是平台原件、未被掉包
+            【Gotchas】
+            - 仅支持当前子任务的有效附件（越权 id 拒绝）；上游产物请按其所属子任务另行处理
+            - 同名附件重复注入是覆盖语义，天然可重入；沙箱随任务终态销毁，注入不跨任务残留
+            - 产物超过沙箱写入失败时返回 staged=false 与原因，请改用 internal_read_attachment_range 分段核对
+            【相关工具】internal_run_in_sandbox / internal_attachment_digest / internal_read_attachment_range
+            """)
+    public Object internalStageAttachmentToSandbox(
+            @ToolParam(description = "执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
+            @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId,
+            @ToolParam(description = "附件主键（必须是当前子任务的有效附件）", required = true) Long attachmentId) {
+        ToolInvocationContext.Ids ids = requireInternalChain();
+        // 归属硬校验：仅当前子任务的有效附件（read 类工具是软约束；写入将变成可执行内容，必须更严）
+        AttachmentRef ref = attachmentPort.listActive(ids.subTaskId()).stream()
+                .filter(a -> a.id().equals(attachmentId))
+                .findFirst()
+                .orElseThrow(() -> new BizException(
+                        "附件不属于当前子任务或已失效，拒绝注入: attachmentId=" + attachmentId));
+        if (!ref.contentLoadable()) {
+            throw new BizException("附件平台不可直读（非受控存储地址），无法注入: attachmentId=" + attachmentId);
+        }
+        byte[] bytes = attachmentPort.loadContent(attachmentId);
+        String path = StagedPathUtil.pathOf(attachmentId, ref.fileName());
+        boolean ok = sandboxExecutionService.writeArtifact(ids.subTaskId(), path, bytes);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("staged", ok);
+        out.put("path", ok ? path : null);
+        out.put("size", bytes.length);
+        out.put("sha256", StagedPathUtil.sha256Hex(bytes));
+        out.put("fileName", ref.fileName());
+        out.put("note", ok
+                ? "已注入你的沙箱，可用 internal_run_in_sandbox 按绝对路径执行/校验；sha256 可与 internal_attachment_digest 对账"
+                : "沙箱写入失败（沙箱未启用或句柄不可用）；可改用 internal_read_attachment_range 分段核对附件内容");
+        return out;
+    }
+
+    /** 注入文件名消毒与 SHA-256 已抽公共：{@link com.helloai.core.agent.runtime.sandbox.StagedPathUtil}（`RV-15` 起全仓唯一事实源）。 */
+
+    private static String prefixByCodePoints(String text, int maxCodePoints) {
+        int count = text.codePointCount(0, text.length());
+        if (count <= maxCodePoints) {
+            return text;
+        }
+        return text.substring(0, text.offsetByCodePoints(0, maxCodePoints));
+    }
+
+    private static String suffixByCodePoints(String text, int maxCodePoints) {
+        int count = text.codePointCount(0, text.length());
+        if (count <= maxCodePoints) {
+            return text;
+        }
+        return text.substring(text.offsetByCodePoints(0, count - maxCodePoints));
+    }
+
+    /** SHA-256 已抽公共：{@link com.helloai.core.agent.runtime.sandbox.StagedPathUtil#sha256Hex}。 */
 
     /**
      * 列出平台全部可调用技能（REF-8.3 全量目录注入）。

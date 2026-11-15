@@ -1136,9 +1136,21 @@ const needsManualIntervention = computed(() => {
 
 const manualReasonText = computed(() => {
   const mark = item.value?.context?.manualIntervention as Record<string, any> | undefined
-  if (mark?.reason === 'fallback_skip_execution_dense') {
-    return '降级能力不匹配：执行密集任务未自动回退给无本机能力的 LLM Agent'
+  switch (mark?.reason) {
+    case 'fallback_skip_execution_dense':
+      return '降级能力不匹配：执行密集任务未自动回退给无本机能力的 LLM Agent'
+    case 'review_verdict_invalid':
+      return '核验结论自相矛盾（判定通过但验收点未全部覆盖），已转人工复核'
+    case 'review_evidence_unavailable':
+      return '证据不可得：核验依赖的附件内容被截断/不可读且无可返工目标，已转人工补证据'
+    case 'reviewer_score_inconsistent':
+      return '核验评分与判定不一致（通过但评分过低 / 驳回却给高分），已转人工复核'
+    case 'reviewer_disagreement':
+      return '双审结论分歧（两个核验模型判定不一致），已转人工裁定'
+    default:
+      break
   }
+  // 无评审侧标记时才是返工次数达上限；有标记时不会走到"0 次"误导文案
   return '返工已达上限（' + (item.value?.reworkCount ?? 0) + ' 次），自动核验已停止'
 })
 
@@ -1255,6 +1267,18 @@ const CONV_TAG_MAP: Record<string, { label: string; type: 'success' | 'danger' |
   subtask_review_skip_repeated_failure: { label: '跳过核验·重复失败', type: 'danger' }
 }
 
+/**
+ * 核验不可解析即时重试轮的消息类型统一加 `_retry` 后缀（后端 ReviewExecutionEngine.runOnce）。
+ * 查标签 / 判类型 / 折叠判定都按归一化后的基名做，避免 `_retry` 落到 fallback 而显示裸英文名、
+ * 且不折叠不配色（新消息类型必须给前端消费路径，否则等于后台写了前台看不见）。
+ */
+function splitRetrySuffix(toolName: string | null | undefined): { base: string; retried: boolean } {
+  if (toolName && toolName.endsWith('_retry')) {
+    return { base: toolName.slice(0, -'_retry'.length), retried: true }
+  }
+  return { base: toolName || '', retried: false }
+}
+
 interface ConvRound {
   type: 'execute' | 'review'
   roundNo: number
@@ -1317,15 +1341,18 @@ const convRounds = computed<ConvRound[]>(() => {
 })
 
 function convTagLabel(toolName: string | null) {
-  return (toolName && CONV_TAG_MAP[toolName]?.label) || toolName || '消息'
+  const { base, retried } = splitRetrySuffix(toolName)
+  const label = (base && CONV_TAG_MAP[base]?.label) || base || '消息'
+  return retried ? `${label}·重试` : label
 }
 
 function convTagType(toolName: string | null, content: string | null | undefined = null) {
-  const base = (toolName && CONV_TAG_MAP[toolName]?.type) || 'info'
+  const { base: tagBase } = splitRetrySuffix(toolName)
+  const base = (tagBase && CONV_TAG_MAP[tagBase]?.type) || 'info'
   // 核验结论类（_result）跟随 verdict.pass 切色：默认绿（success），驳回走红（danger）。
   // 说明：仅 _result 动态切；_verdict（核验分析）保持原 warning 黄色作类别标识，
   // 因为其内容已走 ReviewVerdictView 单独展示 通过/未通过 tag，避免重复表达。
-  if (toolName && /subtask_(review|dual_review|recheck)_result$/.test(toolName)) {
+  if (tagBase && /subtask_(review|dual_review|recheck)_result$/.test(tagBase)) {
     return parseVerdictPass(content) ? 'success' : 'danger'
   }
   return base
@@ -1336,7 +1363,8 @@ function convTagType(toolName: string | null, content: string | null | undefined
 // 说明：is-result 现在包含 _verdict 与 _result 两类（核验分析与核验结论），
 // 外层框体都需要按 pass/fail 切色；_verdict 内容走 JSON 解析，_result 多为遗留 Markdown 走关键字兜底
 function convItemClass(msg: ConversationMessageItem): Record<string, boolean> {
-  const tool = msg.toolName || ''
+  // 重试轮消息按基名分类（`_retry` 后缀不得让核验分析退化成普通消息）
+  const tool = splitRetrySuffix(msg.toolName).base
   const isUser = tool === 'sub_task_execute_user_prompt'
   const isExecute = tool === 'sub_task_execute' || tool === 'sub_task_execute_failed' || tool === 'sub_task_execute_blocked'
   const isAnalysis = isAnalysisMsg(msg)
@@ -1400,7 +1428,7 @@ const ANALYSIS_TOOLS = new Set([
 ])
 
 function isAnalysisMsg(msg: ConversationMessageItem): boolean {
-  return ANALYSIS_TOOLS.has(msg.toolName || '')
+  return ANALYSIS_TOOLS.has(splitRetrySuffix(msg.toolName).base)
 }
 
 function isCollapsible(msg: ConversationMessageItem): boolean {

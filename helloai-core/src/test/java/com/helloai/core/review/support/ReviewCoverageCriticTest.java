@@ -281,4 +281,64 @@ class ReviewCoverageCriticTest {
         assertThat(block.detail()).contains("…").doesNotContain("六");
         assertThat(block.detail()).hasSizeLessThanOrEqualTo(203);
     }
+
+    @Test
+    @DisplayName("真机回放（2026-11-13 dev 探针 A）：6 条 coverage 与阿拉伯编号拆分项逐条对应，无未覆盖")
+    void realMachineArabicNumberedAcceptanceIsFullyCovered() {
+        // coverage 取自该任务 round=1 的实际判定；第 5 条 criterionRef 跨全角分号，
+        // 修复前拆分器会截出「5) …」残片导致双向归属均不成立，本用例即为该误判的回归锁
+        String[] coverageItems = {
+                "{\"criterionRef\":\"交付物内 cat 原始输出行匹配正则 ^HELLOAI_SANDBOX_[0-9]{19,}$，且文末保留换行\","
+                        + "\"status\":\"covered\",\"method\":\"sandbox\",\"evidenceRef\":\"cat /workspace/probe.txt\"}",
+                "{\"criterionRef\":\"交付物内 sha256sum 输出含 64 位十六进制摘要（^[0-9a-f]{64}$）且路径字段为 /workspace/probe.txt，"
+                        + "重跑 sha256sum /workspace/probe.txt 得到的摘要与之逐字符相同\","
+                        + "\"status\":\"covered\",\"method\":\"sandbox\",\"evidenceRef\":\"sha256sum /workspace/probe.txt\"}",
+                "{\"criterionRef\":\"交付物给出 wc -c 结果且数值等于对同一文件重跑 wc -c 的输出（该格式下预期为 36），"
+                        + "同时与 ls -l 显示的大小一致\","
+                        + "\"status\":\"covered\",\"method\":\"sandbox\",\"evidenceRef\":\"wc -c < /workspace/probe.txt\"}",
+                "{\"criterionRef\":\"交付物四段证据（cat 原文 / sha256 / 字节数 / 执行者标识与写入时刻）齐全，任一缺失即判 fail\","
+                        + "\"status\":\"covered\",\"method\":\"attachment\",\"evidenceRef\":\"probe-report.md\"}",
+                "{\"criterionRef\":\"交付物全文不含 /tmp、不含 xxd 调用；对交付物文本执行 grep -q 'HELLOAI_SANDBOX_' 命中且有实际数字\","
+                        + "\"status\":\"covered\",\"method\":\"attachment\",\"evidenceRef\":\"probe-report.md\"}",
+                "{\"criterionRef\":\"交付物正文为 UTF-8\","
+                        + "\"status\":\"covered\",\"method\":\"attachment\",\"evidenceRef\":\"probe-report.md\"}"
+        };
+
+        List<Finding> findings = ReviewCoverageCritic.critique(
+                passed("[" + String.join(",", coverageItems) + "]"),
+                AcceptanceItemSplitterTest.REAL_ACCEPTANCE_A, List.of());
+
+        assertThat(codes(findings)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("mechanical 逐条命中：结论必须落在 evidenceRef 的 id 上，A 文件的结论不能给 B 文件作保")
+    void mechanicalCoverageRequiresSameAttachmentId() {
+        String coverage = "["
+                + "{\"criterionRef\":\"" + ITEM_ONE + "\",\"status\":\"covered\",\"method\":\"mechanical\","
+                + "\"evidenceRef\":\"id=11\"},"
+                + "{\"criterionRef\":\"" + ITEM_TWO + "\",\"status\":\"covered\",\"method\":\"mechanical\","
+                + "\"evidenceRef\":\"id=22\"}]";
+        String bothMeasured = "[MECHANICAL_CHECK] v1\n"
+                + "file id=11 name=a.csv lines=10 rows=9 data=8\n"
+                + "file id=22 name=b.csv lines=20 rows=19 data=18";
+        String onlyEleven = "[MECHANICAL_CHECK] v1\nfile id=11 name=a.csv lines=10 rows=9 data=8";
+        String elevenUnavailable = "[MECHANICAL_CHECK] v1\n"
+                + "file id=11 name=a.csv lines=10 rows=9 data=8\n"
+                + "file id=22 name=b.csv status=UNAVAILABLE reason=too_large";
+
+        assertThat(codes(ReviewCoverageCritic.critique(
+                passed(coverage), ACCEPTANCE, List.of(), bothMeasured))).isEmpty();
+
+        // 引用 id=22 但机械段只有 id=11 ⇒ 不计覆盖（跨文件冒用）
+        assertThat(codes(ReviewCoverageCritic.critique(
+                passed(coverage), ACCEPTANCE, List.of(), onlyEleven)))
+                .contains(ReviewCoverageCritic.ACCEPTANCE_NOT_COVERED,
+                        ReviewCoverageCritic.COVERAGE_MECHANICAL_UNAVAILABLE);
+
+        // 该附件只有 UNAVAILABLE（算不出行数）也不算覆盖
+        assertThat(codes(ReviewCoverageCritic.critique(
+                passed(coverage), ACCEPTANCE, List.of(), elevenUnavailable)))
+                .contains(ReviewCoverageCritic.ACCEPTANCE_NOT_COVERED);
+    }
 }

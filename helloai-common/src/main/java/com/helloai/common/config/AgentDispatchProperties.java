@@ -264,9 +264,14 @@ public class AgentDispatchProperties {
     /**
      * 兜底：REVIEW 孤儿扫描阈值（秒）。
      *
-     * <p>子任务进入 REVIEW 超过此秒数且无 review_record 时，
+     * <p>子任务进入 REVIEW 超过此秒数<b>且未被标记人工介入</b>时，
      * SubTaskReviewService 的 @Scheduled 兜底扫描会触发核验。
      * 作为 AFTER_COMMIT 事件链丢失时的二次确保。默认 60s。</p>
+     *
+     * <p><b>口径注意</b>：候选<b>不按 {@code review_record} 是否存在过滤</b>——通过/驳回后状态
+     * 已离开 REVIEW，记录在不在都无所谓；真正需要重跑的是「事件链丢失」与「核验失败/不可解析
+     * 无结论」两类。已转人工（{@code INCONCLUSIVE} / 返工达上限 / 评审自相矛盾等）会打
+     * {@code context.manualIntervention} 标记，从而永久退出本扫描。</p>
      */
     private int reviewOrphanThresholdSeconds = 60;
 

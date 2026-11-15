@@ -20,7 +20,11 @@
 #      （它是 `assemble-manual.ps1` 的确定性产物；改源不重装即红）。
 #   S5 文档里的限额数字 ↔ **代码常量** —— 防止「代码调了限额、文档没跟」。
 #   S6 scripts/README.md 的脚本计数 ↔ **仓库在册实数**（git ls-files）—— 索引里的数字不许悄悄过期
-#   （五组 + S6 共 23 项；S6 的解析口径契约见其分节注释）
+#   S7 `RV-12` 有界续读工具名**三源对齐** —— `InternalLlmExecutorTools` @Tool / `ToolDisplayName`
+#      枚举 / reviewer 指南同时出现，缺一源即失败（模型按旧指南不会用新工具）。
+#   S8 `RV-8`/`RV-10`/`RV-12` 的标记与常量**同源** —— reviewer 指南必须写明
+#      `[MECHANICAL_CHECK]` / `[EVIDENCE_LEDGER]` / `8,192` / `1,200`，且代码常量存在且数值一致。
+#   （S7/S8 于 2026-11-14 随 `G-034` 批次 3 增加；口径只做存在性与数值一致，不做语义判断）
 #
 # 为什么用 bash（不用 zsh / python）：本守卫刻意只用 bash + grep/sed，**三平台都能跑**、零依赖。
 # （对照：`verify-doc-gap-table.sh` 原为 zsh 实现、Windows/Git Bash 下跑不了且会静默 EXIT=0；
@@ -45,6 +49,10 @@ MCP_CONTROLLER="$REPO_ROOT/helloai-api/src/main/java/com/helloai/api/controller/
 MCP_SERVER="$REPO_ROOT/helloai-core/src/main/java/com/helloai/core/agent/mcp/McpMcpServer.java"
 RENDERER="$REPO_ROOT/helloai-core/src/main/java/com/helloai/core/shared/util/UpstreamAttachmentRenderer.java"
 POLICY="$REPO_ROOT/helloai-core/src/main/java/com/helloai/core/shared/util/AttachmentContentPolicy.java"
+TOOL_IMPL="$REPO_ROOT/helloai-core/src/main/java/com/helloai/core/agent/runtime/tool/InternalLlmExecutorTools.java"
+TOOL_DISPLAY="$REPO_ROOT/helloai-common/src/main/java/com/helloai/common/constant/ToolDisplayName.java"
+MECH_CHECK="$REPO_ROOT/helloai-core/src/main/java/com/helloai/core/review/support/ReviewMechanicalCheck.java"
+EVIDENCE_LEDGER="$REPO_ROOT/helloai-core/src/main/java/com/helloai/core/review/support/ReviewEvidenceLedger.java"
 
 PASS=0
 FAIL=0
@@ -53,7 +61,8 @@ bad() { printf '  [FAIL] %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
 printf '== 交付文档一致性守卫（外部 Agent 手册 ↔ 内部手册 ↔ 代码常量）==\n'
 
-for f in "$GUIDE" "$REVIEWER_GUIDE" "$MANUAL" "$ASSEMBLED" "$MCP_CONTROLLER" "$MCP_SERVER" "$RENDERER" "$POLICY"; do
+for f in "$GUIDE" "$REVIEWER_GUIDE" "$MANUAL" "$ASSEMBLED" "$MCP_CONTROLLER" "$MCP_SERVER" "$RENDERER" "$POLICY" \
+         "$TOOL_IMPL" "$TOOL_DISPLAY" "$MECH_CHECK" "$EVIDENCE_LEDGER"; do
   if [ ! -f "$f" ]; then
     bad "缺少被检查文件：${f#$REPO_ROOT/}"
     printf '\n[verify-executor-doc-parity] FAIL=%s PASS=%s\n' "$FAIL" "$PASS"
@@ -227,6 +236,64 @@ check_count "Java 工具" "$claim_java" "$real_java"
 check_count "SQL" "$claim_sql" "$real_sql"
 check_count "CI 门禁脚本" "$claim_ci" "$real_ci"
 check_count "架构冻结基线" "$claim_base" "$real_base"
+
+# ------------------------------------------------------------
+# S7 RV-12 有界续读工具名三源对齐（@Tool / ToolDisplayName / reviewer 指南）
+# ------------------------------------------------------------
+printf '\n-- S7 RV-12 工具名三源对齐 --\n'
+
+for tool in internal_attachment_digest internal_read_attachment_range; do
+  impl_hits="$(grep -c "@Tool(name = \"$tool\"" "$TOOL_IMPL")"
+  display_hits="$(grep -c "\"$tool\"" "$TOOL_DISPLAY")"
+  guide_hits="$(grep -c "$tool" "$REVIEWER_GUIDE")"
+  if [ "$impl_hits" -gt 0 ] && [ "$display_hits" -gt 0 ] && [ "$guide_hits" -gt 0 ]; then
+    ok "S7 $tool 三源一致（@Tool / ToolDisplayName / reviewer-guide）"
+  else
+    bad "S7 $tool 漂移：@Tool=$impl_hits / ToolDisplayName=$display_hits / reviewer-guide=${guide_hits}（缺哪源补哪源）"
+  fi
+done
+
+# ------------------------------------------------------------
+# S8 RV-8 / RV-10 / RV-12 标记与常量同源
+#   口径：reviewer 指南必须写明四个机读标记/数值；代码侧常量存在且与指南数字一致。
+# ------------------------------------------------------------
+printf '\n-- S8 机械预检 / 台账标记与常量同源 --\n'
+
+for marker in '[MECHANICAL_CHECK]' '[EVIDENCE_LEDGER]'; do
+  if [ "$(grep -cF -- "$marker" "$REVIEWER_GUIDE")" -gt 0 ]; then
+    ok "S8 reviewer 指南含标记 $marker"
+  else
+    bad "S8 reviewer 指南缺标记 ${marker}（模型不知道平台已在 Prompt 里给出该段）"
+  fi
+done
+
+# 4 位整数加千分位（8192 → 8,192；1200 → 1,200）
+thousands() { printf '%s' "$1" | sed -E 's/([0-9])([0-9]{3})$/\1,\2/'; }
+
+range_max="$(grep -oE 'RANGE_MAX_CHARS[[:space:]]*=[[:space:]]*[0-9_]+' "$TOOL_IMPL" | sed -E 's/.*=[[:space:]]*//' | tr -d '_' | grep -E '^[0-9]+$' | head -1)"
+mech_max="$(grep -oE 'MAX_OUTPUT_CHARS[[:space:]]*=[[:space:]]*[0-9_]+' "$MECH_CHECK" | sed -E 's/.*=[[:space:]]*//' | tr -d '_' | grep -E '^[0-9]+$' | head -1)"
+ledger_max="$(grep -oE 'MAX_ENTRIES[[:space:]]*=[[:space:]]*[0-9_]+' "$EVIDENCE_LEDGER" | sed -E 's/.*=[[:space:]]*//' | tr -d '_' | grep -E '^[0-9]+$' | head -1)"
+
+check_number_in_guide() { # $1=常量名 $2=代码值 $3=指南文件
+  if [ -z "$2" ]; then
+    bad "S8 代码常量 $1 未解析到（守卫不能静默失效）"
+    return
+  fi
+  formatted="$(thousands "$2")"
+  if [ "$(grep -cF -- "$formatted" "$3")" -gt 0 ]; then
+    ok "S8 reviewer 指南的 $1 数值与代码一致（${formatted}）"
+  else
+    bad "S8 reviewer 指南缺 $1 数值 ${formatted}（代码=${2}）"
+  fi
+}
+
+check_number_in_guide "RANGE_MAX_CHARS" "$range_max" "$REVIEWER_GUIDE"
+check_number_in_guide "MAX_OUTPUT_CHARS" "$mech_max" "$REVIEWER_GUIDE"
+if [ -n "$ledger_max" ]; then
+  ok "S8 台账条目上限常量存在（ReviewEvidenceLedger.MAX_ENTRIES=${ledger_max}）"
+else
+  bad "S8 台账条目上限常量缺失（ReviewEvidenceLedger.MAX_ENTRIES）"
+fi
 
 # ------------------------------------------------------------
 printf '\n== 汇总 ==\n'
