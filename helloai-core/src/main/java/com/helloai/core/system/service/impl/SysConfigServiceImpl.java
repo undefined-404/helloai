@@ -25,6 +25,12 @@ public class SysConfigServiceImpl extends ServiceImpl<SysConfigMapper, SysConfig
     /** 自助注册开关配置键（BASE-4.5；缺省关闭）。 */
     private static final String REGISTER_ENABLED_KEY = "auth.register.enabled";
 
+    /** 站内事件消息开关配置键（G-035 / MSG-1；缺省关闭，设计 §3.10）。 */
+    private static final String NOTIFICATION_ENABLED_KEY = "notification.enabled";
+
+    /** 置顶公告开关配置键（G-035 / MSG-6；缺省关闭，设计 §3.10）。 */
+    private static final String ANNOUNCEMENT_ENABLED_KEY = "announcement.enabled";
+
     /**
      * 获取所有配置为 Map
      */
@@ -97,6 +103,24 @@ public class SysConfigServiceImpl extends ServiceImpl<SysConfigMapper, SysConfig
     @Override
     public boolean isRegisterEnabled() {
         String val = getValue(REGISTER_ENABLED_KEY);
+        return "1".equals(val) || "true".equalsIgnoreCase(val);
+    }
+
+    /**
+     * 是否启用站内事件消息（缺省关闭；1 / true 视为开启）
+     */
+    @Override
+    public boolean isNotificationEnabled() {
+        String val = getValue(NOTIFICATION_ENABLED_KEY);
+        return "1".equals(val) || "true".equalsIgnoreCase(val);
+    }
+
+    /**
+     * 是否启用置顶公告（缺省关闭；1 / true 视为开启）
+     */
+    @Override
+    public boolean isAnnouncementEnabled() {
+        String val = getValue(ANNOUNCEMENT_ENABLED_KEY);
         return "1".equals(val) || "true".equalsIgnoreCase(val);
     }
 }

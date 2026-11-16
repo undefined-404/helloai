@@ -2,6 +2,7 @@ package com.helloai.core.planner.search;
 
 import com.helloai.common.config.WebSearchProperties;
 import com.helloai.common.crypto.CredentialCryptoService;
+import com.helloai.core.shared.util.SecretMask;
 import com.helloai.core.system.service.SysConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -56,6 +57,21 @@ public class WebSearchCredentialKeyStore {
     public boolean hasBochaApiKey() {
         String key = resolveBochaApiKey();
         return key != null && !key.isBlank();
+    }
+
+    /**
+     * 脱敏展示博查 API Key（设置页只读回显）。
+     *
+     * <p>口径与 LLM Provider 平台 Key 一致（{@link SecretMask}：前 4 + {@code …} + 后 4），
+     * 让两个设置区块的「已配置 Key」呈现同形。未配置返回 {@code null}，由调用方渲染「未配置」，
+     * 而非把空串渲染成一串点号。</p>
+     */
+    public String maskedBochaApiKey() {
+        String key = resolveBochaApiKey();
+        if (key == null || key.isBlank()) {
+            return null;
+        }
+        return SecretMask.mask(key);
     }
 
     /**

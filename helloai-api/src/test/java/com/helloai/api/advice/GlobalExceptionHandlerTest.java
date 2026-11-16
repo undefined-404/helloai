@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
@@ -31,6 +33,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -228,8 +231,46 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.code").value(400));
     }
 
+    // ==================== 异步响应失效（SSE 心跳收敛，2026-11-16）====================
+
+    @Test
+    @DisplayName("AsyncRequestNotUsableException：客户端断开后的 SSE 收敛，不再吞进 Exception 兜底（200 空体）")
+    void asyncRequestNotUsableShouldNotFallThroughTo500() throws Exception {
+        mockMvc.perform(get("/test/ex/async-not-usable"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(""));
+    }
+
+    @Test
+    @DisplayName("SSE 响应已提交后的 IOException（客户端断开）：不记系统异常、不写帧、返回 null")
+    void committedSseIOExceptionShouldBeTreatedAsDisconnect() throws Exception {
+        HttpServletRequest request = sseRequestByAccept();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.isCommitted()).thenReturn(true);
+
+        R<Void> result = handler.handleException(
+                new java.io.IOException("你的主机中的软件中止了一个已建立的连接。"), request, response);
+
+        assertThat(result).isNull();
+        verify(response, never()).getWriter();
+        verify(response, never()).setStatus(HttpStatus.INTERNAL_SERVER_ERROR.value());
+    }
+
+    @Test
+    @DisplayName("普通 JSON 请求的 IOException 仍落系统异常兜底（零回归）")
+    void jsonRequestIOExceptionStillReturns500() {
+        HttpServletRequest request = normalJsonRequest();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+
+        R<Void> result = handler.handleException(new java.io.IOException("disk error"), request, response);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getCode()).isEqualTo(500);
+    }
+
     /**
      * 触发器：把各类异常从控制器方法抛出，交由 {@link GlobalExceptionHandler} 解析。
+
      * {@code MaxUploadSizeExceededException} / {@code MultipartException} 为非受检异常，无需 throws；
      * 其余三者继承 {@code jakarta.servlet.ServletException}（受检），显式 {@code throws Exception}。
      */
@@ -264,6 +305,11 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/test/ex/unknown")
         public void unknown() {
             throw new IllegalStateException("boom");
+        }
+
+        @GetMapping("/test/ex/async-not-usable")
+        public void asyncNotUsable() throws Exception {
+            throw new AsyncRequestNotUsableException("Response not usable after response errors.");
         }
 
         @GetMapping("/test/ex/type-mismatch/{id}")

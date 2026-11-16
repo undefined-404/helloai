@@ -1,37 +1,44 @@
 <template>
-  <Teleport to="body">
-    <!--
-      G-026 LLM 额度浮球（设计 §4.6）。
-      双重闸门：quota:view（primary，无权限不渲染）+ sys_config quota.widget.enabled 平台开关
-      （secondary，显式 '0' 才关闭；读取失败 fail-open 为开启，默认 '1'）。
-      自动刷新间隔由 sys_config quota.refresh.interval-seconds 决定（0=仅手动刷新）。
-    -->
-    <div
-      v-if="visible"
-      class="quota-widget"
-      :class="{ expanded }"
-      :style="positionStyle"
+  <!--
+    停靠形态：胶囊 Teleport 进个人工作台右栏头部（宿主由 Workbench 登记）。
+    停靠态离开工作台页（宿主为空）不渲染任何形态；仅用户拖出后的悬浮态跨页显示——与站内消息铃铛同口径。
+  -->
+  <Teleport
+    v-if="visible && quotaDockHost"
+    :to="quotaDockHost"
+  >
+    <span
+      v-if="mode === 'docked'"
+      ref="dockPillRef"
+      class="qw-pill qw-dock-pill"
+      :class="{ 'is-open': expanded }"
+      role="button"
+      :aria-expanded="expanded"
+      :title="expanded ? '点击收起' : 'LLM 额度（可拖出为悬浮浮球）'"
       @pointerdown="onPointerDown"
     >
-      <!-- 折叠态：总额 + 状态色点（整体可拖，轻点切换展开） -->
-      <div
-        v-if="!expanded"
-        class="qw-pill"
-        role="button"
-        :aria-expanded="expanded"
-      >
-        <span class="qw-total">
-          {{ totalText }}
-        </span>
-        <span class="qw-dot" :class="dotClass" />
-      </div>
+      <span class="qw-total">{{ totalText }}</span>
+      <span class="qw-dot" :class="dotClass" />
+    </span>
+    <span
+      v-else
+      class="qw-dock-ghost"
+      title="浮球拖回此处停靠"
+    >
+      <span class="qw-ghost-mark">¥</span>
+    </span>
+  </Teleport>
 
-      <!-- 展开态面板 -->
+  <Teleport to="body">
+    <!-- 展开面板：两种形态共用（固定定位，不跟着宿主布局走） -->
+    <div
+      v-if="visible && expanded"
+      class="quota-widget"
+      :style="positionStyle"
+    >
       <div
-        v-else
         ref="panelRef"
         class="qw-panel"
-        @pointerdown.stop
       >
         <!-- 头部整行可点收起（与浮球「点一下展开」对称，无需去找右上角 ×） -->
         <div
@@ -111,6 +118,25 @@
         </div>
       </div>
     </div>
+
+    <!-- 悬浮胶囊（折叠态） -->
+    <div
+      v-if="visible && effectiveMode === 'floating' && !expanded"
+      class="quota-widget"
+      :style="positionStyle"
+      @pointerdown="onPointerDown"
+    >
+      <div
+        class="qw-pill"
+        role="button"
+        :aria-expanded="expanded"
+      >
+        <span class="qw-total">
+          {{ totalText }}
+        </span>
+        <span class="qw-dot" :class="dotClass" />
+      </div>
+    </div>
   </Teleport>
 </template>
 
@@ -118,9 +144,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { quotaApi, QUOTA_PROVIDER_LABELS, type QuotaSnapshot, type QuotaWidgetConfig } from '@/api/quota'
+import { quotaDockHost, quotaDockVisible } from '@/composables/quotaDock'
+import { isOverDock, usePointerDrag } from '@/composables/usePointerDrag'
 
-/** 拖拽位置持久化键。 */
+/** 拖拽位置持久化键（仅悬浮态使用）。 */
 const POS_KEY = 'quota.widget.pos'
+/** 形态持久化键：docked=停靠工作台右栏（默认），floating=悬浮浮球；二选一不并存。 */
+const MODE_KEY = 'quota.widget.mode'
 /** 默认停靠位置：右下角，距视口右下缘。 */
 const DEFAULT_POS = { x: 20, y: 20 }
 const DEF_W = 260
@@ -145,6 +175,12 @@ const data = ref<QuotaSnapshot[]>([])
 const lastFetchedAt = ref<number>(0)
 const nowTick = ref(Date.now())
 const pos = ref({ ...DEFAULT_POS })
+/** 用户选择的形态；宿主不存在时会回落为悬浮（见 effectiveMode）。 */
+const mode = ref<'docked' | 'floating'>(readMode())
+/** 停靠胶囊元素：展开面板要以它的视口位置反推锚点。 */
+const dockPillRef = ref<HTMLElement | null>(null)
+/** 停靠锚点（right/bottom 距视口右/下缘 + 胶囊顶边），由 measureDock 刷新。 */
+const dockRect = ref<{ right: number; bottom: number; pillTop: number } | null>(null)
 /** 视口尺寸：展开态定位依赖它，resize 时更新以重新收敛。 */
 const viewport = ref({ w: window.innerWidth, h: window.innerHeight })
 /** 展开态面板元素，用于测量真实高度决定展开方向。 */
@@ -155,8 +191,8 @@ const openUp = ref(true)
 const openTop = ref(MARGIN)
 let timer: ReturnType<typeof setInterval> | null = null
 let clockTimer: ReturnType<typeof setInterval> | null = null
-let dragged = false
-let dragStart = { x: 0, y: 0, px: 0, py: 0 }
+/** 拖拽起点锚点（right/bottom 距视口右/下缘）；按下时快照，拖动中按位移换算。 */
+let dragAnchor = { right: 0, bottom: 0 }
 
 const providers = computed(() =>
   data.value.map((s) => ({ ...s, label: QUOTA_PROVIDER_LABELS[s.providerKey] || s.providerKey }))
@@ -208,21 +244,81 @@ const modeText = computed(() => autoRefreshSeconds.value > 0
   ? `自动刷新：每 ${intervalLabel(autoRefreshSeconds.value)}`
   : '自动刷新已关闭')
 
+function readMode(): 'docked' | 'floating' {
+  try {
+    return localStorage.getItem(MODE_KEY) === 'floating' ? 'floating' : 'docked'
+  } catch {
+    return 'docked'
+  }
+}
+
+/** 切换形态并落地：拖出停靠位、拖回坑位都走这里。 */
+function setMode(next: 'docked' | 'floating') {
+  if (mode.value === next) return
+  mode.value = next
+  try {
+    localStorage.setItem(MODE_KEY, next)
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * 形态收敛：停靠态必须有宿主（工作台右栏头部）才渲染；
+ * 宿主为空说明不在工作台页 → 整件隐藏（与铃铛「停靠态不在其他页出现浮球」同口径）。
+ * 只有用户拖出过的悬浮态才跨页显示。
+ */
+const effectiveMode = computed<'docked' | 'floating' | 'none'>(() => {
+  if (mode.value === 'floating') return 'floating'
+  return quotaDockHost.value ? 'docked' : 'none'
+})
+
+/** 离开工作台页（停靠态）时收起面板：锚点宿主已不存在，面板不应孤悬在其他页面。 */
+watch(quotaDockHost, (host) => {
+  if (!host && mode.value === 'docked' && expanded.value) expanded.value = false
+})
+
+/** 读停靠胶囊的真实视口位置：面板定位与「拖出切成悬浮」的起点都靠它。 */
+function measureDock() {
+  const el = dockPillRef.value
+  if (!el) {
+    dockRect.value = null
+    return
+  }
+  const r = el.getBoundingClientRect()
+  dockRect.value = {
+    right: Math.max(0, window.innerWidth - r.right),
+    bottom: Math.max(0, window.innerHeight - r.bottom),
+    pillTop: r.top
+  }
+}
+
+/** 当前锚点：停靠态用宿主实测值，悬浮态用持久化的 right/bottom 推算。 */
+const anchor = computed(() => {
+  if (effectiveMode.value === 'docked' && dockRect.value) return dockRect.value
+  return {
+    right: pos.value.x,
+    bottom: pos.value.y,
+    pillTop: viewport.value.h - pos.value.y - PILL_H
+  }
+})
+
 /**
  * 定位：
- * - 折叠态：以右下角为锚（right/bottom），与拖拽逻辑一致；
- * - 展开态：默认仍向上生长（面板底边对齐浮球底边）；浮球贴近视口顶部导致
+ * - 折叠态：仅悬浮浮球用，以右下角为锚（right/bottom），与拖拽逻辑一致；
+ * - 展开态：默认仍向上生长（面板底边对齐胶囊底边）；胶囊贴近视口顶部导致
  *   上方放不下时改为向下打开，并整体 clamp 进可视窗口 —— 头部与 × 永远可见。
  */
 const positionStyle = computed(() => {
   if (!expanded.value) {
     return { right: pos.value.x + 'px', bottom: pos.value.y + 'px' }
   }
-  // 水平：面板比浮球宽，向右对齐时需保证左边缘不出界（浮球被拖到左侧时右移贴边）
+  const a = anchor.value
+  // 水平：面板比胶囊宽，向右对齐时需保证左边缘不出界（胶囊被拖到左侧时右移贴边）
   const maxRight = Math.max(MARGIN, viewport.value.w - PANEL_W - MARGIN)
-  const right = Math.max(MARGIN, Math.min(pos.value.x, maxRight))
+  const right = Math.max(MARGIN, Math.min(a.right, maxRight))
   if (openUp.value) {
-    return { right: right + 'px', bottom: pos.value.y + 'px' }
+    return { right: right + 'px', bottom: a.bottom + 'px' }
   }
   return { right: right + 'px', top: openTop.value + 'px' }
 })
@@ -232,6 +328,9 @@ const visible = computed(() => auth.hasPermission('quota:view') && config.value.
 
 /** 刷新是变更动作（POST /refresh/{key}），按 quota:edit 动作码独立判定。 */
 const canRefresh = computed(() => auth.hasPermission('quota:edit'))
+
+/** 工作台据此决定是否渲染停靠坑位：无权限或平台开关关闭时两边都不显示。 */
+watch(visible, (v) => { quotaDockVisible.value = v }, { immediate: true })
 
 function amountText(p: QuotaSnapshot & { label: string }): string {
   if (!p.available || p.amount == null) return '—'
@@ -377,14 +476,14 @@ function onPanelCollapseClick(e: MouseEvent) {
 
 /**
  * 决定展开方向并算出安全位置：
- * 以浮球底边为基准，若上方能完整容纳面板则向上生长，否则向下打开
- * （面板顶边对齐浮球顶边，再 clamp 进视口），保证头部与关闭按钮始终可见。
+ * 以胶囊顶边为基准，若上方能完整容纳面板则向上生长，否则向下打开
+ * （面板顶边对齐胶囊顶边，再 clamp 进视口），保证头部与关闭按钮始终可见。
  */
 function reposition() {
   if (!expanded.value) return
   const vh = viewport.value.h
   const h = panelRef.value?.offsetHeight ?? DEF_H
-  const pillTop = vh - pos.value.y - PILL_H
+  const pillTop = anchor.value.pillTop
   const spaceAbove = pillTop - MARGIN
   if (h <= spaceAbove) {
     openUp.value = true
@@ -395,8 +494,9 @@ function reposition() {
   openTop.value = Math.max(MARGIN, Math.min(pillTop, maxTop))
 }
 
-/** 展开：先按向上生长渲染，DOM 就绪后按真实高度收敛（面板高度随供应商条数变化）。 */
+/** 展开：停靠态先测宿主位置，DOM 就绪后按真实高度收敛（面板高度随供应商条数变化）。 */
 async function expand() {
+  if (effectiveMode.value === 'docked') measureDock()
   expanded.value = true
   // 仅手动刷新模式不因展开触发外部请求，用户可显式点「刷新」
   if (autoRefreshSeconds.value > 0) fetchData()
@@ -404,39 +504,37 @@ async function expand() {
   reposition()
 }
 
-function onPointerDown(e: PointerEvent) {
-  if (expanded.value) return // 面板内不整拖
-  pressed = true
-  dragged = false
-  dragStart = { x: e.clientX, y: e.clientY, px: pos.value.x, py: pos.value.y }
-}
-
-function onPointerMove(e: PointerEvent) {
-  if (!pressed || expanded.value) return
-  const dx = e.clientX - dragStart.x
-  const dy = e.clientY - dragStart.y
-  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragged = true
-  if (!dragged) return
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  pos.value.x = Math.max(4, Math.min(vw - 70, dragStart.px - dx))
-  // 定位用 bottom：向下拖（dy>0）应减小 bottom，故取减号（曾误写为 +dy 导致方向反转）
-  pos.value.y = Math.max(4, Math.min(vh - 60, dragStart.py - dy))
-  persistPos()
-}
-
-function onPointerUp() {
-  if (!pressed) return
-  pressed = false
-  if (expanded.value) return
-  if (!dragged) {
-    // 非拖拽 = 轻点 → 展开（订阅 pointerup，避免点击态与拖拽冲突）
-    void expand()
+const { onPointerDown } = usePointerDrag({
+  canDrag: () => !expanded.value, // 面板展开时不整拖（轻点即收起）
+  onPress: () => {
+    dragAnchor = { right: pos.value.x, bottom: pos.value.y }
+    // 停靠态：以胶囊实际位置为拖拽起点，拖出时不跳位
+    if (effectiveMode.value === 'docked') {
+      measureDock()
+      if (dockRect.value) dragAnchor = { right: dockRect.value.right, bottom: dockRect.value.bottom }
+    }
+  },
+  onDrag: (dx, dy) => {
+    // 从停靠位拖出 → 切成悬浮，后续跟手都写 pos
+    if (effectiveMode.value === 'docked') setMode('floating')
+    pos.value.x = Math.max(4, Math.min(window.innerWidth - 70, dragAnchor.right - dx))
+    // 定位用 bottom：向下拖（dy>0）应减小 bottom，故取减号（曾误写为 +dy 导致方向反转）
+    pos.value.y = Math.max(4, Math.min(window.innerHeight - 60, dragAnchor.bottom - dy))
+    persistPos()
+  },
+  onRelease: (e, dragged) => {
+    if (!dragged) {
+      // 轻点 = 开合面板（与悬浮铃铛一致：再点一次收回）
+      if (expanded.value) collapsePanel()
+      else void expand()
+      return
+    }
+    // 拖回工作台停靠坑位（±DOCK_PAD 容差）即复原为停靠形态
+    if (effectiveMode.value === 'floating' && isOverDock('[data-quota-dock]', e.clientX, e.clientY)) {
+      setMode('docked')
+    }
   }
-  dragged = false
-}
-
-let pressed = false
+})
 function persistPos() {
   try {
     localStorage.setItem(POS_KEY, JSON.stringify(pos.value))
@@ -478,9 +576,10 @@ function stopClock() {
   }
 }
 
-/** 视口变化：折叠态拖拽边界与展开态方向都需重新收敛。 */
+/** 视口变化：折叠态拖拽边界与展开态方向都需重新收敛（停靠锚点也要重测）。 */
 function onResize() {
   viewport.value = { w: window.innerWidth, h: window.innerHeight }
+  if (expanded.value && effectiveMode.value === 'docked') measureDock()
   reposition()
 }
 
@@ -526,8 +625,6 @@ onMounted(async () => {
     }
   }
   document.addEventListener('visibilitychange', onVisibility)
-  window.addEventListener('pointermove', onPointerMove)
-  window.addEventListener('pointerup', onPointerUp)
   window.addEventListener('resize', onResize)
 })
 
@@ -535,8 +632,6 @@ onBeforeUnmount(() => {
   stopPoll()
   stopClock()
   document.removeEventListener('visibilitychange', onVisibility)
-  window.removeEventListener('pointermove', onPointerMove)
-  window.removeEventListener('pointerup', onPointerUp)
   window.removeEventListener('resize', onResize)
 })
 </script>
@@ -582,6 +677,39 @@ onBeforeUnmount(() => {
 .qw-dot.warn { background: #f59e0b; box-shadow: 0 0 6px #f59e0b; }
 .qw-dot.err  { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
 .qw-dot.off  { background: #9ca3af; }
+
+/* 停靠态：工作台右栏头部里的紧凑胶囊（拖出即变回悬浮浮球） */
+.qw-dock-pill {
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  box-shadow: none;
+  user-select: none;
+}
+.qw-dock-pill.is-open {
+  border-color: var(--ha-primary, #7C3AED);
+  color: var(--ha-primary, #7C3AED);
+}
+/* 悬浮时留下的停靠坑位：与余额胶囊同形的缩小版（全圆角、等宽量级），比方块更易识别为「拖回此处」 */
+.qw-dock-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  min-width: 76px;
+  padding: 0 12px;
+  border: 1px dashed var(--ha-border, rgba(128,128,128,.4));
+  border-radius: 999px;
+  color: var(--ha-muted, #8B96AB);
+  font-size: 12px;
+  user-select: none;
+}
+.qw-ghost-mark {
+  line-height: 1;
+  font-weight: 600;
+}
 
 /* 展开面板 */
 .qw-panel {

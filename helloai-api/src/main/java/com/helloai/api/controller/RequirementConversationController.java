@@ -450,7 +450,10 @@ public class RequirementConversationController {
      * 重拉 {@code /workbench}。帧里不带业务数据，权限过滤只在聚合读取侧做一次。
      */
     @GetMapping(value = "/workbench/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter workbenchStream() {
+    public SseEmitter workbenchStream(HttpServletResponse response) {
+        // 反代缓冲关闭：与对话流 streamSse 同口径（审查修复 B1，存量同病一并补）
+        response.setHeader("X-Accel-Buffering", "no");
+        response.setHeader("Cache-Control", "no-cache");
         return workbenchEventHub.connect(CurrentUser.userId());
     }
 

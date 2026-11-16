@@ -43,4 +43,22 @@ public interface SysConfigService extends IService<SysConfig> {
      * {@code POST /api/auth/register} 可用，注册账号默认绑定 GUEST（只读，最小权限）。</p>
      */
     boolean isRegisterEnabled();
+
+    /**
+     * 是否启用站内事件消息（G-035 / MSG-1，设计 §3.10）。
+     *
+     * <p>读取 {@code sys_config} 键 {@code notification.enabled}；**缺省视为关闭**，
+     * 取值 {@code 1} 或 {@code true}（大小写不敏感）视为开启。OFF 时消息单一出口早退不写库、
+     * 读取端点返回空、前端不渲染（停发 + 隐藏）。</p>
+     */
+    boolean isNotificationEnabled();
+
+    /**
+     * 是否启用置顶公告（G-035 / MSG-6，设计 §3.10）。
+     *
+     * <p>读取 {@code sys_config} 键 {@code announcement.enabled}；**缺省视为关闭**，
+     * 取值 {@code 1} 或 {@code true}（大小写不敏感）视为开启。OFF 只隐藏读取与展示，
+     * 公告写入（人工撰写）不受限制。</p>
+     */
+    boolean isAnnouncementEnabled();
 }

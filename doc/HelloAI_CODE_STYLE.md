@@ -631,9 +631,11 @@ system/
 ├── mapper
 ├── service
 ├── service.impl
+├── announcement      # 置顶公告（MSG-6：版本已读 / 发布快照 / 平台开关）
 ├── auth              # 认证 / 会话
 ├── backup            # 备份与恢复闸门
 ├── crypto            # 凭据加解密（CredentialCryptoService）
+├── notification      # 人侧站内消息（G-035：owner 归属 / 幂等键 / 降级不阻断业务）
 ├── port              # §7 端口
 ├── projection        # 只读投影
 ├── quota             # LLM 额度与用量监控（余额快照 / 外部抓取 / 缓存与熔断）
@@ -2031,6 +2033,15 @@ ShedLock（除非属于明确豁免任务）
 +
 可观测日志
 ```
+
+已登记豁免（每实例固有、必须各副本独立执行，登记于此以免每次评审重复讨论）：
+
+```text
+NotificationEventHub    # 站内消息 SSE 心跳（25s；连接表在进程内，按实例广播，跨副本重复执行无副作用）
+WorkbenchEventHub       # 工作台 SSE 心跳（25s；同上，先于 notification 存在，同类豁免）
+```
+
+除上列外新增 `@Scheduled` 必须进 `helloai-job` 并带 `@SchedulerLock`；如确需新豁免，在本清单登记理由。
 
 定时任务不得：
 

@@ -9,6 +9,7 @@ import com.helloai.api.dto.attachment.AttachmentVO;
 import com.helloai.api.dto.duty.DutyAgentLatestResponse;
 import com.helloai.api.dto.review.ReviewResponse;
 import com.helloai.api.dto.subtask.SubTaskResponse;
+import com.helloai.common.base.R;
 import com.helloai.core.agent.service.McpToolService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -205,6 +206,19 @@ class JacksonConfigLongSerializationTest {
         assertTrue(node.get("agentId").isTextual(), "Map 中 Long 值无法判定语义，必须保持字符串");
         assertEquals(String.valueOf(SNOWFLAKE_ID), node.get("agentId").asText());
         assertTrue(node.get("count").isTextual(), "Map 中非 ID 数值亦为字符串（保守：宁可不变形）");
+    }
+
+    @Test
+    @DisplayName("盲区 3：R<Long> 标量 data 擦除为 Object ⇒ 字符串；计数接口须返回 R<Integer> 才是数字")
+    void scalarLongInRDataStaysStringWhileIntegerIsNumber() throws Exception {
+        JsonNode longNode = json(R.ok(0L));
+        assertTrue(longNode.get("data").isTextual(),
+                "R<Long>.data 无属性名可判语义，序列化成字符串（未读数曾因此下发 \"0\"，前端判等与相加失真）");
+
+        JsonNode intNode = json(R.ok(0));
+        assertTrue(intNode.get("data").isNumber(),
+                "计数类接口用 R<Integer> 收口，data 应为 JSON 数字，实际=" + intNode.get("data"));
+        assertEquals(0, intNode.get("data").asInt());
     }
 
     // ──────────────── 4. 命名判定边界 ────────────────

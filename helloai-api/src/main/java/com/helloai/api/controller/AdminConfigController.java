@@ -52,6 +52,23 @@ public class AdminConfigController {
     }
 
     /**
+     * 博查联网搜索 API Key 的配置状态（脱敏回显，不含明文）。
+     *
+     * <p>{@code getAll} 对 {@code .api-key} 后缀键统一回显 {@code ********}，无法展示
+     * 「前 4 + 后 4」的形态；设置页需要与 LLM Provider 区块同形的脱敏串，故单列本端点，
+     * 由 {@link WebSearchCredentialKeyStore} 解密后按 {@code SecretMask} 口径脱敏。</p>
+     */
+    @SaCheckPermission("config:view")
+    @GetMapping("/webSearchApiKey")
+    public R<Map<String, Object>> getWebSearchApiKey() {
+        String masked = webSearchCredentialKeyStore.maskedBochaApiKey();
+        return R.ok(Map.of(
+                "configured", masked != null,
+                "masked", masked != null ? masked : ""
+        ));
+    }
+
+    /**
      * 保存博查联网搜索 API Key（系统设置页「联网搜索」区）。
      * <p>明文仅入参态存在，落库前经 AES-GCM 加密写 sys_config；
      * blank 视为清除。实时生效，无需重启。</p>

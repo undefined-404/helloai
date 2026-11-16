@@ -7,35 +7,44 @@ import { warnUnsafeIds } from './unsafeIdGuard'
 
 /**
  * 错误放行白名单：这些接口即便 code !== 200，也由调用方自行处理错误（弹错/解析），
- * 不走拦截器统一 ElMessage.error。匹配规则：URL 以任意一项开头。
+ * 不走拦截器统一 ElMessage.error。
+ * 匹配规则：URL 以 prefix 开头；条目限定 method 时仅该 HTTP 方法放行。
  * 之前用 url.includes('/auth/') 太宽，未来业务路径里只要含 "/auth/" 就会被绕过 toast，
  * 改用精确路径前缀白名单。
  */
-const ERROR_BY_CALLER_URL_PREFIXES = [
-  '/auth/login',
-  '/auth/logout',
-  '/auth/changePassword',
-  '/auth/me',
+type ErrorBypassRule = { prefix: string; method?: string }
+const ERROR_BY_CALLER_RULES: ErrorBypassRule[] = [
+  { prefix: '/auth/login' },
+  { prefix: '/auth/logout' },
+  { prefix: '/auth/changePassword' },
+  { prefix: '/auth/me' },
   // 技能目录（REF-1.2c）：由 skillCatalog store 懒加载并静默降级（未命中回退原始标签），
   // 失败不弹错——否则每打开一次含技能下拉的弹窗就会弹一次红条。
-  '/skills/catalog',
+  { prefix: '/skills/catalog' },
   // 对话「＋→技能」产出型技能清单：随菜单懒加载，失败静默降级为空菜单，
   // 不能因为一次拉取失败在用户正在输入时弹红条。
-  '/skills/chat-options',
+  { prefix: '/skills/chat-options' },
   // 事件码目录（REF-6.8）：由 eventCatalog store 懒加载并静默降级（未命中回退原始码），
   // 失败不弹错——否则每个事件时间线渲染都会弹错。baseURL 已含 /api，此处用相对路径（对齐 skills/catalog）。
-  '/events/catalog',
+  { prefix: '/events/catalog' },
   // 工具名目录：由 toolCatalog store 懒加载并静默降级（未命中回退原始工具名），
   // 失败不弹错——否则每次渲染含工具调用的时间线都会弹错。
-  '/tools/catalog',
+  { prefix: '/tools/catalog' },
   // 枚举字典：由 enumCatalog store 懒加载并静默降级（未命中回退原码），
   // 失败不弹错。
-  '/enums/catalog'
+  { prefix: '/enums/catalog' },
+  // 博查 Key 状态探针（设置页脱敏回显）：旧后端无此 GET（405）时由调用方回退到
+  // 配置批量读取的 ******** 掩码展示，不弹红条。
+  // 仅放行 GET：同路径的 PUT（保存 Key）失败必须弹后端 msg，不能一并静默。
+  { prefix: '/admin/config/webSearchApiKey', method: 'get' }
 ]
 
-function shouldLetCallerHandleError(url: string | undefined): boolean {
+function shouldLetCallerHandleError(url: string | undefined, method?: string): boolean {
   if (!url) return false
-  return ERROR_BY_CALLER_URL_PREFIXES.some((prefix) => url.startsWith(prefix))
+  const m = (method || '').toLowerCase()
+  return ERROR_BY_CALLER_RULES.some(
+    (rule) => url.startsWith(rule.prefix) && (!rule.method || rule.method === m)
+  )
 }
 
 /**
@@ -126,8 +135,8 @@ instance.interceptors.response.use(
       if (import.meta.env.DEV) warnUnsafeIds(payload, response.config.url)
       return payload
     }
-    // 白名单内接口（登录/登出/改密/me）由页面自行处理错误提示
-    if (shouldLetCallerHandleError(response.config.url)) {
+    // 白名单内接口（登录/登出/改密/me 等）由页面自行处理错误提示
+    if (shouldLetCallerHandleError(response.config.url, response.config.method)) {
       return Promise.reject(new Error(res.msg))
     }
     // 401 未认证/会话失效 → 清空登录态登出（§6.151 起 403 不再登出：
@@ -152,7 +161,9 @@ instance.interceptors.response.use(
     const data = error.response?.data
     const message = error.message || ''
     const canceled = axios.isCancel(error) || message === 'canceled'
-    if (!canceled) {
+    // 白名单接口（含 4xx/5xx 的 HTTP 通道）同样由调用方自行处理错误提示，
+    // 与上面的 code !== 200 分支同一份清单，避免「白名单只挡业务码、挡不住 HTTP 状态码」。
+    if (!canceled && !shouldLetCallerHandleError(error.config?.url, error.config?.method)) {
       ElMessage.error(data?.msg || message || '网络错误')
     }
     // HTTP 401（认证失败/会话失效）：统一清登录态并回登录页，避免残留无效 token

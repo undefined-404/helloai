@@ -157,6 +157,12 @@
 
     <!-- G-026 LLM 额度浮球（右下角只读余额监控；由 quota:view + sys_config 开关双重闸门） -->
     <QuotaFloatWidget />
+
+    <!-- MSG-5 站内消息铃铛（右上角;由 isAdmin + notification.enabled 闸门，默认 OFF） -->
+    <NotificationBell />
+
+    <!-- MSG-6 置顶公告条（顶部;由 announcement.enabled 闸门，默认 OFF，版本已读 + 折叠记忆） -->
+    <AnnouncementBar />
   </el-container>
 </template>
 
@@ -173,6 +179,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 import QuotaFloatWidget from '@/components/QuotaFloatWidget.vue'
+import NotificationBell from '@/components/NotificationBell.vue'
+import AnnouncementBar from '@/components/AnnouncementBar.vue'
 import type { SysPermission } from '@/types'
 
 /** DB 菜单图标列存 @element-plus/icons-vue 组件名，动态映射；未知图标回退 Menu */

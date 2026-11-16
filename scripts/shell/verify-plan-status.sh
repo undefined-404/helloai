@@ -33,6 +33,7 @@ FILES=(
   "HelloAI 沙箱生命周期与台账证据改造计划（2026-11-11）.md"
   "HelloAI 联网搜索效果优化实施计划（2026-10-18）.md"
   "HelloAI 借鉴落地实施计划.md"
+  "HelloAI 站内消息与置顶公告实施计划（2026-11-15）.md"
 )
 
 PY=""
@@ -54,8 +55,8 @@ for f in "${FILES[@]}"; do
 import io, re, sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 S = ["待开始","设计中","实现中","验证中","已完成","部分完成","阻塞","暂缓","明确不做"]
-ID = re.compile(r"^\| \*{0,2}((?:SKX|SL|RV|SR|PA|PC|S|W|ATT|TD|REF|M|Q)-\d+)[^|]*\|")
-SEC = re.compile(r"^#{2,4} \*{0,2}((?:SKX|SL|RV|SR|PA|PC|S|W|ATT|TD|Q)-\d+)")
+ID = re.compile(r"^\| \*{0,2}((?:SKX|MSG|SL|RV|SR|PA|PC|S|W|ATT|TD|REF|M|Q)-\d+)[^|]*\|")
+SEC = re.compile(r"^#{2,4} \*{0,2}((?:SKX|MSG|SL|RV|SR|PA|PC|S|W|ATT|TD|Q)-\d+)")
 ls = io.open(sys.argv[1], encoding="utf-8").read().split("\n")
 bad, checked = [], 0
 header = None

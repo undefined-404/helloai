@@ -1,8 +1,6 @@
 <template>
   <div class="page settings-page ha-entrance-up">
-    <!-- ============================================================
-         顶部 Hero 区：品牌锚点 + 标题/副标题
-         ============================================================ -->
+
     <header class="page-hero">
 <!--      <div
         class="page-hero-icon"
@@ -13,7 +11,7 @@
         </el-icon>
       </div>
       <p class="page-hero-subtitle">
-        配置系统基础参数、模型供应商与通知方式
+        配置平台基础参数、模型供应商与通知方式
       </p>-->
     </header>
 
@@ -27,10 +25,10 @@
       <header class="sheet-header">
         <div class="sheet-header-text">
           <h1 class="sheet-title">
-            系统设置
+            平台设置
           </h1>
           <p class="sheet-subtitle">
-            配置系统基础参数、模型供应商与通知方式
+            配置平台基础参数、模型供应商与通知方式
           </p>
         </div>
         <el-button
@@ -119,22 +117,30 @@
                   联网搜索
                 </h2>
               </div>
-              <el-button
-                size="small"
-                plain
-                :loading="verifyingWebSearchKey"
-                @click="verifyWebSearchKey(true)"
-              >
-                <el-icon><CircleCheck /></el-icon>
-                <span>验证 Key</span>
-              </el-button>
+              <div class="section-actions">
+                <el-button
+                  size="small"
+                  plain
+                  @click="openWebSearchKeyDialog"
+                >
+                  配置 Key
+                </el-button>
+                <el-button
+                  size="small"
+                  plain
+                  :loading="verifyingWebSearchKey"
+                  @click="verifyWebSearchKey(true)"
+                >
+                  <el-icon><CircleCheck /></el-icon>
+                  <span>验证 Key</span>
+                </el-button>
+              </div>
             </div>
             <el-form-item label="博查 API Key">
               <el-input
-                v-model="form.webSearchApiKey"
-                type="password"
-                show-password
-                placeholder="输入新 Key 并保存；清空并保存则移除 Key"
+                :model-value="webSearchMasked"
+                disabled
+                :placeholder="webSearchKeyConfigured ? '' : '未配置'"
               />
               <div class="form-hint">
                 需求对话每轮联网检索（默认供应商博查）使用，加密存储，保存后立即生效无需重启。
@@ -154,12 +160,6 @@
                 >
                   未配置 · 联网搜索不可用
                 </el-tag>
-              </div>
-              <div
-                v-if="webSearchDirty"
-                class="verify-key-tip"
-              >
-                验证的是已保存的 Key；输入框改动请先保存
               </div>
             </el-form-item>
           </div>
@@ -605,6 +605,31 @@
                 系统消息推送。当前仅支持站内通知，其他通道（邮件、IM）后续接入。
               </div>
             </el-form-item>
+            <el-form-item label="站内消息">
+              <div class="switch-field">
+                <el-switch v-model="form.notificationEnabled" />
+                <span
+                  class="switch-state"
+                  :class="form.notificationEnabled ? 'on' : 'off'"
+                >{{ form.notificationEnabled ? '已开启' : '已关闭' }}</span>
+              </div>
+              <div class="form-hint">
+                开启后工作台显示消息铃铛，业务事件（拆解就绪 / 产出提交 / 死信等）自动产生站内提醒。
+                关闭即停发并隐藏：不再产生新消息，铃铛与抽屉不渲染（默认关闭）。
+              </div>
+            </el-form-item>
+            <el-form-item label="置顶公告">
+              <div class="switch-field">
+                <el-switch v-model="form.announcementEnabled" />
+                <span
+                  class="switch-state"
+                  :class="form.announcementEnabled ? 'on' : 'off'"
+                >{{ form.announcementEnabled ? '已开启' : '已关闭' }}</span>
+              </div>
+              <div class="form-hint">
+                开启后工作台顶部展示置顶公告条，支持版本已读与折叠记忆。关闭即隐藏公告条（默认关闭）。
+              </div>
+            </el-form-item>
           </div>
         </div>
       </el-form>
@@ -648,6 +673,36 @@
         <el-button
           type="primary"
           @click="handleSaveKey"
+        >
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 配置博查 API Key 对话框（与 LLM Provider「配置 Key」同口径：弹窗内保存即生效） -->
+    <el-dialog
+      v-model="webSearchKeyDialogVisible"
+      title="配置博查 API Key"
+      width="480px"
+    >
+      <el-input
+        v-model="newWebSearchKey"
+        type="password"
+        show-password
+        placeholder="输入博查 API Key（加密存储，保存后立即生效）"
+        @keyup.enter="handleSaveWebSearchKey"
+      />
+      <div class="form-hint">
+        保存后自动做一次最小搜索验证；留空保存则清除 Key（清除后联网搜索不可用）。
+      </div>
+      <template #footer>
+        <el-button @click="webSearchKeyDialogVisible = false">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="webSearchKeySaving"
+          @click="handleSaveWebSearchKey"
         >
           保存
         </el-button>
@@ -786,26 +841,31 @@ import AddModelFormDialog from './settings/AddModelFormDialog.vue'
 import ProviderApiKeysDialog from './settings/ProviderApiKeysDialog.vue'
 import type { CatalogProvider } from './settings/providerCatalog'
 import type { LongId } from '@/types'
+import { useNotificationStore } from '@/stores/notification'
 
 const formRef = ref()
+// MSG-5/6：保存开关后重评铃铛 / 公告条闸门
+const notifStore = useNotificationStore()
 /** 「仅手动刷新」时输入框的占位分钟数（切回自动刷新时的默认值）。 */
 const DEFAULT_REFRESH_MINUTES = 5
 const form = reactive({
   externalUrl: '',
   qualityGateEnabled: false,
-  webSearchApiKey: '',
   notifyChannels: ['web'] as string[],
   quotaWidgetEnabled: true,
   quotaAutoRefresh: true,
-  quotaRefreshMinutes: 1
+  quotaRefreshMinutes: 1,
+  // MSG-5/6 平台开关：默认 OFF（键缺省即关闭，停发 + 隐藏）
+  notificationEnabled: false,
+  announcementEnabled: false
 })
 
-// 博查 Key 加载时的脱敏回显值（'********'）；未改动则保存时跳过提交，避免把掩码当 Key 写入。
-const webSearchKeyLoaded = ref('')
+// 博查 Key 只读回显（与 LLM Provider 区块同形：前 4 + … + 后 4）；编辑走「配置 Key」弹窗，不参与整页表单脏状态。
 const webSearchKeyConfigured = ref(false)
-
-/** 博查 Key 未保存变更指示：保存的是已落库的 Key，验证前提示先保存。 */
-const webSearchDirty = computed(() => form.webSearchApiKey !== webSearchKeyLoaded.value)
+const webSearchMasked = ref('')
+const webSearchKeyDialogVisible = ref(false)
+const newWebSearchKey = ref('')
+const webSearchKeySaving = ref(false)
 
 /** 未保存变更指示：加载快照与当前表单值比对（保存成功后同步快照）。 */
 const loadedExternalUrl = ref('')
@@ -813,15 +873,18 @@ const loadedQualityGate = ref(false)
 const loadedQuotaWidgetEnabled = ref(true)
 const loadedQuotaAutoRefresh = ref(true)
 const loadedQuotaRefreshMinutes = ref(1)
+const loadedNotificationEnabled = ref(false)
+const loadedAnnouncementEnabled = ref(false)
 const saving = ref(false)
 
 const isDirty = computed(() =>
   form.externalUrl !== loadedExternalUrl.value
   || form.qualityGateEnabled !== loadedQualityGate.value
-  || form.webSearchApiKey !== webSearchKeyLoaded.value
   || form.quotaWidgetEnabled !== loadedQuotaWidgetEnabled.value
   || form.quotaAutoRefresh !== loadedQuotaAutoRefresh.value
   || (form.quotaAutoRefresh && form.quotaRefreshMinutes !== loadedQuotaRefreshMinutes.value)
+  || form.notificationEnabled !== loadedNotificationEnabled.value
+  || form.announcementEnabled !== loadedAnnouncementEnabled.value
 )
 
 const providers = ref<LlmProviderResponse[]>([])
@@ -956,6 +1019,71 @@ async function verifyWebSearchKey(manual = false) {
 }
 
 /**
+ * 博查 Key 状态（脱敏回显）：与 LLM Provider 区块同口径（前 4 + … + 后 4，置灰只读）。
+ * 取数走专用端点——config 批量 GET 对 `.api-key` 后缀统一回 ********。
+ *
+ * @param configMasked 配置批量 GET 里的该键值（旧后端无专用端点时的回退展示）
+ */
+async function loadWebSearchKeyState(configMasked?: string) {
+  try {
+    const state = await settingsApi.getWebSearchApiKeyState()
+    webSearchKeyConfigured.value = !!state?.configured
+    webSearchMasked.value = state?.masked || ''
+  } catch {
+    // 滚动升级窗口（旧后端 + 新前端）：回退到 ******** 掩码；「验证 Key」仍可手动给出真实结论
+    webSearchKeyConfigured.value = !!configMasked
+    webSearchMasked.value = configMasked || ''
+  }
+}
+
+function openWebSearchKeyDialog() {
+  newWebSearchKey.value = ''
+  webSearchKeyDialogVisible.value = true
+}
+
+/**
+ * 弹窗保存博查 Key：保存即生效，随后自动做一次最小搜索验证（与 LLM Provider 保存 Key 后自动验证同口径）。
+ * 留空保存视为清除，已配置时二次确认。
+ */
+async function handleSaveWebSearchKey() {
+  if (webSearchKeySaving.value) return
+  const value = newWebSearchKey.value.trim()
+  if (!value) {
+    if (!webSearchKeyConfigured.value) {
+      webSearchKeyDialogVisible.value = false
+      return
+    }
+    try {
+      await ElMessageBox.confirm(
+        '留空保存将清除博查 API Key，清除后联网搜索不可用。确认清除？',
+        '清除博查 API Key',
+        { confirmButtonText: '清除', cancelButtonText: '取消', type: 'warning' }
+      )
+    } catch {
+      return
+    }
+  }
+  webSearchKeySaving.value = true
+  try {
+    await settingsApi.saveWebSearchApiKey(value)
+    webSearchKeyDialogVisible.value = false
+    newWebSearchKey.value = ''
+    // 旧后端（无状态端点）回退值与 config 批量 GET 的掩码同形，避免保存后误显示「未配置」
+    await loadWebSearchKeyState(value ? '********' : '')
+    if (value) {
+      ElMessage.success('博查 API Key 已生效，无需重启')
+      await verifyWebSearchKey()
+    } else {
+      ElMessage.success('博查 API Key 已清除')
+    }
+  } catch {
+    // PUT 保存已移出白名单静默范围：失败由拦截器统一弹后端 msg，此处不重复弹
+  } finally {
+    webSearchKeySaving.value = false
+  }
+}
+
+/**
  * 质量门控开关确认：§6.151 起默认开启，开启方向是恢复默认（仍二次确认防误点）；
  * 关闭为收敛动作直接放行。before-change 返回 false 时开关保持原值，不污染表单脏状态。
  */
@@ -971,17 +1099,18 @@ function beforeQualityGateChange(): Promise<boolean> {
 }
 
 /**
- * 卸载未保存改动：把基础配置/博查 Key 三个字段恢复到加载快照，
- * LLM Provider / 模型变更属独立保存路径，不参与此处的"未保存"语义。
+ * 卸载未保存改动：把基础配置字段恢复到加载快照。
+ * 博查 Key 走「配置 Key」弹窗独立保存，LLM Provider / 模型变更属独立保存路径，均不参与此处的"未保存"语义。
  */
 function handleReset() {
   if (!isDirty.value) return
   form.externalUrl = loadedExternalUrl.value
   form.qualityGateEnabled = loadedQualityGate.value
-  form.webSearchApiKey = webSearchKeyLoaded.value
   form.quotaWidgetEnabled = loadedQuotaWidgetEnabled.value
   form.quotaAutoRefresh = loadedQuotaAutoRefresh.value
   form.quotaRefreshMinutes = loadedQuotaRefreshMinutes.value
+  form.notificationEnabled = loadedNotificationEnabled.value
+  form.announcementEnabled = loadedAnnouncementEnabled.value
   ElMessage.success('已重置为上次保存的版本')
 }
 
@@ -1022,17 +1151,19 @@ async function copyText(text: string) {
   }
 }
 
+/** 开关值判定：与后端 SysConfigServiceImpl 同口径（'1' 或 'true' 视为开启，缺省 OFF）。 */
+function isSwitchOn(val: string | undefined | null): boolean {
+  return val === '1' || String(val).toLowerCase() === 'true'
+}
+
 async function load() {
   try {
     const config = await settingsApi.getConfig()
     if (config) {
       form.externalUrl = config['helloai.base-url'] || ''
       form.qualityGateEnabled = config['admin.quality.enabled'] === 'true'
-      form.webSearchApiKey = config['web-search.bocha.api-key'] || ''
       loadedExternalUrl.value = form.externalUrl
       loadedQualityGate.value = form.qualityGateEnabled
-      webSearchKeyLoaded.value = form.webSearchApiKey
-      webSearchKeyConfigured.value = !!form.webSearchApiKey
 
       // 额度浮球：0=仅手动刷新；60~3600=自动刷新间隔（后端读取时同样归一化，空值回退 60s）
       const rawIntervalValue = config['quota.refresh.interval-seconds']
@@ -1048,7 +1179,16 @@ async function load() {
       loadedQuotaWidgetEnabled.value = form.quotaWidgetEnabled
       loadedQuotaAutoRefresh.value = form.quotaAutoRefresh
       loadedQuotaRefreshMinutes.value = form.quotaRefreshMinutes
+
+      // MSG-5/6 平台开关：与后端 isNotificationEnabled/isAnnouncementEnabled 同口径（'1' 或 'true' 开启，缺省 OFF）。
+      // 只认 '1' 会让库里手写 'true' 的开关「后端已生效、设置页显示已关闭」，再保存一次即被静默关掉。
+      form.notificationEnabled = isSwitchOn(config['notification.enabled'])
+      form.announcementEnabled = isSwitchOn(config['announcement.enabled'])
+      loadedNotificationEnabled.value = form.notificationEnabled
+      loadedAnnouncementEnabled.value = form.announcementEnabled
     }
+    // 博查 Key 状态单列取自脱敏端点（config 批量 GET 对该键只回 ********，无法展示前后缀）
+    await loadWebSearchKeyState(config?.['web-search.bocha.api-key'])
   } catch {
     ElMessage.error('加载配置失败')
   }
@@ -1151,25 +1291,20 @@ async function handleSave() {
       'helloai.base-url': form.externalUrl,
       'admin.quality.enabled': form.qualityGateEnabled ? 'true' : 'false',
       'quota.widget.enabled': form.quotaWidgetEnabled ? '1' : '0',
-      'quota.refresh.interval-seconds': String(form.quotaAutoRefresh ? form.quotaRefreshMinutes * 60 : 0)
+      'quota.refresh.interval-seconds': String(form.quotaAutoRefresh ? form.quotaRefreshMinutes * 60 : 0),
+      'notification.enabled': form.notificationEnabled ? '1' : '0',
+      'announcement.enabled': form.announcementEnabled ? '1' : '0'
     })
-    // 博查 Key 走专用加密端点；未改动（仍是脱敏回显值）时跳过，清空则视为移除。
-    if (form.webSearchApiKey !== webSearchKeyLoaded.value) {
-      const newKey = form.webSearchApiKey.trim()
-      await settingsApi.saveWebSearchApiKey(newKey)
-      webSearchKeyConfigured.value = !!newKey
-      webSearchKeyLoaded.value = ''
-      form.webSearchApiKey = ''
-      // 非空保存后自动验证（最小搜索请求探测）
-      if (newKey) {
-        await verifyWebSearchKey()
-      }
-    }
+    // 博查 Key 走「配置 Key」弹窗的专用加密端点，不参与整页保存。
     loadedExternalUrl.value = form.externalUrl
     loadedQualityGate.value = form.qualityGateEnabled
     loadedQuotaWidgetEnabled.value = form.quotaWidgetEnabled
     loadedQuotaAutoRefresh.value = form.quotaAutoRefresh
     loadedQuotaRefreshMinutes.value = form.quotaRefreshMinutes
+    loadedNotificationEnabled.value = form.notificationEnabled
+    loadedAnnouncementEnabled.value = form.announcementEnabled
+    // 开关变更后立即重评铃铛闸门（开启即建连拉未读，关闭即停发隐藏），无需刷新页面
+    await notifStore.reload()
     ElMessage.success('保存成功')
   } catch {
     ElMessage.error('保存失败')
@@ -1513,12 +1648,12 @@ onMounted(() => {
   gap: 6px;
 }
 
-/* 博查 Key 未保存提示 ============================================= */
-.verify-key-tip {
-  font-size: 12px;
-  color: var(--ha-ink-secondary);
-  opacity: 0.75;
-  margin-top: 6px;
+/* 章节标题右侧操作区（联网搜索：配置 Key + 验证 Key 并排） ========= */
+.section-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 /* LLM 供应商：左列表 + 右详情 ==================================== */

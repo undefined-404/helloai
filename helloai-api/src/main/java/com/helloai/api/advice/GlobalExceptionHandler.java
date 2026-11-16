@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -239,9 +240,24 @@ public class GlobalExceptionHandler {
         return R.fail(400, message);
     }
 
+    /**
+     * 异步响应已不可用：客户端先断开长连接后，SSE 心跳 / 完成回调再写帧时由容器抛出。
+     * 属于连接收敛的正常路径，不按系统异常记 ERROR（响应已失效，也无 error 帧可写）。
+     */
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleAsyncRequestNotUsable(AsyncRequestNotUsableException e) {
+        log.debug("异步响应已不可用（客户端断开）: {}", e.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public R<Void> handleException(Exception e, HttpServletRequest request, HttpServletResponse response) {
+        // SSE 响应已提交后的 IOException = 客户端/代理断开（心跳或完成回调写帧失败），
+        // 容器记录异步写错误后以错误分派重抛。属连接收敛的正常路径：不记系统异常，也无帧可写。
+        if (e instanceof IOException && sseRequest(request) && response.isCommitted()) {
+            log.debug("SSE 连接已断开，写帧失败按收敛处理: {}", e.getMessage());
+            return null;
+        }
         log.error("系统异常", e);
         if (sseRequest(request)) {
             writeSseError(request, response, "服务内部错误，请联系管理员");

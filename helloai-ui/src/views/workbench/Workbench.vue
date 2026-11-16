@@ -545,23 +545,45 @@
           <span>工作台</span>
           <span class="wb-scope-chip">个人</span>
         </div>
-<!--        <div class="wb-panel-ops">
-          <button class="wb-icon-btn" type="button" title="刷新" @click="refreshAll">
-            <el-icon><Refresh /></el-icon>
-          </button>
-          <el-dropdown trigger="click" @command="onPanelCommand">
-            <button class="wb-icon-btn" type="button" title="更多">
-              <el-icon><MoreFilled /></el-icon>
+        <!-- MSG-5 / G-026 两个可停靠入口：停靠于此；拖出变悬浮，拖回即复原。
+             额度浮球由 QuotaFloatWidget 自行 Teleport 进 data-quota-dock 坑位；
+             两者都由各自闸门（notif.visible / quotaDockVisible）决定是否出现。 -->
+        <div
+          v-if="notif.visible || quotaDockVisible"
+          class="wb-panel-ops"
+        >
+          <div
+            v-if="quotaDockVisible"
+            :ref="setQuotaDockHost"
+            class="wb-quota-dock"
+            data-quota-dock
+          />
+          <el-badge
+            v-if="notif.visible && notif.bellMode === 'docked'"
+            :value="notif.unreadCount"
+            :hidden="notif.unreadCount === 0"
+            :max="99"
+          >
+            <button
+              class="wb-icon-btn"
+              type="button"
+              title="站内消息（可拖出为悬浮铃铛）"
+              data-notif-dock
+              @pointerdown="onDockPointerDown"
+              @click="onDockBellClick"
+            >
+              <el-icon><Bell /></el-icon>
             </button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="refresh">刷新数据</el-dropdown-item>
-                <el-dropdown-item command="tasks">打开任务管理</el-dropdown-item>
-                <el-dropdown-item command="chat">打开需求对话页</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>-->
+          </el-badge>
+          <div
+            v-else-if="notif.visible"
+            class="wb-dock-ghost"
+            title="悬浮铃铛拖回此处停靠"
+            data-notif-dock
+          >
+            <el-icon><Bell /></el-icon>
+          </div>
+        </div>
       </header>
 
       <div class="wb-panel-body">
@@ -701,7 +723,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowDown, ArrowUp, ChatDotRound, Check, CircleClose, Clock, Close, Connection, CopyDocument, Cpu,
+  ArrowDown, ArrowUp, Bell, ChatDotRound, Check, CircleClose, Clock, Close, Connection, CopyDocument, Cpu,
   Document, Download, EditPen, Grid, Histogram, Loading, MagicStick, Microphone, MoreFilled, Plus,
   Refresh, Stamp, Tickets, Tools, User
 } from '@element-plus/icons-vue'
@@ -714,6 +736,9 @@ import { quotaApi, type QuotaSnapshot } from '@/api/quota'
 import { promptEnhanceApi } from '@/api/promptEnhance'
 import { streamWorkbenchEvents } from '@/api/workbenchStream'
 import { useAuthStore } from '@/stores/auth'
+import { useNotificationStore } from '@/stores/notification'
+import { quotaDockHost, quotaDockVisible } from '@/composables/quotaDock'
+import { usePointerDrag } from '@/composables/usePointerDrag'
 import { saveBlobResponse } from '@/utils/download'
 import { fmtTime, splitDateTime } from '@/utils/tableConfig'
 import type {
@@ -724,6 +749,37 @@ import type {
 
 const router = useRouter()
 const auth = useAuthStore()
+// MSG-5 站内消息：与全局铃铛共享 store（全局铃铛负责 start/建连，此处只读未读 + 开抽屉）
+const notif = useNotificationStore()
+
+// ── 铃铛停靠 / 悬浮（二选一）：拖出工作台铃铛 → 悬浮件出现在原坑位并跟手；拖回坑位即复原 ──
+// 拖拽壳与阈值判定走公用 usePointerDrag（与悬浮铃铛、额度胶囊同一套），锚点快照留在本组件
+let dockStart = { right: 0, top: 0 }
+
+const { onPointerDown: onDockPointerDown, consumeClick: consumeDockClick } = usePointerDrag({
+  onPress: (e) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    dockStart = { right: window.innerWidth - rect.right, top: rect.top }
+  },
+  onDrag: (dx, dy) => {
+    // 越过阈值才切成悬浮（与原先「首次拖动即切换」一致）
+    if (notif.bellMode !== 'floating') notif.setBellMode('floating')
+    notif.setBellPos({ right: dockStart.right - dx, top: dockStart.top + dy })
+  }
+})
+
+function onDockBellClick() {
+  // 拖拽结束补发的 click 拦截一次，避免误开抽屉
+  if (consumeDockClick()) return
+  // 开合切换：抽屉已打开时再点铃铛即收回（与点遮罩关闭同效）
+  if (notif.drawerOpen) notif.closeDrawer()
+  else notif.openDrawer()
+}
+
+/** 额度浮球停靠宿主：浮球 Teleport 胶囊进来；宿主卸载时置空，浮球自动回落悬浮。 */
+function setQuotaDockHost(el: unknown) {
+  quotaDockHost.value = (el as HTMLElement | null) ?? null
+}
 
 // ── 静态文案与快捷入口 ──
 /** 模型下拉的「自动」哨兵值：选中它 = 不钉模型，沿用助理 Agent 绑定的模型。 */
@@ -1290,10 +1346,6 @@ async function loadContextUsage() {
   } catch { /* 拦截器已弹错 */ }
 }
 
-async function refreshAll() {
-  await Promise.all([loadWorkbench(), loadQuota()])
-}
-
 // ── 发送（SSE 流式，与需求对话同一事件协议）──
 function onEnter() {
   void send()
@@ -1662,12 +1714,6 @@ function onHistoryCommand(cmd: string) {
 
 function onTopCommand(cmd: string) {
   if (cmd === 'new') startNew()
-  else if (cmd === 'chat') router.push('/requirement-chat')
-}
-
-function onPanelCommand(cmd: string) {
-  if (cmd === 'refresh') void refreshAll()
-  else if (cmd === 'tasks') router.push('/tasks')
   else if (cmd === 'chat') router.push('/requirement-chat')
 }
 
@@ -2905,6 +2951,25 @@ html.dark .wb-page {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+/* 额度浮球的停靠坑位：胶囊由 QuotaFloatWidget Teleport 进来，拖出后留虚线占位 */
+.wb-quota-dock {
+  display: inline-flex;
+  align-items: center;
+}
+/* 铃铛拖出为悬浮后的停靠坑位（拖回此处即复原工作台铃铛） */
+.wb-dock-ghost {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px dashed var(--wb-chip);
+  color: var(--wb-ink-sub);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  opacity: 0.5;
+  user-select: none;
 }
 .wb-panel-body {
   flex: 1 1 auto;

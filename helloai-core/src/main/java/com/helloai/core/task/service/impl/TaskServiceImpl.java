@@ -134,6 +134,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setPriority(TaskPriority.DEFAULT().name());
         task.setStatus(TaskStatus.PENDING);
         task.setTaskArchetype(TaskArchetype.parse(taskArchetype));
+        // PA-1：创建即落归属（人侧消息钩子按 owner 投递，无主任务会被跳过）；无用户态（外部通道）保持 null
+        task.setOwnerId(CurrentUser.userId());
         save(task);
         log.info("任务创建: id={}, title={}, slaMinutes={}, agentPolicy={}, requiredSkills={}, taskArchetype={}",
                 task.getId(), title, slaMinutes, agentPolicy, requiredSkills, task.getTaskArchetype());

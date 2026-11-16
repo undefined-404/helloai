@@ -150,6 +150,13 @@ export interface LlmProviderApiKeyChange {
   activeChanged: boolean
 }
 
+/** 博查 API Key 配置状态（GET /admin/config/webSearchApiKey，只返回脱敏值）。 */
+export interface WebSearchApiKeyState {
+  configured: boolean
+  /** 前 4 + … + 后 4；未配置为空串 */
+  masked: string
+}
+
 export const settingsApi = {
   getStatus() {
     return request.get<any, { setupFinished: boolean; hasUsers: boolean; userCount: number; registerEnabled?: boolean }>(paths.setup.getStatus)
@@ -173,6 +180,10 @@ export const settingsApi = {
    */
   batchUpdateConfig(map: Record<string, string>) {
     return request.put(paths.admin.configBatch, { config: map })
+  },
+  /** 博查 API Key 配置状态（脱敏回显：前 4 + … + 后 4；与保存共用同一路径，GET/PUT 区分）。 */
+  getWebSearchApiKeyState() {
+    return request.get<any, WebSearchApiKeyState>(paths.admin.webSearchApiKey)
   },
   /** 保存博查联网搜索 API Key（后端加密落库，实时生效）。 */
   saveWebSearchApiKey(value: string) {

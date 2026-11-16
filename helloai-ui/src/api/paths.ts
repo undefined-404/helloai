@@ -126,6 +126,7 @@ export const paths = {
     configByKey: (key: string) => `/admin/config/getByKey/${enc(key)}`,
     configUpdateByKey: (key: string) => `/admin/config/updateByKey/${enc(key)}`,
     configBatch: '/admin/config/batch',
+    // GET=脱敏状态探针 / PUT=保存，同路径按方法区分（不拆两个键，防字面量漂移）
     webSearchApiKey: '/admin/config/webSearchApiKey',
     verifyWebSearchApiKey: '/admin/config/verifyWebSearchApiKey',
     // 旧平台 Provider 端点（保留兼容 verify 脚本）
@@ -268,6 +269,31 @@ export const paths = {
     unreadCount: '/inbox/getUnreadCount',
     markRead: (id: string | number) => `/inbox/markReadById/${enc(id)}`,
     archive: (id: string | number) => `/inbox/archiveById/${enc(id)}`
+  },
+  // 人侧站内消息（MSG-5，设计 §3.9）：登录可读，恒按当前用户归属过滤;
+  // notification.enabled 开关 OFF 时读取返回空 / 未读 0（停发 + 隐藏）。
+  notification: {
+    features: '/user-notification/features',
+    page: '/user-notification/pageByReceiver',
+    unreadCount: '/user-notification/unreadCount',
+    markRead: (id: string | number) => `/user-notification/markRead/${enc(id)}`,
+    markAllRead: '/user-notification/markAllRead',
+    archive: (id: string | number) => `/user-notification/archive/${enc(id)}`,
+    stream: '/user-notification/stream'
+  },
+  // 置顶公告（MSG-6，设计 §3.9）：published/seen/unreadCount 登录可读;
+  // manage/draft/publish/archive/history/schemaHistory 走 notice:view / notice:edit 动作码。
+  // announcement.enabled 开关 OFF 时 published 返回空、unreadCount=0（停发 + 隐藏）。
+  announcement: {
+    published: '/announcement/published',
+    seen: (id: string | number) => `/announcement/seen/${enc(id)}`,
+    unreadCount: '/announcement/unreadCount',
+    manage: '/announcement/manage',
+    draft: '/announcement/draft',
+    publish: '/announcement/publish',
+    archive: '/announcement/archive',
+    history: '/announcement/history',
+    schemaHistory: '/announcement/schemaHistory'
   },
   modules: {
     list: (taskId: string | number) => `/modules/findModulesByTaskId/${enc(taskId)}`,
