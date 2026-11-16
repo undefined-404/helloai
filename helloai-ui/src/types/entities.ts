@@ -35,6 +35,16 @@ export interface Task {
   // TD-1: 交付物原型（拆解维度）——决定「按什么维度拆」；与 GRANULARITY（拆多细）正交。
   // 默认 BUILD；未走澄清链路或判不出时回落 BUILD，人工可改。
   taskArchetype?: TaskArchetype
+  // V148 派生血缘（ADR-008）：本任务是某个子任务二次拆分出来的 ⇒ 指向来源子任务
+  parentSubTaskId?: LongId | null
+  // V148 派生血缘：草案期派生的父任务 id（父任务物化后清空，转到 parentSubTaskId）
+  parentTaskId?: LongId | null
+  parentDraftCode?: string | null
+  // V148 根链 id（根任务 = 自身 id）与派生层级（根 0，全局 ≤2）
+  rootTaskId?: LongId | null
+  depth?: number | null
+  // V148 派生原因：PLAN（草案期派生）/ RESTRUCTURE（执行期重构派生）
+  derivationReason?: string | null
 }
 
 // TD-1 交付物原型六类（对齐后端 TaskArchetype）

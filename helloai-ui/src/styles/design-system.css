@@ -12,6 +12,15 @@
   --ha-primary-muted: rgba(124, 58, 237, 0.12);
   --ha-primary-light: rgba(124, 58, 237, 0.08);
 
+  /* 派生血缘徽标（ADR-008 下钻/上钻/返回来源）：设计稿给的是 #6D3BF5 的一套
+     静态色阶（底 #F5F1FF / 描边 #E2D9FF / 悬停 #E9E0FF+#C9B4FF），与本仓主色同相不同值。
+     这里不搬设计稿色值而是折算成主色的 alpha 档——照搬会在同屏出现两种紫，
+     而 alpha 档在亮/暗两个主题下都能自然叠底（暗色只需抬档位，见 html.dark）。 */
+  --ha-handle-bg: rgba(124, 58, 237, 0.07);
+  --ha-handle-border: rgba(124, 58, 237, 0.16);
+  --ha-handle-bg-hover: rgba(124, 58, 237, 0.13);
+  --ha-handle-border-hover: rgba(124, 58, 237, 0.34);
+
   --ha-bg: #F6F7FB;
   --ha-surface: #FFFFFF;
   --ha-surface-hover: #F1F3F9;
@@ -104,6 +113,13 @@
 html.dark {
   --ha-primary-muted: rgba(124, 58, 237, 0.18);
   --ha-primary-light: rgba(124, 58, 237, 0.10);
+
+  /* 血缘徽标在深底上要抬档：亮色档位（0.07 底）压在深海军蓝上几乎看不出，
+     徽标会退化成一块比行底色略深的脏斑。悬停再抬一档保持「加深」的因果方向。 */
+  --ha-handle-bg: rgba(124, 58, 237, 0.22);
+  --ha-handle-border: rgba(124, 58, 237, 0.42);
+  --ha-handle-bg-hover: rgba(124, 58, 237, 0.32);
+  --ha-handle-border-hover: rgba(124, 58, 237, 0.62);
 
   --ha-bg: #0A0E1A;
   --ha-surface: #0F1524;
@@ -1049,6 +1065,7 @@ img {
 
    单元格约定：可点击标题 .link-cell；空值 .cell-muted；操作列 .action-cell；
    下拉危险项 .dropdown-danger；单元格内多标签 .cell-tags；
+   派生血缘手柄 .drill-handle（组件 components/DrillHandle.vue，不在此处定义样式）；
    时间两行 .time-cell（<div class="time-cell"><span>日期</span><span class="time-sub">时分秒</span></div>）。
 
    行内操作统一为「主操作外置 + 其余收进更多」：
@@ -1166,6 +1183,28 @@ img {
 .cell-muted {
   color: var(--ha-muted);
 }
+
+/* 单元格：标题 + 尾随徽标（序号 / 血缘手柄）。
+   为什么不用列的 show-overflow-tooltip：它给 .cell 加 overflow:hidden + nowrap，
+   长标题会把尾随元素一起挤出裁掉——徽标与手柄都是功能入口，不能因为标题长就消失。
+   这里改为「标题自己单行省略、尾随元素 flex:none 永不被压缩」，悬停全名靠 span 的 title。
+   血缘手柄本体是 components/DrillHandle.vue，尺寸与状态色都收在组件里。
+   间距用容器 gap 而不是给手柄加 margin-left：手柄的 class 挂在 el-tooltip 上（单根是
+   ElPopper，不是按钮本身），靠透传落在哪里不稳；gap 在容器上，与子节点结构无关。 */
+.cell-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.cell-title > .cell-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cell-title > :not(.cell-title-text) { flex: none; }
 
 /* 单元格：多枚标签横排（状态 + 等待倒计时等），不撑破行高 */
 .cell-tags {

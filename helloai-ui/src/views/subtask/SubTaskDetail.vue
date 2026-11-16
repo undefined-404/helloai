@@ -65,7 +65,26 @@
         </div>
       </div>
       <h1 class="head-title">
-        {{ item.title }}
+        <span class="head-title-text">{{ item.title }}</span>
+        <!-- 血缘导航（ADR-008）：本子任务是派生出来的 ⇒ 上钻回来源子任务；
+             本子任务有派生任务 ⇒ 下钻看那棵子树。两个方向都只做跳转，不改状态。
+             上钻 28 / 下钻 24：上钻是「换上下文」（离开详情去父级），比「往下看一层」重。 -->
+        <DrillHandle
+          v-if="parentSubTaskId"
+          class="head-drill"
+          direction="up"
+          :size="28"
+          title="上钻：返回派生拆分出来的那个子任务"
+          @click="goParentSubTask"
+        />
+        <DrillHandle
+          v-if="derivedTaskId"
+          class="head-drill"
+          direction="down"
+          :size="24"
+          title="下钻：查看二次拆分出的主任务"
+          @click="goDerivedTask"
+        />
       </h1>
       <div class="head-meta">
         <span>负责人：{{ item.assignedAgentName || resolveAgentName(item.assignedAgent) || '-' }}</span>
@@ -136,7 +155,8 @@
         <div class="head-summary-label">
           任务详情
         </div>
-        <!-- 内容：长文本折叠 3 行 + 展开全文（与对话流折叠同款交互） -->
+        <!-- 长文本一律走结构化视图：拆解产出在库里是「一段话」，但内含
+             `触发条件：…/动作：1) 2) 3)` 这类轻结构，直接插值会糊成一堵墙 -->
         <div
           v-if="item.content"
           class="detail-sec"
@@ -147,9 +167,9 @@
           <div
             :ref="(el) => bindDetailEl('content', el)"
             class="detail-text"
-            :class="{ 'ha-line-clamp': !detailExpanded['content'] }"
+            :class="{ 'is-collapsed': !detailExpanded['content'] }"
           >
-            {{ item.content }}
+            <StructuredTextView :text="item.content" />
           </div>
           <span
             v-if="detailOverflow['content']"
@@ -169,9 +189,9 @@
           <div
             :ref="(el) => bindDetailEl('deliverable', el)"
             class="detail-text"
-            :class="{ 'ha-line-clamp': !detailExpanded['deliverable'] }"
+            :class="{ 'is-collapsed': !detailExpanded['deliverable'] }"
           >
-            {{ item.deliverable }}
+            <StructuredTextView :text="item.deliverable" />
           </div>
           <span
             v-if="detailOverflow['deliverable']"
@@ -191,9 +211,9 @@
           <div
             :ref="(el) => bindDetailEl('acceptance', el)"
             class="detail-text"
-            :class="{ 'ha-line-clamp': !detailExpanded['acceptance'] }"
+            :class="{ 'is-collapsed': !detailExpanded['acceptance'] }"
           >
-            {{ item.acceptance }}
+            <StructuredTextView :text="item.acceptance" />
           </div>
           <span
             v-if="detailOverflow['acceptance']"
@@ -213,9 +233,13 @@
           <div
             :ref="(el) => bindDetailEl('constraints', el)"
             class="detail-text"
-            :class="{ 'ha-line-clamp': !detailExpanded['constraints'] }"
+            :class="{ 'is-collapsed': !detailExpanded['constraints'] }"
           >
-            {{ item.constraints }}
+            <!-- 约束是逐条禁令，允许按 `；` 拆条目 -->
+            <StructuredTextView
+              :text="item.constraints"
+              split-semicolon
+            />
           </div>
           <span
             v-if="detailOverflow['constraints']"
@@ -547,10 +571,15 @@
           :key="ev.id"
           :type="eventTypeColor(ev.eventType)"
         >
-          <!-- 设计图润色：事件卡片化（语义色淡底）+ 顶部分类徽标 + 标题/描述/时间分层 -->
+          <!-- 事件卡统一尺寸：默认只露 2 行描述，整卡可点展开全文、再点收回。
+               统一高度让时间线读起来像一条「节奏序列」，而不是长短不一的色块堆。 -->
           <div
             class="tl-item"
-            :class="'tone-' + eventTypeColor(ev.eventType)"
+            :class="[
+              'tone-' + eventTypeColor(ev.eventType),
+              { 'is-open': isEventOpen(ev.id), 'is-expandable': isEventExpandable(ev) }
+            ]"
+            @click="toggleEvent(ev)"
           >
             <div class="tl-top">
               <el-tag
@@ -562,14 +591,26 @@
               </el-tag>
               <span class="tl-time">{{ fmtTime(ev.createTime) }}</span>
             </div>
-            <div
-              class="tl-title"
-              :title="eventTitleWithDetail(ev)"
-            >
-              {{ eventTitleWithDetail(ev) }}
+            <div class="tl-title-row">
+              <div
+                class="tl-title"
+                :title="eventTitleWithDetail(ev)"
+              >
+                {{ eventTitleWithDetail(ev) }}
+              </div>
+              <el-icon
+                v-if="isEventExpandable(ev)"
+                class="tl-caret"
+                :class="{ open: isEventOpen(ev.id) }"
+              >
+                <ArrowRight />
+              </el-icon>
             </div>
             <!-- 人话化：把事件类型/payload 翻译成非开发者能看懂的一句话 -->
-            <div class="tl-desc">
+            <div
+              class="tl-desc"
+              :class="{ 'is-open': isEventOpen(ev.id) }"
+            >
               {{ eventDescription(ev) }}
             </div>
           </div>
@@ -661,14 +702,16 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, Clock, Refresh } from '@element-plus/icons-vue'
 import { subTaskApi } from '@/api/subTask'
-import { taskMemberApi, type TaskMemberView } from '@/api/task'
+import { taskApi, taskMemberApi, type TaskMemberView } from '@/api/task'
 import { agentApi } from '@/api/agent'
 import { reviewApi } from '@/api/review'
 import { attachmentApi } from '@/api/attachment'
 import { saveBlobResponse } from '@/utils/download'
 import PreviewDialog from '@/components/PreviewDialog.vue'
+import DrillHandle from '@/components/DrillHandle.vue'
 import { isPreviewableAttachment } from '@/utils/filePreview'
 import MarkdownView from '@/components/MarkdownView.vue'
+import StructuredTextView from '@/components/StructuredTextView.vue'
 import ReviewVerdictView from '@/components/ReviewVerdictView.vue'
 import SubTaskSequenceFlow from '@/components/SubTaskSequenceFlow.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
@@ -681,7 +724,7 @@ import { nextPollDelay } from '@/utils/pollBackoff'
 import { useEventCatalogStore } from '@/stores/eventCatalog'
 import { useSkillCatalogStore } from '@/stores/skillCatalog'
 import { resolvePendingWait, usePendingCountdown } from '@/composables/usePendingCountdown'
-import type { SubTask, TaskTimelineItem, ConversationMessageItem, Attachment, LongId, Agent } from '@/types'
+import type { SubTask, Task, TaskTimelineItem, ConversationMessageItem, Attachment, LongId, Agent } from '@/types'
 import { sameId } from '@/utils/id'
 
 const route = useRoute()
@@ -744,6 +787,27 @@ const viewTimeline = computed(() => {
 // 可被精简过滤的例行事件数（基于全量稳定计数，不随展开态变化，否则展开后按钮消失）
 // >0 时卡头露出「展开全部 / 只看关键节点」切换入口
 const hiddenEventCount = computed(() => timeline.value.filter(ev => COMPACT_HIDDEN_EVENTS.has(ev.eventType)).length)
+
+// ── 时间线事件卡：统一高度 + 点击展开/收起 ──
+// 折叠态只露 2 行描述（CSS 裁断），展开态显示完整描述与完整标题。
+// 是否「有更多可看」按描述长度粗判：右栏卡片每行约 22 个汉字，2 行 ≈ 44 字。
+// 不逐卡 ref 量 scrollHeight——时间线有几十条、轮询还会重建，逐条测量得不偿失。
+const EXPANDABLE_DESC_LENGTH = 48
+const expandedEvents = ref<Record<string, boolean>>({})
+
+function isEventOpen(id: LongId | string | number): boolean {
+  return !!expandedEvents.value[String(id)]
+}
+
+function isEventExpandable(ev: TaskTimelineItem): boolean {
+  return (eventDescription(ev) || '').length > EXPANDABLE_DESC_LENGTH
+}
+
+function toggleEvent(ev: TaskTimelineItem) {
+  if (!isEventExpandable(ev)) return
+  const key = String(ev.id)
+  expandedEvents.value = { ...expandedEvents.value, [key]: !expandedEvents.value[key] }
+}
 
 // ── 任务详情展开/收缩（完整展示子任务具体内容：内容/交付物/验收标准/约束/技能/不确定性）──
 // 折叠判定 = 渲染后实测溢出（scrollHeight > clientHeight），宽屏/窄屏均精确：
@@ -1102,6 +1166,59 @@ function eventDescription(ev: TaskTimelineItem): string {
 function goBackToList() {
   const tid = item.value?.taskId
   router.push(tid ? { path: '/sub-tasks', query: { taskId: String(tid) } } : '/sub-tasks')
+}
+
+// ── 派生血缘导航（ADR-008）──
+// 下钻指针：草案期派生在物化时写进 sub_task.context.derivedTaskId；执行期重构只把指针
+// 写进「状态变更」事件 payload，故对 AWAITING_DERIVED 再兜一次时间线（同一事实两处载体，
+// 但不新开查询接口——context 与时间线都已在手）。
+// 上钻指针：task.parent_sub_task_id，即「本子任务所属任务是哪个子任务派生出来的」。
+const currentTask = ref<Task | null>(null)
+
+const derivedTaskId = computed(() => {
+  const fromCtx = item.value?.context?.derivedTaskId
+  if (fromCtx != null && String(fromCtx) !== '') return String(fromCtx)
+  if (item.value?.status !== 'AWAITING_DERIVED') return ''
+  for (let i = timeline.value.length - 1; i >= 0; i--) {
+    const v = timeline.value[i].payload?.derivedTaskId
+    if (v != null && String(v) !== '') return String(v)
+  }
+  return ''
+})
+
+const parentSubTaskId = computed(() => {
+  const v = currentTask.value?.parentSubTaskId
+  return v != null && String(v) !== '' ? String(v) : ''
+})
+
+/** 拉所属任务的血缘锚（失败静默：导航箭头是辅助入口，不该阻断主体渲染）。 */
+async function loadTaskRelation(taskId: LongId | null | undefined) {
+  currentTask.value = null
+  if (taskId == null || taskId === '') return
+  try {
+    currentTask.value = await taskApi.getById(taskId)
+  } catch {
+    currentTask.value = null
+  }
+}
+
+/**
+ * 下钻：跳到二次拆分出的**那个主任务本身**（任务管理里按 taskId 筛选）。
+ *
+ * <p>不跳 `/sub-tasks?taskId=`——那直接进它的子任务列表，跳过了主任务本体（状态、进度、
+ * 报告、操作入口都在主任务上）。要看它的子任务，从那一行点标题即可。</p>
+ */
+function goDerivedTask() {
+  const id = derivedTaskId.value
+  if (!id) return
+  router.push('/tasks?taskId=' + id)
+}
+
+/** 上钻：回到派生来源的那个子任务详情。 */
+function goParentSubTask() {
+  const id = parentSubTaskId.value
+  if (!id) return
+  router.push('/sub-tasks/' + id)
 }
 
 // 事件流工作台：带 taskId + subTaskId 深链（Replay 自动聚焦该子任务的执行轨迹）
@@ -1684,6 +1801,7 @@ async function reloadAllData(id: string): Promise<SubTask | null> {
   // 详情拉取失败：后续数据源没有有效主键（taskId），继续拉只会把兄弟子任务列表清空
   if (!fresh) return null
   await loadTaskMembers(fresh.taskId)
+  await loadTaskRelation(fresh.taskId)
   await loadSiblings(fresh.taskId)
   await loadTimeline(id)
   await loadConversation(id)
@@ -1850,7 +1968,16 @@ onActivated(() => {
   letter-spacing: -0.015em;
   color: var(--ha-ink);
   text-wrap: balance;
+  /* 血缘导航按钮与标题同一行：flex 让按钮始终贴住标题末字，标题换行时按钮跟随 */
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
 }
+.head-title-text { min-width: 0; }
+/* 血缘手柄（下钻/上钻）贴标题末字：22px 标题行高 1.35 ⇒ 29.7px，
+   28px 与 24px 都只需 2px 下沉即可视觉居中（多行标题时贴顶更稳定）。 */
+.head-drill { margin-top: 2px; }
 /* 设计图：元信息行字号统一 12px，字色 muted，主标签/值之间用细分隔点 */
 .head-meta {
   display: flex;
@@ -1923,20 +2050,48 @@ onActivated(() => {
   letter-spacing: 0.01em;
 }
 /* 任务详情小节（内容/交付物/验收标准/约束/技能/不确定性）；长文本折叠 3 行 + 展开全文 */
-.detail-sec { margin-top: 10px; }
-.detail-sec:first-of-type { margin-top: 2px; }
+/* 小节之间用虚线分隔 + 左侧主色标记：字段多时靠分隔线分区，比纯靠留白更好扫读 */
+.detail-sec {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--ha-border-light);
+}
+/* 首个可见小节不画分隔线：`:first-of-type` 在这里失效（父节点第一个 div 是
+   `.head-summary-label`），只能用相邻兄弟选择器 */
+.head-summary-label + .detail-sec {
+  margin-top: 2px;
+  padding-top: 0;
+  border-top: none;
+}
 .detail-sec-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--ha-muted);
-  margin-bottom: 4px;
+  color: var(--ha-ink-secondary, var(--ha-muted));
+  margin-bottom: 6px;
+  letter-spacing: 0.01em;
+}
+.detail-sec-label::before {
+  content: '';
+  width: 3px;
+  height: 11px;
+  border-radius: 2px;
+  background: var(--ha-primary, #7C3AED);
+  opacity: 0.65;
 }
 .detail-text {
   font-size: 13px;
   line-height: 1.75;
   color: var(--ha-ink-secondary, inherit);
-  white-space: pre-wrap;
   word-break: break-word;
+}
+/* 折叠用 max-height 而不是 -webkit-line-clamp：结构化视图内部是 flex/列表块，
+   行数裁断对块级子节点不生效（会整段露出来）。1.75 × 3 行 ≈ 5.25em */
+.detail-text.is-collapsed {
+  max-height: 5.25em;
+  overflow: hidden;
 }
 .detail-toggle {
   display: inline-block;
@@ -1984,6 +2139,10 @@ onActivated(() => {
               background-color var(--ha-duration-fast, 150ms) var(--ha-ease-out, ease-out);
 }
 .tl-item:hover { border-color: var(--ha-primary); }
+/* 可展开的卡给个手型；不可展开的保持默认箭头，避免「点了没反应」的错觉 */
+.tl-item.is-expandable { cursor: pointer; }
+/* 展开态整卡不提亮底色，只放宽描述裁断——否则一路展开下来又变成色块墙 */
+.tl-item.is-open { border-color: var(--ha-primary); }
 /* 设计图润色：事件卡顶行【分类徽标 · 右对齐时间】，统一间距 */
 .tl-top {
   display: flex;
@@ -1993,8 +2152,16 @@ onActivated(() => {
   margin-bottom: 6px;
 }
 .tl-top :deep(.el-tag) { border-radius: 999px; font-size: 11px; }
+/* 标题行：标题占满，右侧展开箭头 */
+.tl-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
 /* 事件名单行裁断 */
 .tl-title {
+  flex: 1 1 auto;
   min-width: 0;
   font-size: 14px;
   font-weight: 600;
@@ -2004,6 +2171,19 @@ onActivated(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 展开时标题也放开折行：标题里常带工具名与参数摘要 */
+.tl-item.is-open .tl-title {
+  white-space: normal;
+  word-break: break-word;
+}
+.tl-caret {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--ha-muted);
+  transition: transform var(--ha-duration-fast, 150ms) var(--ha-ease-out, ease-out);
+}
+.tl-caret.open { transform: rotate(90deg); }
 .tl-time {
   font-size: 12px;
   color: var(--ha-muted);
@@ -2016,6 +2196,19 @@ onActivated(() => {
   line-height: 1.6;
   color: var(--ha-muted);
   word-break: break-word;
+}
+/* 折叠态：固定 2 行（min-height 让只有 1 行的卡与其它卡等高，整条时间线才是齐的） */
+.tl-desc:not(.is-open) {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: calc(1.6em * 2);
+}
+/* 展开态：完整描述，保留原始换行（payload 里常带多行回执） */
+.tl-desc.is-open {
+  white-space: pre-wrap;
+  color: var(--ha-ink-secondary, inherit);
 }
 
 /* 设计图润色：Timeline 本身的圆点改为语义色点 + 缩小默认尺寸 */

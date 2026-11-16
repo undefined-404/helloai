@@ -106,13 +106,26 @@
               {{ parentTask.status }}
             </el-tag>
           </span>
-          <el-button
-            link
-            type="primary"
-            @click="clearTaskFilter"
-          >
-            查看全部子任务
-          </el-button>
+          <!-- 上钻：当前主任务是别的子任务二次拆分出来的 ⇒ 给一条回到来源子任务的路。
+               原来是 el-button link（裸文字，没有可点暗示），按设计规范升级为浅紫胶囊：
+               胶囊的底色/描边与行内下钻同一套，让人认出「这两个是同类动作」。 -->
+          <span class="parent-task-actions">
+            <DrillHandle
+              v-if="parentTask?.parentSubTaskId"
+              direction="back"
+              :size="24"
+              label="返回来源子任务"
+              title="上钻：返回二次拆分的来源子任务"
+              @click="goParentSubTask"
+            />
+            <el-button
+              link
+              type="primary"
+              @click="clearTaskFilter"
+            >
+              查看全部子任务
+            </el-button>
+          </span>
         </template>
       </el-alert>
       <!-- 依赖图视图：拓扑分层流水线（同批可并行），点击节点跳详情 -->
@@ -140,19 +153,31 @@
           <el-table-column
             label="标题"
             min-width="190"
-            show-overflow-tooltip
           >
             <template #default="{ row }">
-              <!-- 拓扑序号小徽标：与依赖列/依赖图 #序号 同口径，仅按主任务过滤时展示 -->
-              <span
-                v-if="taskId && seqMap.get(String(row.id))"
-                class="seq-badge"
-              >#{{ seqMap.get(String(row.id)) }}</span>
-              <span
-                class="link-cell"
-                :title="row.title"
-                @click="router.push('/sub-tasks/' + row.id)"
-              >{{ row.title }}</span>
+              <div class="cell-title">
+                <!-- 拓扑序号小徽标：与依赖列/依赖图 #序号 同口径，仅按主任务过滤时展示 -->
+                <span
+                  v-if="taskId && seqMap.get(String(row.id))"
+                  class="seq-badge"
+                >#{{ seqMap.get(String(row.id)) }}</span>
+                <span
+                  class="link-cell cell-title-text"
+                  :title="row.title"
+                  @click="router.push('/sub-tasks/' + row.id)"
+                >{{ row.title }}</span>
+                <!-- 下钻：该子任务已二次拆分出独立主任务（ADR-008）⇒ 标题后给入口，
+                     落到「任务管理」里那个派生主任务本身（不是它的子任务列表——那要再点一次标题）。
+                     用 24px 浅紫徽标而非裸图标：表格是 stripe 斑马纹，透明底图标在白色行上
+                     会退化成正文的一部分，看不出可点。 -->
+                <DrillHandle
+                  v-if="derivedTaskIdOf(row)"
+                  direction="down"
+                  :size="24"
+                  title="下钻：查看二次拆分出的主任务"
+                  @click.stop="goDerivedTask(row)"
+                />
+              </div>
             </template>
           </el-table-column>
           <!-- 未按主任务过滤时展示归属任务，避免与顶部信息条重复 -->
@@ -669,6 +694,7 @@ import { ArrowDown, List } from '@element-plus/icons-vue'
 import { subTaskApi } from '@/api/subTask'
 import { taskApi } from '@/api/task'
 import AgentSelect from '@/components/AgentSelect.vue'
+import DrillHandle from '@/components/DrillHandle.vue'
 import QuickDispatchDialog from '@/components/QuickDispatchDialog.vue'
 import SubTaskDagView from '@/components/SubTaskDagView.vue'
 import TaskIterationView from '@/components/TaskIterationView.vue'
@@ -872,6 +898,34 @@ function goParentTaskById(id: string) {
 // 所属任务列点击 → 跳转任务管理页并筛选该主任务
 function goParentTask(row: SubTask) {
   if (row.taskId) router.push('/tasks?taskId=' + row.taskId)
+}
+
+// ── 二次拆分下钻（ADR-008）──
+// 指针来源：子任务物化时写进 sub_task.context.derivedTaskId；列表接口已带 context，
+// 无需为每行再查一次派生关系（避免 20 行 20 次请求的 N+1）。
+function derivedTaskIdOf(row: SubTask): string {
+  const v = row.context?.derivedTaskId
+  return v != null && String(v) !== '' ? String(v) : ''
+}
+
+/**
+ * 下钻：该子任务已二次拆分出独立主任务（ADR-008）⇒ 落到**那个主任务本身**。
+ *
+ * <p>落点是「任务管理」并按 taskId 筛选，因为派生出来的是一个独立任务（有自己的状态、
+ * 进度、报告与操作入口），不是当前列表里的兄弟子任务。曾经跳 `/sub-tasks?taskId=`——
+ * 那会直接进「派生主任务的子任务列表」，跳过了主任务本体，用户点下钻看不到它自己的状态。</p>
+ */
+function goDerivedTask(row: SubTask) {
+  const id = derivedTaskIdOf(row)
+  if (!id) return
+  router.push('/tasks?taskId=' + id)
+}
+
+/** 上钻：当前主任务是某个子任务派生出来的 ⇒ 回到那个子任务详情。 */
+function goParentSubTask() {
+  const id = parentTask.value?.parentSubTaskId
+  if (id == null || String(id) === '') return
+  router.push('/sub-tasks/' + String(id))
 }
 
 // 同页面内 taskId 变化（如清除筛选 / 从不同主任务进入）时联动刷新
@@ -1190,11 +1244,14 @@ onMounted(() => {
 .parent-task-bar { margin-bottom: 12px; }
 .parent-task-bar :deep(.el-alert__title) { display: flex; align-items: center; justify-content: space-between; width: 100%; }
 .parent-task-title { display: flex; align-items: center; }
+/* 信息条右侧动作组：胶囊与「查看全部」同一基线并排，space-between 只作用在左右两端 */
+.parent-task-actions { display: inline-flex; align-items: center; gap: 12px; }
 .dep-tag { cursor: pointer; margin-right: 4px; }
-/* 标题前拓扑序号小徽标：参考电商 new 角标样式（小号胶囊、实底白字） */
+/* 标题前拓扑序号小徽标：参考电商 new 角标样式（小号胶囊、实底白字）。
+   与标题、下钻手柄的间距统一由 `.cell-title` 的 gap 给（design-system.css），此处不再自带外边距
+   ——两处各写一半会在「徽标 + 标题 + 手柄」同时出现时叠成 12px。 */
 .seq-badge {
   display: inline-block;
-  margin-right: 6px;
   padding: 0 6px;
   font-size: 11px;
   font-weight: 600;
@@ -1204,6 +1261,7 @@ onMounted(() => {
   border-radius: 8px;
   vertical-align: 1px;
 }
+/* 行内下钻手柄与标题的间距由 `.cell-title` 的 gap 统一给（design-system.css） */
 /* 负责人 Agent 名：长名在窄列下不能换行，单行截断 + 原生 title tooltip 提示全名 */
 .agent-cell {
   display: block;

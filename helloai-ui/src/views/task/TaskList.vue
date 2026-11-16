@@ -55,14 +55,26 @@
         <el-table-column
           label="标题"
           min-width="200"
-          show-overflow-tooltip
         >
           <template #default="{ row }">
-            <span
-              class="link-cell"
-              :title="row.title"
-              @click="goSubTasks(row)"
-            >{{ row.title }}</span>
+            <!-- 标题 + 尾随上钻手柄成一格：不用列的 show-overflow-tooltip，理由见
+                 design-system.css `.cell-title`（它会让长标题把尾随手柄一起裁掉）。
+                 上钻与子任务列表的下钻是同一组动作、同一套外观，故尺寸同为 24、
+                 位置同为「标题之后」——不在页面里另开一列，动作跟着对象走。 -->
+            <div class="cell-title">
+              <span
+                class="link-cell cell-title-text"
+                :title="row.title"
+                @click="goSubTasks(row)"
+              >{{ row.title }}</span>
+              <DrillHandle
+                v-if="row.parentSubTaskId"
+                direction="up"
+                :size="24"
+                title="上钻：返回二次拆分的来源子任务"
+                @click.stop="goParentSubTask(row)"
+              />
+            </div>
           </template>
         </el-table-column>
         <el-table-column
@@ -377,6 +389,7 @@ import { stripMarkdown } from '@/utils/markdown'
 import { queryString } from '@/utils/queryParam'
 import { nextPollDelay } from '@/utils/pollBackoff'
 import MarkdownView from '@/components/MarkdownView.vue'
+import DrillHandle from '@/components/DrillHandle.vue'
 import TaskDeleteDialog from './components/TaskDeleteDialog.vue'
 import PlanReviewDialog from './components/PlanReviewDialog.vue'
 import FinalReportDialog from './components/FinalReportDialog.vue'
@@ -473,6 +486,18 @@ async function load() {
 
 // 标题点击 → 跳转子任务列表
 function goSubTasks(row: any) { router.push('/sub-tasks?taskId=' + String(row.id)) }
+
+/**
+ * 上钻：本任务是某个子任务二次拆分出来的 ⇒ 回到那个来源子任务的详情。
+ *
+ * <p>指针只看 `parentSubTaskId`（V148）：草案期派生写在 `parent_task_id` + `parent_draft_code`，
+ * 父任务确认、子任务物化时回填 `parent_sub_task_id` 并清空那两列，故两者互斥不重叠。</p>
+ */
+function goParentSubTask(row: any) {
+  const id = row.parentSubTaskId
+  if (id == null || String(id) === '') return
+  router.push('/sub-tasks/' + String(id))
+}
 
 // 事件流工作台：按任务维度回放 / 审计（深链自动带入 taskId 并查询）
 function goEvents(row: any) { router.push('/event-stream?taskId=' + String(row.id)) }
