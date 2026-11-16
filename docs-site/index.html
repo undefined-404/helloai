@@ -108,6 +108,20 @@ figure.dg.fs iframe{height:100%!important}
     <span class="sp"></span>
     <button class="tbtn" id="theme">切换明暗</button>
   </header>
+<section id="diagram-index" style="grid-column:1/-1;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px 22px;box-shadow:var(--shadow)">
+<h2 style="margin:0 0 10px;font-size:17px">📊 全部交互式图表（7 张）</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;font-size:13.5px">
+<a href="doc/diagrams/html/helloai-system-architecture.html">系统架构 · 部署视图</a>
+<a href="doc/diagrams/html/platform-scheduling-flow.html">平台任务调度总览（六阶段）</a>
+<a href="doc/diagrams/html/subtask-state-machine.html">子任务状态机（12 态主干）</a>
+<a href="doc/diagrams/html/task-report-state.html">主任务与整合报告状态机</a>
+<a href="doc/diagrams/html/derived-restructuring-branch.html">派生与重构分支（4 态）</a>
+<a href="doc/diagrams/html/llm-internal-execution.html">LLM 内部执行顺序（Harness）</a>
+<a href="doc/diagrams/html/sandbox-evidence-approval.html">沙箱执行与证据审批链路</a>
+<a href="doc/diagrams/html/planner-flow-and-state.html">Planner 编排工作流</a>
+<a href="doc/diagrams/html/executor-flow-and-state.html">Executor 执行工作流（双链）</a>
+<a href="doc/diagrams/html/reviewer-flow-and-state.html">Reviewer 核验工作流（双域）</a>
+</div></section>
   <nav class="toc"><div class="hd">目录</div><a class="toc-l2" href="#sec-1">💎 为什么是 HelloAI？</a>
 <a class="toc-l3" href="#sec-2">为什么需要一支 AI 团队？</a>
 <a class="toc-l3" href="#sec-3">行业分工：我们补的是最缺的那一段</a>
@@ -342,18 +356,9 @@ HelloAI：追问澄清 → 拆解为带依赖的子任务草案 → 你确认 �
 </figure>
 <h3 id="sec-8">平台三级状态机<a class="anchor" href="#sec-8" aria-hidden="true">#</a></h3>
 <p>主任务、子任务、最终整合报告三张状态机各自收敛，经 ①②③ 联动；每张状态机的合法迁移表都是唯一裁判：</p>
-<figure class="dg" data-src="doc/diagrams/html/platform-state-machines.html">
-  <figcaption class="dg-bar">
-    <span class="dg-title">平台三级状态机</span>
-    <span class="dg-sub">主任务 / 子任务 / 整合报告</span>
-    <span class="dg-actions">
-      <button class="dg-btn" data-fs>全屏</button>
-      <a class="dg-btn" href="doc/diagrams/html/platform-state-machines.html" target="_blank" rel="noopener">新窗口打开 ↗</a>
-    </span>
-  </figcaption>
-  <div class="dg-frame"><iframe src="doc/diagrams/html/platform-state-machines.html" style="height:1000px" loading="lazy" title="平台三级状态机"></iframe></div>
-  <p class="dg-hint">可拖拽平移 · 滚轮缩放 · 悬停高亮关联节点 · 点击节点看详情 · 右上角「主题」切换明暗</p>
-</figure>
+<p>📊 交互图：<a href="doc/diagrams/html/subtask-state-machine.html">子任务状态机（12 态 · 主干）</a> ·
+<a href="doc/diagrams/html/derived-restructuring-branch.html">派生与重构分支（4 态）</a> ·
+<a href="doc/diagrams/html/task-report-state.html">主任务与整合报告状态机</a></p>
 <h3 id="sec-9">三种角色的工作流与状态机<a class="anchor" href="#sec-9" aria-hidden="true">#</a></h3>
 <p><strong>Planner（规划者）</strong>——双模澄清 → 六字段需求包 → 能力感知拆解 → 人工确认草案：</p>
 <figure class="dg" data-src="doc/diagrams/html/planner-flow-and-state.html">
@@ -395,7 +400,7 @@ HelloAI：追问澄清 → 拆解为带依赖的子任务草案 → 你确认 �
   <p class="dg-hint">可拖拽平移 · 滚轮缩放 · 悬停高亮关联节点 · 点击节点看详情 · 右上角「主题」切换明暗</p>
 </figure>
 <blockquote>
-<p>更细的链路图：<a href="https://gitee.com/undefined_404/helloai/blob/master/doc/design/Planner_Capability_Awareness.md" target="_blank" rel="noopener">Planner 双模对话</a> · <a href="doc/diagrams/subtask-state-machine.svg">子任务全状态机（11 态）</a> · <a href="doc/diagrams/reviewer-full-flow.svg">Reviewer 审核全流程</a> · <a href="doc/diagrams/external-agent-flow.svg">外部 Agent 执行流程</a> · <a href="doc/diagrams/internal-llm-executor-flow.svg">平台内 LLM 执行流程</a> · <a href="doc/diagrams/final-report-flow.svg">整合报告流程</a> · <a href="doc/diagrams/planner-decompose-flow.svg">Planner 拆解流程</a></p>
+<p>更细的链路图：<a href="https://gitee.com/undefined_404/helloai/blob/master/doc/design/Planner_Capability_Awareness.md" target="_blank" rel="noopener">Planner 双模对话</a> · <a href="doc/diagrams/html/subtask-state-machine.html">子任务状态机（12 态）</a> · <a href="doc/diagrams/reviewer-full-flow.svg">Reviewer 审核全流程</a> · <a href="doc/diagrams/external-agent-flow.svg">外部 Agent 执行流程</a> · <a href="doc/diagrams/internal-llm-executor-flow.svg">平台内 LLM 执行流程</a> · <a href="doc/diagrams/final-report-flow.svg">整合报告流程</a> · <a href="doc/diagrams/planner-decompose-flow.svg">Planner 拆解流程</a></p>
 </blockquote>
 <hr>
 <h2 id="sec-10">🛠️ 技术概览<a class="anchor" href="#sec-10" aria-hidden="true">#</a></h2>
@@ -758,7 +763,7 @@ sudo bash scripts/ci/host-prepare.sh --swap 2G   # 4G 内存机器建议加 2G s
 </tr>
 <tr>
 <td><strong>查看任务状态机</strong></td>
-<td><a href="doc/diagrams/platform-state-machines.svg">平台三级状态机</a> — 主任务 / 子任务 / 整合报告联动 · <a href="doc/diagrams/subtask-state-machine.svg">子任务状态机（11 态）</a> — 流转与异常路径</td>
+<td><a href="doc/diagrams/html/subtask-state-machine.html">子任务状态机（12 态）</a> — 主干 + 派生/重构 · <a href="doc/diagrams/html/task-report-state.html">主任务与报告状态机</a></td>
 </tr>
 <tr>
 <td><strong>浏览交互式架构图</strong></td>
