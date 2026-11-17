@@ -8,8 +8,8 @@
 |---|---|---|---|---|---|---|
 | 打卡 | `checkIn` / `checkOut`（MCP SSE · REST 别名 · REST 直通三通道同名） | checkIn: `workMode` `maxConcurrent` `ttlMinutes` `skills`；checkOut: `closeReason` | checkIn: `ok` `leaseId` `sessionId` `workMode` `maxConcurrent` `expiresAt` `mergedSkills`；checkOut: `ok` `closedCount` `reason` `currentStatus` `latestLeaseId` `latestLeaseExpiresAt` `latestLeaseClosedReason` | 未 `checkIn` 调 `pullTasks` 报 500 `Agent 未在岗`；换 TTL/模式须 `checkOut` 后再 `checkIn`；`checkOut` 幂等，`currentStatus`=CLOSED/EXPIRED/NONE | §2.2 | SKILL§0.1 · 实测 |
 | 工作模式 | 无独立工具；工作模式只能作为 `checkIn` 入参声明 | `workMode` `maxConcurrent` `ttlMinutes` | 同打卡 | `workMode` 仅 `AUTO`/`STRICT`（null/空串按 `AUTO`，非法值立即拒绝）；并发占用口径 = `ASSIGNED`+`IN_PROGRESS`+`REWORK`；串行 LLM 型 Agent 填 1 | §2.3 | SKILL§0.1 · 实测 |
-| 任务获取与认领 | `pullTasks` `ack` `claimSubTask` `getSubTaskDetail` `getDepsSummary` `reportBlocked`；REST：`GET /api/sub-tasks/listMine?agentId=` `GET /api/sub-tasks/listAvailable` `GET /api/sub-tasks/list?taskId=` `POST /api/sub-tasks/claimById/{id}?agentId=` `MCP 工具 startSubTask` `GET /api/sub-tasks/getById/{id}` | pullTasks: `role` `max` `includeRead`；ack: `messageId`；claimSubTask: `subTaskId`；getSubTaskDetail: `agentId` `subTaskId`；getDepsSummary: `subTaskId`；reportBlocked: `subTaskId` `reason` | pullTasks: `messages:[{messageId,type,subTaskId,taskId,title,priority,deadline,summary,read,reassigned,currentAgentId}]`；claimSubTask: `ok` `claimed` `reason` `assignedAgent` `subTaskId` `version` `detail`；getSubTaskDetail: `content` `deliverable` `acceptance` `constraints` `uncertainties` `requiredSkills`；getDepsSummary: `depCount` `loadedCount` `truncatedCount` `degraded` `deps[]` | `pullTasks` 是唯一任务感知通道（门铃已搁置）且不自动标记已读，处理完必须 `ack`；`claimSubTask` 为原子抢单，`claimed=false` 时不得执行；`reassigned`/`unassigned` 必须立即停止执行且不再提交 | §2.4 | SKILL§0.1、§1.5.1 · 实测 |
-| 结果提交 | `submitResult` `uploadArtifact`；文件内容上传 `POST /api/artifacts/upload`（multipart） | submitResult: `subTaskId` `resultId` `success` `output` `finishReason` `tokenUsage`(可选)；uploadArtifact: `subTaskId` `fileName` `mimeType` `fileSize` `storageUrl` | submitResult: `ok` `accepted` `idempotent` `status` `reason` `subTaskId` `resultId`；上传: `attachmentId` `storageUrl` | 只自动推进 `ASSIGNED`/`IN_PROGRESS`（`REWORK` 须先 `startSubTask`）；同一轮重试必须同 `resultId`，返工重提必须换新 `resultId`；`output` 末尾必须附 `EXECUTION_RECORD`；不得直连 MinIO；`tokenUsage` 可选，仅供平台成本观测 | §2.5 | SKILL§0.1、§4.4 · 实测 |
+| 任务获取与认领 | `pullTasks` `ack` `claimSubTask` `startSubTask` `cancelSubTask` `getSubTaskDetail` `getDepsSummary` `reportBlocked`；REST：`GET /api/sub-tasks/listMine?agentId=` `GET /api/sub-tasks/listAvailable` `GET /api/sub-tasks/list?taskId=` `POST /api/sub-tasks/claimById/{id}?agentId=` `GET /api/sub-tasks/getById/{id}` | pullTasks: `role` `max` `includeRead`；ack: `messageId`；claimSubTask: `subTaskId`；startSubTask / cancelSubTask: `subTaskId`；getSubTaskDetail: `agentId` `subTaskId`；getDepsSummary: `subTaskId`；reportBlocked: `subTaskId` `reason` | pullTasks: `messages:[{messageId,type,subTaskId,taskId,title,priority,deadline,summary,read,reassigned,currentAgentId}]`；claimSubTask: `ok` `claimed` `reason` `assignedAgent` `subTaskId` `version` `detail`；cancelSubTask: `ok` `subTaskId` `assignedAgent` `status` `version`；getSubTaskDetail: `content` `deliverable` `acceptance` `constraints` `uncertainties` `requiredSkills`；getDepsSummary: `depCount` `loadedCount` `truncatedCount` `degraded` `deps[]` | `pullTasks` 是唯一任务感知通道（门铃已搁置）且不自动标记已读，处理完必须 `ack`；`claimSubTask` 为原子抢单，`claimed=false` 时不得执行；`reassigned`/`unassigned` 必须立即停止执行且不再提交；`cancelSubTask` 为放弃出口，仅限自己名下非终态，失败显式报 400 且非幂等（§2.4） | §2.4 | SKILL§0.1、§1.5.1 · 实测 |
+| 结果提交 | `submitResult` `uploadArtifact`；文件内容上传 `POST /api/artifacts/upload`（multipart） | submitResult: `subTaskId` `resultId` `success` `output` `finishReason` `tokenUsage`(可选) `parts`(可选，结构化分片数组)；uploadArtifact: `subTaskId` `fileName` `mimeType` `fileSize` `storageUrl` | submitResult: `ok` `accepted` `idempotent` `status` `reason` `subTaskId` `resultId`；上传: `attachmentId` `storageUrl` | 只自动推进 `ASSIGNED`/`IN_PROGRESS`（`REWORK` 须先 `startSubTask`）；同一轮重试必须同 `resultId`，返工重提必须换新 `resultId`；`output` 末尾必须附 `EXECUTION_RECORD`；不得直连 MinIO；`tokenUsage` 可选，仅供平台成本观测；`parts` 可选，与 `output` 二选一优先用 `parts`（见第 03 章 §3.1.3），本批只收 `text` / `data`，`file` 分片返回 400 | §2.5 | SKILL§0.1、§4.4 · 实测 |
 | 心跳与租约 | `heartbeat` `getAgentStatus` | `{}` | heartbeat: `ok` `agentId` `serverTime` `onDuty` `leaseId` `leaseExpiresAt` `remainingTtlSeconds`；getAgentStatus: `status` `dbOnlineStatus` `computedOnlineStatus` `lastSeenAt` `lastActiveAt` `offlineReason` `offlineAt` `serverTime` | `heartbeat` 是唯一刷新 `last_seen_time` 的调用，超 5 分钟无心跳判 `OFFLINE`（业务调用只刷 `last_active_time`）；除 checkIn/checkOut 外任一工具调用自动按原 TTL 续租 | §2.6 | SKILL§0.1、§1.4(4) · 实测 |
 
 ## 2. 平台交互契约详表
@@ -19,10 +19,10 @@
 | 项 | 契约 | 来源 |
 |---|---|---|
 | 鉴权头 | 所有请求带 `Authorization: Bearer <API_KEY>`，Key 前缀 `ak_` | SKILL§0.1 · 实测 |
-| 工具总数 | 三通道同名集合共 12 个：`checkIn` `checkOut` `getAgentStatus` `pullTasks` `ack` `claimSubTask` `getSubTaskDetail` `heartbeat` `uploadArtifact` `submitResult` `reportBlocked` `getDepsSummary` | 实测（tools/list） · SKILL§0.1 |
+| 工具总数 | 三通道同名集合共 14 个：`checkIn` `checkOut` `getAgentStatus` `pullTasks` `ack` `claimSubTask` `startSubTask` `cancelSubTask` `heartbeat` `uploadArtifact` `submitResult` `reportBlocked` `getDepsSummary` `getSubTaskDetail` | 实测（tools/list，2026-11-17） · SKILL§0.1 |
 | 工具清单获取 | `MCP tools/list` 或 `GET /api/mcp/tools`；调用前必须以此为准 | SKILL§0.1 |
 | MCP SSE 握手 | 四步：`GET /mcp/sse` 取 sessionId → `initialize` → `notifications/initialized` → `tools/call`；跳过第 3 步会永久挂死（无响应，非报错） | SKILL§1.4(1) |
-| MCP 参数透传 | MCP 通道 tool arguments 必须显式带 `agentId` 与 `sessionId`，且 sessionId 同时拼在 URL query；漏传报 500 `sessionId 不能为空` | SKILL§1.4(2) |
+| MCP 参数透传 | MCP 通道 tool arguments 必须显式带 `agentId` 与 `authSessionId`（推荐名；旧名 `sessionId`/`_sessionId` 兼容期内仍有效，三名优先级 `authSessionId > sessionId > _sessionId`，首个非空白胜出）；sid 同时拼在 URL query `?sessionId=`（传输层参数名不变）；三名全空报 401 `MCP 鉴权失败：缺少 authSessionId 参数` | SKILL§1.4(2) · 实测（2026-11-17） |
 | REST 通道 | REST 别名与 REST 直通免 sessionId，agentId 由 Bearer 头解析 | SKILL§0.1 · 实测 |
 | 通道选择 | 优先 MCP SSE；出现 `Session not found` 或 session 失效时立即切 REST 别名继续本轮，不中断任务 | SKILL§1.4(3) |
 
@@ -49,7 +49,7 @@
 | `maxConcurrent` | 正整数 | 在飞子任务上限，占用口径 = `ASSIGNED`+`IN_PROGRESS`+`REWORK`；不传默认 1；串行 LLM 型建议 1，脚本型按实际能力填 2~5 | SKILL§0.1 |
 | `ttlMinutes` | 正整数 | 租约有效期（分钟），默认 30；变更须 `checkOut` 后重新 `checkIn` | SKILL§0.1 · §1.2 |
 
-- 平台**没有**独立的工作模式切换工具（13 个工具中不存在该能力），工作模式只能作为 `checkIn` 入参声明。来源：实测（tools/list） · SKILL§0.1。
+- 平台**没有**独立的工作模式切换工具（14 个工具中不存在该能力），工作模式只能作为 `checkIn` 入参声明。来源：实测（tools/list） · SKILL§0.1。
 - 在 `{工作模式需要变更}` 条件下，`{执行者}` **不得**假设存在热切换，**必须**走 §2.2 的签退重签流程；做不到的后果：旧租约继续按原模式参与调度。来源：SKILL§1.2。
 
 ### 2.4 任务获取与认领
@@ -60,6 +60,7 @@
 | `ack` | `messageId` | `ok` `acknowledged` `messageId` | SKILL§0.1 · 实测 |
 | `claimSubTask` | `subTaskId` | `ok` `claimed` `reason`（前置未全部 DONE 时为 `dependency_not_ready`）`assignedAgent` `subTaskId` `version` `detail`（子任务全文） | SKILL§0.1 |
 | `startSubTask` | `subTaskId` | `ok` `started` `reason` `subTaskId` `assignedAgent` `status` `version`（开工/返工出口：ASSIGNED / REWORK / PAUSED → IN_PROGRESS；非归属者 `not_task_owner`） | 代码:McpToolServiceImpl.java · 2026-09-24 G-014 |
+| `cancelSubTask` | `subTaskId` | `ok` `subTaskId` `assignedAgent` `status` `version`（放弃出口：自己名下非终态 → CANCELLED；失败显式报 400，见 §6） | SKILL§0.1 · 代码:McpTaskClaimServiceImpl.java · 实测（2026-11-17） |
 | `getSubTaskDetail` | `agentId` `subTaskId` | `content` `deliverable` `acceptance` `constraints` `uncertainties` `requiredSkills` `attachments:[{attachmentId,fileName,mimeType,fileSize,status,loadable}]` `contributors` | SKILL§0.1 · 2026-09-24 G-014 |
 | `getDepsSummary` | `subTaskId` | `subTaskId` `taskId` `depCount` `loadedCount` `truncatedCount` `degraded` `ready` `notReadyCount` `deps:[{subTaskId,title,status,summary,content,truncated,loaded,contentChars}]` | SKILL§0.1 · 2026-09-24 G-014 |
 | `reportBlocked` | `subTaskId` `reason` | `ok` `blocked` `subTaskId` `reason` | SKILL§0.1 |
@@ -71,6 +72,7 @@
 - 在 `{收到 sub_task.reassigned 或 sub_task.unassigned}` 条件下，`{执行者}` **必须**立即停止执行（终止进行中的 LLM 调用与命令）并**不得**再 `submitResult`，只 `ack` 该消息；`reassigned=true` 与 `currentAgentId` 用于识别“通知到了但任务已不是我的”。来源：SKILL§1.5.1.bis。
 - 在 `{dependsOn 非空}` 条件下，**必须**先调 `getDepsSummary` 拉取前置产出摘要，避免重复调研；`truncated=true` 表示该前置超 4000 字被截断，需用 `GET /api/sub-tasks/listConversationBySubTaskId/{id}` 补拉全文。来源：SKILL§4.2。
 - 在 `{上报阻塞}` 条件下，**必须**把证据（报错原文、失败命令、已重试次数、环境信息）内嵌进 `reportBlocked` 的 `reason`（该工具无附件字段）。来源：SKILL§1.2。
+- `cancelSubTask` 是放弃出口（ADR-009 A-1）：只能取消**自己名下**的非终态子任务，平台级联取消派生子任务并收口执行 attempt；失败模式与 `startSubTask` 不同——不返回 `reason` 码而是显式报 400（子任务不存在 / 非归属 / 终态 DONE·CANCELLED·DEAD_LETTER），重复取消已 CANCELLED 的子任务报错，**非幂等**。来源：SKILL§0.1、§1.2 · 实测（2026-11-17）。
 
 REST 辅助端点（查询/兜底，非执行工具）：
 
@@ -99,7 +101,7 @@ REST 辅助端点（查询/兜底，非执行工具）：
 
 | 工具 | 请求字段 | 返回字段 | 来源 |
 |---|---|---|---|
-| `submitResult` | `subTaskId` `resultId` `success` `output` `finishReason` `tokenUsage`(可选) | `ok` `accepted` `idempotent` `status` `reason` `subTaskId` `resultId` | SKILL§0.1 · 实测 |
+| `submitResult` | `subTaskId` `resultId` `success` `output` `finishReason` `tokenUsage`(可选) `parts`(可选) | `ok` `accepted` `idempotent` `status` `reason` `subTaskId` `resultId` | SKILL§0.1 · 实测 |
 | `uploadArtifact` | `subTaskId` `fileName` `mimeType` `fileSize` `storageUrl` | `ok` `attachmentId` `storageUrl` | SKILL§0.1 |
 | `POST /api/artifacts/upload` | multipart：`file` + `subTaskId` + 可选 `mimeType` | `{attachmentId, storageUrl}` | SKILL§1.2 · 实测 |
 
@@ -159,6 +161,7 @@ REST 辅助端点（查询/兜底，非执行工具）：
 | REST 别名 | `POST /api/mcp/jsonrpc`，无状态、免 session、同步返回，断连后仍可用 | SKILL§1.4(3) |
 | REST 直通 | `POST /api/mcp/tools/*`，响应为 `{code,msg,data}` 包装 | SKILL§0.1 |
 | sessionId | 两种语义：① 租约会话标识（UUID，checkIn 返回，仅标识该份租约）；② MCP transport session（SSE 连接级）；两者独立互不影响 | SKILL§1.2 |
+| authSessionId | MCP tool arguments 的推荐鉴权会话参数名（ADR-009 A-4），值为 MCP transport session id；旧名 `sessionId`/`_sessionId` 兼容期内仍有效，三名优先级 `authSessionId > sessionId > _sessionId`；URL query 传输层参数名仍为 `sessionId` | SKILL§1.4(2) |
 | DutyLease（打卡租约） | checkIn 签发的 ACTIVE 记录，是在岗状态的唯一凭据 | SKILL§1.2 |
 | TTL | 租约有效期窗口，由 checkIn 的 `ttlMinutes` 入参决定，默认 30 分钟 | SKILL§0.1 · §1.2 |
 | 在岗状态 | 由心跳与活跃时间推导的在线判定，值域见 §5.3 | 代码:AgentOnlineStatus · SKILL§1.4(4) |
@@ -262,8 +265,9 @@ REST 辅助端点（查询/兜底，非执行工具）：
 | 404 | 访问 `GET /api/agents/<id>` 或 `/api/rules/merged` | 路径用了历史写法 | 用 §2.4 的准确路径 `getById` / `getMergedRules` | SKILL§附录 |
 | 401 | 调 REST `startById` | 该端点需平台账号会话，不接受 API Key | 外部 Agent 改用 MCP 工具 `startSubTask`（三通道均已注册） | SKILL§附录 |
 | 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 未 `checkIn` 就调用依赖在岗状态的能力 | 先 `checkIn`（三通道任一）再调用 | SKILL§附录 |
-| 500 | `sessionId 不能为空` | MCP tool arguments 漏 `sessionId` 字段 | 把 SSE endpoint 帧的 sessionId 同时拼进 URL query 与 arguments | SKILL§附录 |
-| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）取权威清单（§2.1，13 个） | SKILL§附录 |
+| 401 | `MCP 鉴权失败：缺少 authSessionId 参数` | MCP tool arguments 三名（`authSessionId`/`sessionId`/`_sessionId`）全空 | 把 SSE endpoint 帧的 sid 同时拼进 URL query `?sessionId=`（传输层名不变）与 arguments `authSessionId`（推荐名，旧名兼容） | SKILL§1.4(2) · 实测（2026-11-17） |
+| 400 | `子任务不存在` / `无权取消该子任务：仅当前执行者可取消` / `终态子任务不能取消` | `cancelSubTask` 前置校验失败（不存在 / 非归属 / 终态 DONE·CANCELLED·DEAD_LETTER） | 先 `GET /api/sub-tasks/getById/{id}` 核对归属与状态；**不得**盲目重试（非幂等） | 代码:McpTaskClaimServiceImpl.java · 实测（2026-11-17） |
+| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）取权威清单（§2.1，14 个） | SKILL§附录 |
 | 500 | `非法状态转换: <from> -> <to>` | 违反 §5.2 转换表 | 先 `GET /api/sub-tasks/getById/{id}` 确认当前状态，再走 §2.5 排查顺序 | 代码:SubTaskStateMachine.java |
 | 500 | `invalid_status:REWORK` | 返工未先 `startSubTask` 就 `submitResult` | 按返工四步：`startSubTask` → 新 `resultId` → 提交 | SKILL§注意事项 |
 | 200 | `idempotent_duplicate` | 返工沿用旧 `resultId` | 换新 `resultId` 后重提 | SKILL§注意事项 |
@@ -278,6 +282,8 @@ REST 辅助端点（查询/兜底，非执行工具）：
 | `pullTasks` | 无（只读） | 重复调用不改变消息状态 | SKILL§1.2 |
 | `ack` | `messageId` | 重复 ack 幂等，`is_read` 保持 1；传错 ID 会静默成功而不生效（§2.4） | SKILL§1.2、§5.6 |
 | `claimSubTask` | `subTaskId` + 原子 CAS（`version`） | 竞争者只有一个成功，失败返回 `claimed=false` | SKILL§0.1 |
+| `startSubTask` | 状态幂等 | 已是 IN_PROGRESS 时重复调用幂等返回 `started=true` | SKILL§0.1 |
+| `cancelSubTask` | 无（**非幂等**） | 重复取消已 CANCELLED 的子任务显式报 400，不返回幂等成功 | SKILL§0.1 · 实测（2026-11-17） |
 | `submitResult` | `resultId` | 同一 `resultId` 重复提交不新增结果记录；返工重提必须换新 `resultId` | SKILL§0.1、§注意事项 |
 | `POST /api/artifacts/upload` | 同一子任务内 `fileName` | 同名上传把历史 ACTIVE 置 INACTIVE，最新一份唯一有效；REJECTED 后全部 ACTIVE 失效 | SKILL§1.2 |
 | `reportBlocked` | 无 | 重复上报是否去重 `[待确认]`（§8 TBD-4）；下游**不得**假设其幂等，**必须**自行去重上报次数 | 实测（无幂等参数） |

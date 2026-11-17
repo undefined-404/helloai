@@ -7,6 +7,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.command.ExecutionPart;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.command.ExecutionResultReport;
 import com.helloai.core.agent.entity.Agent;
@@ -43,6 +44,7 @@ import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.ConversationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -152,6 +154,7 @@ class McpToolServiceTest {
         lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("checkOut"))).thenReturn(true);
         lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("heartbeat"))).thenReturn(true);
         lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("startSubTask"))).thenReturn(true);
+        lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("cancelSubTask"))).thenReturn(true);
     }
 
     private AgentInbox subTaskInbox(Long refId) {
@@ -1055,7 +1058,7 @@ class McpToolServiceTest {
 
     @Test
     @DisplayName("getSubTaskDetail：本人名下子任务返回全文，技能为合并清单")
-    void shouldReturnFullDetailForAssignedSubTask() {
+    void shouldReturnFullDetailForAssignedSubTask() throws Exception {
         when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getSubTaskDetail"))).thenReturn(true);
         when(subTaskQueryPort.findById(SUB_TASK_ID))
                 .thenReturn(detailedSubTask(AGENT_ID, SubTaskStatus.IN_PROGRESS));
@@ -1065,6 +1068,13 @@ class McpToolServiceTest {
 
         assertThat(detail.getSubTaskId()).isEqualTo(SUB_TASK_ID);
         assertThat(detail.getTaskId()).isEqualTo(TASK_ID);
+        // A-3（ADR-009 §8.7）：conversationGroupId = taskId 最小投影（对外 A2A 面映射为 contextId）
+        assertThat(detail.getConversationGroupId()).isEqualTo(TASK_ID);
+        // wire 契约：Java 字段用内部名，JSON 键必须是 A2A 契约名 contextId
+        // （不加 @JsonProperty 时序列化结果是 conversationGroupId，文档说的「对外保名」在 wire 上就不成立）
+        String wire = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(detail);
+        assertThat(wire).contains("\"contextId\":" + TASK_ID);
+        assertThat(wire).doesNotContain("conversationGroupId");
         assertThat(detail.getContent()).isEqualTo("执行内容与边界");
         assertThat(detail.getDeliverable()).isEqualTo("交付物");
         assertThat(detail.getAcceptance()).isEqualTo("验收标准：运行 X 输出 Y");
@@ -1480,7 +1490,7 @@ class McpToolServiceTest {
         when(executionResultHandler.handleReport(any())).thenReturn(applied);
 
         McpToolService.SubmitResultResult result = mcpToolService.submitResult(
-                AGENT_ID, SUB_TASK_ID, "rid-token", true, "产出正文", null, "stop", 12345);
+                AGENT_ID, SUB_TASK_ID, "rid-token", true, "产出正文", null, "stop", 12345, null);
 
         assertThat(result.isOk()).isTrue();
         assertThat(result.isAccepted()).isTrue();
@@ -1505,7 +1515,7 @@ class McpToolServiceTest {
         when(executionResultHandler.handleReport(any())).thenReturn(applied);
 
         mcpToolService.submitResult(
-                AGENT_ID, SUB_TASK_ID, "rid-auto", true, "交付正文内容", null, "stop", null);
+                AGENT_ID, SUB_TASK_ID, "rid-auto", true, "交付正文内容", null, "stop", null, null);
 
         ArgumentCaptor<Map<String, Object>> detail = ArgumentCaptor.forClass(Map.class);
         // 2026-10-21：活动日志改为独立事务写入（REQUIRES_NEW），断言点随之下移到 Recorder
@@ -1530,7 +1540,7 @@ class McpToolServiceTest {
         when(executionResultHandler.handleReport(any())).thenReturn(idem);
 
         mcpToolService.submitResult(
-                AGENT_ID, SUB_TASK_ID, "rid-dup", true, "重复提交", null, "stop", null);
+                AGENT_ID, SUB_TASK_ID, "rid-dup", true, "重复提交", null, "stop", null, null);
 
         // 2026-10-21：断言点随独立事务写入器下移——否则该断言恒真（假绿）
         verify(submissionActivityRecorder, never()).recordInNewTx(anyLong(), anyString(), anyString(),
@@ -1552,7 +1562,7 @@ class McpToolServiceTest {
                 .recordInNewTx(anyLong(), anyString(), anyString(), anyString(), any(), any());
 
         McpToolService.SubmitResultResult result = mcpToolService.submitResult(
-                AGENT_ID, SUB_TASK_ID, "rid-err", true, "正文", null, "stop", null);
+                AGENT_ID, SUB_TASK_ID, "rid-err", true, "正文", null, "stop", null, null);
 
         assertThat(result.isOk()).isTrue();
         assertThat(result.isAccepted()).isTrue();
@@ -1570,11 +1580,78 @@ class McpToolServiceTest {
         when(executionResultHandler.handleReport(any())).thenReturn(applied);
 
         mcpToolService.submitResult(
-                AGENT_ID, SUB_TASK_ID, "rid-legacy", true, "产出正文", null, "stop", null);
+                AGENT_ID, SUB_TASK_ID, "rid-legacy", true, "产出正文", null, "stop", null, null);
 
         ArgumentCaptor<ExecutionResultReport> captor = ArgumentCaptor.forClass(ExecutionResultReport.class);
         verify(executionResultHandler).handleReport(captor.capture());
         assertThat(captor.getValue().getTokenUsage()).isNull();
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    //  submitResult.parts：协议适配层拒收（ADR-009 §8.6 用户口径①）
+    //  落点判据：拒收必须在 McpToolServiceImpl（三通道公共入口），
+    //  不许进 ExecutionResultHandler.handleReport（内外链共用点）。
+    // ──────────────────────────────────────────────────────────────
+
+    private static ExecutionPart partOf(String type, String text, String data) {
+        ExecutionPart part = new ExecutionPart();
+        part.setType(type);
+        part.setText(text);
+        part.setData(data);
+        return part;
+    }
+
+    @Test
+    @DisplayName("parts：file 分片 → 400 显式拒收（提示先 uploadArtifact，不静默丢弃）")
+    void shouldRejectFilePart() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("submitResult"))).thenReturn(true);
+
+        assertThatThrownBy(() -> mcpToolService.submitResult(AGENT_ID, SUB_TASK_ID, "rid-file",
+                true, "正文", null, "stop", null,
+                List.of(partOf(ExecutionPart.TYPE_FILE, null, null))))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("file 分片")
+                .hasMessageContaining("uploadArtifact");
+    }
+
+    @Test
+    @DisplayName("parts：未知 type → 400（本批只收 text / data）")
+    void shouldRejectUnknownPartType() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("submitResult"))).thenReturn(true);
+
+        assertThatThrownBy(() -> mcpToolService.submitResult(AGENT_ID, SUB_TASK_ID, "rid-unknown",
+                true, "正文", null, "stop", null,
+                List.of(partOf("video", null, null))))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("type 不支持");
+    }
+
+    @Test
+    @DisplayName("parts：单分片正文超 64k → 400（超限拒收，不静默截断）")
+    void shouldRejectOversizedPartBody() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("submitResult"))).thenReturn(true);
+        String tooLong = "a".repeat(com.helloai.core.shared.util.AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT + 1);
+
+        assertThatThrownBy(() -> mcpToolService.submitResult(AGENT_ID, SUB_TASK_ID, "rid-long",
+                true, "正文", null, "stop", null,
+                List.of(partOf(ExecutionPart.TYPE_TEXT, tooLong, null))))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("超长");
+    }
+
+    @Test
+    @DisplayName("parts：分片数超上限 → 400（防 JSONB 行失控）")
+    void shouldRejectTooManyParts() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("submitResult"))).thenReturn(true);
+        List<ExecutionPart> parts = new java.util.ArrayList<>();
+        for (int i = 0; i <= ExecutionPart.MAX_PARTS; i++) {
+            parts.add(partOf(ExecutionPart.TYPE_TEXT, "p" + i, null));
+        }
+
+        assertThatThrownBy(() -> mcpToolService.submitResult(AGENT_ID, SUB_TASK_ID, "rid-many",
+                true, "正文", null, "stop", null, parts))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("parts 数量超限");
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -1595,5 +1672,127 @@ class McpToolServiceTest {
         assertThat(McpToolService.WakeReason.resolve(null)).isEqualTo("none");
         assertThat(McpToolService.WakeReason.resolve("")).isEqualTo("none");
         assertThat(McpToolService.WakeReason.resolve("  ")).isEqualTo("none");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  cancelSubTask（ADR-009 A-1）：归属 + 非终态校验，失败抛 BizException(400)
+    //  ══════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("cancelSubTask（ADR-009 A-1）")
+    class CancelSubTask {
+
+        private SubTaskSnapshot owned(SubTaskStatus status, int version) {
+            return SubTaskSnapshot.builder()
+                    .id(SUB_TASK_ID).taskId(TASK_ID).assignedAgentId(AGENT_ID)
+                    .status(status).version(version).build();
+        }
+
+        @Test
+        @DisplayName("成功：归属自己的 IN_PROGRESS → CANCELLED，委派 port.cancel 并回读最新 version")
+        void cancelOwnedInProgress() {
+            when(subTaskQueryPort.findById(SUB_TASK_ID))
+                    .thenReturn(owned(SubTaskStatus.IN_PROGRESS, 3))
+                    .thenReturn(owned(SubTaskStatus.CANCELLED, 4));
+
+            McpToolService.CancelSubTaskResult r = mcpToolService.cancelSubTask(AGENT_ID, SUB_TASK_ID);
+
+            assertThat(r.isOk()).isTrue();
+            assertThat(r.getStatus()).isEqualTo("CANCELLED");
+            assertThat(r.getVersion()).isEqualTo(4);
+            assertThat(r.getAssignedAgent()).isEqualTo(AGENT_ID);
+            assertThat(r.getSubTaskId()).isEqualTo(SUB_TASK_ID);
+            verify(subTaskCommandPort).cancel(SUB_TASK_ID);
+        }
+
+        @Test
+        @DisplayName("非终态（如 REVIEW）均可取消，合法性交由状态机裁决")
+        void cancelNonTerminalDelegates() {
+            when(subTaskQueryPort.findById(SUB_TASK_ID))
+                    .thenReturn(owned(SubTaskStatus.REVIEW, 2))
+                    .thenReturn(owned(SubTaskStatus.CANCELLED, 3));
+
+            McpToolService.CancelSubTaskResult r = mcpToolService.cancelSubTask(AGENT_ID, SUB_TASK_ID);
+
+            assertThat(r.isOk()).isTrue();
+            verify(subTaskCommandPort).cancel(SUB_TASK_ID);
+        }
+
+        @Test
+        @DisplayName("子任务不存在 → BizException(400)，不触达 port.cancel")
+        void cancelNotFound() {
+            when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(null);
+
+            assertThatThrownBy(() -> mcpToolService.cancelSubTask(AGENT_ID, SUB_TASK_ID))
+                    .isInstanceOf(BizException.class)
+                    .hasFieldOrPropertyWithValue("code", 400)
+                    .hasMessageContaining("子任务不存在");
+            verify(subTaskCommandPort, never()).cancel(anyLong());
+        }
+
+        @Test
+        @DisplayName("subTaskId=null → 400 子任务不存在，不触达 port.cancel")
+        void cancelNullId() {
+            assertThatThrownBy(() -> mcpToolService.cancelSubTask(AGENT_ID, null))
+                    .isInstanceOf(BizException.class)
+                    .hasFieldOrPropertyWithValue("code", 400)
+                    .hasMessageContaining("子任务不存在");
+            verify(subTaskCommandPort, never()).cancel(anyLong());
+        }
+
+        @Test
+        @DisplayName("非归属者（他人名下）→ 400 无权取消，回显真实归属，不触达 port.cancel")
+        void cancelNotOwner() {
+            SubTaskSnapshot others = SubTaskSnapshot.builder()
+                    .id(SUB_TASK_ID).assignedAgentId(OTHER_AGENT)
+                    .status(SubTaskStatus.IN_PROGRESS).version(3).build();
+            when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(others);
+
+            assertThatThrownBy(() -> mcpToolService.cancelSubTask(AGENT_ID, SUB_TASK_ID))
+                    .isInstanceOf(BizException.class)
+                    .hasFieldOrPropertyWithValue("code", 400)
+                    .hasMessageContaining("无权取消")
+                    .hasMessageContaining(String.valueOf(OTHER_AGENT));
+            verify(subTaskCommandPort, never()).cancel(anyLong());
+        }
+
+        @Test
+        @DisplayName("未分配（assignedAgentId=null）→ 400 无权取消")
+        void cancelUnassigned() {
+            SubTaskSnapshot unassigned = SubTaskSnapshot.builder()
+                    .id(SUB_TASK_ID).assignedAgentId(null)
+                    .status(SubTaskStatus.PENDING).version(1).build();
+            when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(unassigned);
+
+            assertThatThrownBy(() -> mcpToolService.cancelSubTask(AGENT_ID, SUB_TASK_ID))
+                    .isInstanceOf(BizException.class)
+                    .hasFieldOrPropertyWithValue("code", 400)
+                    .hasMessageContaining("无权取消");
+            verify(subTaskCommandPort, never()).cancel(anyLong());
+        }
+
+        @Test
+        @DisplayName("三终态（DONE/CANCELLED/DEAD_LETTER）→ 400 终态不能取消，不触达 port.cancel")
+        void cancelTerminalStates() {
+            for (SubTaskStatus terminal : List.of(SubTaskStatus.DONE, SubTaskStatus.CANCELLED, SubTaskStatus.DEAD_LETTER)) {
+                when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(owned(terminal, 3));
+                assertThatThrownBy(() -> mcpToolService.cancelSubTask(AGENT_ID, SUB_TASK_ID))
+                        .isInstanceOf(BizException.class)
+                        .hasFieldOrPropertyWithValue("code", 400)
+                        .hasMessageContaining("终态子任务不能取消");
+            }
+            verify(subTaskCommandPort, never()).cancel(anyLong());
+        }
+
+        @Test
+        @DisplayName("工具未启用 → 门面守卫拦截，不触达 port.cancel")
+        void cancelToolDisabled() {
+            when(agentMcpServerService.isToolEnabled(AGENT_ID, "cancelSubTask")).thenReturn(false);
+
+            assertThatThrownBy(() -> mcpToolService.cancelSubTask(AGENT_ID, SUB_TASK_ID))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("工具未启用");
+            verify(subTaskCommandPort, never()).cancel(anyLong());
+        }
     }
 }

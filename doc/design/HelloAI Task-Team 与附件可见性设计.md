@@ -24,7 +24,7 @@
 | **读权限是 sub_task 级硬隔离** | `AttachmentController.assertSubTaskReadable()`：agent 通道必须 `agentId.equals(subTask.assignedAgentId())`，否则 403 |
 | 该硬隔离是**事后安全修复** | 注释标明 G-014 T04b，原缺陷＝「任意有效 Agent API Key 可凭 attachmentId 读取任意子任务附件正文」 |
 | `attachment` **无 `task_id`** | 仅可空 `sub_task_id`（现有 93 个附件 100% 有归属）；`file_type` 仅格式（markdown/log/other） |
-| 外部 agent **无读取附件的 MCP 工具** | 13 工具中仅 `uploadArtifact`（只上传） |
+| 外部 agent **无读取附件的 MCP 工具** | 14 工具中仅 `uploadArtifact`（只上传；工具面 2026-11-17 起为 14，ADR-009 A-1） |
 | 掉线判定与改派**已有基础** | `AgentSelector.isHeartbeatFresh()`（CLI_CLIENT 超 `offlineMinutes` 默认 5 分钟判离线；API_KEY_LLM 恒新鲜）；`SubTaskDispatchService.dispatchBlockedSubTask` / `redispatchInProgress` / `redispatchDeadLetter` |
 
 **根因**：当前把「选人」与「授权」压在一个概念里 —— team 展开完就丢，导致运行时**没有授权依据**，只能退化成「按子任务归属硬隔离」。

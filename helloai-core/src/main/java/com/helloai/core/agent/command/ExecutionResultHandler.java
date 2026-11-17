@@ -21,6 +21,8 @@ import com.helloai.core.agent.port.TaskRunningSpecPort;
 import com.helloai.core.agent.quality.ExecutorDoneIssuesBackfiller;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
+import com.helloai.core.shared.util.AttachmentContentPolicy;
+import com.helloai.core.shared.util.TextTruncator;
 import com.helloai.core.agent.service.ExecutionArtifactService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
@@ -304,15 +306,26 @@ public class ExecutionResultHandler {
         last.put("executor", report.getExecutorName());
         last.put("finishReason", report.getFinishReason());
         last.put("tokens", report.getTokenUsage());
+        // A-2（ADR-009 §8.6）：parts 存在时 output 退化为其纯文本投影；无 parts 走旧路径。
+        // ★单写点：投影与截断只在本处做一次——在 McpAgentReportServiceImpl 再写一份会制造第二事实源。
+        String projectedParts = ExecutionPart.projectToText(report.getParts());
+        boolean hasParts = projectedParts != null;
+        String baseOutput = hasParts ? projectedParts : report.getOutput();
         // 方案3 displayText：物化开启时 output/对话流写摘要+文件概览+尾部（EXECUTION_RECORD 保留），
         // 避免 manifest JSON 全文刷屏；物化关闭/降级时保持原文，与现状一致
-        ParsedOutput parsedOutput = executionOutputParser.parse(subTask.title(), report.getOutput());
-        String outputText = report.getOutput();
+        ParsedOutput parsedOutput = executionOutputParser.parse(subTask.title(), baseOutput);
+        String outputText = baseOutput;
         if (!parsedOutput.isEmpty() && parsedOutput.displayText() != null
                 && executionArtifactService.isEnabled()) {
             outputText = parsedOutput.displayText();
         }
+        // JSONB 体积预算（复用注入侧同一常量，不造第二常量）：头尾双向保留——
+        // 只保头会切掉方案3 刻意留在尾部的 EXECUTION_RECORD 块（见 TextTruncator#truncateHeadTail）
+        outputText = TextTruncator.truncateHeadTail(outputText, AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT);
         last.put("output", outputText);
+        if (hasParts) {
+            last.put("parts", report.getParts());
+        }
         // 外部失败回执可能只给 finishReason（如 blocked）而不带 error：
         // 对话流与 context 统一用兜底文本，避免前端只剩 unknown_error 占位
         String failureReason = failureReason(report);
@@ -324,7 +337,7 @@ public class ExecutionResultHandler {
         // ExecutionRecord(Parser) 是 task 协议类型，留在消费方会重新引入反向依赖。
         try {
             taskRunningSpecPort.parseAndAppendExecutionRecord(
-                    subTask.taskId(), subTask.id(), subTask.title(), report.getAgentId(), report.getOutput());
+                    subTask.taskId(), subTask.id(), subTask.title(), report.getAgentId(), baseOutput);
         } catch (Exception e) {
             log.warn("Task Running Spec 回填失败（不阻断主链路）: subTaskId={}, err={}",
                     subTask.id(), e.getMessage());
@@ -417,10 +430,10 @@ public class ExecutionResultHandler {
             // 反馈回路第 1 层：executorDoneIssues LLM 语义对比回填（异步 best-effort）。
             // 轻量预检（reviewHistory 最后一轮有空 executorDoneIssues 且有 issues）通过才
             // 注册 afterCommit 触发；完整校验与防覆盖在 ExecutorDoneIssuesBackfiller 内完成。
-            if (report.getOutput() != null && !report.getOutput().isBlank()
+            if (baseOutput != null && !baseOutput.isBlank()
                     && hasUnresolvedLastRound(ctx)) {
                 final Long backfillSubTaskId = report.getSubTaskId();
-                final String backfillOutput = report.getOutput();
+                final String backfillOutput = baseOutput;
                 if (TransactionSynchronizationManager.isSynchronizationActive()) {
                     TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                         @Override
@@ -486,10 +499,11 @@ public class ExecutionResultHandler {
             final boolean trackSuccess = report.isSuccess();
             // Paperclip 阶段一·4（三配额分离）：失败现场按 output 是否空白归因 ——
             // 空回复（EMPTY_REPLY）归 continuation（可容忍），其余真失败归 recovery。
-            // ★EMPTY_REPLY 须「output 非 null 且空白」：handleFailure 等异常路径的 output 恒 null
+            // ★EMPTY_REPLY 须「产出非 null 且空白」：handleFailure 等异常路径的 output 恒 null
             // （无产出，是异常现场而非执行者空回复）⇒ recovery；只有执行者显式回空串（output=""）才是 continuation。
+            // 用 baseOutput 而非 report.getOutput()：走 parts 时原始 output 可能为空，产出在投影里。
             final boolean emptyReply = !trackSuccess
-                    && report.getOutput() != null && report.getOutput().isBlank();
+                    && baseOutput != null && baseOutput.isBlank();
             if (TransactionSynchronizationManager.isSynchronizationActive()) {
                 TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                     @Override

@@ -61,7 +61,8 @@
 | MCP 返回 404 `Session not found` | 确认 SSE 长连接是否断开 | 旧 sessionId 无法复活（契约 §6） | 切 REST 别名 `POST /api/mcp/jsonrpc` 继续本轮，不中断任务 |
 | POST `/mcp/messages` 返回 400 `Invalid message format` | 检查请求头是否带 `charset=utf-8` | 带 UTF-8 后正常 | 修正请求后再试 |
 | 返回 404（路径） | 核对路径是否为历史写法 | 正确写法为 `/api/agents/getById/{id}`、`/api/rules/getMergedRules`（契约 §6） | 改用正确路径 |
-| 返回 500 `Unknown tool: xxx` | 用 `tools/list` 取权威清单 | 仅 13 个工具可用（契约 §2.1） | 改用正确工具名 |
+| 返回 500 `Unknown tool: xxx` | 用 `tools/list` 取权威清单 | 仅 14 个工具可用（契约 §2.1） | 改用正确工具名 |
+| MCP 调用返回 401 `MCP 鉴权失败：缺少 authSessionId 参数` | 检查 tool arguments 是否带鉴权会话参数 | 三名（`authSessionId`/`sessionId`/`_sessionId`）至少一个非空（契约 §2.1） | 把 SSE endpoint 帧的 sid 拼进 arguments `authSessionId`（URL query `?sessionId=` 传输层名不变） |
 | 调 REST `startById` 返回 401 | 确认走的是哪条通道 | 该端点需平台账号会话，不接受 API Key（契约 §2.4） | 外部 Agent 改用 MCP 工具 `startSubTask` |
 
 ## 5.3 需要立即升级人工的情形

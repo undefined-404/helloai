@@ -2,6 +2,7 @@ package com.helloai.api.controller;
 
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.service.McpToolService.AckResult;
+import com.helloai.core.agent.service.McpToolService.CancelSubTaskResult;
 import com.helloai.core.agent.service.McpToolService.ClaimSubTaskResult;
 import com.helloai.core.agent.service.McpToolService.CheckInResult;
 import com.helloai.core.agent.service.McpToolService.CheckOutResult;
@@ -140,11 +141,42 @@ class McpControllerDualEntryContractTest {
     }
 
     @Test
+    @DisplayName("cancelSubTask：REST 与 JSON-RPC 传同一 subTaskId（ADR-009 A-1）")
+    void cancelSubTask_restAndJsonrpcCallIdentically() {
+        when(mcpToolService.cancelSubTask(AGENT_ID, 203L)).thenReturn(new CancelSubTaskResult());
+        when(mcpToolService.cancelSubTask(AGENT_ID, 203L)).thenReturn(new CancelSubTaskResult());
+
+        controller.cancelSubTask(AGENT_ID, Map.of("subTaskId", 203L));
+        jsonrpcCall("cancelSubTask", Map.of("subTaskId", 203L));
+
+        verify(mcpToolService, org.mockito.Mockito.times(2)).cancelSubTask(AGENT_ID, 203L);
+    }
+
+    @Test
+    @DisplayName("cancelSubTask：缺 subTaskId 两入口行为一致（REST R.fail / JSON-RPC error -32000）")
+    void cancelSubTask_missingArgConsistentAcrossEntries() {
+        var restResult = controller.cancelSubTask(AGENT_ID, Map.of());
+        assertThat(restResult.getCode()).isEqualTo(500);
+        assertThat(restResult.getMsg()).contains("subTaskId");
+
+        var rpcResult = jsonrpcCall("cancelSubTask", Map.of());
+        assertThat(rpcResult).isInstanceOf(Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rpc = (Map<String, Object>) rpcResult;
+        assertThat(rpc.get("error")).isNotNull();
+        assertThat(((Map<?, ?>) rpc.get("error")).get("code")).isEqualTo(-32000);
+        assertThat(((Map<?, ?>) rpc.get("error")).get("message").toString()).contains("subTaskId");
+
+        verify(mcpToolService, org.mockito.Mockito.never())
+                .cancelSubTask(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
     @DisplayName("submitResult：多参（tokenUsage 可选）两入口逐参一致")
     void submitResult_restAndJsonrpcCallIdentically() {
-        when(mcpToolService.submitResult(AGENT_ID, 303L, "res-1", true, "done", null, "stop", 1000))
+        when(mcpToolService.submitResult(AGENT_ID, 303L, "res-1", true, "done", null, "stop", 1000, null))
                 .thenReturn(new SubmitResultResult());
-        when(mcpToolService.submitResult(AGENT_ID, 303L, "res-1", true, "done", null, "stop", 1000))
+        when(mcpToolService.submitResult(AGENT_ID, 303L, "res-1", true, "done", null, "stop", 1000, null))
                 .thenReturn(new SubmitResultResult());
 
         Map<String, Object> args = Map.of(
@@ -154,7 +186,7 @@ class McpControllerDualEntryContractTest {
         jsonrpcCall("submitResult", args);
 
         verify(mcpToolService, org.mockito.Mockito.times(2))
-                .submitResult(AGENT_ID, 303L, "res-1", true, "done", null, "stop", 1000);
+                .submitResult(AGENT_ID, 303L, "res-1", true, "done", null, "stop", 1000, null);
     }
 
     @Test

@@ -23,6 +23,7 @@ import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.McpReadModelService;
 import com.helloai.core.agent.service.McpTaskClaimService;
 import com.helloai.core.agent.service.McpToolService.AckResult;
+import com.helloai.core.agent.service.McpToolService.CancelSubTaskResult;
 import com.helloai.core.agent.service.McpToolService.ClaimSubTaskResult;
 import com.helloai.core.agent.service.McpToolService.PullTasksResult;
 import com.helloai.core.agent.service.McpToolService.StartSubTaskResult;
@@ -386,6 +387,49 @@ public class McpTaskClaimServiceImpl implements McpTaskClaimService {
                 ? updated.status().name() : SubTaskStatus.IN_PROGRESS.name());
         result.setVersion(updated != null ? updated.version() : subTask.version() + 1);
         log.info("MCP 子任务开工: subTaskId={}, agentId={}, from={}", subTaskId, agentId, subTask.status());
+        return result;
+    }
+
+    /**
+     * 子任务取消：归属自己的非终态子任务 → CANCELLED（ADR-009 A-1）。
+     *
+     * <p>归属校验以服务端鉴权 agentId 为准（不信任入参）。失败显式抛 {@code BizException(400)}
+     * （ADR §2.6 口径）：不存在 / 非归属 / 三终态（DONE / CANCELLED / DEAD_LETTER）。
+     * 与 {@link #startSubTask} 的 reason 码模式刻意不同——取消是终态操作，重复取消应显式报错而非假成功。</p>
+     *
+     * <p>实际写入复用 {@link SubTaskCommandPort#cancel}（原子命令），其内部经 task 域状态机
+     * {@code changeStatus} 单一入口完成级联取消 / attempt 收口 / outbox / inbox / 交接通知，
+     * 本层不开新 attempt、不手动收口（cancel 是退出不是起点）。</p>
+     */
+    @Override
+    public CancelSubTaskResult cancelSubTask(Long agentId, Long subTaskId) {
+        SubTaskSnapshot subTask = subTaskId != null ? subTaskQueryPort.findById(subTaskId) : null;
+        if (subTask == null) {
+            throw new BizException(400, "子任务不存在: subTaskId=" + subTaskId);
+        }
+        // 归属校验：仅当前执行者可取消，防止越权取消他人任务（回显真实归属，G-015 B3.2 同口径）
+        if (subTask.assignedAgentId() == null || !agentId.equals(subTask.assignedAgentId())) {
+            throw new BizException(400, "无权取消该子任务：仅当前执行者可取消, subTaskId=" + subTaskId
+                    + ", assignedAgent=" + subTask.assignedAgentId());
+        }
+        // 终态拒绝：DONE / CANCELLED / DEAD_LETTER 均无 →CANCELLED 出边（DEAD_LETTER 亦无），
+        // 三态全拦给 400 明确文案，避免落到状态机通用异常（500）。
+        SubTaskStatus status = subTask.status();
+        if (status == SubTaskStatus.DONE || status == SubTaskStatus.CANCELLED || status == SubTaskStatus.DEAD_LETTER) {
+            throw new BizException(400, "终态子任务不能取消: subTaskId=" + subTaskId + ", status=" + status);
+        }
+
+        subTaskCommandPort.cancel(subTaskId);
+        // 重新读取获取最新 version（changeStatus 已 bump @Version）
+        SubTaskSnapshot updated = subTaskQueryPort.findById(subTaskId);
+        CancelSubTaskResult result = new CancelSubTaskResult();
+        result.setOk(true);
+        result.setSubTaskId(subTaskId);
+        result.setAssignedAgent(agentId);
+        result.setStatus(updated != null && updated.status() != null
+                ? updated.status().name() : SubTaskStatus.CANCELLED.name());
+        result.setVersion(updated != null ? updated.version() : subTask.version() + 1);
+        log.info("MCP 子任务取消: subTaskId={}, agentId={}, from={}", subTaskId, agentId, status);
         return result;
     }
 

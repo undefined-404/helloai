@@ -28,7 +28,7 @@ Content-Type: application/json; charset=utf-8
 {"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"checkIn","arguments":{"workMode":"AUTO","maxConcurrent":1,"ttlMinutes":30,"skills":"shell,eng-doc-standard"}}}
 ```
 
-MCP SSE 通道：完成四步握手后，`tools/call` 的 arguments **必须**额外带 `agentId` 与 `sessionId`（契约 §2.1）。
+MCP SSE 通道：完成四步握手后，`tools/call` 的 arguments **必须**额外带 `agentId` 与 `authSessionId`（推荐名；旧名 `sessionId`/`_sessionId` 兼容期内仍有效，契约 §2.1）。
 
 实测响应（原始）：
 

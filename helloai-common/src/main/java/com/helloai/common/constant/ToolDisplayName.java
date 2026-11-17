@@ -41,6 +41,7 @@ public enum ToolDisplayName {
     GET_AGENT_STATUS("getAgentStatus", "查自身状态", "查询 Agent 状态（外部面）"),
     CLAIM_SUB_TASK("claimSubTask", "认领子任务", "把待执行子任务认领到自己名下"),
     START_SUB_TASK("startSubTask", "开始子任务", "标记子任务进入执行中"),
+    CANCEL_SUB_TASK("cancelSubTask", "取消子任务", "取消归属自己的非终态子任务"),
     SUBMIT_RESULT("submitResult", "提交产出", "提交本轮执行结果"),
     REPORT_BLOCKED("reportBlocked", "上报阻塞", "上报无法完成并请求人工介入（外部面）"),
     UPLOAD_ARTIFACT("uploadArtifact", "上传产出文件", "把产出文件上传为附件"),

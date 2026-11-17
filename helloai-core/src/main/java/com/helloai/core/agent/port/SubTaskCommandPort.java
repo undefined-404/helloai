@@ -66,6 +66,18 @@ public interface SubTaskCommandPort {
     void submit(Long subTaskId);
 
     /**
+     * 子任务状态推进到 {@code CANCELLED}（<b>原子命令，无消费侧判定</b>，ADR-009 A-1 新增）。
+     *
+     * <p>直接委派 {@code SubTaskService#cancel}（内部经 {@code SubTaskStateMachine} 校验合法性 +
+     * {@code changeStatus} 单一写入入口，级联取消 / attempt 收口 / outbox / inbox / 交接通知全在既有事件序内）。
+     * 调用方（MCP 工具）自带「归属 + 非终态」前置校验以产出对外 {@code BizException(400)} 语义，
+     * 属消费方协议适配职责（见接口 javadoc 划界）；本命令不复刻该判定。</p>
+     *
+     * @param subTaskId 子任务 ID
+     */
+    void cancel(Long subTaskId);
+
+    /**
      * 原子认领：条件更新 {@code WHERE status='PENDING' AND (assigned_agent IS NULL OR = agentId)}。
      *
      * <p><b>不透明原子命令</b>：互斥条件写在 SQL 里（状态机的一部分），消费方无从复现，

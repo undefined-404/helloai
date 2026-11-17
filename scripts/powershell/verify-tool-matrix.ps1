@@ -2,8 +2,8 @@
 # ============================================================
 # helloai A0-3 tool surface consistency verifier
 # 用途：验证三通道工具面一致性 + SKILL 动作清单与服务器声明 diff（防漂移）：
-#   S1) REST alias POST /api/mcp/jsonrpc tools/list -> 13 tools + inputSchema
-#   S2) GET /api/mcp/tools (REST direct) -> 13 tools, same name set as tools/list
+#   S1) REST alias POST /api/mcp/jsonrpc tools/list -> 14 tools + inputSchema
+#   S2) GET /api/mcp/tools (REST direct) -> 14 tools, same name set as tools/list
 #   S3) REST direct /api/mcp/tools/getAgentStatus probe (POST + Bearer -> 200)
 #   S4) SKILL.md 0.1 table tool names == server tools/list names (diff guard)
 #   S5) SKILL.md 0.2 table REST endpoint paths -> probe each (route existence)
@@ -11,7 +11,7 @@
 #   S6) SKILL.md forbidden old paths check (/api/agents/<, /api/rules/merged)
 #   S7) REST direct checkIn -> checkOut real call (sync lease receipt)
 #
-# NOTE: the "13 tools" constant asserted by S1/S2/S4 is the EXTERNAL MCP surface
+# NOTE: the "14 tools" constant asserted by S1/S2/S4 is the EXTERNAL MCP surface
 #       (McpMcpServer's @Tool methods, restated in AgentMcpServerService:45-58 and
 #       in guide.md 0.1). It is deliberately NOT the ToolRegistry total: internal
 #       tools such as `echo` / `web_search` are registered but never exposed to
@@ -234,7 +234,7 @@ Write-Output ("agentApiKey = " + (Mask-Secret $agentApiKey))
 Write-Output ""
 
 # ============================================================
-# STEP S1: REST alias tools/list -> 13 tools + inputSchema
+# STEP S1: REST alias tools/list -> 14 tools + inputSchema
 # ============================================================
 Write-Output "=== [S1] REST alias POST /api/mcp/jsonrpc tools/list ==="
 $s1Body = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -249,7 +249,7 @@ if ($s1Obj -ne $null -and $s1Obj.result -ne $null -and $s1Obj.result.tools -ne $
     foreach ($t in $s1Obj.result.tools) {
         if ($t.inputSchema -eq $null -or $t.inputSchema.type -ne "object") { $schemaOk = $false }
     }
-    Assert-True ($s1Names.Count -eq 13) "S1 REST alias tools/list: 13 tools declared (got $($s1Names.Count))"
+    Assert-True ($s1Names.Count -eq 14) "S1 REST alias tools/list: 14 tools declared (got $($s1Names.Count))"
     Assert-True $schemaOk "S1 REST alias tools/list: every tool has inputSchema (type=object)"
 } else {
     Assert-True $false "S1 REST alias tools/list: parse failed or no result (HTTP $($s1Resp.Code))"
@@ -269,7 +269,7 @@ $s2Names = @()
 if ($s2Obj -ne $null -and $s2Obj.data -ne $null) {
     $s2Names = @($s2Obj.data | ForEach-Object { [string]$_ })
     $diff = Compare-Object $s1Names $s2Names
-    Assert-True ($diff -eq $null -and $s2Names.Count -eq 13) "S2 GET /api/mcp/tools: 13 tools, same name set as REST alias (got $($s2Names.Count))"
+    Assert-True ($diff -eq $null -and $s2Names.Count -eq 14) "S2 GET /api/mcp/tools: 14 tools, same name set as REST alias (got $($s2Names.Count))"
 } else {
     Assert-True $false "S2 GET /api/mcp/tools: parse failed (HTTP $($s2Resp.Code))"
 }

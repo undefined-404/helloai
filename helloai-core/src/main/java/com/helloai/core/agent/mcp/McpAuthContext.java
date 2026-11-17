@@ -186,19 +186,23 @@ public class McpAuthContext {
     }
 
     /**
-     * 直接透传 sessionId（鉴权收官方案）。
+     * 直接透传鉴权会话 ID（鉴权收官方案）。
      *
      * <p>spring-ai 1.1.0 的 {@code SyncMcpToolMethodCallback} 反射器不认识
      * {@code McpSyncServerExchange}，ToolContext.getContext() 实际为空 map，
-     * sessionId 永远自动进不来。客户端必须在 arguments 里显式传 {@code _sessionId}。</p>
+     * sessionId 永远自动进不来。客户端必须在 arguments 里显式传鉴权会话 ID。</p>
      *
-     * @param sessionId MCP sessionId（客户端从 SSE handshake 提取后透传）
+     * <p><b>ADR-009 A-4</b>：推荐参数名 {@code authSessionId}（该 ID 是 Redis 鉴权上下文的键，
+     * 即「鉴权会话」，与 MCP 传输会话解耦）；旧名 {@code sessionId} / {@code _sessionId} 仍兼容
+     * （优先级由 {@code McpMcpServer.requireAuthId} 裁决，本方法只收最终选定的非空值）。</p>
+     *
+     * @param sessionId 鉴权会话 ID（客户端从 SSE handshake 提取后透传）
      * @return 鉴权主体 ID
      * @throws BizException 401 如果 sessionId 为空或未鉴权
      */
     public Long requireAuthId(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
-            throw new BizException(401, "MCP 鉴权失败：缺少 _sessionId 参数（请从 SSE handshake 提取 sessionId 后透传）");
+            throw new BizException(401, "MCP 鉴权失败：缺少 authSessionId 参数（推荐名；旧名 sessionId / _sessionId 仍兼容。请从 SSE handshake 提取 sessionId 后透传）");
         }
         return requireAuthIdBySessionId(sessionId);
     }

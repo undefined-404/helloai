@@ -73,6 +73,19 @@ public class SubTaskCommandPortAdapter implements SubTaskCommandPort {
     /**
      * {@inheritDoc}
      *
+     * <p><b>原子命令、零判定</b>：直接委派 {@code SubTaskService#cancel}
+     * （内部 {@code SubTaskStateMachine} 校验合法性 + {@code changeStatus} 完成级联与收口）。
+     * 调用方自带的「归属 + 非终态」校验属其协议适配职责，不在此复刻。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void cancel(Long subTaskId) {
+        subTaskService.cancel(subTaskId);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
      * <p>互斥条件（{@code WHERE status='PENDING' AND (assigned_agent IS NULL OR = agentId)}）
      * 是状态机的一部分、写在 SQL 条件更新里，消费方无从复现，故整体委派。</p>
      */

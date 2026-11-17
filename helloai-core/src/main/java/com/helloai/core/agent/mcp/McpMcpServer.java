@@ -1,5 +1,6 @@
 package com.helloai.core.agent.mcp;
 
+import com.helloai.core.agent.command.ExecutionPart;
 import com.helloai.core.agent.service.McpToolService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,11 +15,13 @@ import java.util.List;
 /**
  * helloai MCP Server 业务工具集。
  * <p>
- * 暴露给外部 MCP Client（如 Qoder / Trae / MCP Inspector）的 9 个工具：
+ * 暴露给外部 MCP Client（如 Qoder / Trae / MCP Inspector）的 14 个工具：
  * <ol>
  *   <li>{@code pullTasks} —— 拉取 Agent 待处理收件箱（includeRead/read/summary）</li>
  *   <li>{@code ack} —— 确认收件箱消息已处理</li>
  *   <li>{@code claimSubTask} —— 原子认领子任务（并发互斥）</li>
+ *   <li>{@code startSubTask} —— 开工 / 返工出口（ASSIGNED / REWORK / PAUSED → IN_PROGRESS）</li>
+ *   <li>{@code cancelSubTask} —— 取消归属自己的非终态子任务（ADR-009 A-1）</li>
  *   <li>{@code heartbeat} —— 心跳上报（refresh last_seen_time）</li>
  *   <li>{@code uploadArtifact} —— 上传产物附件元数据</li>
  *   <li>{@code submitResult} —— 上交子任务执行结果（进入统一回写入口）</li>
@@ -26,6 +29,8 @@ import java.util.List;
  *   <li>{@code getAgentStatus} —— 查询 Agent 自身状态（协议列要求）</li>
  *   <li>{@code getDepsSummary} —— 主动拉取前置产出摘要（数据口径与执行链 buildDependencySection 同源）</li>
  *   <li>{@code getSubTaskDetail} —— 查询子任务详情（执行内容 / 交付物 / 验收标准 / 执行约束 / 不确定性申报）</li>
+ *   <li>{@code checkIn} —— 值班打卡（签发租约 + 技能上报）</li>
+ *   <li>{@code checkOut} —— 值班签退（关闭 ACTIVE 租约）</li>
  * </ol>
  * <p>
  * 设计原则：业务逻辑 <b>完全委托</b>给现有 {@link McpToolService}，本类只承担
@@ -55,12 +60,27 @@ public class McpMcpServer {
     private final McpAuthContext mcpAuthContext;
 
     /**
-     * 从 _sessionId 参数直接拿 sessionId → 查 Redis 鉴权上下文 → 返鉴权主体 ID。
-     * 客户端显式透传 sessionId（spring-ai 1.1.0 不支持隐式注入）。
+     * 从鉴权会话参数拿 sessionId → 查 Redis 鉴权上下文 → 返鉴权主体 ID。
+     * 客户端显式透传（spring-ai 1.1.0 不支持隐式注入）。
+     *
+     * <p><b>ADR-009 A-4</b>：参数名与 MCP 传输会话概念解耦——该 ID 实为 Redis 鉴权上下文的键
+     * （{@code helloai:mcp:session-auth:{id}}，见 {@link McpAuthContext}），即「鉴权会话」，
+     * 与 spring-ai 传输层 sessionId 是两回事。优先级 {@code authSessionId > sessionId > _sessionId}
+     * （首个非空白胜出）；旧两名 {@code sessionId} / {@code _sessionId} 保留一个周期，删除另立批次。</p>
      */
-    private Long requireAuthId(String sessionId, String _sessionId) {
-        String sid = (_sessionId != null && !_sessionId.isBlank()) ? _sessionId : sessionId;
+    private Long requireAuthId(String authSessionId, String sessionId, String _sessionId) {
+        String sid = firstNonBlank(authSessionId, sessionId, _sessionId);
         return mcpAuthContext.requireAuthId(sid);
+    }
+
+    /** 取首个非空白候选（A-4 三名优先级：authSessionId &gt; sessionId &gt; _sessionId）；全空返 null（由下游抛 401）。 */
+    private static String firstNonBlank(String... candidates) {
+        for (String c : candidates) {
+            if (c != null && !c.isBlank()) {
+                return c;
+            }
+        }
+        return null;
     }
 
     // ================================================================
@@ -85,10 +105,11 @@ public class McpMcpServer {
             @ToolParam(description = "Agent 角色（如 EXECUTOR / PLANNER / REVIEWER）。默认 EXECUTOR", required = false) String role,
             @ToolParam(description = "最多返回消息数。建议 20，最大 200", required = false) Integer max,
             @ToolParam(description = "是否附带最近已读消息（未读优先，默认 false）", required = false) Boolean includeRead,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
         // 鉴权：强制用 token 解析的 agentId 覆盖客户端传值，防止越权
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP pullTasks: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
@@ -114,10 +135,11 @@ public class McpMcpServer {
     public McpToolService.AckResult ack(
             @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "消息 ID，格式 'inbox-{id}'，来自 pullTasks 响应", required = true) String messageId,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
         // 鉴权：强制覆盖
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP ack: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
@@ -145,10 +167,11 @@ public class McpMcpServer {
     public McpToolService.ClaimSubTaskResult claimSubTask(
             @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "SubTask ID（要认领的子任务）", required = true) Long subTaskId,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
         // 鉴权：强制覆盖
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP claimSubTask: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
@@ -173,14 +196,44 @@ public class McpMcpServer {
     public McpToolService.StartSubTaskResult startSubTask(
             @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "SubTask ID（要开工的子任务）", required = true) Long subTaskId,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP startSubTask: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
         agentId = authAgentId;
         return mcpToolService.startSubTask(agentId, subTaskId);
+    }
+
+    // ================================================================
+    // 3c. cancelSubTask（ADR-009 A-1）
+    // ================================================================
+
+    @Tool(name = "cancelSubTask", description = """
+            【何时使用】EXECUTOR 认领后决定放弃 / 无法继续执行某子任务，需要把它推进到 CANCELLED 时调用。
+            补齐对外执行通道的取消出口——此前 executor 卡死后平台只能改库或等租约过期。
+            【调用频率】决定放弃时调用一次；终态操作，重复取消会显式报错（非幂等成功）。
+            【Gotchas】
+            - 只能取消自己名下的子任务（assigned_agent 必须等于鉴权 agentId），非归属者抛 400
+            - 仅非终态可取消；DONE / CANCELLED / DEAD_LETTER 三终态抛 400
+            - 取消会级联取消派生子任务并收口执行 attempt，由平台状态机统一完成
+            - 失败显式返回 400 错误（不存在 / 非归属 / 终态），与 startSubTask 的 reason 码模式不同
+            【相关工具】claimSubTask、startSubTask、reportBlocked
+            """)
+    public McpToolService.CancelSubTaskResult cancelSubTask(
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "SubTask ID（要取消的子任务）", required = true) Long subTaskId,
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
+        if (agentId == null || !authAgentId.equals(agentId)) {
+            log.warn("MCP cancelSubTask: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
+        }
+        agentId = authAgentId;
+        return mcpToolService.cancelSubTask(agentId, subTaskId);
     }
 
     // ================================================================
@@ -200,10 +253,11 @@ public class McpMcpServer {
             """)
     public McpToolService.HeartbeatResult heartbeat(
             @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
         // 鉴权：强制覆盖
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP heartbeat: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
@@ -240,10 +294,11 @@ public class McpMcpServer {
             @ToolParam(description = "MIME 类型（如 application/json、image/png）", required = false) String mimeType,
             @ToolParam(description = "文件大小（字节），选填", required = false) Long fileSize,
             @ToolParam(description = "已在平台桶中的对象地址，格式 minio://helloai-artifacts/{ownerName}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名}；文件内容场景请改用 POST /api/artifacts/upload", required = true) String storageUrl,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
         // 鉴权：强制覆盖
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP uploadArtifact: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
@@ -263,6 +318,10 @@ public class McpMcpServer {
             - 如果子任务仍是 ASSIGNED，本工具会先推进到 IN_PROGRESS 再回写结果
             - success=true 时建议提供 output；success=false 时建议提供 error
             - tokenUsage 可选：回报本次执行消耗的 token 总数（平台成本观测用，不回报不影响验收）
+            - parts 可选：结构化产物分片（推荐交付物有结构时使用）。给了 parts 后 output 退化为其纯文本投影，二者不必重复写
+              * 支持 type=text（正文放 text）与 type=data（JSON 放 data，平台投影成 ```json 代码块）
+              * type=file **本批不支持**，传了直接 400：请先用 uploadArtifact 上传文件到平台桶，再用 text 分片引用其 storageUrl
+              * 上限：最多 20 个分片；单个分片正文 ≤ 64000 字符（超限 400，请拆多片）
             【相关工具】claimSubTask、uploadArtifact
             """)
     public McpToolService.SubmitResultResult submitResult(
@@ -274,15 +333,20 @@ public class McpMcpServer {
             @ToolParam(description = "失败原因（success=false 时建议填写）", required = false) String error,
             @ToolParam(description = "结束原因（可选，如 completed/failed/timeout）", required = false) String finishReason,
             @ToolParam(description = "本次执行消耗的 token 总数（可选，用于平台成本观测；不回报不影响验收）", required = false) Integer tokenUsage,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+            @ToolParam(description = "结构化产物分片数组（可选）。元素形如 {\"type\":\"text\",\"text\":\"正文\"} "
+                    + "或 {\"type\":\"data\",\"data\":\"{\\\"k\\\":1}\",\"mimeType\":\"application/json\"}；"
+                    + "type 只收 text / data（file 请先用 uploadArtifact 上传再用 text 引用）；最多 20 片、单片正文 ≤ 64000 字符",
+                    required = false) List<ExecutionPart> parts,
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP submitResult: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
         agentId = authAgentId;
         return mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason,
-                tokenUsage);
+                tokenUsage, parts);
     }
 
     // ================================================================
@@ -302,10 +366,11 @@ public class McpMcpServer {
             @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "子任务 ID", required = true) Long subTaskId,
             @ToolParam(description = "阻塞原因（必填，建议 50 字以内）", required = true) String reason,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
         // 鉴权：强制覆盖
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP reportBlocked: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
@@ -332,10 +397,11 @@ public class McpMcpServer {
             """)
     public McpToolService.GetAgentStatusResult getAgentStatus(
             @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
         // 鉴权：强制覆盖（与客户端传值无关，永远查 token 解析的 agent）
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP getAgentStatus: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
@@ -361,10 +427,11 @@ public class McpMcpServer {
     public McpToolService.GetDepsSummaryResult getDepsSummary(
             @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "子任务 ID（查询其直接前置产出）", required = true) Long subTaskId,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
         // 鉴权：强制覆盖（与客户端传值无关，永远查 token 解析的 agent）
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP getDepsSummary: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
@@ -398,10 +465,11 @@ public class McpMcpServer {
     public McpToolService.SubTaskDetail getSubTaskDetail(
             @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "子任务 ID（要查看详情的子任务）", required = true) Long subTaskId,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
         // 鉴权：强制覆盖（与客户端传值无关，永远查 token 解析的 agent）
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP getSubTaskDetail: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
@@ -433,9 +501,10 @@ public class McpMcpServer {
             @ToolParam(description = "最大并发子任务数，默认 1", required = false) Integer maxConcurrent,
             @ToolParam(description = "租约有效期（分钟），默认 30", required = false) Integer ttlMinutes,
             @ToolParam(description = "本次打卡上报的已加载技能标签（逗号分隔，如 eng-code-review,shell；与既有技能取并集，只增不减），可为空", required = false) String skills,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP checkIn: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
@@ -475,9 +544,10 @@ public class McpMcpServer {
             @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "关闭原因（推荐字段名 closeReason，如 shutdown / session_end / manual_close），可缺省", required = false) String closeReason,
             @ToolParam(description = "兼容参数：旧字段名 reason，等同 closeReason", required = false) String reason,
-            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
-            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        Long authAgentId = requireAuthId(sessionId, _sessionId);
+            @ToolParam(description = "鉴权会话 ID（推荐参数名 authSessionId；从 SSE handshake 提取后透传）", required = false) String authSessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧推荐名 sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：鉴权会话 ID（旧字段名 _sessionId）", required = false) String _sessionId) {
+        Long authAgentId = requireAuthId(authSessionId, sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP checkOut: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }

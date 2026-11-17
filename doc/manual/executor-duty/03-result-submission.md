@@ -37,6 +37,7 @@ Content-Type: application/json; charset=utf-8
 | 请求 | `output` | 产出正文，**末尾必须**附 `EXECUTION_RECORD` 块 | 契约 §2.5 |
 | 请求 | `finishReason` | 自由字符串，平台不强校验；建议 `completed`/`failed`/`timeout`/`blocked` | 契约 §2.5 |
 | 请求 | `tokenUsage` | **可选**（integer）；本次执行消耗的 token 总数，供平台成本观测（G-008 盲区收口） | 平台工具 schema（B5.1） |
+| 请求 | `parts` | **可选**（分片数组）；结构化产物，与 `output` 二选一优先用 `parts`，详见 §3.1.3 | 平台工具 schema（ADR-009 A-2） |
 | 返回 | `ok` | 调用是否成功执行 | 契约 §2.5 · 实测 |
 | 返回 | `accepted` | 产出是否被采纳 | 契约 §2.5 · 实测 |
 | 返回 | `idempotent` | 是否为重复提交（采纳旧结果） | 契约 §2.5 · 实测 |
@@ -46,6 +47,43 @@ Content-Type: application/json; charset=utf-8
 | 返回 | `status`（子任务状态） | 不在本响应中；提交后需用 `GET /api/sub-tasks/getById/{id}` 或 `listMine` 查询 | 实测 |
 
 注意：本响应中的 `status` 是**采纳状态**（`applied`），不是子任务状态机状态；两者不得混用。
+
+### 3.1.3 结构化产物 `parts`（可选，与 `output` 二选一）
+
+`parts` 是本次新增的**可选**字段，用于把产出拆成带类型的分片提交（对齐 A2A `Artifact.parts`）。**不传 `parts` 时行为与旧协议完全一致**，存量执行器无需改动。
+
+| 项 | 规则 |
+|---|---|
+| 分片结构 | `{"type":"text","text":"..."}` 或 `{"type":"data","data":"<JSON 文本>"}` |
+| 支持类型 | 本批**只收** `text` / `data`；`file` 分片返回 **400** |
+| 文件怎么交 | 仍走 `POST /api/artifacts/upload` + `uploadArtifact`，然后在 `text` 分片里引用其 `storageUrl` |
+| 数量上限 | 20 片（超出 400） |
+| 单片正文上限 | 64000 字符（超出 400） |
+| 与 `output` 关系 | `parts` 优先：平台把分片投影成纯文本作为 `output`，**传了 `parts` 时 `output` 字段不再作为产出一事实源** |
+| `EXECUTION_RECORD` 放哪 | 放在**最后一个 `text` 分片的末尾**（投影后仍在尾部，回填链照常解析） |
+
+示例（一次提交正文 + 结构化指标）：
+
+```json
+{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"submitResult","arguments":{
+  "subTaskId":2097935069198065667,
+  "resultId":"subTask-2097935069198065667-r2",
+  "success":true,
+  "parts":[
+    {"type":"text","text":"已完成接口改造，详见附件。\n\nEXECUTION_RECORD:\n{...}"},
+    {"type":"data","data":"{\"changedFiles\":3,\"testsPassed\":149}"}
+  ],
+  "finishReason":"completed"}}}
+```
+
+驳回边界（400，属于**可纠正的入参错误**，按返回文案改完重提即可，不计入服务端故障）：
+
+- `parts[i] 为 file 分片` —— 改用 `uploadArtifact` + `text` 引用
+- `parts[i] 的 type 不支持` / `缺少 type`
+- `parts[i] (text) 的 text 不能为空`（`data` 同理）
+- 单片正文超 64000 字符 / 分片数超 20
+
+在 `{提交产出}` 条件下，**优先**用 `parts`（结构化、支持多类型）；**做不到的后果**：仍用单一 `output` 也可通过验收，只是丧失结构化能力。
 
 ## 3.2 结果格式与证据要求
 

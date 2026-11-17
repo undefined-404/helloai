@@ -16,12 +16,14 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -495,5 +497,109 @@ class ExecutionResultHandlerTest {
                                 AgentResult.success("done", "stop", "RuntimeTurnExecutor", 1)))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("agent_event insert failed");
+    }
+
+    // ================================================================
+    // A-2（ADR-009 §8.6）：parts 单写点装配 + 写侧 64k 截断（保头保尾）
+    // ================================================================
+
+    @Test
+    @DisplayName("A-2：parts 存在 → 同点写 parts 与 output 投影，output 不再取 report.output")
+    void shouldWritePartsAndProjectedOutputAtSinglePoint() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+
+        ExecutionPart textPart = new ExecutionPart();
+        textPart.setType(ExecutionPart.TYPE_TEXT);
+        textPart.setText("正文");
+        ExecutionPart dataPart = new ExecutionPart();
+        dataPart.setType(ExecutionPart.TYPE_DATA);
+        dataPart.setData("{\"k\":1}");
+
+        ExecutionResultReport report = reportOf(22L, 11L, "rid-parts");
+        report.setSource("EXTERNAL");
+        report.setExecutorName("cli_client");
+        report.setOutput("这段自由文本不应成为 output（已给 parts）");
+        report.setParts(List.of(textPart, dataPart));
+
+        executionResultHandler.handleReport(report);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskCommandPort).updateContext(eq(22L), ctxCaptor.capture());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> lastExecution = (Map<String, Object>) ctxCaptor.getValue().get("lastExecution");
+
+        assertThat(lastExecution).containsKey("parts");
+        assertThat((List<?>) lastExecution.get("parts")).hasSize(2);
+        assertThat(lastExecution).containsEntry("output", "正文\n\n```json\n{\"k\":1}\n```");
+    }
+
+    @Test
+    @DisplayName("A-2：走 parts 且 output 为空 → EXECUTION_RECORD 回填读投影而非空原文")
+    void shouldBackfillExecutionRecordFromProjectionWhenPartsOnly() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+
+        ExecutionPart textPart = new ExecutionPart();
+        textPart.setType(ExecutionPart.TYPE_TEXT);
+        textPart.setText("正文\n\nEXECUTION_RECORD:\n{\"files\":[\"a.md\"]}");
+
+        ExecutionResultReport report = reportOf(22L, 11L, "rid-parts-record");
+        report.setOutput(null);
+        report.setParts(List.of(textPart));
+
+        executionResultHandler.handleReport(report);
+
+        // 若这里仍读 report.getOutput()，parts-only 提交的 EXECUTION_RECORD 会静默丢失
+        verify(taskRunningSpecPort).parseAndAppendExecutionRecord(
+                eq(33L), eq(22L), anyString(), eq(11L),
+                eq("正文\n\nEXECUTION_RECORD:\n{\"files\":[\"a.md\"]}"));
+    }
+
+    @Test
+    @DisplayName("A-2：无 parts → 不写 parts 键（旧协议零变化）")
+    void shouldNotWritePartsKeyWhenAbsent() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+
+        executionResultHandler.handleReport(reportOf(22L, 11L, "rid-legacy-out"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskCommandPort).updateContext(eq(22L), ctxCaptor.capture());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> lastExecution = (Map<String, Object>) ctxCaptor.getValue().get("lastExecution");
+
+        assertThat(lastExecution).doesNotContainKey("parts");
+        assertThat(lastExecution).containsEntry("output", "done");
+    }
+
+    @Test
+    @DisplayName("A-2：output 超 64k → 写侧截断仍保留 EXECUTION_RECORD 尾部（只保头会切掉它）")
+    void shouldKeepExecutionRecordTailWhenOutputTooLong() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+
+        String bigOutput = "正文段落行\n".repeat(20000) + "EXECUTION_RECORD:\n{\"files\":[\"a.md\"]}";
+        assertThat(bigOutput.length())
+                .isGreaterThan(com.helloai.core.shared.util.AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT);
+
+        ExecutionResultReport report = reportOf(22L, 11L, "rid-big");
+        report.setOutput(bigOutput);
+
+        executionResultHandler.handleReport(report);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskCommandPort).updateContext(eq(22L), ctxCaptor.capture());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> lastExecution = (Map<String, Object>) ctxCaptor.getValue().get("lastExecution");
+        String written = (String) lastExecution.get("output");
+
+        assertThat(written.length())
+                .isLessThanOrEqualTo(com.helloai.core.shared.util.AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT);
+        assertThat(written).contains("EXECUTION_RECORD:");
+        assertThat(written).contains("中间省略");
     }
 }

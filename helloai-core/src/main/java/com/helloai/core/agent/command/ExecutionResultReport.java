@@ -2,6 +2,8 @@ package com.helloai.core.agent.command;
 
 import lombok.Data;
 
+import java.util.List;
+
 @Data
 public class ExecutionResultReport {
     private Long subTaskId;
@@ -21,6 +23,17 @@ public class ExecutionResultReport {
     private String finishReason;
     private Object tokenUsage;
     private String output;
+    /**
+     * 结构化产物分片（ADR-009 §8.6 / {@code AQ-7} 方案 A，第一批）。
+     *
+     * <p>非空时 {@link #output} 不再是独立事实源，而是 {@link ExecutionPart#projectToText}
+     * 的纯文本投影——两者在<b>同一个装配点</b>（{@code ExecutionResultHandler#handleReport}）
+     * 一次性构造，禁止在调用方分别写（双写必分叉）。</p>
+     *
+     * <p>内部执行链不产生分片（恒为 null，行为与旧协议完全一致）；外部执行者经
+     * {@code submitResult.parts} 上报，协议层已拒收 file 分片。</p>
+     */
+    private List<ExecutionPart> parts;
     private String thinking;
     private String error;
 }

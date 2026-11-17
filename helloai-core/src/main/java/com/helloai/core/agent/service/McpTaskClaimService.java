@@ -1,13 +1,14 @@
 package com.helloai.core.agent.service;
 
 import com.helloai.core.agent.service.McpToolService.AckResult;
+import com.helloai.core.agent.service.McpToolService.CancelSubTaskResult;
 import com.helloai.core.agent.service.McpToolService.ClaimSubTaskResult;
 import com.helloai.core.agent.service.McpToolService.PullTasksResult;
 import com.helloai.core.agent.service.McpToolService.StartSubTaskResult;
 
 /**
  * MCP 任务获取链服务契约（RM9-a 从 {@link McpToolService} 实现类拆出的职责契约）：
- * 「任务获取 → 确认 → 认领 → 开工」同一条前置链。
+ * 「任务获取 → 确认 → 认领 → 开工」同一条前置链，及归属子任务的状态命令（开工 / 取消）。
  *
  * <p>实现见 {@code com.helloai.core.agent.service.impl.McpTaskClaimServiceImpl}。
  * 按 {@code HelloAI_CODE_STYLE.md §8.1}「{@code {domain}.service} 放 {@code XxxService} 接口、
@@ -26,4 +27,7 @@ public interface McpTaskClaimService {
 
     /** 开始子任务（开工）。 */
     StartSubTaskResult startSubTask(Long agentId, Long subTaskId);
+
+    /** 取消子任务（归属 + 非终态校验，失败抛 BizException(400)，ADR-009 A-1）。 */
+    CancelSubTaskResult cancelSubTask(Long agentId, Long subTaskId);
 }

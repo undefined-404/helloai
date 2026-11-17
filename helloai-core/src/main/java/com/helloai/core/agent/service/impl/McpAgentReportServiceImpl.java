@@ -10,6 +10,7 @@ import com.helloai.common.constant.WorkMode;
 import com.helloai.core.agent.AgentSkillDeriver;
 import com.helloai.core.agent.SkillCapabilityRequirements;
 import com.helloai.core.agent.SkillNormalizer;
+import com.helloai.core.agent.command.ExecutionPart;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.command.ExecutionResultReport;
 import com.helloai.core.agent.entity.Agent;
@@ -213,7 +214,7 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
     @Override
     public SubmitResultResult submitResult(Long agentId, Long subTaskId, String resultId,
                                           Boolean success, String output, String error, String finishReason,
-                                          Integer tokenUsage) {
+                                          Integer tokenUsage, List<ExecutionPart> parts) {
         if (subTaskId == null) {
             SubmitResultResult r = new SubmitResultResult();
             r.setOk(false);
@@ -268,6 +269,9 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
         // B5.1（G-008 盲区收口）：外部执行者回报的 token 原样入链路（null = 旧协议，行为不变）
         report.setTokenUsage(tokenUsage);
         report.setOutput(output);
+        // ADR-009 §8.6：分片原样透传，output/projection 的装配与截断由唯一写点
+        // ExecutionResultHandler#handleReport 完成（本类不投影、不截断——否则就是第二写点）。
+        report.setParts(parts);
         report.setError(error);
 
         // G-006：外部执行 attempt 收口（AFTER_COMMIT，见 closeAttemptAfterCommit 说明）。
@@ -651,7 +655,7 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
      * 查询 Agent 自身状态（管理态 + DB 持久在线态 + 实时计算态）。
      *
      * <p>业务逻辑统一下沉到 {@link McpToolService}，MCP SSE 与 REST 别名
-     * 两条通道工具矩阵完全对齐（10 工具），避免实现漂移。</p>
+     * 两条通道工具矩阵完全对齐（14 工具），避免实现漂移。</p>
      */
     @Override
     public GetAgentStatusResult getAgentStatus(Long agentId) {

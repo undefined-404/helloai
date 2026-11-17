@@ -29,7 +29,7 @@ import static org.mockito.Mockito.when;
  *
  * <p><b>REF-8.1（2026-10-12）</b>：给 {@code API_KEY_LLM} 解封进程内工具通道——返回
  * {@code INTERNAL_LLM_TOOLS}（internal_ 固有通道无条件可见 + contributor 工具受 available 限定），
- * 而非空集。13 个外部 MCP 会话工具对内部 LLM <b>依旧剔除</b>（防 L3 P1-1 复活）；
+ * 而非空集。14 个外部 MCP 会话工具对内部 LLM <b>依旧剔除</b>（防 L3 P1-1 复活）；
  * contributor 工具（web_search / search_knowledge）仅在平台授权时并入。</p>
  *
  * <p><b>REF-1.3b 增补</b>：不可关闭清单（{@code CRITICAL_TOOLS} = pullTasks / submitResult / heartbeat）
@@ -42,9 +42,9 @@ import static org.mockito.Mockito.when;
 @DisplayName("AgentMcpServerServiceImpl 接入类型工具过滤（L3 P1-1 + REF-8.1）")
 class AgentMcpServerServiceImplTest {
 
-    /** 13 个 MCP 会话类工具（与本单 MCP_SESSION_TOOLS 同集合，逐个列出以冻结清单）。 */
+    /** 14 个 MCP 会话类工具（与本单 MCP_SESSION_TOOLS 同集合，逐个列出以冻结清单）。 */
     private static final List<String> MCP_TOOLS = List.of(
-            "pullTasks", "ack", "claimSubTask", "startSubTask", "getSubTaskDetail", "heartbeat",
+            "pullTasks", "ack", "claimSubTask", "startSubTask", "cancelSubTask", "getSubTaskDetail", "heartbeat",
             "uploadArtifact", "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
             "checkIn", "checkOut");
 
@@ -93,9 +93,9 @@ class AgentMcpServerServiceImplTest {
     }
 
     @Test
-    @DisplayName("API_KEY_LLM（REF-8.1）：返回内部进程内工具通道，13 个 MCP 会话工具全部剔除")
+    @DisplayName("API_KEY_LLM（REF-8.1）：返回内部进程内工具通道，14 个 MCP 会话工具全部剔除")
     void shouldExcludeMcpSessionToolsForApiKeyLlm() {
-        // 授权集 = 13 个 MCP 工具 + 已授权的 contributor（web_search/search_knowledge）
+        // 授权集 = 14 个 MCP 工具 + 已授权的 contributor（web_search/search_knowledge）
         List<String> authorized = new java.util.ArrayList<>(MCP_TOOLS);
         authorized.add("web_search");
         authorized.add("search_knowledge");
@@ -103,7 +103,7 @@ class AgentMcpServerServiceImplTest {
 
         List<String> injectable = service.getEnabledToolsForAccess(11L, AgentAccessType.API_KEY_LLM);
 
-        // 13 个 MCP 会话工具一个都不能留（防 L3 P1-1 复活）
+        // 14 个 MCP 会话工具一个都不能留（防 L3 P1-1 复活）
         assertThat(injectable).doesNotContainAnyElementsOf(MCP_TOOLS);
         // REF-8.1：返回 5 个 internal_ 固有工具 + 已授权的 contributor 工具
         assertThat(injectable).containsAll(INTERNAL_LLM_TOOLS);
@@ -114,14 +114,14 @@ class AgentMcpServerServiceImplTest {
     @DisplayName("CLI_CLIENT / WEB_BROWSER / null：与 getEnabledTools 逐字一致（外部链路零回归）")
     void shouldReturnIdenticalToGetEnabledToolsForNonApiKeyLlm() {
         List<String> authorized = List.of(
-                "pullTasks", "ack", "claimSubTask", "startSubTask", "getSubTaskDetail", "heartbeat",
+                "pullTasks", "ack", "claimSubTask", "startSubTask", "cancelSubTask", "getSubTaskDetail", "heartbeat",
                 "uploadArtifact", "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
                 "checkIn", "checkOut");
         when(chain.list()).thenReturn(rowsOf(authorized));
 
         List<String> baseline = service.getEnabledTools(11L);
 
-        // ★外部 Agent（trae-excutor / TeleAgent-executor）为 CLI_CLIENT，13 工具注入必须逐字不变
+        // ★外部 Agent（trae-excutor / TeleAgent-executor）为 CLI_CLIENT，14 工具注入必须逐字不变
         assertThat(service.getEnabledToolsForAccess(11L, AgentAccessType.CLI_CLIENT))
                 .containsExactlyElementsOf(baseline);
         assertThat(service.getEnabledToolsForAccess(11L, AgentAccessType.WEB_BROWSER))
@@ -131,10 +131,10 @@ class AgentMcpServerServiceImplTest {
     }
 
     @Test
-    @DisplayName("getEnabledTools 原语义不变：仍返回含 13 个 MCP 工具的授权全集")
+    @DisplayName("getEnabledTools 原语义不变：仍返回含 14 个 MCP 工具的授权全集")
     void shouldNotChangeGetEnabledToolsSemantics() {
         List<String> authorized = List.of(
-                "pullTasks", "ack", "claimSubTask", "startSubTask", "getSubTaskDetail", "heartbeat",
+                "pullTasks", "ack", "claimSubTask", "startSubTask", "cancelSubTask", "getSubTaskDetail", "heartbeat",
                 "uploadArtifact", "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
                 "checkIn", "checkOut");
         when(chain.list()).thenReturn(rowsOf(authorized));
@@ -147,7 +147,7 @@ class AgentMcpServerServiceImplTest {
     }
 
     @Test
-    @DisplayName("enableDefaultsForAgent：默认授权含 13 个 MCP 工具 + 2 个 contributor 工具（2026-10-25 事故修）")
+    @DisplayName("enableDefaultsForAgent：默认授权含 14 个 MCP 工具 + 2 个 contributor 工具（2026-10-25 事故修）")
     void shouldEnableContributorToolsByDefault() {
         // 模拟 DB 无既有行（新 agent 注册场景）
         when(chain.list()).thenReturn(rowsOf(List.of()));
@@ -156,8 +156,8 @@ class AgentMcpServerServiceImplTest {
 
         int inserted = service.enableDefaultsForAgent(11L);
 
-        // 13 个 MCP 会话工具 + 2 个 contributor 工具（web_search / search_knowledge）
-        assertThat(inserted).isEqualTo(15);
+        // 14 个 MCP 会话工具 + 2 个 contributor 工具（web_search / search_knowledge）
+        assertThat(inserted).isEqualTo(16);
     }
 
     // #region REF-1.3b 不可关闭清单（CRITICAL_TOOLS）

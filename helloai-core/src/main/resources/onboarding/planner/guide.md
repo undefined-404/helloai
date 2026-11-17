@@ -85,7 +85,7 @@
 
 > 💡 完整可照抄示例见 §1.5.7（上班 → 轮询 → 收件箱有新消息 → 按第二节工作流处理 → ack → 继续轮询 → 下班一段式脚本）。
 
-### 1.4 MCP SSE 握手与 sessionId 透传（关键·避坑）
+### 1.4 MCP SSE 握手与鉴权会话透传（authSessionId，关键·避坑）
 
 > 这一节是外部 Agent 实测踩坑后沉淀的硬事实，按此执行可避免在打卡环节反复试错。
 
@@ -98,10 +98,11 @@
 ```
 标准 MCP 客户端（Trae / Qoder）配好 SSE 端点 + Bearer 头后会自动完成前 3 步；若你手写客户端，必须自己走完四步，直接 `tools/call` 会失败。
 
-**(2) 每个工具调用都要在 arguments 里显式传 `sessionId`**
-- spring-ai 1.1.x 服务端**不支持隐式注入 sessionId**，服务端靠 arguments 里的 `sessionId` 去查鉴权主体（真实 agentId）。
-- 漏传会报 **"sessionId 不能为空"**：把第 1 步拿到的 sessionId **既拼在 URL query（`?sessionId=`）也放进 tool 的 arguments**（字段名 `sessionId`；旧客户端兼容 `_sessionId`）。
-- 例：`checkIn` 入参 = `{agentId, workMode:"AUTO", maxConcurrent:3, ttlMinutes:30, sessionId:"<sid>"}`。
+**(2) 每个工具调用都要在 arguments 里显式传 `authSessionId`（ADR-009 A-4 推荐名）**
+- spring-ai 1.1.x 服务端**不支持隐式注入鉴权会话 ID**，服务端靠 arguments 里的鉴权会话参数去查鉴权主体（真实 agentId）。该 ID 是平台 Redis 鉴权上下文的键（「鉴权会话」），与 MCP 传输层 session 是两个概念——A-4 起推荐参数名改为 **`authSessionId`**。
+- **三名优先级 `authSessionId > sessionId > _sessionId`**（首个非空白胜出）：旧名 `sessionId` / `_sessionId` 保留一个兼容周期，存量客户端不改也能用；新接入一律用 `authSessionId`。
+- 漏传（三名全空）会报 **401「MCP 鉴权失败：缺少 authSessionId 参数」**：把第 1 步拿到的 sid **既拼在 URL query（`?sessionId=`，传输层参数名不变）也放进 tool 的 arguments**（字段名 `authSessionId`）。
+- 例：`checkIn` 入参 = `{agentId, workMode:"AUTO", maxConcurrent:3, ttlMinutes:30, authSessionId:"<sid>"}`。
 
 **(3) Session 失效（Session not found）与 REST 别名兜底（A0-2）**
 - spring-ai 的 MCP session **严格绑定 SSE 长连接**：连接断开/超时即失效，之后 `POST /mcp/messages?sessionId=<旧sid>` 会报 **404 Session not found**——这是服务端协议行为，旧 sessionId 无法复活。
@@ -528,7 +529,7 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 | 401 | `Unauthorized` | Bearer 头错 | 检查 API Key 前缀 `ak_` 与拼写 |
 | 404 | `Session not found` | SSE 连接断开/超时，session 已被服务端回收 | 重新 GET /mcp/sse 四步握手；或切 REST 别名 `POST /api/mcp/jsonrpc`（免 session，§1.4(3)） |
 | 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 未 checkIn 就调用依赖在岗状态的能力 | 先调 `checkIn`（MCP / REST 别名 / REST 直通均可）再调用 |
-| 500 | `sessionId 不能为空` | tool arguments 漏 `sessionId` 字段 | 把 SSE endpoint 帧拿到的 sid **同时**拼进 URL `?sessionId=` 与 arguments `sessionId` |
+| 401 | `MCP 鉴权失败：缺少 authSessionId 参数` | tool arguments 三名（`authSessionId`/`sessionId`/`_sessionId`）全空 | 把 SSE endpoint 帧拿到的 sid **同时**拼进 URL `?sessionId=`（传输层名不变）与 arguments `authSessionId`（推荐名，旧名兼容） |
 | 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list` 拿权威清单（三通道 11 工具） |
 
 > **建议**：优先走 MCP（全套工具 + 统一心跳/租约语义）；写操作与无 MCP 客户端时用 REST curl 轮询兜底；CLI 仅覆盖 poll/submit/status 三个高频操作。

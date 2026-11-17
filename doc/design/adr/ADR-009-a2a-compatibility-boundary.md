@@ -239,10 +239,52 @@ A 档四洞的具体口径：
 | §8.3 | `AQ-8` | 待回填 | — |
 | §8.4 | `AQ-5` | 待回填 | — |
 | §8.5 | `AQ-6` | 待回填 | — |
-| §8.6 | `AQ-7` | 待回填 | — |
-| §8.7 | `AQ-4` | 待回填 | — |
+| §8.6 | `AQ-7` | 已回填（2026-11-17） | 方案 A + 三条用户口径（file part 首批 400 拒收 / 单写点 / 64k 投影截断），见下方 §8.6 小节 |
+| §8.7 | `AQ-4` | 已回填（2026-11-17） | 方案①对外保名 + 内部 `conversationGroupId` = taskId 最小投影 + 三义登记，见下方 §8.7 小节 |
 | §8.8 | `AQ-2` | 待回填 | — |
 | §8.9 | `AQ-11` | 待回填 | — |
 | §8.10 | `AQ-12` | 待回填 | — |
 | §8.11 | `AQ-13` | 待回填 | — |
 | §8.12 | `AQ-9` / `AQ-10` | 待回填 | — |
+
+### §8.6 `AQ-7` 回填：`submitResult.parts` 存储形态与 `output` 兼容策略（2026-11-17）
+
+- **来源**：用户拍板（2026-11-17，采纳展开分析推荐默认「方案 A + 不回填 + EXECUTION_RECORD 留尾部 + 消费方两批」，叠加用户新增三条口径）；代码事实均 `[实测]`。
+- **结论（方案 A）**：
+  1. **存储**：`submitResult` 加可选 `parts`（text / file / data 分片数组，对齐 A2A `Artifact.parts`），落 `sub_task.context.lastExecution.parts`（JSONB），不加表、不加列。`parts` 存在时 `output` 不再是第二事实源（§2.6 A-2 已定死），退化为 `parts` 的纯文本投影。
+  2. **file part 形态（用户口径①）**：JSONB 里只存平台桶内 `minio://` 引用（与 `uploadArtifact` 只收平台桶内地址同口径，`McpMcpServer.java:268-300`；`A-1` 插入 `cancelSubTask` 后整体下移约 50 行，旧引 `:218-252` 已失效），**字节永不进库**。**第一批直接拒收 file part（显式 `new BizException(400, ...)`，与 A-1 失败口径同构）**——外部提交了文件 part 而平台不知放哪时，静默丢弃比报错糟；file part 物化成 attachment 推到第二批。第一批收 text / data。**拒收判点（落点，勿再订正）**：必须在**协议适配层**——`McpToolServiceImpl.submitResult` 入参构建处（工具面解析收到的 `parts` 后立即判），**禁止放进 `ExecutionResultHandler.handleReport`**：后者是内外执行链共用点，在其内抛 400 会把内部链路的一次装配异常报成外部协议错误（与「单写点订正」同型：落点想当然会把正确口径做错）。
+  3. **单写点（用户口径②，落点经实测订正一跳）**：`lastExecution{parts, output}` 必须由唯一装配点 **`ExecutionResultHandler.handleReport`**（A-2 实施后装配段 `ExecutionResultHandler.java:309-333`，`ctx.put("lastExecution", last)` :333；A-2 前为 :298-320，插入 parts 逻辑后下移 13 行）**一次性构造**，内外执行链共用此点；`McpAgentReportServiceImpl.submitResult`（:279）只是委托方，`recordSubmissionActivity`（:289/:353）只写时间线活动明细、不写 `lastExecution`——在后者写 parts 反而制造第二写点。**禁两处分别写**，这是双写分叉的唯一防线。装配点已有方案3 displayText 逻辑（物化开启时 output = 摘要 + 文件概览 + 尾部），parts 投影与之同点装配，parts 存在时以 parts 投影优先。
+  4. **JSONB 体积预算（用户口径③）**：parts + output 投影使 `lastExecution` 体积近翻倍。投影函数（写侧，handleReport 调用）**复用 `AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT = 64000`**（`AttachmentContentPolicy.java:25`；该常量现仅注入侧消费 `ReviewEvidenceAssembler.java:643`，写侧此前无 64k 截断——本口径是其写侧首次消费），超限截断并打标，不造第二常量。读侧六族消费方（核验证据注入 / EXECUTION_RECORD 解析 / 报告整合与审查 / 下游注入 / 内部执行链 / 前端）共用入口 `SubTaskOutputExtractor.extractExecutionOutput`，读到的已是截断后投影，预算行为天然收敛，不各自漂移。
+
+   **两条必守补充（2026-11-17 取证订正，防实施做错）**：
+   - **截断保头又保尾**：口径只说「超限截断」，未定方向。若按最简 `substring(0, LIMIT)`，会正好切掉方案3 特意保留在 `displayText` **尾部**的 `EXECUTION_RECORD` 块（`ParsedOutput` 保尾约定，`ExecutionOutputParser.java:95/:137`），等于自废既有协议。**必须保头 + 保尾**（尾部 `EXECUTION_RECORD` 段整体保留），中段截断打标。
+   - **影响面比「JSONB 体积」更宽**：今日 `lastExecution.output` 存全量，仅注入侧（`ReviewEvidenceAssembler.java:643`）截 64k；写侧一截，**最终报告正文 / 交付物聚合 / 任务迭代 / 前端详情 / 下游注入**同步降到 64k。且 64000 在本仓是**三个同值不同义**的预算：`AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT`（注入摘要）/ `TaskFinalReportServiceImpl.SECTION_OUTPUT_LIMITS[0]`（报告正文第一档，`{64000,16000,4000}`）/ 本口径（存储投影）。同值 ≠ 同一预算，收敛的是常量引用，不是语义。
+   - **`EXECUTION_RECORD` 解析不在读侧**：回填走 `report.getOutput()` 原文（`ExecutionResultHandler.java:309` 解析 + `:322` 起 `TaskRunningSpecPort`），不经 `lastExecution`。故写侧截断**不会**破坏回填；上句「读侧六族」中的「EXECUTION_RECORD 解析」应理解为「回填链不受本口径影响」，不得据此改回填链。
+  5. **兼容**：旧数据不回填（无 parts 时按旧协议行为）；EXECUTION_RECORD 块保留 text part 尾部（`ExecutionOutputParser` / `TaskRunningSpecPort` 解析链不变）；消费方分两批适配（第一批：写侧 + 核验注入 + 下游注入；第二批：报告整合 / 前端渲染 / file 物化）。
+- **对 §1~§7 的影响**：无。本节是 §2.6 A-2「存储形态待 AQ-7」预留项的回填；边界结论（内核不改 / 双平面 / 投影三原则 / 身份解耦 / 出站优先）均不变。
+
+**实施落地（2026-11-17，同日）**：
+
+- **落地形态**：`parts` 为可选入参，三通道一致（SSE 工具面强类型 `List<ExecutionPart>` / REST `POST .../submitResult` / JSON-RPC `tools/call`，后两者经 `ExecutionPart.fromRaw` 转换）；落库键 `sub_task.context.lastExecution.parts`，无新表无迁移。
+- **拒收落点已按口径落地**：`McpToolServiceImpl.validateParts`（协议适配层，三通道公共入口），`ExecutionResultHandler.handleReport` **不含**任何以 400 拒收 parts 的逻辑。拒收项：`file` 分片 / 未知或缺失 `type` / 正文为空 / 单片正文 > 64000 / 分片数 > 20，全部双参 `BizException(400, ...)`。
+- **工具入参 JSON Schema 的 `required` 收窄（本批新发现，实施时修）**：spring-ai 生成 schema 时把**无 `@Nullable` 标注的字段**一律写进 `required`，导致 `[{type:"text",text:"..."}]` 这种合法分片被判「缺 data/fileName/mimeType」。已在 `ExecutionPart` 的 `text` / `data` / `mimeType` / `fileName` 加 `@org.springframework.lang.Nullable`；实测 schema 现为 `items.required = ["type"]`，外层 `required = [agentId, subTaskId, success]`。**这是一条通用坑**：以后任何作为工具入参的可选嵌套 DTO，字段不加 `@Nullable` 就会被静默标成必填。
+- **口径订正（本条与上方第 4 条补充冲突，以本行为准）**：上方写「`EXECUTION_RECORD` 回填走 `report.getOutput()` 原文、不经投影」。实施时发现**走 parts 且原始 `output` 为空时，回填会静默拿到空串**——这等于 parts-only 提交丢失全部回填。已改为读 `baseOutput`（有 parts 时为投影、无 parts 时仍是原 `output`），即 `parseAndAppendExecutionRecord(..., baseOutput)`。同理把「返工问题语义回填」（`executorDoneIssuesBackfiller`）与「空回复归因」（`emptyReply`）两处也一并改为 `baseOutput`，否则 parts 提交会被误判成 EMPTY_REPLY。
+- **截断实现**：`TextTruncator.truncateHeadTail`（新增），保头 + 保尾 + 中段打「中间省略 N 字符」标记；`ExecutionResultHandler` 写 `lastExecution.output` 前调用，阈值 `AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT`。
+- **验证**：`common + core` 932 文件全量编译 0 错、`api` 192 文件 0 错；定向单测 149 例全绿（core 119 + api 30），其中新增 `ExecutionPartTest`（投影/转换）、`TextTruncator#truncateHeadTail` 边界、`handleReport` parts 装配 + parts-only 回填 + 无 parts 零变化 + 64k 保尾；三通道 schema 与序列化用探针实测。
+- **对外文档同步**：`doc/manual/executor-duty/`（00 契约表/工具表、03 新增 §3.1.3、版本记录 v1.3、`manual-assembled.md` 重拼）、`onboarding/executor/guide.md`、`scripts/powershell/executor-SKILL.md` 三处均补 `parts`；parity 守卫 PASS=30。
+
+### §8.7 `AQ-4` 回填：`contextId` 撞名处置（2026-11-17）
+
+- **来源**：用户拍板（2026-11-17，采纳方案①「对外保名、内部另起名」+ taskId 最小投影）；代码事实均 `[实测]`。
+- **结论**：
+  1. **对外保名 `contextId`**（A2A v1.0.1 契约名不动），**内部另起名**：`SubTaskDetail` 快照新增 `conversationGroupId`，**字段注释必须写明「= taskId，A2A 会话分组投影」**——值取 taskId 时「会话分组」之名不严格符实（分组的是任务不是会话），用户裁定不纠结命名，以注释说明。
+  2. **取值 = taskId 最小投影**：task 域无既有会话分组键（`conversationId` 全域 grep 零命中，`[实测]`），第一批 `contextId` 直接投影自 taskId；将来出现真实会话分组需求再扩展，对外契约不变。
+  3. **三处撞名登记**（调研清单原只登两义，第三义已增补）：① `WorkspaceRef.contextId` = 沙箱观测归属（`SL-8`，`WorkspaceRef.java:33/:39`，只用于台账与日志、不参与槽键）；② A2A `contextId` = 会话分组；③ `ArtifactItemVO.contextId` / `MyArtifactsQueryService` = 助理域「会话 id 或任务 id，前端跳转用」（`ArtifactItemVO.java:36`、`MyArtifactsQueryService.java:50`）。
+  4. **`WorkspaceRef` 改名不做**（方案②排除）：其语义自洽、消费点集中在沙箱域，改名是纯成本；§4.3 禁止项（禁用 `WorkspaceRef.contextId` 承载 A2A 会话分组）维持不变。
+- **对 §1~§7 的影响**：无。本节是 §2.6 A-3 预留项的回填；§4.3 禁止项不变。
+
+**实施落地（2026-11-17，同日）**：
+
+- **落地形态**：`SubTaskDetail` 新增 `private Long conversationGroupId`，装配处 `McpReadModelServiceImpl.buildSubTaskDetail` 一次性赋 `subTask.taskId()`（允许为空，消费方按「无分组」处理）。
+- **wire 名落地（实施时补的关键一跳）**：仅靠 Java 字段名 `conversationGroupId` 时，序列化出来的 JSON 键就是 `conversationGroupId`——文档说的「对外保名 `contextId`」在 wire 上**不成立**。已加 `@JsonProperty("contextId")`，实测序列化为 `"contextId":<taskId>` 且不含 `conversationGroupId`，并在 `McpToolServiceTest` 加断言锁住该契约。**判据**：「对外保名」是 wire 层事实，不是命名意图；不加注解就是没做到。
+- **验证**：与 A-2 同批（core 119 + api 30 = 149 例全绿）。对外文档 `getSubTaskDetail` 返回字段表已补 `contextId` 并注明「= taskId、执行侧无需处理」（手册 / onboarding 引导 / SKILL 镜像三源同步）。

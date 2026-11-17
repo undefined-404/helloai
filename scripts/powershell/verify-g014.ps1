@@ -2,7 +2,7 @@
 # verify-g014.ps1 - G-014 外部 Agent 执行通道修复 · 端到端验证
 #
 # 为何新增（规约 §23/§26）：本专项 7 个验证点（依赖门禁新 reason / 开工工具
-# 幂等 / 附件与贡献者可发现 / 归属 403 / 平台账号 200 回归 / 13 工具 schema）
+# 幂等 / 附件与贡献者可发现 / 归属 403 / 平台账号 200 回归 / 14 工具 schema）
 # 在既有 scripts/powershell/ 资产中无对应断言，且需「一正一反」双通道验证，
 # 故新增本脚本；复用同一 HTTP/MCP 调用范式，不引入新框架。
 #
@@ -111,7 +111,8 @@ function Skip([string]$Case, [string]$Reason) {
 Write-Output ('=== verify-g014 @ ' + $BaseUrl + ' ===')
 
 # ------------------------------------------------------------
-# S1  T07 schema：13 工具 + 每个 inputSchema 带 required + 含 startSubTask
+# S1  T07 schema：14 工具 + 每个 inputSchema 带 required + 含 startSubTask
+#     （G-014 当时为 13；ADR-009 A-1 新增 cancelSubTask 后外部面为 14，常量随之更新）
 # ------------------------------------------------------------
 try {
   $json = Invoke-McpRaw $AgentKey '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
@@ -121,7 +122,7 @@ try {
   $missingRequired = @($tools | Where-Object {
       -not ($_.inputSchema.PSObject.Properties.Name -contains 'required')
     }).Count
-  Report 'S1' (($count -eq 13) -and $hasStart -and ($missingRequired -eq 0)) `
+  Report 'S1' (($count -eq 14) -and $hasStart -and ($missingRequired -eq 0)) `
     ('tools=' + $count + ' startSubTask=' + $hasStart + ' missingRequired=' + $missingRequired)
 } catch {
   Report 'S1' $false ('request failed: ' + $_.Exception.Message)

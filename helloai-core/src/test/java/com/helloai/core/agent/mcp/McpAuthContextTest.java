@@ -190,10 +190,11 @@ class McpAuthContextTest {
         }
 
         @Test
-        @DisplayName("requireAuthId(String) 空白 → 401 提示补传 _sessionId")
+        @DisplayName("requireAuthId(String) 空白 → 401 提示补传 authSessionId（A-4 推荐名，旧名仍兼容）")
         void requireAuthIdString_blank_401() {
             BizException e = assertThrows(BizException.class, () -> ctx.requireAuthId((String) null));
             assertEquals(401, e.getCode());
+            assertTrue(e.getMessage().contains("authSessionId"), e.getMessage());
             assertTrue(e.getMessage().contains("_sessionId"), e.getMessage());
         }
 

@@ -249,6 +249,8 @@ public class McpReadModelServiceImpl implements McpReadModelService {
         SubTaskDetail detail = new SubTaskDetail();
         detail.setSubTaskId(subTask.id());
         detail.setTaskId(subTask.taskId());
+        // ADR-009 §8.7：conversationGroupId = taskId（A2A 会话分组最小投影，第一批取值即 taskId）
+        detail.setConversationGroupId(subTask.taskId());
         detail.setTitle(subTask.title());
         detail.setContent(subTask.content());
         detail.setDeliverable(subTask.deliverable());

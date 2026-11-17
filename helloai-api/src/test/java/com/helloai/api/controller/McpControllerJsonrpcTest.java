@@ -44,7 +44,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <ul>
  *   <li>同步响应：tools/call 返回 JSON-RPC result（含 accepted/resultId/status），不再像
  *       SSE 通道 POST 那样静默 200 空 body</li>
- *   <li>tools/list：12 工具声明齐全且每个工具都带 JSON Schema（inputSchema）</li>
+ *   <li>tools/list：14 工具声明齐全且每个工具都带 JSON Schema（inputSchema）</li>
  *   <li>无状态复用：不依赖 MCP session（无 sessionId 参数），会话过期/断连后仍可调用</li>
  *   <li>错误语义：未知 method -32601、未知工具/参数缺失 -32000（BizException）</li>
  * </ul>
@@ -79,7 +79,7 @@ class McpControllerJsonrpcTest {
     }
 
     @Test
-    @DisplayName("tools/list：12 工具齐全且每个工具带 inputSchema（无状态 Schema 声明）")
+    @DisplayName("tools/list：14 工具齐全且每个工具带 inputSchema（无状态 Schema 声明）")
     void toolsList_hasAllTenToolsWithSchema() throws Exception {
         MvcResult result = postJsonrpc(Map.of("jsonrpc", "2.0", "method", "tools/list", "id", 1));
         JsonNode root = MAPPER.readTree(result.getResponse().getContentAsString());
@@ -89,10 +89,10 @@ class McpControllerJsonrpcTest {
 
         JsonNode tools = root.get("result").get("tools");
         assertNotNull(tools, "tools 数组不应为空");
-        assertEquals(13, tools.size(), "应声明 13 个工具（与 MCP SSE 通道对齐，含 getDepsSummary / getSubTaskDetail / startSubTask）");
+        assertEquals(14, tools.size(), "应声明 14 个工具（与 MCP SSE 通道对齐，含 getDepsSummary / getSubTaskDetail / startSubTask / cancelSubTask）");
 
         List<String> expectedNames = List.of(
-                "pullTasks", "ack", "claimSubTask", "startSubTask", "heartbeat", "uploadArtifact",
+                "pullTasks", "ack", "claimSubTask", "startSubTask", "cancelSubTask", "heartbeat", "uploadArtifact",
                 "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
                 "getSubTaskDetail", "checkIn", "checkOut");
         for (String name : expectedNames) {
@@ -121,7 +121,7 @@ class McpControllerJsonrpcTest {
         receipt.setStatus("REVIEW");
         receipt.setSubTaskId(101L);
         receipt.setResultId("res-20260811-001");
-        when(mcpToolService.submitResult(anyLong(), anyLong(), any(), any(), any(), any(), any(), any()))
+        when(mcpToolService.submitResult(anyLong(), anyLong(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(receipt);
 
         MvcResult result = postJsonrpc(Map.of(
@@ -252,7 +252,7 @@ class McpControllerJsonrpcTest {
     // ================================================================
 
     @Test
-    @DisplayName("GET /api/mcp/tools：声明 12 个工具且与 JSON-RPC tools/list 同名集合一致")
+    @DisplayName("GET /api/mcp/tools：声明 14 个工具且与 JSON-RPC tools/list 同名集合一致")
     void listTools_declaresAllTenMatchingJsonrpc() throws Exception {
         MvcResult result = mockMvc.perform(get("/api/mcp/tools")
                         .requestAttr("_authId", AGENT_ID))
@@ -267,7 +267,7 @@ class McpControllerJsonrpcTest {
             declared.add(t.asText());
         }
         List<String> expected = List.of(
-                "pullTasks", "ack", "claimSubTask", "startSubTask", "heartbeat", "uploadArtifact",
+                "pullTasks", "ack", "claimSubTask", "startSubTask", "cancelSubTask", "heartbeat", "uploadArtifact",
                 "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
                 "getSubTaskDetail", "checkIn", "checkOut");
         assertEquals(expected, declared, "GET /api/mcp/tools 声明应与三通道统一清单一致");

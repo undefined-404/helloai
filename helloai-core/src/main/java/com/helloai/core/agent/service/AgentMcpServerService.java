@@ -14,7 +14,7 @@ import java.util.Map;
 public interface AgentMcpServerService extends IService<AgentMcpServer> {
 
     /**
-     * 为新建 Agent 启用 EXECUTOR 默认 10 工具（已存在跳过，安全幂等）。
+     * 为新建 Agent 启用 EXECUTOR 默认工具（14 个 MCP 会话工具 + 2 个 contributor 工具；已存在跳过，安全幂等）。
      *
      * <p>由 {@link AgentService#register(String, com.helloai.common.constant.AgentRole, String)}
      * 在 {@code save(agent)} 之后调用，纳入同一事务。</p>
@@ -48,7 +48,7 @@ public interface AgentMcpServerService extends IService<AgentMcpServer> {
      * {@code accessType} 追加一层「可注入性」过滤 ——</p>
      * <ul>
      *   <li>{@code API_KEY_LLM}（内部 LLM 执行者，进程内 {@code AgentLoop} 无 MCP 会话）：
-     *       剔除 MCP 会话类工具（pullTasks / ack / claimSubTask / startSubTask /
+     *       剔除 MCP 会话类工具（pullTasks / ack / claimSubTask / startSubTask / cancelSubTask /
      *       getSubTaskDetail / heartbeat / uploadArtifact / submitResult / reportBlocked /
      *       getAgentStatus / getDepsSummary / checkIn / checkOut）——它们依赖
      *       {@code McpAuthContext} 的 sessionId，进程内调用必然 401；</li>

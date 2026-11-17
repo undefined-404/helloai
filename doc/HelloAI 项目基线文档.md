@@ -159,7 +159,7 @@ Credential
 - Retry / Timeout / Compensation；
 - DLQ / 死信台账；
 - Agent 在线状态治理（ACTIVE 值班租约作为一等存活证据——心跳过期不直接判 OFFLINE，避免在岗 Agent 被误判离线触发在飞任务重派；`renewLease` 到期时刻同租约内单调不减）；
-- 外部 Agent 通道与内部分发链约束同口径（`claimSubTask` 复用 `isReady` 依赖门禁、`listAvailable` 就绪过滤；新增 MCP `startSubTask` 打通 REWORK 返工出口；`SubTaskDetail` 内联产出附件与贡献者，产物可发现）；
+- 外部 Agent 通道与内部分发链约束同口径（`claimSubTask` 复用 `isReady` 依赖门禁、`listAvailable` 就绪过滤；新增 MCP `startSubTask` 打通 REWORK 返工出口；新增 MCP `cancelSubTask` 打通放弃出口（ADR-009 A-1，2026-11-17：仅限自己名下非终态 → CANCELLED，级联取消派生子任务，失败显式 400 非幂等）；MCP 鉴权会话参数推荐名 `authSessionId`（ADR-009 A-4，旧名 `sessionId`/`_sessionId` 兼容期内仍有效）；`SubTaskDetail` 内联产出附件与贡献者，产物可发现）；
 - 失败重派和结果收敛；
 - 报告审查链三级容错（L1 `@TransactionalEventListener(AFTER_COMMIT)` 内存事件 + L2 Outbox（报告写回与 `agent_outbox_event` 同事务 → `AgentEventCompensationTask` 补投 → `helloai.report-review.queue` → `MqFinalReportReviewConsumer` 幂等消费）+ L3 `FinalReportReviewOrphanTask` 巡检（`REVIEWING` 超阈值收敛 `DONE`，刻意不重投审查）；写口收口 `FinalReportStateMachine` 显式迁移表 + `TaskService.transitFinalReportStatus` / `convergeFinalReportToDone`；入口 Redisson 防双审锁）；
 - 产物存储一致性（ArtifactStorage 抽象 + Composite 路由（local/minio 双实现、按 type/URL 前缀分派）+ `AttachmentServiceImpl.register` 前置校验（validateAddress + 存在性，不存在 400 拒绝，把预览期 500 提前成登记期 400）；`ArtifactStorageReconcileTask` 6h ShedLock 只读对账（attachment 全量含逻辑删除 ↔ 桶内对象双向比对，悬空/孤儿/字节不符三态）；孤儿清理默认关闭，三重保险——开关 + 24h 时间窗 + 单轮上限 200）。

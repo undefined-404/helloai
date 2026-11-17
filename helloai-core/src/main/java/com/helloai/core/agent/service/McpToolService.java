@@ -1,7 +1,9 @@
 package com.helloai.core.agent.service;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
+import com.helloai.core.agent.command.ExecutionPart;
 import com.helloai.core.agent.port.UncertaintySnapshot;
 import lombok.Data;
 
@@ -112,6 +114,18 @@ public interface McpToolService {
      */
     StartSubTaskResult startSubTask(Long agentId, Long subTaskId);
 
+    /**
+     * 取消子任务：把已归属自己的非终态子任务推进到 CANCELLED（ADR-009 A-1）。
+     *
+     * <p>补齐对外执行通道的操作级缺口——此前 executor 认领后卡死/放弃时，平台侧只能改库或等租约过期。
+     * 状态机本就有 →CANCELLED 出边（10 个非终态全在），本工具只补 MCP 工具面入口，状态机零改动。</p>
+     *
+     * <p>授权：仅子任务当前 assigned_agent 可调用（服务端取鉴权 agentId，不信任入参）；
+     * 状态须为非终态（DONE / CANCELLED / DEAD_LETTER 三终态拒绝）。失败显式抛
+     * {@code BizException(400, ...)}（ADR §2.6 口径，与 startSubTask 的 reason 码模式不同是设计授权）。</p>
+     */
+    CancelSubTaskResult cancelSubTask(Long agentId, Long subTaskId);
+
     /** 心跳（含值班租约状态）。 */
     HeartbeatResult heartbeat(Long agentId);
 
@@ -126,10 +140,15 @@ public interface McpToolService {
      * @param tokenUsage 本轮执行消耗的 token 总数（可选）。外部执行者回报后进入平台成本观测链路
      *                   （{@code sub_task.context.lastExecution.tokens}）；为 null 时与旧协议行为完全一致
      *                   ——本参数是 B5「Fleet 成本选人」的数据前置（G-008 盲区收口）。
+     * @param parts      结构化产物分片（可选，ADR-009 §8.6 方案 A）。非空时落
+     *                   {@code lastExecution.parts}，{@code output} 退化为其纯文本投影；
+     *                   为 null = 旧协议（自由文本），行为不变。
+     *                   <b>第一批只收 text / data</b>：file 分片在协议适配层显式 400 拒收
+     *                   （文件统一先 {@code uploadArtifact} 上传，再用 text 分片引用）。
      */
     SubmitResultResult submitResult(Long agentId, Long subTaskId, String resultId,
                                     Boolean success, String output, String error, String finishReason,
-                                    Integer tokenUsage);
+                                    Integer tokenUsage, List<ExecutionPart> parts);
 
     /** 上报子任务阻塞。 */
     ReportBlockedResult reportBlocked(Long agentId, Long subTaskId, String reason);
@@ -240,6 +259,24 @@ public interface McpToolService {
     }
 
     /**
+     * 子任务取消结果（cancelSubTask 返回体，ADR-009 A-1）。
+     *
+     * <p>失败走 {@code BizException(400)}（不存在 / 非归属 / 终态），故本 DTO 只承载成功面，
+     * 无 {@code reason} 字段——与 {@link StartSubTaskResult} 的 reason 码模式刻意不同。</p>
+     */
+    @Data
+    class CancelSubTaskResult {
+        private boolean ok;
+        private Long subTaskId;
+        /** Agent ID：命名不符 {@code *Id} 约定，须显式声明为字符串以免雪花 ID 在前端丢精度。 */
+        @JsonSerialize(using = ToStringSerializer.class)
+        private Long assignedAgent;
+        /** 取消后的子任务状态；成功时为 CANCELLED。 */
+        private String status;
+        private Integer version;
+    }
+
+    /**
      * 子任务详情（getSubTaskDetail 返回体 / ClaimSubTaskResult.detail）。
      *
      * <p>字段与子任务实体一一对应，不做事后截断：验收标准与执行边界被截断正是
@@ -256,6 +293,29 @@ public interface McpToolService {
     class SubTaskDetail {
         private Long subTaskId;
         private Long taskId;
+        /**
+         * 会话分组键（ADR-009 §8.7 / `AQ-4` 处置）：**= taskId，A2A 会话分组投影**。
+         *
+         * <p>取值即为 {@link #taskId}——task 域当前没有独立的会话分组键（`conversationId`
+         * 全域零命中），故第一批直接用 taskId 做最小投影，将来出现真实分组需求再扩展，
+         * 对外契约（A2A `Task.contextId`）不变。</p>
+         *
+         * <p><b>命名口径</b>：对外 A2A 面保名 {@code contextId}（v1.0.1 契约名），
+         * 平台内部另起名 {@code conversationGroupId}，避免与库里另两义撞名——
+         * `WorkspaceRef.contextId`（沙箱观测归属）与 `ArtifactItemVO.contextId`
+         * （助理域「会话 id 或任务 id」）。**禁止**让 `WorkspaceRef.contextId`
+         * 承载本语义（ADR-009 §4.3 禁止项）。</p>
+         *
+         * <p>值本身允许为空：历史数据/异常快照下取不到 taskId 时为 null，
+         * 消费方须按「无分组」处理，不得据此报错。</p>
+         *
+         * <p>{@link JsonProperty} 是这条口径的唯一落地点：Java 字段名用内部名
+         * {@code conversationGroupId}，而<b>对外的 JSON 键必须是 A2A 契约名 {@code contextId}</b>。
+         * 不加此注解时序列化结果是 {@code conversationGroupId}，文档说的「对外保名」
+         * 在 wire 上就不成立（判据：规则存在 ≠ 全路径强制）。</p>
+         */
+        @JsonProperty("contextId")
+        private Long conversationGroupId;
         private String title;
         /** 执行内容与边界（做什么、边界在哪里）——外部执行者此前完全不可见的字段。 */
         private String content;

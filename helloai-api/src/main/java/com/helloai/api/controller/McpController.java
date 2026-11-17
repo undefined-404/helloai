@@ -2,6 +2,7 @@ package com.helloai.api.controller;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
+import com.helloai.core.agent.command.ExecutionPart;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.service.McpToolService.*;
 import lombok.RequiredArgsConstructor;
@@ -43,17 +44,17 @@ public class McpController {
     private final McpToolService mcpToolService;
 
     // ================================================================
-    // REST 通道 — 13 个工具（getAgentStatus/checkIn/checkOut；
-    // getDepsSummary/getSubTaskDetail/startSubTask，与 MCP SSE / JSON-RPC 三通道工具面完全对齐）
+    // REST 通道 — 14 个工具（getAgentStatus/checkIn/checkOut；
+    // getDepsSummary/getSubTaskDetail/startSubTask/cancelSubTask，与 MCP SSE / JSON-RPC 三通道工具面完全对齐）
     // ================================================================
 
     /** 三通道统一工具清单（MCP SSE / REST 别名 jsonrpc / REST 直通 tools/*），防声明与实现漂移。 */
     private static final List<String> TOOL_NAMES = List.of(
-            "pullTasks", "ack", "claimSubTask", "startSubTask", "heartbeat", "uploadArtifact",
+            "pullTasks", "ack", "claimSubTask", "startSubTask", "cancelSubTask", "heartbeat", "uploadArtifact",
             "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
             "getSubTaskDetail", "checkIn", "checkOut");
 
-    /** GET /api/mcp/tools — 列出当前 Agent 可用的工具（与 MCP SSE / JSON-RPC 通道一致，13 个） */
+    /** GET /api/mcp/tools — 列出当前 Agent 可用的工具（与 MCP SSE / JSON-RPC 通道一致，14 个） */
     @GetMapping("/tools")
     public R<?> listTools(@RequestAttribute("_authId") Long agentId) {
         return R.ok(TOOL_NAMES);
@@ -107,6 +108,18 @@ public class McpController {
         return R.ok(mcpToolService.startSubTask(agentId, subTaskId));
     }
 
+    /** POST /api/mcp/tools/cancelSubTask — 取消出口（归属自己的非终态 → CANCELLED，ADR-009 A-1） */
+    @PostMapping("/tools/cancelSubTask")
+    public R<CancelSubTaskResult> cancelSubTask(
+            @RequestAttribute("_authId") Long agentId,
+            @RequestBody Map<String, Object> body) {
+        Long subTaskId = toLong(body.get("subTaskId"));
+        if (subTaskId == null) {
+            return R.fail("subTaskId 不能为空");
+        }
+        return R.ok(mcpToolService.cancelSubTask(agentId, subTaskId));
+    }
+
     /** POST /api/mcp/tools/heartbeat */
     @PostMapping("/tools/heartbeat")
     public R<HeartbeatResult> heartbeat(
@@ -145,11 +158,13 @@ public class McpController {
         String error = (String) body.get("error");
         String finishReason = (String) body.get("finishReason");
         Integer tokenUsage = toInt(body.get("tokenUsage")); // B5.1 可选：成本观测
+        // ADR-009 §8.6：parts 可选（第一批收 text / data，file 由协议层拒收）
+        List<ExecutionPart> parts = ExecutionPart.fromRaw(body.get("parts"));
 
         if (subTaskId == null) return R.fail("subTaskId 不能为空");
         if (success == null) return R.fail("success 不能为空");
 
-        return R.ok(mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason, tokenUsage));
+        return R.ok(mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason, tokenUsage, parts));
     }
 
     /** POST /api/mcp/tools/reportBlocked */
@@ -297,6 +312,10 @@ public class McpController {
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
                                     "subTaskId", Map.of("type", "integer")),
                                     "required", java.util.List.of("subTaskId"))),
+                    Map.of("name", "cancelSubTask", "description", "取消子任务（归属自己的非终态 → CANCELLED；不存在/非归属/终态抛 400，ADR-009 A-1）",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of(
+                                    "subTaskId", Map.of("type", "integer")),
+                                    "required", java.util.List.of("subTaskId"))),
                     Map.of("name", "heartbeat", "description", "心跳上报",
                             "inputSchema", Map.of("type", "object", "properties", Map.of(),
                                     "required", java.util.List.of())),
@@ -306,12 +325,21 @@ public class McpController {
                                     "mimeType", Map.of("type", "string"), "fileSize", Map.of("type", "integer"),
                                     "storageUrl", Map.of("type", "string")),
                                     "required", java.util.List.of("subTaskId", "fileName", "storageUrl"))),
-                    Map.of("name", "submitResult", "description", "上交子任务执行结果（同步返回 accepted/status；可选回报 tokenUsage 供平台成本观测）",
+                    Map.of("name", "submitResult", "description", "上交子任务执行结果（同步返回 accepted/status；可选回报 tokenUsage 供平台成本观测；可选 parts 结构化产物分片，给 parts 后 output 退化为其投影）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
                                     "subTaskId", Map.of("type", "integer"), "resultId", Map.of("type", "string"),
                                     "success", Map.of("type", "boolean"), "output", Map.of("type", "string"),
                                     "error", Map.of("type", "string"), "finishReason", Map.of("type", "string"),
-                                    "tokenUsage", Map.of("type", "integer", "description", "本次执行消耗的 token 总数（可选，成本观测用）")),
+                                    "tokenUsage", Map.of("type", "integer", "description", "本次执行消耗的 token 总数（可选，成本观测用）"),
+                                    "parts", Map.of("type", "array", "description",
+                                            "结构化产物分片（可选）；type 只收 text / data，file 请先 uploadArtifact；最多 20 片、单片正文 ≤ 64000 字符",
+                                            "items", Map.of("type", "object", "properties", Map.of(
+                                                    "type", Map.of("type", "string", "enum", java.util.List.of("text", "data")),
+                                                    "text", Map.of("type", "string", "description", "text 分片正文"),
+                                                    "data", Map.of("type", "string", "description", "data 分片的 JSON 文本"),
+                                                    "mimeType", Map.of("type", "string"),
+                                                    "fileName", Map.of("type", "string")),
+                                                    "required", java.util.List.of("type")))),
                                     "required", java.util.List.of("subTaskId", "success"))),
                     Map.of("name", "reportBlocked", "description", "上报任务阻塞（REWORK 态亦可上报）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
@@ -395,6 +423,12 @@ public class McpController {
                     throw new BizException("subTaskId is required");
                 yield mcpToolService.startSubTask(agentId, subTaskId);
             }
+            case "cancelSubTask" -> {
+                Long subTaskId = toLong(args.get("subTaskId"));
+                if (subTaskId == null)
+                    throw new BizException("subTaskId is required");
+                yield mcpToolService.cancelSubTask(agentId, subTaskId);
+            }
             case "heartbeat" -> mcpToolService.heartbeat(agentId);
             case "uploadArtifact" -> {
                 Long subTaskId = toLong(args.get("subTaskId"));
@@ -415,9 +449,10 @@ public class McpController {
                 String error = (String) args.get("error");
                 String finishReason = (String) args.get("finishReason");
                 Integer tokenUsage = toInt(args.get("tokenUsage")); // B5.1 可选：成本观测
+                List<ExecutionPart> parts = ExecutionPart.fromRaw(args.get("parts"));
                 if (subTaskId == null) throw new BizException("subTaskId is required");
                 if (success == null) throw new BizException("success is required");
-                yield mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason, tokenUsage);
+                yield mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason, tokenUsage, parts);
             }
             case "reportBlocked" -> {
                 Long subTaskId = toLong(args.get("subTaskId"));

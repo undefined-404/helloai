@@ -15,7 +15,7 @@
 # 断言（HARD = 失败即 exit 1）：
 #   H1 tools/list 能拿到非空工具集
 #   H2 没有任何工具名以 internal_ 开头（泄漏 = 红）
-#   H3 工具集**恰好等于** 16 个对外工具（多一个 = 泄漏，少一个 = 误删）
+#   H3 工具集**恰好等于** 17 个对外工具（多一个 = 泄漏，少一个 = 误删）
 #
 # 对实现：scripts/powershell/verify-mcp-external-surface.ps1（Windows 侧 2026-10-12 实测通过）。
 #   相对 ps1 的唯一增强：SSE 回包由「固定等待 N 秒」改为「轮询等待目标 id 出现」（默认 15s 上限），
@@ -186,13 +186,13 @@ send_mcp() { # body  label  [header...]
 
 # ------------------------------------------------------------
 # 对外 MCP 面唯一权威清单 = spring-ai 聚合的全部 ToolCallback（用户裁定 2026-10-12）：
-#   13 个业务 MCP 生命周期工具 + echo（平台连通性诊断，EchoMcpTool，设计对外）
+#   14 个业务 MCP 生命周期工具 + echo（平台连通性诊断，EchoMcpTool，设计对外）
 #   + search_knowledge / web_search（平台内置 contributor 工具，经 McpToolConfig 并入对外 provider）。
-#   注意：此清单 ≠ McpController.TOOL_NAMES（后者是 REST 直通通道的 13 个 Agent 生命周期工具，
+#   注意：此清单 ≠ McpController.TOOL_NAMES（后者是 REST 直通通道的 14 个 Agent 生命周期工具，
 #   不含诊断 / contributor 工具）。改动须同步 McpToolConfig（provider 全量）。
 # ------------------------------------------------------------
 EXPECTED_TOOLS=(
-  "pullTasks" "ack" "claimSubTask" "startSubTask" "heartbeat" "uploadArtifact"
+  "pullTasks" "ack" "claimSubTask" "startSubTask" "cancelSubTask" "heartbeat" "uploadArtifact"
   "submitResult" "reportBlocked" "getAgentStatus" "getDepsSummary"
   "getSubTaskDetail" "checkIn" "checkOut"
   "echo" "search_knowledge" "web_search"
@@ -260,7 +260,7 @@ http_request POST "$BASE_URL/mcp/messages?sessionId=$SID" '{"jsonrpc":"2.0","id"
 [[ "$HTTP_CODE" == "200" ]] || fail "tools/list POST HTTP $HTTP_CODE body=$HTTP_BODY"
 sse_wait_for_id "$list_offset" 1 || fail "SSE 未在 ${SSE_REPLY_TIMEOUT_SEC}s 内返回 tools/list（id=1）回包"
 
-names="$(sse_json_objects "$list_offset" | jq -r 'select(.id == 1) | .result.tools[]?.name' | sort -u)"
+names="$(sse_json_objects "$list_offset" | jq -r 'select(.id == 1) | .result.tools[]?.name' | tr -d '\r' | sort -u)"
 tool_count="$(printf '%s\n' "$names" | grep -c . || true)"
 log "  tools/list returned $tool_count tools:"
 printf '%s\n' "$names" | sed 's/^/    /'
@@ -276,8 +276,10 @@ leaked="$(printf '%s\n' "$names" | grep '^internal_' || true)"
 [[ -z "$leaked" ]] || fail "internal_* tools leaked into external MCP tools/list: $(printf '%s' "$leaked" | tr '\n' ',')"
 log "  H2 OK: no internal_* tool in external tools/list"
 
-extra="$(comm -13 <(printf '%s\n' "${EXPECTED_TOOLS[@]}" | sort -u) <(printf '%s\n' "$names"))"
-missing="$(comm -23 <(printf '%s\n' "${EXPECTED_TOOLS[@]}" | sort -u) <(printf '%s\n' "$names"))"
+# 两侧都剔除 CR：Windows 版 jq（jq.exe）输出 CRLF，comm 会把 "ack\r" 与 "ack" 判为不同
+# ⇒ H3 报「extra 全部 + missing 全部」的假红（2026-11-17 实测，工具集本身正确）。
+extra="$(comm -13 <(printf '%s\n' "${EXPECTED_TOOLS[@]}" | tr -d '\r' | sort -u) <(printf '%s\n' "$names"))"
+missing="$(comm -23 <(printf '%s\n' "${EXPECTED_TOOLS[@]}" | tr -d '\r' | sort -u) <(printf '%s\n' "$names"))"
 if [[ -n "$extra" || -n "$missing" ]]; then
   fail "external tool set mismatch: extra=[$(printf '%s' "$extra" | tr '\n' ',')] missing=[$(printf '%s' "$missing" | tr '\n' ',')]"
 fi

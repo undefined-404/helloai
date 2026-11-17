@@ -2,6 +2,8 @@ package com.helloai.core.agent.service.impl;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.core.agent.command.ExecutionPart;
+import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
@@ -136,7 +138,7 @@ public class McpToolServiceImpl implements McpToolService {
     /**
      * 子任务开工：ASSIGNED / REWORK / PAUSED → IN_PROGRESS（P0-2 返工死锁修复）。
      *
-     * <p>与其余 12 个工具守卫口径一致（Agent 须 ACTIVE + 工具须启用）；不加「逃生口」，
+     * <p>与其余 13 个工具守卫口径一致（Agent 须 ACTIVE + 工具须启用）；不加「逃生口」，
      * 避免返工死锁时唯一的出口也被守卫挡住。isToolEnabled 对 DEFAULT_EXECUTOR_TOOLS
      * 会自动补默认行，存量 Agent 首次调用即启用（幂等）。</p>
      */
@@ -147,6 +149,26 @@ public class McpToolServiceImpl implements McpToolService {
         assertToolEnabled(agentId, "startSubTask");
         refreshDutyLease(agentId); // 开工顺带续租，与认领/提交同口径
         return taskClaimService.startSubTask(agentId, subTaskId);
+    }
+
+    // ================================================================
+    // cancelSubTask
+    // ================================================================
+
+    /**
+     * 子任务取消：归属自己的非终态子任务 → CANCELLED（ADR-009 A-1）。
+     *
+     * <p>与其余工具守卫口径一致（Agent 须 ACTIVE + 工具须启用）；失败显式抛
+     * {@code BizException(400)}（不存在 / 非归属 / 终态），由协议适配层产出。
+     * isToolEnabled 对 DEFAULT_EXECUTOR_TOOLS 会自动补默认行，存量 Agent 首次调用即启用（幂等）。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public CancelSubTaskResult cancelSubTask(Long agentId, Long subTaskId) {
+        assertAgentActive(agentId);
+        assertToolEnabled(agentId, "cancelSubTask");
+        refreshDutyLease(agentId); // 取消顺带续租，与认领/开工同口径
+        return taskClaimService.cancelSubTask(agentId, subTaskId);
     }
 
     // ================================================================
@@ -217,12 +239,65 @@ public class McpToolServiceImpl implements McpToolService {
     @Transactional(rollbackFor = Exception.class)
     public SubmitResultResult submitResult(Long agentId, Long subTaskId, String resultId,
                                           Boolean success, String output, String error, String finishReason,
-                                          Integer tokenUsage) {
+                                          Integer tokenUsage, List<ExecutionPart> parts) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "submitResult");
         refreshDutyLease(agentId); // 结果提交顺带续租
+        validateParts(parts);
         return agentReportService.submitResult(agentId, subTaskId, resultId, success,
-                output, error, finishReason, tokenUsage);
+                output, error, finishReason, tokenUsage, parts);
+    }
+
+    /**
+     * {@code parts} 入参校验（ADR-009 §8.6 用户口径①，<b>落点 = 协议适配层本方法所在类</b>）。
+     *
+     * <p><b>为什么必须在这一层拒收</b>：{@code ExecutionResultHandler#handleReport} 是内外执行链
+     * 共用点，在那里抛 400 会把内部链的一次装配异常报成外部协议错误；而本类是三条外部通道
+     * （SSE 工具面 / REST / JSON-RPC）的公共入口，判一次覆盖全部入口。</p>
+     *
+     * <p>拒收项：file 分片（第一批不支持，提示先 uploadArtifact）；未知 type；正文为空；
+     * 单分片正文超 {@link AttachmentContentPolicy#OUTPUT_SUMMARY_LIMIT}；分片数超
+     * {@link ExecutionPart#MAX_PARTS}。<b>一律 400 显式拒绝、不静默截断</b>——静默截断会让
+     * 调用方以为提交完整（用户可纠正的入参错误，按判据 22 用双参构造写 400）。</p>
+     */
+    private void validateParts(List<ExecutionPart> parts) {
+        if (parts == null || parts.isEmpty()) {
+            return;
+        }
+        if (parts.size() > ExecutionPart.MAX_PARTS) {
+            throw new BizException(400, "parts 数量超限：最多 " + ExecutionPart.MAX_PARTS
+                    + " 个（当前 " + parts.size() + "）");
+        }
+        for (int i = 0; i < parts.size(); i++) {
+            ExecutionPart part = parts.get(i);
+            String label = "parts[" + i + "]";
+            if (part == null || part.getType() == null || part.getType().isBlank()) {
+                throw new BizException(400, label + " 缺少 type（本批支持 text / data）");
+            }
+            String type = part.getType().trim();
+            if (ExecutionPart.TYPE_FILE.equals(type)) {
+                throw new BizException(400, label + " 为 file 分片，本批不支持："
+                        + "请先用 uploadArtifact 上传到平台桶，再用 text 分片引用其 storageUrl");
+            }
+            if (ExecutionPart.TYPE_TEXT.equals(type)) {
+                requireTextPartBody(part.getText(), label + " (text) 的 text");
+            } else if (ExecutionPart.TYPE_DATA.equals(type)) {
+                requireTextPartBody(part.getData(), label + " (data) 的 data");
+            } else {
+                throw new BizException(400, label + " 的 type 不支持：" + type + "（本批只收 text / data）");
+            }
+        }
+    }
+
+    /** 单分片正文校验：非空 + 不超 64k（复用注入侧预算常量，不造第二常量）。 */
+    private void requireTextPartBody(String body, String field) {
+        if (body == null || body.isBlank()) {
+            throw new BizException(400, field + " 不能为空");
+        }
+        if (body.length() > AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT) {
+            throw new BizException(400, field + " 超长：" + body.length()
+                    + " 字符，上限 " + AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT + "（请拆分多个分片）");
+        }
     }
 
     // ================================================================
@@ -302,7 +377,7 @@ public class McpToolServiceImpl implements McpToolService {
      * 查询 Agent 自身状态（管理态 + DB 持久在线态 + 实时计算态）。
      *
      * <p>业务逻辑统一下沉到 {@link McpToolService}，MCP SSE 与 REST 别名
-     * 两条通道工具矩阵完全对齐（10 工具），避免实现漂移。</p>
+     * 两条通道工具矩阵完全对齐（14 工具），避免实现漂移。</p>
      */
     @Override
     public GetAgentStatusResult getAgentStatus(Long agentId) {

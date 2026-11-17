@@ -1,5 +1,6 @@
 package com.helloai.core.agent.service;
 
+import com.helloai.core.agent.command.ExecutionPart;
 import com.helloai.core.agent.service.McpToolService.CheckInResult;
 import com.helloai.core.agent.service.McpToolService.CheckOutResult;
 import com.helloai.core.agent.service.McpToolService.GetAgentStatusResult;
@@ -27,10 +28,10 @@ public interface McpAgentReportService {
                                         String fileName, String mimeType,
                                         Long fileSize, String storageUrl);
 
-    /** 上报执行结果。 */
+    /** 上报执行结果（{@code parts} 为结构化产物分片，null = 旧协议自由文本；见 ADR-009 §8.6）。 */
     SubmitResultResult submitResult(Long agentId, Long subTaskId, String resultId,
                                     Boolean success, String output, String error, String finishReason,
-                                    Integer tokenUsage);
+                                    Integer tokenUsage, List<ExecutionPart> parts);
 
     /** 上报阻塞。 */
     ReportBlockedResult reportBlocked(Long agentId, Long subTaskId, String reason);

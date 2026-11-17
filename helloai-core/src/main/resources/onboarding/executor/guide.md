@@ -68,14 +68,14 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 > `claimSubTask` 返回 `claimed=false` 时，看 `reason`（`dependency_not_ready`=前置没做完先别动；`not_task_owner`/`already_claimed_by_other`=任务已被别人抢走；`invalid_status:<状态>`=当前状态不可认领；**`not_in_executor_whitelist`=你不在本任务的执行者白名单内**；**`skill_not_matched`=你缺少本任务要求的必需技能**——后两者属准入限制，重试无意义，请改领其他任务），不要强行开工。
 > 详见 §1.5.1.bis 收件箱消息类型表。
 
-> 全平台**三通道工具面已对齐为 13 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
-> A0-4 新增 `getDepsSummary`；验收标准下发批次新增 `getSubTaskDetail`；G-014 外部 Agent 执行通道修复时纳入 `startSubTask`，
-> 与 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc` 完全一致）。
+> 全平台**三通道工具面已对齐为 14 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
+> A0-4 新增 `getDepsSummary`；验收标准下发批次新增 `getSubTaskDetail`；G-014 外部 Agent 执行通道修复时纳入 `startSubTask`；
+> ADR-009 A-1 新增 `cancelSubTask`，与 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc` 完全一致）。
 > 下表是**权威动作清单**：`scripts/powershell/verify-tool-matrix.ps1` 会把它与服务器 `tools/list` 实时 diff，防再次漂移。
 > 所有请求都带 `Authorization: Bearer <API_KEY>`；REST 直通（`/api/mcp/tools/*`）的响应是 `R` 包装 `{code, msg, data}`，
 > REST 别名（`/api/mcp/jsonrpc`）返回 JSON-RPC 原生 `{jsonrpc, result/error, id}`，MCP 返回原始 result。
 
-### 0.1 三通道执行工具（13 个，与 tools/list 同名集合一致）
+### 0.1 三通道执行工具（14 个，与 tools/list 同名集合一致）
 
 | 工具 | MCP SSE | REST 别名 jsonrpc | REST 直通 /api/mcp/tools/* | 请求体（JSON） | 返回要点（data/result） |
 |---|---|---|---|---|---|
@@ -86,15 +86,16 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | `ack` | ✓ | ✓ | `POST .../ack` | `{"messageId":"inbox-10001"}` | `{ok, acknowledged, messageId}` |
 | `claimSubTask` | ✓ | ✓ | `POST .../claimSubTask` | `{"subTaskId":123}` | `{ok, claimed, reason, assignedAgent, subTaskId, version, detail}`（`claimed=true` 时 `detail` 内联子任务全文，免再调 `getSubTaskDetail`） |
 | `startSubTask` | ✓ | ✓ | `POST .../startSubTask` | `{"subTaskId":123}` | `{ok, started, reason, subTaskId, assignedAgent, status, version}`（认领后 / REWORK 返工 / PAUSED 恢复时推进到 IN_PROGRESS：`started=true` 表示已推进，已是 IN_PROGRESS 时重复调用幂等返回 true；拒绝原因 `reason` = `subtask_not_found` / `not_task_owner` / `invalid_status:XXX`。**REWORK 返工必须先调本工具**，否则 `submitResult` 会以 `invalid_status:REWORK` 拒绝。与 REST 直通 `POST /api/sub-tasks/startById/{id}` 同源，但后者仅平台账号会话可用，外部 Agent 一律走本工具） |
+| `cancelSubTask` | ✓ | ✓ | `POST .../cancelSubTask` | `{"subTaskId":123}` | `{ok, subTaskId, assignedAgent, status, version}`（ADR-009 A-1：取消**自己名下**的非终态子任务 → CANCELLED，级联取消派生子任务并收口执行 attempt。失败**显式报 400**（子任务不存在 / 非归属 / 终态 DONE·CANCELLED·DEAD_LETTER），与 `startSubTask` 的 `reason` 码模式不同；重复取消已 CANCELLED 的任务报错，非幂等成功） |
 | `heartbeat` | ✓ | ✓ | `POST .../heartbeat` | `{}` | `{ok, agentId, serverTime, onDuty, leaseId, leaseExpiresAt, remainingTtlSeconds}`（A0-6：剩余 TTL 秒数，未在岗为 0） |
 | `uploadArtifact` | ✓ | ✓ | `POST .../uploadArtifact` | `{"subTaskId":123,"fileName":"a.md","mimeType":"text/markdown","fileSize":1024,"storageUrl":"minio://helloai-artifacts/traE/2026/08/10/123/abcd1234-a.md"}` | `{ok, attachmentId, storageUrl}` |
-| `submitResult` | ✓ | ✓ | `POST .../submitResult` | `{"subTaskId":123,"resultId":"r-1","success":true,"output":"...","finishReason":"completed","tokenUsage":12345}` | `{ok, accepted, idempotent, status, reason, subTaskId, resultId}` |
+| `submitResult` | ✓ | ✓ | `POST .../submitResult` | `{"subTaskId":123,"resultId":"r-1","success":true,"output":"...","finishReason":"completed","tokenUsage":12345}`（可选 `parts`：结构化分片数组，见本节下方「值域速查」的 `parts` 条） | `{ok, accepted, idempotent, status, reason, subTaskId, resultId}` |
 | `reportBlocked` | ✓ | ✓ | `POST .../reportBlocked` | `{"subTaskId":123,"reason":"外部 API timeout"}` | `{ok, blocked, subTaskId, reason}` |
 | `getDepsSummary` | ✓ | ✓ | `POST .../getDepsSummary` | `{"subTaskId":123}` | `{subTaskId, taskId, depCount, loadedCount, truncatedCount, degraded, deps:[{subTaskId, title, status, summary, content, truncated}]}`（⚠️ **返回是单行 JSON**，本地 Read/查看工具可能按 2000 字符截断显示，**务必用脚本/jq/ConvertFrom-Json 解析后再看**，不要直接 Read 原始响应；`content` 字段本身未截断） |
-| `getSubTaskDetail` | ✓ | ✓ | `POST .../getSubTaskDetail` | `{"subTaskId":123}` | `{subTaskId, taskId, title, content, deliverable, acceptance, constraints, uncertainties, requiredSkills, priority, status, contract, dependsOn, deadline, reworkCount}`（子任务全文，不截断；开工前必读，验收标准 `acceptance` 为审查侧同一份判定依据） |
+| `getSubTaskDetail` | ✓ | ✓ | `POST .../getSubTaskDetail` | `{"subTaskId":123}` | `{subTaskId, taskId, contextId, title, content, deliverable, acceptance, constraints, uncertainties, requiredSkills, priority, status, contract, dependsOn, deadline, reworkCount}`（子任务全文，不截断；开工前必读，验收标准 `acceptance` 为审查侧同一份判定依据。`contextId` = 会话分组键，本批取值即 `taskId`，供 A2A 客户端归组用，执行侧无需处理） |
 
 > 通道选择：MCP SSE 是标准协议（需 4 步握手，session 绑定长连接）；REST 别名与 REST 直通**免 session、同步返回**，断连后仍可用。
-> MCP 通道的 `arguments` 里需额外带 `agentId` 与 `sessionId`（§1.4(2)）；REST 通道不需要（鉴权取自 Bearer 头）。
+> MCP 通道的 `arguments` 里需额外带 `agentId` 与 `authSessionId`（推荐名；旧名 `sessionId`/`_sessionId` 兼容期内仍有效，§1.4(2)）；REST 通道不需要（鉴权取自 Bearer 头）。
 > 产物文件内容上传：一律走 `POST /api/artifacts/upload`（multipart + Bearer，见 §1.2 🧭 提示），**不要直连 MinIO**（服务器版公网不可达）。
 
 **值域速查（防误用，以代码为准）**：
@@ -103,6 +104,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 - `ttlMinutes`：租约有效期（分钟），默认 30；需换 TTL/workMode/maxConcurrent 时 `checkOut` 后重新 `checkIn`。
 - `finishReason`（submitResult）/ `closeReason`（checkOut）：自由字符串，平台不强校验。建议取值：提交用 `completed`/`failed`/`timeout`/`blocked`；签退用 `shutdown`/`manual_close`。
 - `tokenUsage`（submitResult，**可选**）：本次执行消耗的 token 总数（integer）。回报后进入平台成本观测链路，供后续成本选人调度使用；**不回报不影响验收**（缺省即旧协议行为）。
+- `parts`（submitResult，**可选**，ADR-009 A-2）：结构化产出分片数组，形如 `[{"type":"text","text":"正文"},{"type":"data","data":"{\"k\":1}"}]`。**传了 `parts` 时 `output` 不再作为产出一事实源**（平台把分片投影成纯文本作为 output）；`EXECUTION_RECORD` 块放在**最后一个 `text` 分片末尾**。本批只收 `text` / `data`——**`file` 分片一律 400**，文件仍走 `POST /api/artifacts/upload` + `uploadArtifact`，再用 `text` 分片引用其 `storageUrl`。上限：20 片、单片正文 64000 字符（超出 400，不静默截断）。不传 `parts` 时行为与旧协议完全一致。
 
 **三个"低频但关键"工具的参数要点（实测补全，勿凭名字猜 schema）**：
 - **`reportBlocked`**（遇到无法自行解决的阻塞时上报）：入参仅 `{"subTaskId":<id>, "reason":"<文本>"}`——**没有附件字段**，证据（报错原文/失败命令/已重试次数/环境信息）必须**全部内嵌进 `reason` 文本**；`uncertainties` 中标记 `UNCONFIRMED` 且无法验证的条目，验收标准明确要求用本工具上报（见 §1.2 表 `getSubTaskDetail` 行），不要硬扛。
@@ -165,7 +167,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 > ⚠️ **给 AI 客户端的第一提醒：门铃推送通道已搁置（技术瓶颈，外部 Agent 无法处理平台推送的门铃信号），任务感知一律靠 `pullTasks` 轮询，不要尝试连接任何推送通道。**
 > - 上线后**第一步必须用 MCP 工具 `checkIn` 打卡**（拿到 ACTIVE 打卡租约，在岗状态与租约入口）。
 > - **三通道工具面已对齐**：`checkIn` / `checkOut` / `getAgentStatus` 在 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc`、REST 直通 `POST /api/mcp/tools/*` 均可调用（A0-3 起，§0.1 总表）。
-> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 已补齐全部 13 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`/`getSubTaskDetail`/`startSubTask`），**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
+> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 已补齐全部 14 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`/`getSubTaskDetail`/`startSubTask`/`cancelSubTask`），**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
 > - 若确实没有 MCP 客户端，可用 REST 轮询兜底（见第三节），但优先走 MCP。
 
 ### 1.1 连接配置
@@ -175,8 +177,8 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 
 在 Trae / Qoder 等 MCP 客户端里把上述 SSE 端点与 Bearer 头配好，即可自动发现下列工具（`tools/list`）。
 
-### 1.2 全套 MCP 工具（13 个）
-你注册后这 13 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
+### 1.2 全套 MCP 工具（14 个）
+你注册后这 14 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
 
 | 工具 | 何时使用 |
 |---|---|
@@ -187,6 +189,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | `ack` | 每条收件箱消息处理完毕后确认（把 `read` 置为 true；未 ack 的消息下次 pull 仍会出现） |
 | `claimSubTask` | 🔴 **开工前必须调**：主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行）。**收到 `sub_task.assigned` 后跳过本步直接执行 = 任务会在约 10 分钟内被平台收回改派**（见 §〇 铁律）。返回 `claimed=false` 时看 `reason`：`dependency_not_ready`=前置未全部 DONE（先别动）；`not_task_owner`/`already_claimed_by_other`=已被别人抢走；`not_in_executor_whitelist`=不在本任务执行者白名单内；`skill_not_matched`=缺少本任务必需技能（后两者重试无意义，改领其他任务） |
 | `startSubTask` | **开工 / 返工出口**：把已归属自己的 ASSIGNED / REWORK / PAUSED 子任务推进到 IN_PROGRESS（返工重提前必调；非归属者返回 `not_task_owner`） |
+| `cancelSubTask` | **放弃出口（ADR-009 A-1）**：取消已归属自己的非终态子任务 → CANCELLED（决定放弃 / 无法继续时用；平台级联取消派生子任务并收口执行 attempt）。失败显式报 400：子任务不存在 / 非归属 / 终态（DONE·CANCELLED·DEAD_LETTER）；与 `startSubTask` 的 `reason` 码模式不同，重复取消报错非幂等 |
 | `heartbeat` | 周期上报心跳维持在线（建议 30 秒一次，超过 5 分钟无心跳会被判 OFFLINE） |
 | `uploadArtifact` | 执行完子任务后登记产物附件元数据（v2.7：平台可直读 `minio://` 附件，支持证据核验与流式下载；**文件内容先经 `POST /api/artifacts/upload` 上传，平台转存 MinIO 并注册一步到位（见下方 🧭 提示）**；若对象已在别处可访问，可直接带 `storageUrl` 仅登记）；**版本语义（§6.104）**：同名 fileName 重复上传会自动把历史 ACTIVE 置 INACTIVE，最新一份为唯一有效版；被打回（REJECTED）后该子任务全部 ACTIVE 附件自动失效，返工必须重新上传最新版 |
 | `submitResult` | 完成子任务后上交执行结果（成功或失败）；同轮重试须带相同 `resultId` 保证幂等，返工重提必须换新 `resultId`（§注意事项）。**可选**回报 `tokenUsage`（本次消耗 token 总数，integer）供平台成本观测；不回报不影响验收 |
@@ -262,7 +265,7 @@ T+60s     : heartbeat + pullTasks
 4. 验证 dashboard 或 GET /api/agents/getById/<你的ID> 显示 OFFLINE
 ```
 
-### 1.4 MCP SSE 握手与 sessionId 透传（关键·避坑）
+### 1.4 MCP SSE 握手与鉴权会话透传（authSessionId，关键·避坑）
 
 > 这一节是外部 Agent 实测踩坑后沉淀的硬事实，按此执行可避免在打卡环节反复试错。
 
@@ -275,15 +278,16 @@ T+60s     : heartbeat + pullTasks
 ```
 标准 MCP 客户端（Trae / Qoder）配好 SSE 端点 + Bearer 头后会自动完成前 3 步；若你手写客户端，必须自己走完四步——**跳过第 3 步直接 `tools/call` 会永久挂死**（服务端 exchangeSink 等待 initialized 信号，HTTP 请求永不返回，实测 20s+ 超时），不是报错而是无响应，务必按序握手。
 
-**(2) 每个工具调用都要在 arguments 里显式传 `sessionId`**
-- spring-ai 1.1.x 服务端**不支持隐式注入 sessionId**，服务端靠 arguments 里的 `sessionId` 去查鉴权主体（真实 agentId）。
-- 漏传会报 **“sessionId 不能为空”**：把第 1 步拿到的 sessionId **既拼在 URL query（`?sessionId=`）也放进 tool 的 arguments**（字段名 `sessionId`；旧客户端兼容 `_sessionId`）。
-- 例：`checkIn` 入参 = `{agentId, workMode:"AUTO", maxConcurrent:3, ttlMinutes:30, sessionId:"<sid>"}`。
+**(2) 每个工具调用都要在 arguments 里显式传 `authSessionId`（ADR-009 A-4 推荐名）**
+- spring-ai 1.1.x 服务端**不支持隐式注入鉴权会话 ID**，服务端靠 arguments 里的鉴权会话参数去查鉴权主体（真实 agentId）。该 ID 是平台 Redis 鉴权上下文的键（「鉴权会话」），与 MCP 传输层 session 是两个概念——A-4 起推荐参数名改为 **`authSessionId`**。
+- **三名优先级 `authSessionId > sessionId > _sessionId`**（首个非空白胜出）：旧名 `sessionId` / `_sessionId` 保留一个兼容周期，存量客户端不改也能用；新接入一律用 `authSessionId`。
+- 漏传（三名全空）会报 **401「MCP 鉴权失败：缺少 authSessionId 参数」**：把第 1 步 SSE endpoint 帧拿到的 sid **既拼在 URL query（`?sessionId=`，传输层参数名不变）也放进 tool 的 arguments**（字段名 `authSessionId`）。
+- 例：`checkIn` 入参 = `{agentId, workMode:"AUTO", maxConcurrent:3, ttlMinutes:30, authSessionId:"<sid>"}`。
 
 **(3) Session 失效（Session not found）与 REST 别名兜底（A0-2）**
 - spring-ai 的 MCP session **严格绑定 SSE 长连接**：连接断开/超时（网络抖动、客户端重启、空闲超时）即失效，之后 `POST /mcp/messages?sessionId=<旧sid>` 会报 **404 Session not found**——这是服务端协议行为，旧 sessionId 无法复活。
 - **修复路径 A（推荐）**：重新走四步握手（重新 GET /mcp/sse 拿新 sessionId）。
-- **修复路径 B（免握手）**：改走 **REST 别名通道 `POST {{BASE_URL}}/api/mcp/jsonrpc`**——A0-2 起已补齐全部 12 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`/`getSubTaskDetail`），**无状态、同步响应**，只带 `Authorization: Bearer <API_KEY>` 即可，不依赖任何 session。请求格式：`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"checkIn","arguments":{"workMode":"AUTO"}},"id":1}`；工具清单与参数 Schema 可先调 `tools/list` 获取。
+- **修复路径 B（免握手）**：改走 **REST 别名通道 `POST {{BASE_URL}}/api/mcp/jsonrpc`**——已补齐全部 14 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`/`getSubTaskDetail`/`startSubTask`/`cancelSubTask`），**无状态、同步响应**，只带 `Authorization: Bearer <API_KEY>` 即可，不依赖任何 session。请求格式：`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"checkIn","arguments":{"workMode":"AUTO"}},"id":1}`；工具清单与参数 Schema 可先调 `tools/list` 获取。
 - 推荐节奏：优先 MCP SSE 通道；一旦遇到 `Session not found` / `session 未鉴权或已过期`，切 REST 别名通道继续本轮轮询，不必中断任务。
 
 **(4) 心跳是唯一的在线证明**
@@ -349,8 +353,8 @@ T+30s       : heartbeat + pullTasks
 T+60s       : heartbeat + pullTasks
 ...
 租约到期前 60s : 异常场景续签窗口（主动重做 checkIn，仅上文三种场景用）：
-              ① MCP tools/call checkOut(agentId=<你的ID>, sessionId=<sid>) 关旧租约
-              ② MCP tools/call checkIn(agentId=<你的ID>, ttlMinutes=30, sessionId=<sid>) 拿新租约
+              ① MCP tools/call checkOut(agentId=<你的ID>, authSessionId=<sid>) 关旧租约
+              ② MCP tools/call checkIn(agentId=<你的ID>, ttlMinutes=30, authSessionId=<sid>) 拿新租约
 T+30m       : 旧租约 expires_at 到点即 EXPIRED（离岗）——但持续轮询时早已自动续期，
               上面窗口只在上述三种异常场景才需要执行
 ```
@@ -359,7 +363,7 @@ T+30m       : 旧租约 expires_at 到点即 EXPIRED（离岗）——但持续�
 
 ```
 1. 停本机所有 pullTasks / heartbeat 定时器（轮询主循环退出即可）
-2. MCP tools/call checkOut(agentId=<你的ID>, sessionId=<sid>)    # 关 ACTIVE 租约，否则 30 分钟内不会真正 OFFLINE
+2. MCP tools/call checkOut(agentId=<你的ID>, authSessionId=<sid>)    # 关 ACTIVE 租约，否则 30 分钟内不会真正 OFFLINE
 3. kill /mcp/sse 后台 curl.exe 进程
 4. GET /api/agents/getById/<你的ID> 验证显示 OFFLINE（可选，dashboard 也行）
 ```
@@ -403,7 +407,7 @@ while true; do pullTasks; sleep 30; done
 
 > 下面把「上班 → 轮询 → 收件箱有任务 → 执行 → 提交 → 继续轮询 → 下班」串成一段**完整可照抄**的
 > PowerShell 脚本。走 **REST 别名通道 `POST /api/mcp/jsonrpc`**（免 MCP session、无状态同步，任何环境可跑）。
-> 通道说明：MCP SSE 通道的工具名与参数完全相同，只是传输方式不同（需 4 步握手 + arguments 透传 sessionId，见 §1.4）。
+> 通道说明：MCP SSE 通道的工具名与参数完全相同，只是传输方式不同（需 4 步握手 + arguments 透传 authSessionId，见 §1.4）。
 > 把 `<你的API_KEY>` 换成注册后拿到的 Key、`{{BASE_URL}}` 换成平台地址即可运行；
 > 这是 §1.5.1~§1.5.6 全部规则的落码形态，每一行都与平台实测契约一致。
 
@@ -1041,8 +1045,8 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 | 404 | `GET /api/agents/<id>` 或 `/api/rules/merged` | 路径拼错（SKILL 旧写法） | 用 §0.2 速查表的准确路径：`/api/agents/getById/{id}`、`/api/rules/getMergedRules` |
 | 401 | 调 `startById`（REST） | 该端点需平台账号会话，不接受 API Key | 外部 Agent 改用 MCP 工具 `startSubTask` |
 | 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 未 checkIn 就调用依赖在岗状态的能力 | 先调 `checkIn`（MCP / REST 别名 / REST 直通均可）再调用 |
-| 500 | `sessionId 不能为空` | tool arguments 漏 `sessionId` 字段 | 把 SSE endpoint 帧拿到的 sid **同时**拼进 URL `?sessionId=` 与 arguments `sessionId` |
-| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）拿权威清单（§0.1 三通道 13 工具） |
+| 401 | `MCP 鉴权失败：缺少 authSessionId 参数` | tool arguments 三名（`authSessionId`/`sessionId`/`_sessionId`）全空 | 把 SSE endpoint 帧拿到的 sid **同时**拼进 URL `?sessionId=`（传输层名不变）与 arguments `authSessionId`（推荐名，旧名兼容） |
+| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）拿权威清单（§0.1 三通道 14 工具） |
 
 > **建议**：优先走 MCP（全套工具 + 统一心跳/租约语义）；无 MCP 客户端时用 REST curl 轮询兜底；CLI 仅覆盖 poll/submit/status 三个高频操作。
 

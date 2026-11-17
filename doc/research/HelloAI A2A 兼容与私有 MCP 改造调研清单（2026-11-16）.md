@@ -2,7 +2,7 @@
 
 > **状态：Analysis**
 >
-> 最后更新：2026-11-16（首稿：结合本仓代码实测，把「要不要兼容 A2A」拆成 13 个可独立开工的调研问题）
+> 最后更新：2026-11-17（AQ-7 / AQ-4 已拍板，结论回填 ADR-009 §8.6 / §8.7；AQ-4 增补 contextId 第三义。首稿 2026-11-16：结合本仓代码实测，把「要不要兼容 A2A」拆成 13 个可独立开工的调研问题）
 >
 > **本文是什么**：一份**调研清单**，不是调研报告、不是方案、不是排期。已核实的写进 §2（不要重查），未核实的写成 `AQ-x` 问题（每条给「为什么重要 / 查哪里 / 查完什么算完」）。结论性的方向判断集中在 §1 与 §5，供用户裁定。
 >
@@ -95,7 +95,9 @@ getSubTaskDetail / checkIn / checkOut
 
 ### 2.5 `submitResult` 的产物是自由文本
 
-`[实测]` `McpMcpServer.java:258-292`：`output` 是 `String`（自由文本），`error` 是 `String`，`resultId` 是幂等键（可选）。`uploadArtifact`（:218-252）要求 `storageUrl` 是**已在平台桶中**的 `minio://` 地址，不是外部 URL 或 inline bytes。
+`[实测]` `McpMcpServer.java:309-342`：`output` 是 `String`（自由文本），`error` 是 `String`，`resultId` 是幂等键（可选）。`uploadArtifact`（:268-300）要求 `storageUrl` 是**已在平台桶中**的 `minio://` 地址，不是外部 URL 或 inline bytes。
+
+> **行号订正（2026-11-17）**：本节初稿写 `submitResult` `:258-292` / `uploadArtifact` `:218-252`，那是 `A-1`（`cancelSubTask`）落地前的坐标；`cancelSubTask` 插入 `:210-241` 后整体下移约 50 行。跨批搬运行号必失效，引用时以本次订正值为准。
 
 > 对照 A2A：产物是 `Artifact{artifactId, name, parts[]}`，`parts` 是带类型数组（text / file / data）。
 
@@ -147,11 +149,15 @@ getSubTaskDetail / checkIn / checkOut
 - **查哪里**：`output` 字段的全部读方（`ReviewEvidenceAssembler`、`TaskFinalReport*`、前端 `SubTaskDetail.vue`、`submitArtifact` 落库链）。
 - **查完什么算完**：给出消费方清单 + 每个的兼容策略（`parts` 与 `output` 并存时以谁为准、旧数据怎么回填）。
 
+> **2026-11-17 已拍板**：方案 A（context JSONB `lastExecution.parts` + output 纯文本投影 + file part 第一批 400 拒收 + 单写点 + 64k 投影截断）。结论唯一回填于 `ADR-009` §8.6，本清单不复述结论。
+
 #### `AQ-4` `contextId` 撞名的处置方案
 
-- **为什么重要**：`WorkspaceRef.contextId`（沙箱上下文）与 A2A `contextId`（会话分组）同名两义。若不处置，将来读代码的人会以为是同一个东西。
-- **查哪里**：`WorkspaceRef.contextId` 的全部消费点；`SandboxRuntimeAdapter` 的 `toRef` 装配。
+- **为什么重要**：`WorkspaceRef.contextId`（沙箱上下文）与 A2A `contextId`（会话分组）同名两义。若不处置，将来读代码的人会以为是同一个东西。**2026-11-17 增补第三义**：助理域 `ArtifactItemVO.contextId` / `MyArtifactsQueryService` 的 `contextId` = 「会话 id 或任务 id，前端跳转用」（`[实测]` `helloai-api/.../dto/requirement/ArtifactItemVO.java:36`、`helloai-core/.../planner/assistant/service/MyArtifactsQueryService.java:50`），首稿漏登。
+- **查哪里**：`WorkspaceRef.contextId` 的全部消费点；`SandboxRuntimeAdapter` 的 `toRef` 装配；助理域 `ArtifactItemVO.contextId` 的装配与前端跳转消费点（第三义）。
 - **查完什么算完**：二选一定案——① A2A 侧对外仍叫 `contextId`、内部另起名；② 或给 `WorkspaceRef` 的字段改名。任一方案都要给出全仓 grep 清理清单。
+
+> **2026-11-17 已拍板**：方案①（对外保名 `contextId`、内部另起名 `conversationGroupId` = taskId 最小投影；`WorkspaceRef` 不改名）。结论唯一回填于 `ADR-009` §8.7，本清单不复述结论。
 
 ### 3.3 第三梯队：技术可行性，实测才知道
 
