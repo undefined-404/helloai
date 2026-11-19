@@ -17,6 +17,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -25,7 +26,6 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -57,10 +57,15 @@ class InternalLlmExecutorToolsTest {
     private final ConversationService conversationService = mock(ConversationService.class);
     private final com.helloai.core.agent.runtime.sandbox.SandboxCallLedger sandboxCallLedger =
             new com.helloai.core.agent.runtime.sandbox.SandboxCallLedger();
+    /** MA-5：internal_load_tool 惰性取注册表（ObjectProvider 构造期零解析，破内建循环依赖）。 */
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<com.helloai.core.agent.tool.ToolRegistry> toolRegistryProvider =
+            mock(ObjectProvider.class);
     private final InternalLlmExecutorTools tools =
             new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService,
                     subTaskCommandPort, sandboxExecutionService, skillExecutionSupport,
-                    skillArtifactExportService, conversationService, sandboxCallLedger);
+                    skillArtifactExportService, conversationService, sandboxCallLedger,
+                    toolRegistryProvider);
 
     /** REF-8.1 A1 强制闸门：本类工具仅可由内部执行链调用，单测需先绑定执行链上下文。 */
     @BeforeEach
@@ -312,6 +317,70 @@ class InternalLlmExecutorToolsTest {
     }
 
     // ────────────────────────────────────────────────────────────
+    //  MA-5：internal_load_tool（目录 + 按需取第一步）
+    // ────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("MA-5 internal_load_tool：resolve 命中返回完整描述，并写入 turn 内缓存（二次调用零重复解析）")
+    void shouldLoadToolDescriptionAndCache() {
+        com.helloai.core.agent.tool.ToolRegistry registry =
+                mock(com.helloai.core.agent.tool.ToolRegistry.class);
+        when(toolRegistryProvider.getIfAvailable()).thenReturn(registry);
+        when(registry.resolve(org.mockito.ArgumentMatchers.anyList(),
+                org.mockito.ArgumentMatchers.any(com.helloai.core.agent.tool.ToolContext.class)))
+                .thenReturn(List.of(new com.helloai.core.agent.tool.ToolDefinition(
+                        "internal_get_deps_summary", "【何时使用】确认前置依赖就绪情况…完整描述")));
+
+        Object first = tools.internalLoadTool("internal_get_deps_summary");
+        Object second = tools.internalLoadTool("internal_get_deps_summary");
+
+        assertThat(first).isEqualTo("【何时使用】确认前置依赖就绪情况…完整描述");
+        assertThat(second).isEqualTo(first);
+        // turn 内缓存命中 ⇒ resolve 只被调一次（同轮重复加载不再解析）
+        verify(registry, org.mockito.Mockito.times(1)).resolve(
+                org.mockito.ArgumentMatchers.anyList(),
+                org.mockito.ArgumentMatchers.any(com.helloai.core.agent.tool.ToolContext.class));
+    }
+
+    @Test
+    @DisplayName("MA-5 internal_load_tool：resolve 落空（不存在 / 条件摘除）→ 返回「不可用」提示，不写缓存")
+    void shouldReportUnavailableTool() {
+        com.helloai.core.agent.tool.ToolRegistry registry =
+                mock(com.helloai.core.agent.tool.ToolRegistry.class);
+        when(toolRegistryProvider.getIfAvailable()).thenReturn(registry);
+        when(registry.resolve(org.mockito.ArgumentMatchers.anyList(),
+                org.mockito.ArgumentMatchers.any(com.helloai.core.agent.tool.ToolContext.class)))
+                .thenReturn(List.of());
+
+        Object result = tools.internalLoadTool("internal_run_in_sandbox");
+
+        assertThat(result).isInstanceOf(String.class).asString()
+                .contains("不存在或当前不可用").contains("internal_run_in_sandbox");
+        // 不可用不占缓存位 ⇒ 允许后续（环境恢复后）重试成功
+        assertThat(ToolInvocationContext.cachedTool("internal_run_in_sandbox")).isNull();
+    }
+
+    @Test
+    @DisplayName("MA-5 internal_load_tool：注册表降级（bean 缺失）→ 明确提示而非 NPE")
+    void shouldHandleMissingRegistry() {
+        when(toolRegistryProvider.getIfAvailable()).thenReturn(null);
+
+        Object result = tools.internalLoadTool("internal_get_deps_summary");
+
+        assertThat(result).isInstanceOf(String.class).asString().contains("暂不可用");
+    }
+
+    @Test
+    @DisplayName("MA-5 internal_load_tool：空 / 空白工具名 → 拒绝")
+    void shouldRejectBlankToolName() {
+        assertThatThrownBy(() -> tools.internalLoadTool("  "))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("工具名不能为空");
+        assertThatThrownBy(() -> tools.internalLoadTool(null))
+                .isInstanceOf(BizException.class);
+    }
+
+    // ────────────────────────────────────────────────────────────
     //  REF-8.1.1：自报阻塞（「做不到」的结构化通道）
     // ────────────────────────────────────────────────────────────
 
@@ -522,7 +591,7 @@ class InternalLlmExecutorToolsTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("注入失败")
                 .hasMessageContaining("清单与实际内容不一致");
-        verify(skillExecutionSupport, never()).run(any(), any(), any(), any(), anyInt());
+        verify(skillExecutionSupport, never()).run(any(), any(), any(), any());
     }
 
     @Test
@@ -531,7 +600,9 @@ class InternalLlmExecutorToolsTest {
         when(skillExecutionSupport.resolve("archify")).thenReturn(archifyTarget());
         when(skillExecutionSupport.ensureInstalled(22L, archifyTarget()))
                 .thenReturn(SkillInstallResult.ok(122, 4_330_504L, "/workspace/skills/archify", true, "skipped"));
-        when(skillExecutionSupport.run(22L, archifyTarget(), "node bin/archify.mjs doctor", 60, 0))
+        // MA-3：执行身份必须显式传下去（agentId / taskId 此前在这里被丢弃）
+        when(skillExecutionSupport.run(any(SkillExecutionSupport.SkillRunContext.class),
+                eq(archifyTarget()), eq("node bin/archify.mjs doctor"), eq(60)))
                 .thenReturn(new ExecuteResponse("Archify is ready.", 0, false));
 
         Object result = tools.internalRunSkill(11L, 22L, "archify", "node bin/archify.mjs doctor", 60);
@@ -543,6 +614,16 @@ class InternalLlmExecutorToolsTest {
         assertThat(map.get("exitCode")).isEqualTo(0);
         assertThat(map.get("output")).isEqualTo("Archify is ready.");
         assertThat(map.get("installed")).isEqualTo(Map.of("files", 122, "bytes", 4_330_504L, "skipped", true));
+        // 绑定值为 (11,22)：agentId=11 / subTaskId=22 / round=0 / taskId 未绑定 ⇒ null
+        org.mockito.ArgumentCaptor<SkillExecutionSupport.SkillRunContext> ctxCaptor =
+                org.mockito.ArgumentCaptor.forClass(SkillExecutionSupport.SkillRunContext.class);
+        verify(skillExecutionSupport).run(ctxCaptor.capture(), eq(archifyTarget()),
+                eq("node bin/archify.mjs doctor"), eq(60));
+        SkillExecutionSupport.SkillRunContext ctx = ctxCaptor.getValue();
+        assertThat(ctx.agentId()).isEqualTo(11L);
+        assertThat(ctx.subTaskId()).isEqualTo(22L);
+        assertThat(ctx.scopeId()).isEqualTo(22L);
+        assertThat(ctx.round()).isZero();
     }
 
     @Test

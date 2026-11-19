@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -73,6 +75,17 @@ public final class ToolInvocationContext {
      */
     private static final ThreadLocal<Set<String>> CALLED = new ThreadLocal<>();
 
+    /**
+     * 本执行链<b>已按需加载过的内部工具描述</b>（MA-5「目录 + 按需取」）。
+     *
+     * <p>用途：{@code internal_load_tool} 的 <b>turn 内缓存</b>——模型在同一轮执行里
+     * 反复加载同一个工具时命中缓存，杜绝重复查询 / 重复解析。生命周期与
+     * {@link #CALLED} 完全一致（{@link #bind} 重置、{@link #unbind} 清空、
+     * {@link #capture}/{@link #callWith} 跨线程共享同一 Map 实例）；线程池线程
+     * 复用不串味（{@code callWith} 退出时严格还原）。</p>
+     */
+    private static final ThreadLocal<Map<String, String>> TOOL_CACHE = new ThreadLocal<>();
+
     private ToolInvocationContext() {
     }
 
@@ -101,6 +114,7 @@ public final class ToolInvocationContext {
     public static void bind(Long agentId, Long taskId, Long subTaskId, int round, boolean reviewer) {
         CURRENT.set(new Ids(agentId, taskId, subTaskId, Math.max(round, 0), reviewer));
         CALLED.remove();   // 二次绑定 = 新执行链，调用记录清零
+        TOOL_CACHE.remove(); // 新执行链，工具描述缓存一并清零（MA-5：turn 级缓存不跨 turn）
     }
 
     /** 绑定标识（默认非 reviewer；任务子任务执行链使用，`SL-10`）。 */
@@ -145,6 +159,7 @@ public final class ToolInvocationContext {
     public static void unbind() {
         CURRENT.remove();
         CALLED.remove();
+        TOOL_CACHE.remove();
     }
 
     /**
@@ -177,6 +192,37 @@ public final class ToolInvocationContext {
         return called != null && toolName != null && called.contains(toolName);
     }
 
+    /**
+     * 缓存「本执行链已按需加载过的工具描述」（{@code internal_load_tool} 使用，MA-5）。
+     *
+     * <p>turn 内缓存：同一轮执行里重复加载同一工具直接命中，杜绝重复查询 / 重复解析；
+     * 生命周期随 {@link #bind}/{@link #unbind} 重置与清空，不跨 turn 泄漏。</p>
+     *
+     * @param name        工具名（须与 {@code @Tool(name=…)} 逐字一致）
+     * @param description 生效描述；{@code null} 不缓存（未知工具不占位，允许后续重试）
+     */
+    public static void cacheTool(String name, String description) {
+        if (CURRENT.get() == null || name == null || description == null) {
+            return;
+        }
+        Map<String, String> cache = TOOL_CACHE.get();
+        if (cache == null) {
+            cache = new HashMap<>();
+            TOOL_CACHE.set(cache);
+        }
+        cache.put(name, description);
+    }
+
+    /**
+     * 读取本执行链已缓存的工具描述；未绑定 / 未缓存返回 {@code null}（MA-5）。
+     *
+     * @param name 工具名（须与 {@code @Tool(name=…)} 逐字一致）
+     */
+    public static String cachedTool(String name) {
+        Map<String, String> cache = TOOL_CACHE.get();
+        return cache == null || name == null ? null : cache.get(name);
+    }
+
     /** 当前线程绑定的标识；未绑定返回 {@code null}（仅供诊断 / 测试）。 */
     public static Ids current() {
         return CURRENT.get();
@@ -187,7 +233,7 @@ public final class ToolInvocationContext {
      *
      * <p><b>为什么必须能跨线程</b>：{@code CancellableToolExecutor}（REF-8.6 单工具超时装饰器）
      * 把工具调用提交到独立线程池（线程名 {@code agent-tool-timeout-N}）后
-     * {@code future.get(timeout)} 等待。而本类的两个状态都是 {@link ThreadLocal}——
+     * {@code future.get(timeout)} 等待。而本类的上下文状态都是 {@link ThreadLocal}——
      * 子线程读不到父线程的绑定 ⇒ {@code requireInternalChain()} 判定「缺少执行链上下文」⇒
      * <b>全部 {@code internal_*} 工具在这条路径上 100% 失败</b>（实测：get_sub_task_detail 6 次 /
      * get_deps_summary 6 次 / list_skills 2 次 / run_in_sandbox 4 次，success 全为 false）。</p>
@@ -196,10 +242,11 @@ public final class ToolInvocationContext {
      * {@link #markCalled(String)} 写入的记录，必须对父线程可见——否则
      * 「internal_report_blocked 要求先读子任务详情」的判据会永远为 false。</p>
      *
-     * @param ids    执行者标识
-     * @param called 已调用内部工具集（同一实例引用）
+     * @param ids       执行者标识
+     * @param called    已调用内部工具集（同一实例引用）
+     * @param toolCache 已按需加载的工具描述缓存（同一实例引用，{@link #TOOL_CACHE}）
      */
-    public record Scope(Ids ids, Set<String> called) {
+    public record Scope(Ids ids, Set<String> called, Map<String, String> toolCache) {
     }
 
     /**
@@ -218,7 +265,14 @@ public final class ToolInvocationContext {
             called = new HashSet<>();
             CALLED.set(called);
         }
-        return new Scope(ids, called);
+        Map<String, String> toolCache = TOOL_CACHE.get();
+        if (toolCache == null) {
+            // 同 called：必须写回当前线程，否则子线程 cacheTool 写进「父线程拿不到」的临时 Map，
+            // 父线程的 cachedTool 命中率恒为 0（internal_load_tool 的 turn 内缓存会失效）
+            toolCache = new HashMap<>();
+            TOOL_CACHE.set(toolCache);
+        }
+        return new Scope(ids, called, toolCache);
     }
 
     /**
@@ -234,8 +288,10 @@ public final class ToolInvocationContext {
         }
         Ids prevIds = CURRENT.get();
         Set<String> prevCalled = CALLED.get();
+        Map<String, String> prevToolCache = TOOL_CACHE.get();
         CURRENT.set(scope.ids());
         CALLED.set(scope.called());
+        TOOL_CACHE.set(scope.toolCache());
         try {
             return action.get();
         } finally {
@@ -248,6 +304,11 @@ public final class ToolInvocationContext {
                 CALLED.remove();
             } else {
                 CALLED.set(prevCalled);
+            }
+            if (prevToolCache == null) {
+                TOOL_CACHE.remove();
+            } else {
+                TOOL_CACHE.set(prevToolCache);
             }
         }
     }

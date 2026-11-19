@@ -157,6 +157,8 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
             "internal_stage_attachment_to_sandbox",
             "internal_list_skills",
             "internal_load_skill",
+            // MA-5：目录 + 按需取——模型对准备使用的工具加载完整描述（目录 160 字符摘要后的全文）。
+            "internal_load_tool",
             "internal_report_blocked",
             "internal_run_in_sandbox",
             // SKX-8：技能执行面。可用性由 SkillExecutionToolContributor 声明

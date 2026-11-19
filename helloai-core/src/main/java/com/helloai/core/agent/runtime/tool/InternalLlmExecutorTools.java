@@ -19,11 +19,15 @@ import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.service.SkillArtifactExportService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
+import com.helloai.core.agent.tool.ToolContext;
+import com.helloai.core.agent.tool.ToolDefinition;
 import com.helloai.core.agent.tool.ToolInvocationContext;
+import com.helloai.core.agent.tool.ToolRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -80,6 +84,17 @@ public class InternalLlmExecutorTools {
     private final ConversationService conversationService;
     /** 沙箱调用台账（`SL-5`）：{@code internal_list_sandbox_calls} 的只读事实源。 */
     private final SandboxCallLedger sandboxCallLedger;
+    /**
+     * 工具注册表（MA-5）：{@code internal_load_tool} 经 {@code resolve} 取「与模型可见同源」的生效描述。
+     *
+     * <p><b>为什么用 {@link ObjectProvider} 而非直接注入</b>：{@code McpToolConfig.internalToolCallbacks()}
+     * 的 {@code @Bean} 依赖本组件，而 {@link ToolRegistryImpl} 又经字段注入 {@link InternalToolCallbacks}
+     * （= 本组件的回调集合）——直接构造注入 {@link ToolRegistry} 会形成创建期循环依赖。
+     * {@code ObjectProvider} 构造期零解析、调用期 {@link #getIfAvailable()} 惰性取，环被打破；
+     * 与既有先例（{@code ToolRegistryImpl} / {@code RuntimeTurnExecutor} 对
+     * {@code InternalToolCallbacks} 的字段注入绕环）同思路。</p>
+     */
+    private final ObjectProvider<ToolRegistry> toolRegistryProvider;
 
     /** 自报阻塞前置：必须先读过子任务详情（知情拒绝闸门，见 {@code internal_report_blocked}）。 */
     private static final String TOOL_GET_SUB_TASK_DETAIL = "internal_get_sub_task_detail";
@@ -528,6 +543,70 @@ public class InternalLlmExecutorTools {
     }
 
     /**
+     * 按需加载某个工具的<b>完整描述</b>（MA-5「目录 + 按需取」第一步）。
+     *
+     * <p><b>为什么需要</b>：MA-5 目录装配（{@link com.helloai.core.agent.tool.ToolCatalogAssembler}）
+     * 把模型可见列表里的描述截断到 160 字符以内——{@code internal_run_in_sandbox} /
+     * {@code internal_run_skill} 这类工具的长描述（用法 / 约束 / Gotchas）无法在目录里完整呈现。
+     * 本工具补「按需取全文」通道：模型在目录看到简介后，对<b>准备使用</b>的工具加载完整说明，
+     * 与技能侧 {@code internal_list_skills} → {@code internal_load_skill} 已是同一范式。</p>
+     *
+     * <p><b>取数同源（不新开事实源）</b>：直接走 {@link ToolRegistry#resolve} 的单名字解析——
+     * 与模型可见列表同一条链路，<b>条件可用摘除</b>（沙箱未启用时 {@code internal_run_in_sandbox}
+     * 被摘除）与<b>动态描述重写</b>（声明者的描述优先）都如实复现：resolve 命中 ⇒ 返回生效描述；
+     * resolve 落空 ⇒ 返回「不存在或当前不可用」提示（不编造描述）。</p>
+     *
+     * <p><b>turn 内缓存</b>：同一轮执行里重复加载同一工具直接命中
+     * {@link ToolInvocationContext#cachedTool}（生命周期随 bind/unbind，不跨 turn 泄漏）。</p>
+     *
+     * @param name 工具名（须与目录中的名字<b>严格一致</b>；如 {@code internal_run_in_sandbox} / {@code web_search}）
+     * @return 工具的生效完整描述；不存在或当前不可用时返回「不可用」提示
+     */
+    @Tool(name = "internal_load_tool", description = """
+            【何时使用】记住某个工具的**完整用法**时调用：目录里看到的描述是 160 字符以内的简介，
+            准备使用的工具请先加载全文（用法 / 约束 / Gotchas）。
+            【Gotchas】
+            - name 必须与目录中的工具名**严格一致**（如 internal_run_in_sandbox / web_search），不做归一化
+            - 工具存在但**当前不可用**（如沙箱未启用时的 internal_run_in_sandbox）会返回「不可用」提示，
+              此时不要调用它——它不是坏了，而是当前环境没有运行条件
+            - 同轮内重复加载同一工具直接命中缓存，不重复解析
+            【相关工具】internal_list_skills（技能目录）/ internal_load_skill（技能正文）
+            """)
+    public Object internalLoadTool(
+            @ToolParam(description = "工具名（严格匹配，如 internal_run_in_sandbox）", required = true) String name) {
+        requireInternalChain();
+        if (name == null || name.isBlank()) {
+            throw new BizException("工具名不能为空");
+        }
+        // ① turn 内缓存命中直接返回（同一轮重复加载不走 resolve）
+        String cached = ToolInvocationContext.cachedTool(name);
+        if (cached != null) {
+            return cached;
+        }
+        // ② 惰性取注册表（ObjectProvider 构造期零解析，破内建循环依赖；目录降级 / 缺 bean 时给明确提示）
+        ToolRegistry registry = toolRegistryProvider.getIfAvailable();
+        if (registry == null) {
+            return "[LOAD_TOOL] 工具注册表暂不可用（平台故障降级），请稍后重试";
+        }
+        // ③ 与模型可见同源：单名字 resolve（条件摘除 / 动态描述 / 未知跳过三态如实复现）。
+        // ToolContext 只装配工具内建链手头已有的事实（accessType / requiredSkills 缺失 ⇒ 按 fail-open
+        // 处理；internal_ 工具的可用性声明均不读这些字段，见 SandboxExecutionToolContributor /
+        // SkillExecutionToolContributor——对内部面零影响）。
+        ToolInvocationContext.Ids ids = ToolInvocationContext.current();
+        ToolContext toolContext = new ToolContext(ids.agentId(), ids.taskId(), ids.subTaskId(),
+                ids.round(), null, java.util.List.of());
+        List<ToolDefinition> resolved = registry.resolve(List.of(name), toolContext);
+        if (resolved == null || resolved.isEmpty()) {
+            return "[LOAD_TOOL] 工具不存在或当前不可用: " + name
+                    + "（沙箱类工具在沙箱未启用时不可见；技能类工具在无技能包入库时不可见）";
+        }
+        String description = resolved.get(0).description();
+        // ④ 写入 turn 内缓存（null 描述不缓存，允许后续重试）
+        ToolInvocationContext.cacheTool(name, description);
+        return description;
+    }
+
+    /**
      * 在 OpenSandbox 沙箱内执行验证命令或脚本（S-8，沙箱执行链设计方案 §3.2）。
      *
      * <p><b>为什么存在</b>：自检（{@code REF-8.2.2} 验证证据围栏）与 Reviewer 核验（{@code subtask-review.md}）
@@ -698,8 +777,12 @@ public class InternalLlmExecutorTools {
         if (!install.success()) {
             throw new BizException("技能包注入失败（" + target.label() + "）: " + install.message());
         }
-        ExecuteResponse response = skillExecutionSupport.run(ids.subTaskId(), target, command,
-                timeoutSeconds, ids.round());
+        // MA-3：执行身份四元组显式传下去落台账——agentId / taskId 此前在这里被丢弃，
+        // 导致「哪个 Agent、在哪个任务下跑的这次技能」事后查不到
+        ExecuteResponse response = skillExecutionSupport.run(
+                SkillExecutionSupport.SkillRunContext.ofSubTask(
+                        ids.subTaskId(), ids.taskId(), ids.agentId(), ids.round()),
+                target, command, timeoutSeconds);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("skill", target.label());
         result.put("skillDir", install.targetDir());

@@ -229,4 +229,63 @@ class ToolInvocationContextTest {
         // callWith 退出后宿主线程还原为「未绑定」
         assertThat(ToolInvocationContext.currentReviewer()).isFalse();
     }
+
+    // ===== MA-5（2026-11-19）：turn 级工具描述缓存（internal_load_tool 用） =====
+
+    @Test
+    @DisplayName("MA-5 工具描述缓存：绑定后可写可读；解绑 / 二次绑定即清空（不跨 turn 泄漏）")
+    void toolCacheShouldFollowChainLifecycle() {
+        assertThat(ToolInvocationContext.cachedTool("internal_a")).isNull();
+
+        ToolInvocationContext.bind(11L, 22L);
+        ToolInvocationContext.cacheTool("internal_a", "desc-a");
+        assertThat(ToolInvocationContext.cachedTool("internal_a")).isEqualTo("desc-a");
+        assertThat(ToolInvocationContext.cachedTool("internal_b")).isNull();
+
+        ToolInvocationContext.unbind();
+        assertThat(ToolInvocationContext.cachedTool("internal_a")).isNull();
+
+        // 二次绑定 = 新执行链：缓存一并清零（即便同线程复用也不串味）
+        ToolInvocationContext.bind(11L, 22L);
+        assertThat(ToolInvocationContext.cachedTool("internal_a")).isNull();
+    }
+
+    @Test
+    @DisplayName("MA-5 工具描述缓存：null 描述不缓存（未知工具不占位）；未绑定时缓存为空操作")
+    void toolCacheShouldIgnoreNullAndUnbound() {
+        ToolInvocationContext.cacheTool("internal_a", "desc-a");
+        assertThat(ToolInvocationContext.cachedTool("internal_a")).isNull();
+
+        ToolInvocationContext.bind(11L, 22L);
+        ToolInvocationContext.cacheTool("internal_a", null);
+        assertThat(ToolInvocationContext.cachedTool("internal_a")).isNull();
+        ToolInvocationContext.cacheTool(null, "desc-a");
+        assertThat(ToolInvocationContext.cachedTool(null)).isNull();
+    }
+
+    @Test
+    @DisplayName("MA-5 工具描述缓存：cross-thread 快照携带缓存 + 子线程写入对共享实例可见 + 退出严格还原")
+    void toolCacheShouldSurviveCrossThreadScope() {
+        ToolInvocationContext.bind(11L, 22L);
+        ToolInvocationContext.cacheTool("internal_a", "desc-a");
+        ToolInvocationContext.Scope scope = ToolInvocationContext.capture();
+        ToolInvocationContext.unbind();
+
+        // 宿主线程（未绑定）读不到
+        assertThat(ToolInvocationContext.cachedTool("internal_a")).isNull();
+
+        callWithInSubThread(scope);
+        // callWith 退出后宿主线程还原为「未绑定」，不因子线程写入而污染
+        assertThat(ToolInvocationContext.cachedTool("internal_a")).isNull();
+        assertThat(ToolInvocationContext.cachedTool("internal_b")).isNull();
+    }
+
+    /** 模拟跨线程调用（同线程顺序执行即可——快照的共享实例语义与线程无关）。 */
+    private static void callWithInSubThread(ToolInvocationContext.Scope scope) {
+        ToolInvocationContext.callWith(scope, () -> {
+            assertThat(ToolInvocationContext.cachedTool("internal_a")).isEqualTo("desc-a");
+            ToolInvocationContext.cacheTool("internal_b", "desc-b");
+            return null;
+        });
+    }
 }

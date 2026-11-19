@@ -62,6 +62,8 @@ class AgentMcpServerServiceImplTest {
             "internal_stage_attachment_to_sandbox",
             "internal_list_skills",
             "internal_load_skill",
+            // MA-5（2026-11-19）：目录 + 按需取——工具完整描述加载通道（与 load_skill 同族）。
+            "internal_load_tool",
             "internal_report_blocked",
             "internal_run_in_sandbox",
             "internal_run_skill",

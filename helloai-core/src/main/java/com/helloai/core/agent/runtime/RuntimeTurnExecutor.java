@@ -1,6 +1,7 @@
 package com.helloai.core.agent.runtime;
 
 import com.helloai.common.config.AgentExecutionProperties;
+import com.helloai.common.config.ToolCatalogProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.ExecutionStatus;
@@ -18,6 +19,7 @@ import com.helloai.core.shared.util.VerificationFence;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.tool.EnabledToolNames;
 import com.helloai.core.agent.tool.InternalToolCallbacks;
+import com.helloai.core.agent.tool.ToolCatalogAssembler;
 import com.helloai.core.agent.tool.ToolContext;
 import com.helloai.core.agent.tool.ToolDefinition;
 import com.helloai.core.agent.tool.ToolExecutor;
@@ -83,6 +85,15 @@ public class RuntimeTurnExecutor implements AgentRuntime {
      */
     @Autowired
     private AgentExecutionProperties executionProperties;
+
+    /**
+     * 工具目录装配配置（MA-5 第一步）：模型可见描述摘要封顶 + 白名单。非构造注入（field +
+     * {@code @Autowired}），保持既有 6 参构造器不变（复用其显式构造的测试零改动）；
+     * 单测显式构造时该字段为 null，{@code resolveVisibleCallbacks} 内回落
+     * {@code new ToolCatalogProperties()}（默认 160 / 白名单，行为确定）。
+     */
+    @Autowired
+    private ToolCatalogProperties toolCatalogProperties;
 
     @Override
     public AgentExecutionResult execute(AgentContext ctx) {
@@ -264,14 +275,24 @@ public class RuntimeTurnExecutor implements AgentRuntime {
      * AgentLoop 可见 schema 与可调工具一致；best-effort：解析失败返回已装配部分 / 空列表）。
      *
      * <p><b>REF-8.5 起</b>：过滤本体已抽到 {@link VisibleToolCallbacks}（业务面循环入口共用
-     * 同一实现，防「第二处二次过滤」）。语义细节见该类 javadoc；本方法只负责
-     * 「取目录（对外 MCP 面 ∪ 内部执行链专用面）+ 委派选择」。</p>
+     * 同一实现，防「第二处二次过滤」）。<b>MA-5 起</b>：在委派前先经
+     * {@link ToolCatalogAssembler} 做目录装配（模型可见描述 ≤160 字符摘要、白名单工具保留
+     * 完整描述）——名字 / 顺序 / 数量不变，故 {@code TOOL_RESOLVED} 事件的
+     * {@code tools / effectiveTools / removedTools} 与上层语义零变化（外部读取零回归），
+     * 完整描述改由 {@code internal_load_tool} 按需加载。</p>
      */
     private List<ToolCallback> resolveVisibleCallbacks(List<ToolDefinition> resolvedTools) {
         // REF-8.5：过滤逻辑抽到 VisibleToolCallbacks（业务面循环入口共用同一实现，
         // 保证「模型可见工具 = ToolRegistry.resolve 结果」这一单口径不在两处各写一份）。
         // 可见回调源 = 对外 MCP 面 ∪ 内部执行链专用面（REF-8.1 B，internal_ 前缀在后）。
-        return VisibleToolCallbacks.select(resolvedTools,
+        // MA-5 第一步：目录装配只换 description 内容（摘要 / 白名单全文），不换 name 与顺序
+        // ⇒ effectiveTools 语义在装配前后逐字一致；摘要后的完整描述由 internal_load_tool 取。
+        ToolCatalogProperties catalogProps = toolCatalogProperties != null ? toolCatalogProperties
+                : new ToolCatalogProperties();
+        List<ToolDefinition> visibleTools = ToolCatalogAssembler.assemble(
+                resolvedTools, catalogProps.getDescriptionMaxLength(),
+                new HashSet<>(catalogProps.getFullDefinitionTools()));
+        return VisibleToolCallbacks.select(visibleTools,
                 InternalToolCallbacks.union(toolCallbackProvider.getToolCallbacks(), internalToolCallbacks));
     }
 
