@@ -8,10 +8,12 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.constant.SubTaskContextKeys;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.executor.AgentSelector;
+import com.helloai.core.agent.executor.DispatchDecisionSnapshot;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
@@ -23,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -224,6 +227,65 @@ class SubTaskDispatchServiceTest {
         return subTask;
     }
 
+    /**
+     * 造一份带快照的选人结果（`MA-2`）：只有中选者与一条候选明细，够断言「快照被带到落库侧」。
+     */
+    private static AgentSelector.Selection selectionOf(Agent agent) {
+        DispatchDecisionSnapshot snapshot = DispatchDecisionSnapshot.primary(List.of(
+                new DispatchDecisionSnapshot.Candidate(agent.getId(), agent.getName(), "EXECUTOR",
+                        agent.getScore(), 3, 4, 1, 0, true)));
+        return new AgentSelector.Selection(agent, snapshot);
+    }
+
+    @Test
+    @DisplayName("MA-2 派单成功 ⇒ context 写 dispatchSnapshot；attempt 取 attempt_total（非内存推算）")
+    void shouldRecordDispatchSnapshotAfterDispatch() {
+        SubTask subTask = blockedSubTask(28L);
+        // 自增后的真实值；写快照时必须读它，而不是在内存上 +1
+        subTask.setAttemptTotal(3);
+        when(subTaskService.getById(28L)).thenReturn(subTask);
+        when(subTaskService.resetToPendingForDispatch(28L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
+        Agent preferred = new Agent();
+        preferred.setId(99L);
+        when(agentSelector.pickPreferredWithSnapshot(AgentRole.EXECUTOR, null))
+                .thenReturn(selectionOf(preferred));
+
+        subTaskDispatchService.dispatchBlockedSubTaskAuto(28L, true);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor =
+                ArgumentCaptor.forClass((Class<Map<String, Object>>) (Class<?>) Map.class);
+        verify(subTaskService).updateContextInNewTx(eq(28L), captor.capture());
+        DispatchDecisionSnapshot snapshot =
+                (DispatchDecisionSnapshot) captor.getValue().get(SubTaskContextKeys.DISPATCH_SNAPSHOT);
+        assertThat(snapshot).isNotNull();
+        assertThat(snapshot.attempt()).isEqualTo(3);
+        assertThat(snapshot.path()).isEqualTo(DispatchDecisionSnapshot.PATH_PRIMARY);
+        assertThat(snapshot.candidates()).hasSize(1);
+        assertThat(snapshot.candidates().get(0).winner()).isTrue();
+    }
+
+    @Test
+    @DisplayName("MA-2 快照写入抛异常 ⇒ 派单照常完成（best-effort，不把派单打回）")
+    void shouldNotFailDispatchWhenSnapshotWriteThrows() {
+        SubTask subTask = blockedSubTask(29L);
+        when(subTaskService.getById(29L)).thenReturn(subTask);
+        when(subTaskService.resetToPendingForDispatch(29L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
+        Agent preferred = new Agent();
+        preferred.setId(99L);
+        when(agentSelector.pickPreferredWithSnapshot(AgentRole.EXECUTOR, null))
+                .thenReturn(selectionOf(preferred));
+        org.mockito.Mockito.doThrow(new IllegalStateException("jsonb 写入失败"))
+                .when(subTaskService).updateContextInNewTx(eq(29L), anyMap());
+
+        var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(29L, true);
+
+        assertThat(result.applied()).isTrue();
+        verify(taskDispatchPort).assignNext(99L, 29L, null);
+    }
+
     @Test
     @DisplayName("自动重派：无人工介入标记 → 走既有调度链并 applied")
     void shouldAutoRedispatchBlockedWhenNoManualIntervention() {
@@ -233,7 +295,8 @@ class SubTaskDispatchServiceTest {
                 .thenReturn(subTask);
         Agent preferred = new Agent();
         preferred.setId(99L);
-        when(agentSelector.pickPreferred(AgentRole.EXECUTOR, null)).thenReturn(preferred);
+        when(agentSelector.pickPreferredWithSnapshot(AgentRole.EXECUTOR, null))
+                .thenReturn(selectionOf(preferred));
 
         var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(21L, true);
 
@@ -254,7 +317,7 @@ class SubTaskDispatchServiceTest {
 
         assertThat(result.applied()).isFalse();
         assertThat(result.reason()).isEqualTo("manual_intervention");
-        verify(agentSelector, never()).pickPreferred(any(), any());
+        verify(agentSelector, never()).pickPreferredWithSnapshot(any(), any());
         verify(subTaskService, never()).resetToPendingForDispatch(anyLong(), any());
     }
 
@@ -269,7 +332,8 @@ class SubTaskDispatchServiceTest {
                 .thenReturn(subTask);
         Agent preferred = new Agent();
         preferred.setId(99L);
-        when(agentSelector.pickPreferred(AgentRole.EXECUTOR, null)).thenReturn(preferred);
+        when(agentSelector.pickPreferredWithSnapshot(AgentRole.EXECUTOR, null))
+                .thenReturn(selectionOf(preferred));
 
         var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(23L, true);
 
@@ -291,7 +355,7 @@ class SubTaskDispatchServiceTest {
 
         assertThat(result.applied()).isFalse();
         assertThat(result.reason()).isEqualTo("manual_intervention");
-        verify(agentSelector, never()).pickPreferred(any(), any());
+        verify(agentSelector, never()).pickPreferredWithSnapshot(any(), any());
     }
 
     @Test
@@ -299,7 +363,8 @@ class SubTaskDispatchServiceTest {
     void shouldSkipAutoRedispatchWhenNoCandidate() {
         SubTask subTask = blockedSubTask(25L);
         when(subTaskService.getById(25L)).thenReturn(subTask);
-        when(agentSelector.pickPreferred(AgentRole.EXECUTOR, null)).thenReturn(null);
+        when(agentSelector.pickPreferredWithSnapshot(AgentRole.EXECUTOR, null))
+                .thenReturn(new AgentSelector.Selection(null, null));
 
         var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(25L, true);
 
@@ -322,7 +387,7 @@ class SubTaskDispatchServiceTest {
         assertThatThrownBy(() -> subTaskDispatchService.dispatchBlockedSubTaskAuto(26L, true))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("BLOCKED");
-        verify(agentSelector, never()).pickPreferred(any(), any());
+        verify(agentSelector, never()).pickPreferredWithSnapshot(any(), any());
     }
 
     @Test
@@ -571,13 +636,14 @@ class SubTaskDispatchServiceTest {
 
         when(subTaskService.resetToPendingForDispatch(61L, Set.of(SubTaskStatus.ASSIGNED)))
                 .thenReturn(subTask);
-        when(agentSelector.pickAlternative(11L, AgentRole.EXECUTOR, null)).thenReturn(newAgent);
+        when(agentSelector.pickAlternativeWithSnapshot(11L, AgentRole.EXECUTOR, null))
+                .thenReturn(selectionOf(newAgent));
 
         subTaskDispatchService.redispatchAssignedTimeout(61L, 11L, AgentRole.EXECUTOR);
 
         // 必须用 pickAlternative(originalAgentId, role)，而不是 pickPreferred(role)
-        verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR, null);
-        verify(agentSelector, never()).pickPreferred(any(), any());
+        verify(agentSelector).pickAlternativeWithSnapshot(11L, AgentRole.EXECUTOR, null);
+        verify(agentSelector, never()).pickPreferredWithSnapshot(any(), any());
         verify(taskDispatchPort).assignNext(99L, 61L, null);
         // 关键调度节点：超时未领取改派事件留痕（用户可观测，独立于通用 dispatch_prepare）
         verify(taskTimelineService).recordEvent(
@@ -595,11 +661,12 @@ class SubTaskDispatchServiceTest {
         when(subTaskService.resetToPendingForDispatch(62L, Set.of(SubTaskStatus.ASSIGNED)))
                 .thenReturn(subTask);
         // pickAlternative 返回 null（只有原 Agent 一个候选）
-        when(agentSelector.pickAlternative(11L, AgentRole.EXECUTOR, null)).thenReturn(null);
+        when(agentSelector.pickAlternativeWithSnapshot(11L, AgentRole.EXECUTOR, null))
+                .thenReturn(new AgentSelector.Selection(null, null));
 
         subTaskDispatchService.redispatchAssignedTimeout(62L, 11L, AgentRole.EXECUTOR);
 
-        verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR, null);
+        verify(agentSelector).pickAlternativeWithSnapshot(11L, AgentRole.EXECUTOR, null);
         verify(taskDispatchPort, never()).assignNext(any(), any(), any());
         // 无候选时超时未领取的调度决策本身仍应留痕（便于后续死信排查）
         verify(taskTimelineService).recordEvent(
@@ -641,7 +708,7 @@ class SubTaskDispatchServiceTest {
                 Map.of("reason", "reassign_attempt_exceeded",
                         "attempt_total", 5,
                         "max_reassign_attempts", 5));
-        verify(agentSelector, never()).pickPreferred(any(), any());
+        verify(agentSelector, never()).pickPreferredWithSnapshot(any(), any());
         verify(taskDispatchPort, never()).assignNext(any(), any(), any());
     }
 
@@ -661,7 +728,8 @@ class SubTaskDispatchServiceTest {
 
         Agent preferred = new Agent();
         preferred.setId(99L);
-        when(agentSelector.pickPreferred(AgentRole.EXECUTOR, null)).thenReturn(preferred);
+        when(agentSelector.pickPreferredWithSnapshot(AgentRole.EXECUTOR, null))
+                .thenReturn(selectionOf(preferred));
 
         Long result = subTaskDispatchService.dispatchPendingSubTaskAuto(82L, AgentRole.EXECUTOR);
 
@@ -685,7 +753,8 @@ class SubTaskDispatchServiceTest {
         // ready 守卫在熔断检查前，无依赖子任务视为就绪
         when(subTaskService.isReady(subTask)).thenReturn(true);
         // 选人失败：当前没有任何可用候选
-        when(agentSelector.pickPreferred(AgentRole.EXECUTOR, null)).thenReturn(null);
+        when(agentSelector.pickPreferredWithSnapshot(AgentRole.EXECUTOR, null))
+                .thenReturn(new AgentSelector.Selection(null, null));
 
         assertThatThrownBy(() -> subTaskDispatchService.dispatchPendingSubTaskAuto(86L, AgentRole.EXECUTOR))
                 .isInstanceOf(NoCandidateAgentException.class)
@@ -1030,7 +1099,7 @@ class SubTaskDispatchServiceTest {
 
         Agent preferred = new Agent();
         preferred.setId(11L);
-        when(agentSelector.pickPreferred(any(), any())).thenReturn(preferred);
+        when(agentSelector.pickPreferredWithSnapshot(any(), any())).thenReturn(selectionOf(preferred));
 
         var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(78L, false);
 
@@ -1117,7 +1186,7 @@ class SubTaskDispatchServiceTest {
 
         Agent preferred = new Agent();
         preferred.setId(11L);
-        when(agentSelector.pickPreferred(any(), any())).thenReturn(preferred);
+        when(agentSelector.pickPreferredWithSnapshot(any(), any())).thenReturn(selectionOf(preferred));
 
         var result = subTaskDispatchService.dispatchBlockedSubTaskAuto(79L, false);
 

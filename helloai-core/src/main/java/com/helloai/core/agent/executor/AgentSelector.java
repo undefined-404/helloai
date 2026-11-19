@@ -27,6 +27,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -66,6 +67,24 @@ public class AgentSelector {
     private static final int COST_RANK_NEUTRAL = 3;
 
     /**
+     * 一次选人的完整结果：中选者 + 决策快照（`MA-2`）。
+     *
+     * <p><b>为什么快照由选人器「返回」而不是自己落库</b>：本类在 {@code agent} 域，
+     * {@code sub_task.context} 属 {@code task} 域；跨域直写是「直捅」（CODE_STYLE §7.1）。
+     * 返回纯数据由 {@code task} 域落库，既守住边界，也让快照可单测。</p>
+     *
+     * @param agent    中选者；无候选时为 {@code null}
+     * @param snapshot 决策快照；无候选时为 {@code null}（<b>不写空快照</b>——
+     *                 否则「有快照但没候选」与「压根没走过选人」无法区分）
+     */
+    public record Selection(Agent agent, DispatchDecisionSnapshot snapshot) {
+
+        static Selection empty() {
+            return new Selection(null, null);
+        }
+    }
+
+    /**
      * 从指定角色的 Agent 中选取首选执行器（用于初始分配）。
      *
      * <p>注意：本方法只负责“选人”，不落库、不发布事件。
@@ -101,13 +120,28 @@ public class AgentSelector {
      * @return 首选 Agent，无可选时返回 null
      */
     public Agent pickPreferred(AgentRole role, AgentSelectionConstraints constraints) {
-        List<Agent> candidates;
-        if (role != null) {
-            candidates = agentService.listByRole(role);
-        } else {
-            candidates = agentService.listActive();
-        }
-        return pickFromCandidates(candidates, null, constraints);
+        return selectFromCandidates(loadCandidates(role), null, constraints).agent();
+    }
+
+    /**
+     * 带<b>决策快照</b>的首选选人（`MA-2`）。
+     *
+     * <p>与 {@link #pickPreferred(AgentRole, AgentSelectionConstraints)} <b>同一条实现</b>
+     * （{@code selectFromCandidates}），差别只是把中选时已经算好的候选池位次一并带回，
+     * 供 {@code task} 域落 {@code sub_task.context.dispatchSnapshot}。
+     * 选人语义、过滤规则、排序<b>逐字不变</b>。</p>
+     *
+     * @param role        Agent 角色；为 null 时不限定角色
+     * @param constraints 任务级选人约束；null 表示不约束
+     * @return 中选者 + 快照；无候选时 {@link Selection#agent()} 为 {@code null}
+     */
+    public Selection pickPreferredWithSnapshot(AgentRole role, AgentSelectionConstraints constraints) {
+        return selectFromCandidates(loadCandidates(role), null, constraints);
+    }
+
+    /** 候选来源：按角色取，或取全部可用（两种入口同源，避免各写一份 {@code if}）。 */
+    private List<Agent> loadCandidates(AgentRole role) {
+        return role != null ? agentService.listByRole(role) : agentService.listActive();
     }
 
     /**
@@ -161,19 +195,39 @@ public class AgentSelector {
      * @return 可用替代 Agent，无可选时返回 null
      */
     public Agent pickAlternative(Long excludeAgentId, AgentRole role, AgentSelectionConstraints constraints) {
-        List<Agent> candidates;
-        if (role != null) {
-            candidates = agentService.listByRole(role);
-        } else {
-            candidates = agentService.listActive();
-        }
-        return pickFromCandidates(candidates, excludeAgentId, constraints);
+        return selectFromCandidates(loadCandidates(role), excludeAgentId, constraints).agent();
     }
 
-    private Agent pickFromCandidates(List<Agent> candidates, Long excludeAgentId,
-                                     AgentSelectionConstraints constraints) {
+    /**
+     * 带<b>决策快照</b>的替代选人（`MA-2`；ASSIGNED 超时回收等换人路径）。
+     *
+     * <p>与 {@link #pickAlternative(Long, AgentRole, AgentSelectionConstraints)} 同一条实现，
+     * 差别只是附带候选池位次。</p>
+     *
+     * @param excludeAgentId 需要排除的 Agent ID（原分配目标）
+     * @param role           Agent 角色；为 null 时不限定角色
+     * @param constraints    任务级选人约束；null 表示不约束
+     * @return 中选者 + 快照；无候选时 {@link Selection#agent()} 为 {@code null}
+     */
+    public Selection pickAlternativeWithSnapshot(Long excludeAgentId, AgentRole role,
+                                                 AgentSelectionConstraints constraints) {
+        return selectFromCandidates(loadCandidates(role), excludeAgentId, constraints);
+    }
+
+    /**
+     * 选人的<b>唯一实现</b>：过滤 → 排序/抽签 → 投影快照。
+     *
+     * <p>返回 {@link Selection} 而不是 {@link Agent}：既有的
+     * {@code pickPreferred} / {@code pickAlternative} 只取 {@code agent()}，
+     * 新入口额外拿走 {@code snapshot()}——<b>同一条实现、两种消费方式</b>，
+     * 不会出现「快照顺序」与「真实选人顺序」两份算法（判据 4）。
+     * </p>
+     */
+    private Selection selectFromCandidates(List<Agent> candidates, Long excludeAgentId,
+                                           AgentSelectionConstraints constraints) {
         Map<Long, Integer> qualityRanks = resolveQualityRanks(candidates);
         Map<Long, Integer> costRanks = resolveCostRanks(candidates);
+        Map<Long, Integer> dutyRanks = resolveDutyRanks(candidates);
         Map<Long, Integer> inFlight = resolveInFlightCounts(candidates);
         List<Agent> pool = candidates.stream()
                 .filter(a -> excludeAgentId == null || !a.getId().equals(excludeAgentId))
@@ -193,20 +247,21 @@ public class AgentSelector {
                 .filter(this::isCircuitClosed)
                 .toList();
         if (pool.isEmpty()) {
-            return null;
+            return Selection.empty();
         }
         if (!isWeightedRandom()) {
             // 原路径逐字不变：分类优先级 + score 降序取最高
-            return pool.stream()
-                    .max(resolveComparator(qualityRanks, costRanks))
+            Agent best = pool.stream()
+                    .max(resolveComparator(qualityRanks, costRanks, dutyRanks))
                     .orElse(null);
+            return new Selection(best, buildSnapshot(pool, best, qualityRanks, costRanks, dutyRanks, inFlight));
         }
         // 加权随机：先分「最优层级」（值班/接入类型/质量/成本 全等），再在层内抽签。
         // 分层不可跳过——否则会把低质量档的 Agent 抽上来，违反既有分类优先级语义。
-        Comparator<Agent> tierComparator = resolveTierComparator(qualityRanks, costRanks);
+        Comparator<Agent> tierComparator = resolveTierComparator(qualityRanks, costRanks, dutyRanks);
         Agent tierBest = pool.stream().max(tierComparator).orElse(null);
         if (tierBest == null) {
-            return null;
+            return Selection.empty();
         }
         List<Agent> tier = pool.stream()
                 .filter(a -> tierComparator.compare(a, tierBest) == 0)
@@ -218,7 +273,60 @@ public class AgentSelector {
                     chosen.getId(), weightOf(chosen, scoreRange(pool)),
                     inFlight.getOrDefault(chosen.getId(), 0), chosen.getScore(), tier.size());
         }
-        return chosen;
+        return new Selection(chosen, buildSnapshot(pool, chosen, qualityRanks, costRanks, dutyRanks, inFlight));
+    }
+
+    /**
+     * 把候选池投影成决策快照（`MA-2`）。
+     *
+     * <p><b>只投影、不重算</b>：质量/成本/值班/在飞四份中间量都是本次选人已经算好的，
+     * 这里只按<b>选人用的同一组比较器</b>排序后落成行——排第一的候选就是
+     * {@code SCORE_DESC} 策略下会被选中的人；加权随机策略下中选者可能不是第一档第一位，
+     * 由 {@code winner} 标出，正是「抽签结果与位次」都要留痕的原因。</p>
+     *
+     * @param pool         过滤后的候选池
+     * @param chosen       中选者；{@code null} 时不产快照
+     * @param qualityRanks 质量档位（空 Map = 该维度未参与 → 快照记 {@code null}）
+     * @param costRanks    成本档位（同上）
+     * @param dutyRanks    值班档位
+     * @param inFlight     在飞数（同上：{@code SCORE_DESC} 策略不采集 → 记 {@code null}）
+     * @return 快照；{@code chosen == null} 时返回 {@code null}
+     */
+    private DispatchDecisionSnapshot buildSnapshot(List<Agent> pool, Agent chosen,
+                                                   Map<Long, Integer> qualityRanks,
+                                                   Map<Long, Integer> costRanks,
+                                                   Map<Long, Integer> dutyRanks,
+                                                   Map<Long, Integer> inFlight) {
+        if (chosen == null) {
+            return null;
+        }
+        Comparator<Agent> tierOrder = resolveTierComparator(qualityRanks, costRanks, dutyRanks);
+        Comparator<Agent> order = resolveComparator(qualityRanks, costRanks, dutyRanks);
+        List<Agent> ranked = pool.stream()
+                .filter(a -> a != null && a.getId() != null)
+                .sorted(order.reversed())
+                .toList();
+        List<DispatchDecisionSnapshot.Candidate> rows = new ArrayList<>(ranked.size());
+        int tier = 0;
+        Agent previous = null;
+        for (Agent agent : ranked) {
+            // 档位 = 「分类优先级」分组的序号：与上一名同档则不进位
+            if (previous != null && tierOrder.compare(previous, agent) != 0) {
+                tier++;
+            }
+            previous = agent;
+            rows.add(new DispatchDecisionSnapshot.Candidate(
+                    agent.getId(),
+                    agent.getName(),
+                    agent.getRole() != null ? agent.getRole().name() : null,
+                    agent.getScore(),
+                    qualityRanks.isEmpty() ? null : qualityRanks.getOrDefault(agent.getId(), 0),
+                    costRanks.isEmpty() ? null : costRanks.getOrDefault(agent.getId(), COST_RANK_NEUTRAL),
+                    inFlight.isEmpty() ? null : inFlight.getOrDefault(agent.getId(), 0),
+                    tier,
+                    agent.getId().equals(chosen.getId())));
+        }
+        return DispatchDecisionSnapshot.primary(rows);
     }
 
     /** 是否走加权随机策略。 */
@@ -410,11 +518,12 @@ public class AgentSelector {
      * 加权随机策略改走 {@link #resolveTierComparator} + 层内抽签。</p>
      */
     private Comparator<Agent> resolveComparator(Map<Long, Integer> qualityRanks,
-                                                Map<Long, Integer> costRanks) {
+                                                Map<Long, Integer> costRanks,
+                                                Map<Long, Integer> dutyRanks) {
         // AgentHub P0-B：“当前是否处于值班”作为软优先级最高一档。
         // 无硬拒绝：即使无任何值班 Agent，仍能从非值班候选中选出，
         // 保证与当前行为向后兼容（未上线时 checkIn 未被调用，选择器表现与以前一致）。
-        Comparator<Agent> dutyFirst = Comparator.comparingInt(this::dutyRank);
+        Comparator<Agent> dutyFirst = Comparator.comparingInt(a -> dutyOf(dutyRanks, a));
         if (agentDispatchProperties.isPreferExternal()) {
             dutyFirst = dutyFirst.thenComparingInt(this::accessTypeRank);
         }
@@ -447,8 +556,9 @@ public class AgentSelector {
      * 这样既不打乱既有分类语义（低质量档不会被抽上来），又能在同档内实现按权重分散。</p>
      */
     private Comparator<Agent> resolveTierComparator(Map<Long, Integer> qualityRanks,
-                                                    Map<Long, Integer> costRanks) {
-        Comparator<Agent> tier = Comparator.comparingInt(this::dutyRank);
+                                                    Map<Long, Integer> costRanks,
+                                                    Map<Long, Integer> dutyRanks) {
+        Comparator<Agent> tier = Comparator.comparingInt(a -> dutyOf(dutyRanks, a));
         if (agentDispatchProperties.isPreferExternal()) {
             tier = tier.thenComparingInt(this::accessTypeRank);
         }
@@ -562,6 +672,39 @@ public class AgentSelector {
         }
         int rank = (int) Math.round(COST_RANK_MAX * (double) (max - avgTokens) / (max - min));
         return Math.max(COST_RANK_MIN, Math.min(COST_RANK_MAX, rank));
+    }
+
+    /**
+     * 预计算候选 Agent 的<b>值班档位</b>（1 = 在岗，0 = 不在岗），供比较器复用。
+     *
+     * <p><b>为什么必须预计算</b>：{@link #dutyRank} 每次调用都要查一次租约表。
+     * 原来它只在 {@code max(...)} 的两两比较里被调，候选 n 个就要查约 2n 次；
+     * `MA-2` 还要按同一个比较器给候选排序（O(n log n) 次比较），不预计算会把查询量放大一个量级。
+     * 预计算后每次选人只查 n 次，且<b>比较结果完全相同</b>（同一批数据、同一个判定）。</p>
+     *
+     * <p>返回 {@link HashMap}（不是 {@code Map.of()}）：比较器里用
+     * {@code getOrDefault(id, 0)} 兜底，而不可变空 Map 对 {@code null} 键会抛 NPE。</p>
+     */
+    private Map<Long, Integer> resolveDutyRanks(List<Agent> candidates) {
+        Map<Long, Integer> ranks = new HashMap<>();
+        if (candidates == null) {
+            return ranks;
+        }
+        for (Agent agent : candidates) {
+            if (agent == null || agent.getId() == null) {
+                continue;
+            }
+            ranks.put(agent.getId(), dutyRank(agent));
+        }
+        return ranks;
+    }
+
+    /** 取值班档位（缺失/空 id ⇒ 0，与 {@link #dutyRank} 的降级口径一致）。 */
+    private static int dutyOf(Map<Long, Integer> dutyRanks, Agent agent) {
+        if (agent == null || agent.getId() == null) {
+            return 0;
+        }
+        return dutyRanks.getOrDefault(agent.getId(), 0);
     }
 
     /**

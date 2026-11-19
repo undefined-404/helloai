@@ -88,6 +88,43 @@ public final class SubTaskContextKeys {
     /** {@link #RESTRUCTURE_HISTORY} 的条数上限：超出时保留首条（原始基线）与最近条目。 */
     public static final int RESTRUCTURE_HISTORY_LIMIT = 50;
 
+    /**
+     * 派单决策快照（{@code Map}：{@code attempt / path / decidedAt / candidateTotal /
+     * truncated / candidates[]}，`MA-2`）。
+     *
+     * <p>语义 = 「最近一次派单当时，候选池里有谁、各自什么位次、中选的是谁、走的是哪条路径」。
+     * 答案此前只存在于日志里，无法事后按子任务查。</p>
+     *
+     * <p><b>写入</b>：{@code SubTaskDispatchServiceImpl}（**唯一写点**，四条选人路径共用），
+     * 按键合并（{@code updateContextInNewTx}）——<b>整段覆写会清掉 {@code gateFindings} /
+     * {@code plannerAgentId} 等其它写方的键</b>。写入是 best-effort：失败只 {@code log.warn}，
+     * 绝不让「记不下来」把派单打回。</p>
+     *
+     * <p><b>读取</b>：子任务详情接口（{@code getById} 已下发 {@code context}）；
+     * <b>无前端展示</b>，本期是数据契约。若长期无消费方，须按判据 2 重新评估是否保留。</p>
+     *
+     * <p><b>覆盖式</b>：每次派单覆盖写一份，只有「最近一次」；要全量历史必须建表，属另一批。
+     * <b>键缺失 = 从未走过选人</b>（如子任务还没派过、或派单前就被拦下），
+     * 与「有快照但候选为空」刻意区分开——后者不写。</p>
+     */
+    public static final String DISPATCH_SNAPSHOT = "dispatchSnapshot";
+
+    /**
+     * 显式声明「本次无产物、无需闸门校验」（{@code Boolean} 或字符串 {@code "true"}，`MA-4`）。
+     *
+     * <p>语义 = 分析 / 决策类任务的「结论即交付物」，不产生文件 / 分片 / 文本产物，
+     * 交付物登记闸（{@code DeliveryEvidenceEvaluator}）命中本键即豁免，不记
+     * {@code delivery_gate_miss}。</p>
+     *
+     * <p><b>为什么放这里</b>：写入方 = 外部 Agent 提交时经 {@code submitResult} 在 context 带上，
+     * 读取方 = {@code agent.command.DeliveryEvidenceEvaluator}（agent 域）。键名靠字符串约定，
+     * 与 {@link #ACCEPTANCE_KIND_DECLARED} 同族，放 {@code common} 让两侧共享同一事实源。</p>
+     *
+     * <p><b>诚实边界</b>：声明式天然可造假（模型/用户自报），本期接受——与 {@code parts}
+     * 声明式同源（蓝图 §4 `MA-4`④诚实边界 3），第三段如需更强证据再议。</p>
+     */
+    public static final String NO_DELIVERABLE = "noDeliverable";
+
     private SubTaskContextKeys() {
     }
 }

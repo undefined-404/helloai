@@ -8,10 +8,12 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.ManualInterventionReasons;
 import com.helloai.common.constant.RetryPolicy;
+import com.helloai.common.constant.SubTaskContextKeys;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.executor.AgentSelector.AgentSelectionConstraints;
+import com.helloai.core.agent.executor.DispatchDecisionSnapshot;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.CircuitBreakerAlertService;
@@ -30,6 +32,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -74,6 +77,16 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * 而退避本身<b>不消耗预算</b>，豁免它对熔断零副作用。</p>
      */
     private static final int[] REASSIGN_BACKOFF_SECONDS = {60, 180, 600, 1800};
+
+    /**
+     * N11 回退的排序键：{@code score} 降序（{@code null} 视为最小）。
+     *
+     * <p>抽成常量是为了让「选中谁」与「快照里的名次」用<b>同一个比较器</b>——
+     * 两处各写一遍 {@code Comparator.comparing(...)} 迟早会漂移（判据 4）。</p>
+     */
+    private static final Comparator<AgentProfileSnapshot> SCORE_DESC =
+            Comparator.comparing(AgentProfileSnapshot::score,
+                    Comparator.nullsFirst(Comparator.naturalOrder()));
 
     @Override
     public RedispatchResult dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId) {
@@ -170,7 +183,9 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         // 先选人、后改状态：选不出人时保持 BLOCKED、不消耗重派预算（P1-1 口径）
         AgentRole role = resolveAgentRole(subTask.getAssignedAgentId());
         DispatchConstraints constraints = resolveConstraints(subTask);
-        var preferred = agentSelector.pickPreferred(role, toSelectorConstraints(constraints));
+        AgentSelector.Selection selection =
+                agentSelector.pickPreferredWithSnapshot(role, toSelectorConstraints(constraints));
+        var preferred = selection.agent();
         if (preferred == null) {
             log.info("BLOCKED 自动重派暂无可用候选（可自愈等待态，保持 BLOCKED）: subTaskId={}, role={}",
                     subTaskId, role);
@@ -178,6 +193,10 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         }
 
         RedispatchResult result = dispatchBlockedSubTask(subTaskId, preferred.getId(), GatePurpose.AUTO);
+        if (result.applied()) {
+            // MA-2：派单成功之后才留快照（未派出 = 不写，避免「有快照但没派出去」）
+            recordDispatchSnapshot(subTaskId, selection.snapshot());
+        }
         if (result.applied() && selfReported) {
             // 平台已接管「自报阻塞」的处置 ⇒ 清除人工介入标记，避免前端仍显示「等待人工介入」
             // 却与自动重派自相矛盾（同款语义见 redispatchDeadLetter 的人工拍板清理）
@@ -321,7 +340,9 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
 
         // 任务级选人约束（executorAgentIds 白名单 + required_skills 技能 AND 匹配）
         DispatchConstraints constraints = resolveConstraints(subTask);
-        var preferred = agentSelector.pickPreferred(role, toSelectorConstraints(constraints));
+        AgentSelector.Selection selection =
+                agentSelector.pickPreferredWithSnapshot(role, toSelectorConstraints(constraints));
+        var preferred = selection.agent();
         if (preferred == null) {
             // 无候选属可自愈等待态：抛专用异常且**不消耗**重派预算（见方法 javadoc）
             // ★ G-015 收口：无候选此前只有 log + 时间线事件，无告警出口；
@@ -351,6 +372,8 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                         "role", role != null ? role.name() : "null"));
 
         taskDispatchPort.assignNext(preferred.getId(), subTaskId, constraints);
+        // MA-2：派单成功之后留快照（attempt 由 recordDispatchSnapshot 读库回填）
+        recordDispatchSnapshot(subTaskId, selection.snapshot());
         log.info("子任务自动分配进入调度链: subTaskId={}, preferredAgentId={}, role={}",
                 subTaskId, preferred.getId(), role);
         return preferred.getId();
@@ -459,7 +482,8 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                     TaskAgentPolicy.difficulty(agentPolicy));
             return null;
         }
-        AgentProfileSnapshot fallbackAgent = pickApiKeyLlmAgent(role);
+        FallbackPick fallbackPick = pickApiKeyLlmAgent(role);
+        AgentProfileSnapshot fallbackAgent = fallbackPick.agent();
 
         if (fallbackAgent == null) {
             String msg = String.format(
@@ -553,32 +577,53 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                         "reason", reason != null ? reason : ""));
 
         taskDispatchPort.assignNext(fallbackAgent.id(), subTaskId);
+        // MA-2：N11 回退也留快照（path=fallback，排名字段为 null——单维 max(score) 没有排名）
+        recordDispatchSnapshot(subTaskId, fallbackPick.snapshot());
         log.info("N11 阈值回退已重新进入调度链: subTaskId={}, failedAgentId={}, fallbackAgentId={}",
                 subTaskId, failedAgentId, fallbackAgent.id());
         return fallbackAgent.id();
     }
 
     /**
-     * 在同角色 EXECUTOR/PLANNER/REVIEWER 中按 score 降序选一个
-     * access_type=API_KEY_LLM 且 status=ACTIVE 的 Agent。
+     * 同角色 {@code API_KEY_LLM} 候选按 {@code score} 降序取最高（N11 回退）。
      *
-     * <p>简单实现：基于 {@code AgentService.listActive} + stream filter。
+     * <p>简单实现：基于 {@code AgentService.listActiveProfiles} + stream filter。
      * 不复用 {@link AgentSelector} 是为了彻底屏蔽"preferExternal"在回退路径上的影响，
      * 即使配置被误改也保证回退方向。</p>
+     *
+     * <p><b>`MA-2` 起同时返回决策快照</b>：本路径的「候选池」= 过滤后的完整列表
+     * （它没有质量/成本/在飞中间量，也没有分档，故 {@code qualityRank} / {@code costRank} /
+     * {@code tier} 一律 {@code null}——编造 0 会让人误读成「排第一」）。</p>
+     *
+     * @param inputRole 目标角色；{@code null} ⇒ {@code EXECUTOR}
+     * @return 中选者 + 快照；无候选时两者都为 {@code null}
      */
-    private AgentProfileSnapshot pickApiKeyLlmAgent(AgentRole inputRole) {
+    private FallbackPick pickApiKeyLlmAgent(AgentRole inputRole) {
         final AgentRole role = (inputRole != null) ? inputRole : AgentRole.EXECUTOR;
-        return agentService.listActiveProfiles().stream()
+        List<AgentProfileSnapshot> pool = agentService.listActiveProfiles().stream()
                 .filter(a -> a.accessType() == AgentAccessType.API_KEY_LLM)
                 .filter(a -> a.status() == AgentStatus.ACTIVE)
                 .filter(a -> role.equals(a.role()))
                 .filter(a -> a.onlineStatus() == null
                         || a.onlineStatus().name().equals("ONLINE")
                         || a.onlineStatus().name().equals("IDLE"))
-                .max(java.util.Comparator.comparing(
-                        AgentProfileSnapshot::score,
-                        java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
-                .orElse(null);
+                .toList();
+        if (pool.isEmpty()) {
+            return new FallbackPick(null, null);
+        }
+        AgentProfileSnapshot best = pool.stream().max(SCORE_DESC).orElse(null);
+        List<DispatchDecisionSnapshot.Candidate> ranked = pool.stream()
+                .sorted(SCORE_DESC.reversed())
+                .map(a -> new DispatchDecisionSnapshot.Candidate(
+                        a.id(), a.name(), a.role() != null ? a.role().name() : null,
+                        a.score(), null, null, null, null,
+                        best != null && a.id() != null && a.id().equals(best.id())))
+                .toList();
+        return new FallbackPick(best, DispatchDecisionSnapshot.fallback(ranked));
+    }
+
+    /** N11 回退的选人结果：中选者 + 决策快照（`MA-2`）。 */
+    private record FallbackPick(AgentProfileSnapshot agent, DispatchDecisionSnapshot snapshot) {
     }
 
     @Override
@@ -615,7 +660,9 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         // 走 AgentSelector 已有的"同角色排除指定 Agent"选人逻辑。
         // 任务级约束（executorAgentIds / required_skills）同样作用于重分配。
         DispatchConstraints constraints = resolveConstraints(subTask);
-        var preferred = agentSelector.pickAlternative(originalAgentId, role, toSelectorConstraints(constraints));
+        AgentSelector.Selection selection = agentSelector.pickAlternativeWithSnapshot(
+                originalAgentId, role, toSelectorConstraints(constraints));
+        var preferred = selection.agent();
         if (preferred == null) {
             log.warn("ASSIGNED超时回收：无可用候选 Agent: subTaskId={}, role={}, excludeAgentId={}",
                     subTaskId, role != null ? role : "null", originalAgentId);
@@ -623,8 +670,45 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         }
 
         taskDispatchPort.assignNext(preferred.getId(), subTaskId, constraints);
+        // MA-2：换人成功之后留快照（path=primary；候选池已排除原 Agent）
+        recordDispatchSnapshot(subTaskId, selection.snapshot());
         log.info("ASSIGNED超时已回收: subTaskId={}, originalAgentId={}, newPreferredAgentId={}",
                 subTaskId, originalAgentId, preferred.getId());
+    }
+
+    /**
+     * 落派单决策快照（`MA-2`，四条选人路径的唯一写点）。
+     *
+     * <p><b>为什么在这里而不是选人器</b>：{@code sub_task.context} 属 {@code task} 域，
+     * 选人器在 {@code agent} 域，跨域直写是「直捅」（CODE_STYLE §7.1）。</p>
+     *
+     * <p><b>为什么用 {@code updateContextInNewTx}</b>：它是<b>按键合并 + 独立事务</b>——
+     * 整段覆写（{@code updateContext}）会清掉 {@code gateFindings} / {@code plannerAgentId}
+     * 等其它写方的键；而快照属观测数据，不该与派单事务同生共死。</p>
+     *
+     * <p><b>best-effort</b>：任何异常只 {@code log.warn}。快照写失败绝不能让已经成功的派单回滚——
+     * 那不是「记录不全」，是「记录把业务弄坏了」。</p>
+     *
+     * <p><b>attempt 回填</b>：{@code attempt_total} 由 {@code incrementAttemptTotal} 原子写入，
+     * 调用方手里的 {@code subTask} 是自增前的快照。这里重读一行取真实值，
+     * 而不是在内存里 {@code +1}（那等于给同一事实造第二个来源）。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @param snapshot  选人器产出的快照；{@code null}（无候选 / 未走选人）⇒ 不写
+     */
+    private void recordDispatchSnapshot(Long subTaskId, DispatchDecisionSnapshot snapshot) {
+        if (subTaskId == null || snapshot == null) {
+            return;
+        }
+        try {
+            SubTask latest = subTaskService.getById(subTaskId);
+            Integer attemptTotal = latest != null ? latest.getAttemptTotal() : null;
+            subTaskService.updateContextInNewTx(subTaskId, Map.of(
+                    SubTaskContextKeys.DISPATCH_SNAPSHOT, snapshot.withAttempt(attemptTotal)));
+        } catch (Exception e) {
+            log.warn("派单决策快照写入失败（不影响派单结果）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+        }
     }
 
     @Override
