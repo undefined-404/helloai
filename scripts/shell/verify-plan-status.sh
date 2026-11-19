@@ -34,6 +34,11 @@ FILES=(
   "HelloAI 联网搜索效果优化实施计划（2026-10-18）.md"
   "HelloAI 借鉴落地实施计划.md"
   "HelloAI 站内消息与置顶公告实施计划（2026-11-15）.md"
+  "HelloAI MA-1 执行结果结构化契约实施计划（2026-11-18）.md"
+  "HelloAI MA-2 候选集快照实施计划（2026-11-18）.md"
+  "HelloAI MA-3 子任务技能执行台账实施计划（2026-11-18）.md"
+  "HelloAI MA-4 交付物登记闸实施计划（2026-11-19）.md"
+  "HelloAI MA-5 工具面按需加载实施计划（2026-11-19）.md"
 )
 
 PY=""
@@ -55,8 +60,8 @@ for f in "${FILES[@]}"; do
 import io, re, sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 S = ["待开始","设计中","实现中","验证中","已完成","部分完成","阻塞","暂缓","明确不做"]
-ID = re.compile(r"^\| \*{0,2}((?:SKX|MSG|SL|RV|SR|PA|PC|S|W|ATT|TD|REF|M|Q)-\d+)[^|]*\|")
-SEC = re.compile(r"^#{2,4} \*{0,2}((?:SKX|MSG|SL|RV|SR|PA|PC|S|W|ATT|TD|Q)-\d+)")
+ID = re.compile(r"^\| [*`]{0,2}((?:SKX|MSG|SL|RV|SR|PA|PC|S|W|ATT|TD|REF|M|MA1|MA2|MA3|MA4|MA5|Q)-\d+)[^|]*\|")
+SEC = re.compile(r"^#{2,4} [*`]{0,2}((?:SKX|MSG|SL|RV|SR|PA|PC|S|W|ATT|TD|MA1|MA2|MA3|MA4|MA5|Q)-\d+)")
 ls = io.open(sys.argv[1], encoding="utf-8").read().split("\n")
 bad, checked = [], 0
 header = None
