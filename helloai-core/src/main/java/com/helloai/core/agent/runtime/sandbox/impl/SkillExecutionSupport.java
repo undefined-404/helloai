@@ -1,6 +1,7 @@
 package com.helloai.core.agent.runtime.sandbox.impl;
 
 import com.helloai.common.config.OpenSandboxProperties;
+import com.helloai.core.agent.entity.SubTaskSkillRun;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
 import com.helloai.core.agent.runtime.sandbox.SandboxCallOrigin;
 import com.helloai.core.agent.runtime.sandbox.SandboxExecutionService;
@@ -34,11 +35,54 @@ public class SkillExecutionSupport {
     /** 默认技能规格名（与 {@code application.yml} 的 {@code spec-presets} 键一致）。 */
     public static final String DEFAULT_SKILL_SPEC_PRESET = "node";
 
+    /** 台账里命令前缀的字符上限（与 {@code SandboxCallLedger} 同口径：完整命令可能含密钥）。 */
+    static final int COMMAND_PREFIX_LIMIT = 200;
+
     private final OpenSandboxProperties properties;
 
     private final SkillPackageLoader skillPackageLoader;
 
     private final SandboxExecutionService sandboxExecutionService;
+
+    private final SkillRunLedgerRecorder skillRunLedgerRecorder;
+
+    /**
+     * 技能执行的<b>身份四元组</b> + 沙箱作用域键（`MA-3`）。
+     *
+     * <p><b>为什么显式入参而不是读 {@code ToolInvocationContext} 的 ThreadLocal</b>：
+     * 本类是编排门面，不该知道「工具调用上下文」这种东西；隐式依赖会让它在非工具场景
+     * （业务面技能执行）无法复用，且 ThreadLocal 在线程切换时会静默失效——那时台账只会
+     * 少记几行，谁也不会发现。</p>
+     *
+     * <p><b>为什么 {@code scopeId} 与 {@code subTaskId} 分开</b>：同一套执行编排有两个入口，
+     * 两个入口的「沙箱作用域键」语义不同——内部执行链是 {@code subTaskId}（按子任务复用沙箱），
+     * 业务面技能执行是<b>会话级</b> {@code scopeId}，它<b>不属于任何子任务</b>。
+     * 若把两者塞进同一个字段，台账就会写出一批「子任务 ID = 会话 ID」的假行。</p>
+     *
+     * @param scopeId   沙箱复用槽键（内部执行链 = subTaskId）
+     * @param subTaskId 子任务 ID；<b>{@code null} ⇒ 不落台账</b>（业务面技能执行，它的记录在
+     *                  {@code chat_skill_run}）
+     * @param taskId    所属任务 ID（可为 null）
+     * @param agentId   执行者 Agent ID（可为 null）
+     * @param round     执行轮次（无轮次语义传 0）
+     */
+    public record SkillRunContext(Long scopeId, Long subTaskId, Long taskId, Long agentId, int round) {
+
+        /** 内部执行链（{@code internal_run_skill}）：作用域即子任务，落台账。 */
+        public static SkillRunContext ofSubTask(Long subTaskId, Long taskId, Long agentId, int round) {
+            return new SkillRunContext(subTaskId, subTaskId, taskId, agentId, Math.max(round, 0));
+        }
+
+        /**
+         * 业务面技能执行（对话技能）：{@code scopeId} 是会话级工作区键，不是子任务。
+         *
+         * <p><b>不落本台账</b>：那张表是「子任务维度」，混进来会让「技能成功率」被两种
+         * 触发者稀释。该路径的记录在 {@code chat_skill_run}（已有）。</p>
+         */
+        public static SkillRunContext ofConversationScope(Long scopeId) {
+            return new SkillRunContext(scopeId, null, null, null, 0);
+        }
+    }
 
     /**
      * 解析后的技能执行目标。
@@ -110,33 +154,80 @@ public class SkillExecutionSupport {
     }
 
     /**
-     * 在技能根目录执行命令。
+     * 在技能根目录执行命令（**唯一入口**，`MA-3` 收口）。
      *
      * <p><b>两处命令包装都是必需的</b>：① {@code cd <skillRoot>}——技能 CLI 都以自身根目录为基准
      * （{@code node bin/archify.mjs}），不 cd 就得让模型自己拼绝对路径，多一个出错点；
      * ② {@code TMPDIR=/workspace/tmp}——archify 的临时目录身份校验在部分容器形态下敏感
      * （计划 §2.4 第 24 条：{@code docker run} 上必挂、真实沙箱不复现），这条是零成本的防御。</p>
      *
-     * @param subTaskId      子任务 ID
+     * <p><b>★ 旧的两参/三参 {@code run(...)} 重载已删</b>：保留一个「不落台账」的入口，
+     * 等于给台账开了条绕行道——判据 1「规则存在 ≠ 全路径强制」正是这么破的。
+     * 现在所有调用方都必须交 {@link SkillRunContext}。</p>
+     *
+     * <p><b>台账是 best-effort</b>：写失败只 {@code log.warn}，返回值与异常语义<b>逐字不变</b>——
+     * 「记录把执行弄坏了」比「记录不全」严重得多。</p>
+     *
+     * @param ctx            执行身份（作用域 / 子任务 / 任务 / 执行者 / 轮次）
      * @param target         解析后的技能目标
      * @param command        模型给的命令（相对技能根目录）
      * @param timeoutSeconds 超时秒数（null/&lt;=0 ⇒ 默认 30，上限 300）
      */
-    public ExecuteResponse run(Long subTaskId, SkillTarget target, String command, Integer timeoutSeconds) {
-        return run(subTaskId, target, command, timeoutSeconds, 0);
+    public ExecuteResponse run(SkillRunContext ctx, SkillTarget target, String command,
+                               Integer timeoutSeconds) {
+        String wrapped = "mkdir -p /workspace/tmp >/dev/null 2>&1; export TMPDIR=/workspace/tmp; cd "
+                + target.rootDir() + " && " + command;
+        long startedNanos = System.nanoTime();
+        ExecuteResponse response = null;
+        try {
+            response = sandboxExecutionService.execute(ctx.scopeId(), target.spec(), wrapped,
+                    timeoutSeconds, SandboxCallOrigin.EXECUTOR, ctx.round());
+            return response;
+        } finally {
+            // 成功 / 非零退出 / 超时 / SDK 异常 / 抛异常 —— 全部留痕：只记成功的话，
+            // 失败率永远算不出来，而失败率才是「这个技能能不能用」的核心指标
+            recordRun(ctx, target, command, startedNanos, response);
+        }
     }
 
     /**
-     * 在技能根目录执行命令（带轮次，`SL-4`）。
+     * 落一行台账（`MA-3`，best-effort）。
      *
-     * @param round 执行轮次（落台账；无轮次语义的调用方传 0）
+     * @param response 执行结果；{@code null} 表示 {@code execute} 直接抛了异常
+     *                 ⇒ {@code exit_code} 记 {@link ExecuteResponse#EXIT_CODE_ERROR}（-1）
      */
-    public ExecuteResponse run(Long subTaskId, SkillTarget target, String command,
-                               Integer timeoutSeconds, int round) {
-        String wrapped = "mkdir -p /workspace/tmp >/dev/null 2>&1; export TMPDIR=/workspace/tmp; cd "
-                + target.rootDir() + " && " + command;
-        return sandboxExecutionService.execute(subTaskId, target.spec(), wrapped, timeoutSeconds,
-                SandboxCallOrigin.EXECUTOR, round);
+    private void recordRun(SkillRunContext ctx, SkillTarget target, String command,
+                           long startedNanos, ExecuteResponse response) {
+        if (ctx == null || ctx.subTaskId() == null) {
+            return;   // 业务面技能执行（不属于任何子任务）⇒ 不写子任务维度台账
+        }
+        try {
+            SubTaskSkillRun row = new SubTaskSkillRun();
+            row.setSubTaskId(ctx.subTaskId());
+            row.setTaskId(ctx.taskId());
+            row.setAgentId(ctx.agentId());
+            row.setRound(ctx.round());
+            row.setSkillName(target.name());
+            row.setSkillVersion(target.version());
+            row.setCommandPrefix(prefix(command));
+            row.setExitCode(response != null ? response.exitCode() : ExecuteResponse.EXIT_CODE_ERROR);
+            row.setTruncated(response != null && response.truncated() ? 1 : 0);
+            row.setDurationMs((System.nanoTime() - startedNanos) / 1_000_000L);
+            row.setCallId(response != null ? response.callId() : null);
+            skillRunLedgerRecorder.record(row);
+        } catch (Exception e) {
+            log.warn("技能执行台账写入失败（不影响执行结果）: subTaskId={}, skill={}, err={}",
+                    ctx.subTaskId(), target.label(), e.getMessage());
+        }
+    }
+
+    /** 命令前缀（≤ {@link #COMMAND_PREFIX_LIMIT} 字符）：完整命令可能含密钥，不整段落库。 */
+    private static String prefix(String command) {
+        if (command == null) {
+            return null;
+        }
+        return command.length() <= COMMAND_PREFIX_LIMIT
+                ? command : command.substring(0, COMMAND_PREFIX_LIMIT);
     }
 
     /**

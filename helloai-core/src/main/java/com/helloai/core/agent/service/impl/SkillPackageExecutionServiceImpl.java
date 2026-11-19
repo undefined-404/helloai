@@ -62,7 +62,11 @@ public class SkillPackageExecutionServiceImpl implements SkillPackageExecutionSe
             log.warn("技能包注入失败: skill={}, scope={}, reason={}", skillName, scopeId, reason);
             return new RunResult(false, ExecuteResponse.EXIT_CODE_ERROR, "技能包注入失败：" + reason, false);
         }
-        ExecuteResponse response = skillExecutionSupport.run(scopeId, target, command,
+        // MA-3：本路径的 scopeId 是会话级工作区键，不属于任何子任务 ⇒ 不落子任务技能台账
+        // （它的记录在 chat_skill_run；混进来会让「技能成功率」被两种触发者稀释）
+        ExecuteResponse response = skillExecutionSupport.run(
+                SkillExecutionSupport.SkillRunContext.ofConversationScope(scopeId),
+                target, command,
                 timeoutSeconds == null || timeoutSeconds <= 0 ? DEFAULT_TIMEOUT_SECONDS : timeoutSeconds);
         boolean timedOut = response.exitCode() == ExecuteResponse.EXIT_CODE_TIMEOUT;
         return new RunResult(response.exitCode() == 0, response.exitCode(),

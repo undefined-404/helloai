@@ -3,6 +3,7 @@ package com.helloai.core.agent.runtime.sandbox;
 import com.helloai.common.config.OpenSandboxProperties;
 import com.helloai.core.agent.runtime.sandbox.impl.SkillExecutionSupport;
 import com.helloai.core.agent.runtime.sandbox.impl.SkillPackageLoader;
+import com.helloai.core.agent.runtime.sandbox.impl.SkillRunLedgerRecorder;
 import com.helloai.core.agent.tool.ToolContext;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,7 +35,7 @@ class SkillExecutionToolContributorTest {
                 ? List.of(new SkillPackageLoader.BundledSkill("archify", "3.1.0"))
                 : List.of());
         SkillExecutionSupport support = new SkillExecutionSupport(properties, loader,
-                mock(SandboxExecutionService.class));
+                mock(SandboxExecutionService.class), mock(SkillRunLedgerRecorder.class));
         return new SkillExecutionToolContributor(support);
     }
 
