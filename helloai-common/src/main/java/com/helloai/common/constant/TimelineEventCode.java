@@ -74,6 +74,7 @@ public enum TimelineEventCode {
     SUB_TASK_EXECUTE_START("sub_task_execute_start", "开始执行", "执行 Agent 开始处理子任务"),
     SUB_TASK_EXECUTE_SUBMIT("sub_task_execute_submit", "提交产出", "执行 Agent 提交了本次产出"),
     SUB_TASK_EXECUTE_SUCCESS("sub_task_execute_success", "执行成功", "子任务执行成功"),
+    DELIVERY_GATE_MISS("delivery_gate_miss", "交付物缺失登记", "成功提交但无产物证据（warn-only，不阻断）"),
     SUB_TASK_EXECUTE_THINKING("sub_task_execute_thinking", "思考过程", "执行 Agent 的思考 / 推理过程"),
     SUB_TASK_EXECUTION_COMMAND_CONSUME("sub_task_execution_command_consume", "领取指令", "执行 Agent 已领取指令，准备开始"),
     SUB_TASK_EXECUTION_COMMAND_CONSUME_SKIPPED("sub_task_execution_command_consume_skipped", "跳过指令", "该执行指令被跳过（可能已被处理）"),

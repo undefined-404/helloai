@@ -61,6 +61,9 @@ import com.helloai.core.agent.port.TaskTimelinePort;
 @RequiredArgsConstructor
 public class ExecutionResultHandler {
 
+    /** 外部 Agent 提交源标记（与 {@code McpAgentReportServiceImpl} 写点逐字一致）。 */
+    private static final String REPORT_SOURCE_EXTERNAL = "EXTERNAL";
+
     /** 子任务只读快照端口（原 {@code SubTaskService#getById}）。 */
     private final SubTaskQueryPort subTaskQueryPort;
     /** 子任务命令端口（原 {@code SubTaskService#submit/block/updateById}）。 */
@@ -89,6 +92,8 @@ public class ExecutionResultHandler {
     private final AgentSessionService agentSessionService;
     /** 执行记录服务（804 归属校验：失败回写前确认本消费仍持有该 RUNNING 记录）。 */
     private final AgentExecutionRecordService agentExecutionRecordService;
+    /** 交付物登记闸判据组件（`MA-4` 第一段：只观察、不改行为）。 */
+    private final DeliveryEvidenceEvaluator deliveryEvidenceEvaluator;
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
@@ -375,6 +380,37 @@ public class ExecutionResultHandler {
         }
 
         if (report.isSuccess()) {
+            // MA-4 第一段：交付物登记闸（只观察、不改行为）。
+            // 仅对 source=EXTERNAL 的成功提交评估判据：不通过 → log.warn + 时间线事件
+            // delivery_gate_miss，不阻断、不改状态、不写 gateFindings（观察期后再议第二段）。
+            // 内部链（source=INTERNAL，产物由 ExecutionArtifactService 物化）与失败路径零改动。
+            if (REPORT_SOURCE_EXTERNAL.equals(report.getSource())) {
+                DeliveryEvidenceEvaluator.DeliveryEvidenceDetail deliveryDetail =
+                        deliveryEvidenceEvaluator.evaluate(
+                                report.getSubTaskId(), report.getParts(), report.getOutput(), ctx);
+                if (deliveryDetail != null && !deliveryDetail.hasDeliverable()) {
+                    log.warn("交付物缺失登记（warn-only，不阻断）: subTaskId={}, agentId={}, "
+                                    + "partsHit={}, attachmentHit={}, outputHit={}, outputLength={}, "
+                                    + "exempted={}, exemptReason={}",
+                            report.getSubTaskId(), report.getAgentId(),
+                            deliveryDetail.partsHit(), deliveryDetail.attachmentHit(), deliveryDetail.outputHit(),
+                            deliveryDetail.outputLength(), deliveryDetail.exempted(), deliveryDetail.exemptReason());
+                    taskTimelinePort.recordEvent(
+                            subTask.taskId(),
+                            report.getSubTaskId(),
+                            TimelineEventCode.DELIVERY_GATE_MISS.code(),
+                            AgentRole.EXECUTOR,
+                            report.getAgentId(),
+                            safeMap(
+                                    "source", report.getSource(),
+                                    "partsHit", deliveryDetail.partsHit(),
+                                    "attachmentHit", deliveryDetail.attachmentHit(),
+                                    "outputHit", deliveryDetail.outputHit(),
+                                    "outputLength", deliveryDetail.outputLength(),
+                                    "exempted", deliveryDetail.exempted(),
+                                    "exemptReason", deliveryDetail.exemptReason()));
+                }
+            }
             subTaskCommandPort.submit(report.getSubTaskId());
             // 执行会话终态 COMPLETED（best-effort 不阻断回写）
             agentSessionService.complete(report.getSubTaskId(), report.getAgentId(),

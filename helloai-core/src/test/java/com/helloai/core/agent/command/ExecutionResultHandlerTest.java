@@ -93,6 +93,10 @@ class ExecutionResultHandlerTest {
     @Mock
     private com.helloai.core.agent.event.AgentEventRecorder agentEventRecorder;
 
+    // MA-4（2026-11-19）：交付物登记闸判据组件；仅 EXTERNAL 成功路径调用（@InjectMocks 缺 mock 注入 null）
+    @Mock
+    private DeliveryEvidenceEvaluator deliveryEvidenceEvaluator;
+
     @InjectMocks
     private ExecutionResultHandler executionResultHandler;
 

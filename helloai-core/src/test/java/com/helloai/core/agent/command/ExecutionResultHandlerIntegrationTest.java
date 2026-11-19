@@ -106,6 +106,10 @@ class ExecutionResultHandlerIntegrationTest {
     @Mock
     private com.helloai.core.agent.service.AgentExecutionRecordService agentExecutionRecordService;
 
+    // MA-4（2026-11-19）：交付物登记闸判据组件；集成用例走 INTERNAL 路径不触发（仅防构造 NPE）
+    @Mock
+    private DeliveryEvidenceEvaluator deliveryEvidenceEvaluator;
+
     private ExecutionResultHandler handler;
 
     @BeforeEach
@@ -113,7 +117,7 @@ class ExecutionResultHandlerIntegrationTest {
         handler = new ExecutionResultHandler(subTaskQueryPort, subTaskCommandPort, taskTimelinePort, failureTracker,
                 agentService, applicationEventPublisher, conversationService, executionArtifactService,
                 taskRunningSpecPort, new ExecutionOutputParser(), executorDoneIssuesBackfiller, agentEventRecorder,
-                agentSessionService, agentExecutionRecordService);
+                agentSessionService, agentExecutionRecordService, deliveryEvidenceEvaluator);
         // 模拟 Spring @Transactional 已开启（afterCommit 注册需要激活的同步管理器）
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.initSynchronization();
