@@ -54,6 +54,8 @@ export const paths = {
   subTasks: {
     list: '/sub-tasks/list',
     getById: (id: string | number) => `/sub-tasks/getById/${enc(id)}`,
+    // MA-1 执行结果结构化契约：只读，返回 { format, markdown|parts, sections, truncated }
+    getExecutionResult: (id: string | number) => `/sub-tasks/getExecutionResultById/${enc(id)}`,
     // G-010 草案人工修订：确认前编辑技能指派与执行约束（仅暂存区草案可编辑）
     // TD-9 单条草案重生成（同步等待 LLM，原草案不被破坏）
     create: '/sub-tasks',

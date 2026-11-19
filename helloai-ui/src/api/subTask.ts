@@ -1,6 +1,6 @@
 import request from './request'
 import { paths } from './paths'
-import type { Task, SubTask, ChangeStatusRequest, PageResult, LongId, CreateSubTaskPayload, TaskTimelineItem, ConversationMessageItem, Uncertainty, AcceptanceKind, RedispatchResult } from '@/types'
+import type { Task, SubTask, ChangeStatusRequest, PageResult, LongId, CreateSubTaskPayload, TaskTimelineItem, ConversationMessageItem, Uncertainty, AcceptanceKind, RedispatchResult, SubTaskExecutionResult } from '@/types'
 
 export const subTaskApi = {
   // taskId: 按主任务过滤（任务管理页跳转携带），LongId 传 string 防精度丢
@@ -56,6 +56,10 @@ export const subTaskApi = {
   // V28: 子任务执行对话流（执行产出全文 + 核验 Prompt/分析原文）
   conversation(id: LongId) {
     return request.get<any, ConversationMessageItem[]>(paths.subTasks.conversation(id))
+  },
+  // MA-1 执行结果结构化契约：只读，返回 { format, markdown|parts, sections, truncated }
+  getExecutionResult(id: LongId) {
+    return request.get<any, SubTaskExecutionResult>(paths.subTasks.getExecutionResult(id))
   },
   // V25: 死信人工兜底指派（DEAD_LETTER → ASSIGNED，熔断计数清零）
   redispatchDeadLetter(id: LongId, agentId: LongId) {

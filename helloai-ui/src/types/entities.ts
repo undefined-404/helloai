@@ -148,6 +148,15 @@ export interface SubTask {
   uncertainties?: Uncertainty[] | null
   // V27 依赖编排：前置子任务 id 列表（全部 DONE 才分发），旧数据为空数组
   dependsOn?: LongId[]
+  /**
+   * 执行上下文（JSONB）。
+   *
+   * <p><b>MA-1 定性：内部状态，客户端不得依赖</b>。客户端读取执行结果请用
+   * {@code getExecutionResultById/{id}}（执行结果结构化契约端点）；本字段仍整包下发，
+   * 属软约束（无机制强制不读）。待迁读点：{@code derivedTaskId}（派生血缘下钻，读已迁至
+   * {@code SubTaskDetail} 的 executionResult 前先经时间线兜底）/ {@code noCandidate} /
+   * {@code manualIntervention}（人工介入面板），移动端开工前必须完成迁移。</p>
+   */
   context: Record<string, any> | null
   scoreFactors: Record<string, any> | null
   compositeScore: number | null

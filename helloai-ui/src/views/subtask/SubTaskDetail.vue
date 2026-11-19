@@ -285,7 +285,39 @@
             >
               {{ u.kind === 'ASSUMPTION' ? '假设' : '待确认' }}
             </el-tag>
-            <span>{{ u.note }}</span>
+            <span
+              class="detail-unc-note"
+              v-html="renderInline(u.note)"
+            />
+          </div>
+        </div>
+        <!-- MA-1 执行结果结构化契约：按 format 三路选渲染器。
+             markdown → MarkdownView；parts → PartListView。正文来自独立只读端点。
+             未拿到可渲染正文（老后端 / 未执行 / 请求失败）时本块不渲染，
+             老数据仍走「执行对话流」里 sub_task_execute 的既有 Markdown 展示（逐像素不变）。
+             executionResult 非 null 即已通过 hasRenderableResult：
+             format 恒为 markdown|parts 且正文非空，StructuredTextView 分支仅为防异常兜底。
+             有本块时，对话流最后一条执行产出默认收起（同一条产出的原样证据，不重复占屏）。 -->
+        <div
+          v-if="executionResult"
+          class="detail-sec"
+        >
+          <div class="detail-sec-label">
+            执行结果
+          </div>
+          <div class="detail-text">
+            <PartListView
+              v-if="executionResult.format === 'parts'"
+              :parts="executionResult.parts"
+            />
+            <MarkdownView
+              v-else-if="executionResult.format === 'markdown'"
+              :content="executionResult.markdown"
+            />
+            <StructuredTextView
+              v-else
+              :text="executionResult.markdown || ''"
+            />
           </div>
         </div>
       </div>
@@ -712,6 +744,8 @@ import DrillHandle from '@/components/DrillHandle.vue'
 import { isPreviewableAttachment } from '@/utils/filePreview'
 import MarkdownView from '@/components/MarkdownView.vue'
 import StructuredTextView from '@/components/StructuredTextView.vue'
+import PartListView from '@/components/PartListView.vue'
+import { renderInline } from '@/utils/structuredText'
 import ReviewVerdictView from '@/components/ReviewVerdictView.vue'
 import SubTaskSequenceFlow from '@/components/SubTaskSequenceFlow.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
@@ -724,7 +758,7 @@ import { nextPollDelay } from '@/utils/pollBackoff'
 import { useEventCatalogStore } from '@/stores/eventCatalog'
 import { useSkillCatalogStore } from '@/stores/skillCatalog'
 import { resolvePendingWait, usePendingCountdown } from '@/composables/usePendingCountdown'
-import type { SubTask, Task, TaskTimelineItem, ConversationMessageItem, Attachment, LongId, Agent } from '@/types'
+import type { SubTask, Task, TaskTimelineItem, ConversationMessageItem, Attachment, LongId, Agent, SubTaskExecutionResult } from '@/types'
 import { sameId } from '@/utils/id'
 
 const route = useRoute()
@@ -739,6 +773,8 @@ const loading = ref(false)
 const refreshing = ref(false)
 const timeline = ref<TaskTimelineItem[]>([])
 const conversation = ref<ConversationMessageItem[]>([])
+/** MA-1 执行结果结构化契约：独立只读请求，不阻塞详情主请求；失败静默回落老路径 */
+const executionResult = ref<SubTaskExecutionResult | null>(null)
 let pollTimer: number | null = null
 const timelinePolling = ref(false)
 // 对话流卡内页签：执行对话流 / 执行时序图（时序图从时间线卡迁入，左主栏画布更宽）
@@ -1548,8 +1584,32 @@ function isAnalysisMsg(msg: ConversationMessageItem): boolean {
   return ANALYSIS_TOOLS.has(splitRetrySuffix(msg.toolName).base)
 }
 
+/**
+ * 已被「执行结果」块取代的最后一条执行产出消息 id。
+ *
+ * 同一条产出会出现在两处：上方「执行结果」块（后端读模型，已剥机器块、已声明格式）与
+ * 对话流里的 sub_task_execute 消息（读侧同样已剥机器块的可读正文）。后者是审计用的
+ * 原样证据行，不该删；但默认全展开就变成同页两份正文。这里让最后一条执行产出默认收起
+ * 并说明「正文在上方」，既保留复制 / 导出入口与轮次时序，又去掉视觉重复。
+ *
+ * 只在「执行结果」块真的有正文时才成立（executionResult 已经过 hasRenderableResult 过滤），
+ * 否则收起等于把唯一一份正文藏起来。
+ */
+const supersededExecMsgId = computed<string | null>(() => {
+  if (!executionResult.value) return null
+  for (let i = conversation.value.length - 1; i >= 0; i--) {
+    const m = conversation.value[i]
+    if (m.toolName === 'sub_task_execute' && m.content) return String(m.id)
+  }
+  return null
+})
+
+function isSupersededExec(msg: ConversationMessageItem): boolean {
+  return supersededExecMsgId.value != null && String(msg.id) === supersededExecMsgId.value
+}
+
 function isCollapsible(msg: ConversationMessageItem): boolean {
-  return isAnalysisMsg(msg) || (msg.content?.length || 0) > 300
+  return isSupersededExec(msg) || isAnalysisMsg(msg) || (msg.content?.length || 0) > 300
 }
 
 // 逐条用户开关（默认值：分析类收起、其余展开），轮询刷新不重置已打开的块
@@ -1568,6 +1628,7 @@ function toggleMsg(msg: ConversationMessageItem) {
 
 // 收起态预览：首个非空行，剖掉 Markdown 符号，截断 120 字
 function msgPreview(msg: ConversationMessageItem): string {
+  if (isSupersededExec(msg)) return '正文同上方「执行结果」，点此展开可复制 / 导出'
   const line = (convContent(msg) || '').split('\n').map(l => l.trim()).find(l => l) || ''
   const plain = line.replace(/[#*`>_|-]/g, ' ').replace(/\s+/g, ' ').trim()
   return plain.length > 120 ? plain.slice(0, 120) + '…' : (plain || '（无内容）')
@@ -1733,6 +1794,30 @@ async function loadConversation(id: string) {
   }
 }
 
+/**
+ * MA-1 执行结果结构化契约：独立只读请求。
+ *
+ * <p><b>不阻塞详情主请求</b>：本请求只决定「执行产出正文」呈现形态，失败/缺失时沿用
+ * 对话流会话里的既有 Markdown 展示（老路径逐像素不变），静默回落后端未升级也兼容。</p>
+ */
+async function loadExecutionResult(id: string) {
+  try {
+    const r = await subTaskApi.getExecutionResult(id)
+    // format 恒存在（后端固定二选一），「能不能渲染」要看正文：未执行的子任务会返回
+    // {format:'markdown', markdown:null}，只判 format 会留下一个空的「执行结果」标题
+    executionResult.value = hasRenderableResult(r) ? r : null
+  } catch {
+    executionResult.value = null
+  }
+}
+
+/** 结构化契约是否真的带正文（parts 非空 / markdown 非空白）。 */
+function hasRenderableResult(r: SubTaskExecutionResult | null): r is SubTaskExecutionResult {
+  if (!r?.format) return false
+  if (r.format === 'parts') return (r.parts?.length ?? 0) > 0
+  return !!r.markdown && r.markdown.trim().length > 0
+}
+
 // ── 方案 2：产出附件列表 + 单附件下载 ──
 const attachments = ref<Attachment[]>([])
 const downloadingAttId = ref<LongId | null>(null)
@@ -1805,6 +1890,7 @@ async function reloadAllData(id: string): Promise<SubTask | null> {
   await loadSiblings(fresh.taskId)
   await loadTimeline(id)
   await loadConversation(id)
+  await loadExecutionResult(id)
   await loadAttachments(id)
   return fresh
 }
@@ -2067,36 +2153,46 @@ onActivated(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--ha-ink-secondary, var(--ha-muted));
-  margin-bottom: 6px;
+  color: var(--ha-ink, var(--ha-ink-secondary));
+  margin-bottom: 8px;
   letter-spacing: 0.01em;
 }
 .detail-sec-label::before {
   content: '';
   width: 3px;
-  height: 11px;
+  height: 12px;
   border-radius: 2px;
   background: var(--ha-primary, #7C3AED);
   opacity: 0.65;
 }
+/* 正文用主文本色：这几个字段是执行者真正要逐条读的内容，
+   用次级灰会让 1500 字的长段落更难辨认边界 */
 .detail-text {
-  font-size: 13px;
-  line-height: 1.75;
-  color: var(--ha-ink-secondary, inherit);
+  font-size: 13.5px;
+  line-height: 1.85;
+  color: var(--ha-ink, inherit);
   word-break: break-word;
 }
 /* 折叠用 max-height 而不是 -webkit-line-clamp：结构化视图内部是 flex/列表块，
-   行数裁断对块级子节点不生效（会整段露出来）。1.75 × 3 行 ≈ 5.25em */
+   行数裁断对块级子节点不生效（会整段露出来）。
+   收 6 行（1.85 × 6 ≈ 11.1em）而不是 3 行：结构化后前 3 行往往只够显示步骤 1 的前半句，
+   看不到「这是一个步骤列表」这件事，折叠就失去了「先给个结构感」的意义。
+   底部渐隐代替硬切——硬切会把最后一行拦腰截断，视觉上像坏了。
+   渐隐起点取 92% 而不是 72%：更低的起点会把整行一起淡掉，最后一行几乎透明，
+   看起来像「渲染漏了几行」而不是「还有更多内容」。 */
 .detail-text.is-collapsed {
-  max-height: 5.25em;
+  max-height: 11.1em;
   overflow: hidden;
+  mask-image: linear-gradient(180deg, #000 92%, transparent 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 92%, transparent 100%);
 }
 .detail-toggle {
   display: inline-block;
-  margin-top: 4px;
+  margin-top: 6px;
   font-size: 12px;
+  font-weight: 500;
   color: var(--el-color-primary);
   cursor: pointer;
   user-select: none;
@@ -2105,13 +2201,17 @@ onActivated(() => {
 .detail-skills { display: flex; flex-wrap: wrap; gap: 4px; }
 .detail-unc-row {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: flex-start;
-  margin-top: 4px;
+  margin-top: 8px;
   font-size: 13px;
-  line-height: 1.75;
-  color: var(--ha-ink-secondary, inherit);
+  line-height: 1.8;
+  color: var(--ha-ink, inherit);
   word-break: break-word;
+}
+.detail-unc-note {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* §6.52 人工介入面板 */

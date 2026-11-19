@@ -3,9 +3,9 @@ package com.helloai.core.task.service.impl;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskIterationConst;
+import com.helloai.core.agent.output.ExecutionRecordProtocol;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.task.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.TaskIteration;
@@ -13,6 +13,7 @@ import com.helloai.core.task.mapper.TaskIterationMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskIterationService;
+import com.helloai.core.task.util.SubTaskDependencyOrder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -194,15 +195,15 @@ public class TaskIterationServiceImpl extends ServiceImpl<TaskIterationMapper, T
         if (output == null || output.isBlank()) {
             return null;
         }
-        int execIdx = output.lastIndexOf("## EXECUTION_RECORD");
+        int execIdx = ExecutionRecordProtocol.locateBlockStart(output);
         if (execIdx < 0) {
             return null;
         }
-        int sumIdx = output.indexOf("SUMMARY:", execIdx);
+        int sumIdx = output.indexOf(ExecutionRecordProtocol.SUMMARY_LABEL, execIdx);
         if (sumIdx < 0) {
             return null;
         }
-        int start = sumIdx + "SUMMARY:".length();
+        int start = sumIdx + ExecutionRecordProtocol.SUMMARY_LABEL.length();
         // 跳过一个空格前缀（有些格式 SUMMARY:后面紧跟空格）
         if (start < output.length() && output.charAt(start) == ' ') {
             start++;

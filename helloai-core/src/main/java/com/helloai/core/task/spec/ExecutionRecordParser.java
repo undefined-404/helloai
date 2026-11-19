@@ -1,5 +1,6 @@
 package com.helloai.core.task.spec;
 
+import com.helloai.core.agent.output.ExecutionRecordProtocol;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.regex.Matcher;
@@ -35,15 +36,15 @@ public final class ExecutionRecordParser {
     private ExecutionRecordParser() {
     }
 
-    /** EXECUTION_RECORD 块分隔符。 */
-    private static final String BLOCK_START = "## EXECUTION_RECORD";
-    private static final String BLOCK_END = "---";
+    /** EXECUTION_RECORD 块终止分隔符（标记常量单源见 {@link ExecutionRecordProtocol}，MA1-1）。 */
+    private static final String BLOCK_END = ExecutionRecordProtocol.BLOCK_END;
 
     /** VERIFICATION 段标记（围栏协议证据段）。 */
     private static final String VERIFICATION_MARKER = "VERIFICATION:";
 
-    /** 各段标题匹配。 */
-    private static final Pattern SUMMARY_PATTERN = Pattern.compile("^SUMMARY:\\s*(.+)$", Pattern.MULTILINE);
+    /** 各段标题匹配（SUMMARY 标签与读模型剥离共用 {@link ExecutionRecordProtocol#SUMMARY_LABEL}）。 */
+    private static final Pattern SUMMARY_PATTERN = Pattern.compile(
+            "^" + Pattern.quote(ExecutionRecordProtocol.SUMMARY_LABEL) + "\\s*(.+)$", Pattern.MULTILINE);
     private static final Pattern KEY_DECISIONS_PATTERN = Pattern.compile(
             "KEY_DECISIONS:\\s*\\n((?:\\s*-\\s*.+\\n?)*)", Pattern.MULTILINE);
     private static final Pattern DOWNSTREAM_NOTES_PATTERN = Pattern.compile(
@@ -65,11 +66,11 @@ public final class ExecutionRecordParser {
         if (rawOutput == null || rawOutput.isBlank()) {
             return null;
         }
-        int startIdx = rawOutput.indexOf(BLOCK_START);
+        int startIdx = ExecutionRecordProtocol.locateBlockStart(rawOutput);
         if (startIdx < 0) {
             return null;
         }
-        int endIdx = rawOutput.indexOf(BLOCK_END, startIdx + BLOCK_START.length());
+        int endIdx = rawOutput.indexOf(BLOCK_END, startIdx + ExecutionRecordProtocol.SECTION_HEADER.length());
         if (endIdx < 0) {
             endIdx = rawOutput.length();
         }

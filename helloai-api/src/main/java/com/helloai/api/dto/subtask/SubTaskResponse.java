@@ -45,7 +45,10 @@ public class SubTaskResponse {
     private String constraints;
     /** 不确定性申报（G-011：kind=ASSUMPTION/UNCONFIRMED + note；拆解侧指派，草案确认 UI 可编辑，外部 agent 下行可见） */
     private List<Uncertainty> uncertainties;
-    /** 执行上下文（JSONB）：含人工介入标记 manualIntervention，§6.52 前端人工介入面板判定依赖此字段 */
+    /** 执行上下文（JSONB）：含人工介入标记 manualIntervention，§6.52 前端人工介入面板判定依赖此字段。
+     *  <p><b>内部状态，客户端不得依赖</b>（MA1-9）。客户端读取执行结果请用
+     *  {@code GET /api/sub-tasks/getExecutionResultById/{id}} 端点；依赖本字段的结构化读取
+     *  （derivedTaskId / noCandidate / manualIntervention）为待迁项，移动端开工前必须完成迁移。</p> */
     private Map<String, Object> context;
     /** 依赖的子任务 id 列表（同 Task 内；空列表=无依赖） */
     @JsonSerialize(contentUsing = ToStringSerializer.class)

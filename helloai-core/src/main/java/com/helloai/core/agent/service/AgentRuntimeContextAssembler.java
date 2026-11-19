@@ -25,6 +25,7 @@ import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
 import com.helloai.core.shared.util.UpstreamAttachmentRenderer;
+import com.helloai.core.agent.output.ExecutionRecordProtocol;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.AttachmentRef;
 import com.helloai.core.agent.port.SubTaskQueryPort;
@@ -452,7 +453,7 @@ public class AgentRuntimeContextAssembler {
         sb.append("## 产出回填要求\n");
         sb.append("请在完成交付物输出后，在输出的最后附上以下结构化回填块：\n\n");
         sb.append("```\n");
-        sb.append("## EXECUTION_RECORD\n");
+        sb.append(ExecutionRecordProtocol.SECTION_HEADER).append("\n");
         sb.append("SUMMARY: <1-2句核心产出描述>\n");
         sb.append("KEY_DECISIONS:\n");
         sb.append("- <关键决策1>\n");

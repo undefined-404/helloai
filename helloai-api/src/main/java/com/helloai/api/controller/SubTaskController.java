@@ -9,6 +9,8 @@ import com.helloai.api.dto.subtask.CreateSubTaskRequest;
 import com.helloai.api.dto.subtask.ReassignRequest;
 import com.helloai.api.dto.subtask.ReworkRequest;
 import com.helloai.api.dto.subtask.RestructureUpdateRequest;
+import com.helloai.api.dto.subtask.SubTaskExecutionResultAssembler;
+import com.helloai.api.dto.subtask.SubTaskExecutionResultResponse;
 import com.helloai.api.dto.subtask.SubTaskResponse;
 import com.helloai.api.dto.subtask.SubTaskResponseMapper;
 import com.helloai.api.dto.subtask.TaskTimelineItem;
@@ -18,18 +20,20 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskPriority;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.ConversationMessage;
-import com.helloai.core.agent.service.ConversationService;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.entity.Task;
-import com.helloai.core.task.entity.TaskTimeline;
+import com.helloai.core.agent.output.ExecutionRecordProtocol;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.planner.service.RestructureSessionService;
+import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
@@ -205,18 +209,36 @@ public class SubTaskController {
         return it;
     }
 
+    /**
+     * 对话消息 → 展示项。
+     *
+     * <p><b>执行产出在读侧剥掉 {@code EXECUTION_RECORD} 回填块</b>：该块是给回填侧解析用的机器块
+     * （生成侧与解析侧同源于 {@link ExecutionRecordProtocol}），对人不具可读性，落到 Markdown 渲染
+     * 会变成一个正经二级标题 + {@code SUMMARY:} 行。写侧<b>不改</b>——{@code conversation_message.content}
+     * 仍是原始产出，回填链读的也是它；只在返回给客户端这一层剥离，保证 Web / 移动端 / 小程序
+     * 拿到的是同一份可读正文，不必各自实现一遍剥离规则。</p>
+     */
     private ConversationMessageItem toConversationItem(ConversationMessage m) {
         ConversationMessageItem it = new ConversationMessageItem();
         it.setId(m.getId());
         it.setRole(m.getRole());
         it.setSenderType(m.getSenderType());
         it.setSenderId(m.getSenderId());
-        it.setContent(m.getContent());
+        it.setContent(displayContent(m));
         it.setContentType(m.getContentType());
         it.setToolName(m.getToolName());
         it.setSeq(m.getSeq());
         it.setCreateTime(m.getCreateTime());
         return it;
+    }
+
+    /** 执行产出剥掉机器回填块；其余消息（用户提问 / 核验结论 / 失败回执）原样返回。 */
+    private String displayContent(ConversationMessage m) {
+        String content = m.getContent();
+        if (content == null || !TimelineEventCode.SUB_TASK_EXECUTE.code().equals(m.getToolName())) {
+            return content;
+        }
+        return ExecutionRecordProtocol.strip(content);
     }
 
     /**
@@ -258,6 +280,29 @@ public class SubTaskController {
         attachTaskTitles(List.of(response));
         attachAgentNames(List.of(response));
         return R.ok(response);
+    }
+
+    /**
+     * 执行结果公开读取契约（{@code MA1-2}~{@code MA1-4}，蓝图 §4 MA-1）。
+     *
+     * <p>只做「选择 + 打包」不重新投影：读 {@code sub_task.context.lastExecution} 组装
+     * {@code {format, markdown | parts, sections}}，供各端（Web / 移动端 / 小程序）以声明格式渲染。
+     * 独立端点、不塞 {@code SubTaskResponse}：{@code parts} 单行上界约 1.28M 字符，塞进被列表接口
+     * 共用的 mapper 会无条件拖大列表 JSON。</p>
+     *
+     * <p>纯读、无副作用：不写 context、不回填、不落任何状态；主体校验与 {@code getById} 同一条
+     * {@link #assertSubTaskReadableByAgent}（Agent 通道仅可读自己名下 / 根任务 Team 成员）。</p>
+     */
+    @GetMapping("/getExecutionResultById/{id}")
+    public R<SubTaskExecutionResultResponse> getExecutionResult(@PathVariable("id") Long id,
+                                                                @RequestAttribute(value = "_authType", required = false) String authType,
+                                                                @RequestAttribute(value = "_authId", required = false) Long agentId) {
+        assertSubTaskReadableByAgent(id, authType, agentId);
+        SubTask subTask = subTaskService.getById(id);
+        if (subTask == null) return R.fail("子任务不存在");
+        SubTaskExecutionResultResponse result =
+                SubTaskExecutionResultAssembler.assemble(subTask.getContext(), id);
+        return R.ok(result);
     }
 
     // ══════════════════════════════════════════════════════════
