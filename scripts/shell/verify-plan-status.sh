@@ -39,6 +39,8 @@ FILES=(
   "HelloAI MA-3 子任务技能执行台账实施计划（2026-11-18）.md"
   "HelloAI MA-4 交付物登记闸实施计划（2026-11-19）.md"
   "HelloAI MA-5 工具面按需加载实施计划（2026-11-19）.md"
+  "HelloAI MA-8 安全扫描只记不拦实施计划（2026-11-20）.md"
+  "HelloAI MA-10 执行链超时治理实施计划（2026-11-20）.md"
 )
 
 PY=""
@@ -60,8 +62,8 @@ for f in "${FILES[@]}"; do
 import io, re, sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 S = ["待开始","设计中","实现中","验证中","已完成","部分完成","阻塞","暂缓","明确不做"]
-ID = re.compile(r"^\| [*`]{0,2}((?:SKX|MSG|SL|RV|SR|PA|PC|S|W|ATT|TD|REF|M|MA1|MA2|MA3|MA4|MA5|Q)-\d+)[^|]*\|")
-SEC = re.compile(r"^#{2,4} [*`]{0,2}((?:SKX|MSG|SL|RV|SR|PA|PC|S|W|ATT|TD|MA1|MA2|MA3|MA4|MA5|Q)-\d+)")
+ID = re.compile(r"^\| [*`]{0,2}((?:SKX|MSG|SL|RV|SR|PA|PC|S|W|ATT|TD|REF|M|MA\d+|Q)-\d+)[^|]*\|")
+SEC = re.compile(r"^#{2,4} [*`]{0,2}((?:SKX|MSG|SL|RV|SR|PA|PC|S|W|ATT|TD|MA\d+|Q)-\d+)")
 ls = io.open(sys.argv[1], encoding="utf-8").read().split("\n")
 bad, checked = [], 0
 header = None
@@ -110,6 +112,8 @@ for i, l in enumerate(ls):
             bad.append("L%d(%s 已完成但剩余动作非「—」)" % (i+1, m.group(1)))
         if "已完成" not in hits and act_blank:
             bad.append("L%d(%s 非已完成但剩余动作为「—」或空)" % (i+1, m.group(1)))
+if checked == 0:
+    bad.append("解析出 0 个任务条目（零条目假绿；检查编号是否已登记进本脚本 ID/SEC 正则）")
 print("%d|%s" % (checked, " ".join(bad[:10])))
 PY
 )

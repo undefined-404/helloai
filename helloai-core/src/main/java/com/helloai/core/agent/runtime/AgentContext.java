@@ -81,4 +81,18 @@ public class AgentContext {
      * write-only 旁路通道）。
      */
     LoopCheckpointListener loopCheckpointListener;
+
+    /**
+     * 子任务级轮次预算提示（`MA-10` 改动 2，来源 {@code sub_task.context.maxIterationsHint}）。
+     *
+     * <p><b>为什么在装配层解析、不在这里查库</b>：{@code sub_task.context} 的键名是字符串约定，
+     * 若让执行器自己读，{@code RuntimeTurnExecutor} 就要持有子任务读端口——执行器边界是
+     * 「只执行、不查业务数据」。装配层本来已经拿着 {@code SubTaskSnapshot}（快照含 {@code context}），
+     * 零额外查询即可解析。</p>
+     *
+     * <p><b>可空</b>：{@code null} = 未给 hint / 给了非法值 ⇒ 回落接入类型分档默认，
+     * 行为与改造前逐字一致。这里<b>只做解析不做钳制</b>——钳制属执行侧判据（上限来自配置，
+     * 见 {@code RuntimeTurnExecutor#resolveMaxIterations}）。</p>
+     */
+    Integer maxIterationsHint;
 }

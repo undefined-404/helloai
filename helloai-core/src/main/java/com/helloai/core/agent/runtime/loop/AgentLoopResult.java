@@ -92,4 +92,31 @@ public record AgentLoopResult(boolean success, String text, String thinking, int
         return new AgentLoopResult(success, text, thinking, iterations, toolCallCount, tokenUsage,
                 finishReason, errorMessage, usage);
     }
+
+    /**
+     * 「尽力交付」判据（`MA-10` 改动 1，2026-11-20）：
+     * <b>轮次预算用尽、但手里有可交付正文</b> ⇒ 消费侧应判成功，而不是把整个任务判失败。
+     *
+     * <p><b>为什么本判据放在这里而不是直接改 {@link #maxIterations} 的 {@code success}</b>：
+     * {@code success} 被多处同时消费（{@code FinalReportFenceHook} 的收尾轮判据、
+     * {@code BusinessSurfaceLoopRunner} 的映射、{@code RuntimeTurnExecutor} 的状态映射、
+     * 以及锁定该语义的既有单测）。把 {@code success} 改成 {@code true} 会一次性改变
+     * 全部读取方的假设，且「循环层是否自然终止」与「业务层算不算交付成功」是<b>两件事</b>——
+     * 前者为 {@code false} 是真值（确实没走到自然终态），不该被掩盖（判据：真值不掩盖）。</p>
+     *
+     * <p><b>为什么空正文退回失败</b>：空正文的「轮次耗尽」确实是失败，必须继续走
+     * {@code agent_runtime_empty_output} 一类既有护栏；把空正文也判成功等于把失败伪装成交付
+     * （蓝图 §4 `MA-10` ⑦ 第一条风险）。</p>
+     *
+     * <p><b>消费侧口径</b>：命中本判据时，调用方应判 {@code SUCCESS} + 保留
+     * {@code finishReason="MAX_ITERATIONS"}（让下游能区分「自然 STOP」与「预算用尽」），
+     * 并<b>豁免</b>按自然 STOP 施加的输出契约（VERIFICATION 围栏）——尽力交付不适用
+     * 「自证交付」的 fail-close 口径，那是给自然终态用的。</p>
+     */
+    public boolean isPartialDelivery() {
+        return !success
+                && "MAX_ITERATIONS".equals(finishReason)
+                && text != null
+                && !text.isBlank();
+    }
 }

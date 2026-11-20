@@ -86,7 +86,7 @@
 | `MA-5` | 工具面按需加载 | 每次请求都带全部工具定义 | 建议 `MA-3`（先有数据） | 1 个 resolve 点 + 1 张目录 | 需对比实验 |
 | `MA-6` | 状态契约外化 | 12 态表焊在 Java 里 | `MA-7` 或 A2A 出站 | 1 个类 → 1 份 JSON | 能（对拍） |
 | `MA-7` | ACP 适配器小样 | 只验证「能不能通」 | 无 | 独立脚本 | 能 |
-| `MA-8` | 安全扫描只记不拦 | 完全空白 | 无 | 3 个挂点 + 1 套规则 | 能（造样本） |
+| `MA-8` | 安全扫描只记不拦 | 完全空白 | 无 | 4 个挂点 + 1 套规则 | 能（造样本） |
 | `MA-9` | 敏感动作审批（拦截 + 询问 + 恢复） | 发现敏感内容后只能记日志，不能当场问用户 | **`MA-8` 先行**（规则集即「什么该问」的判据源）；**`MA-10` 先行**（挂起豁免与收尾语义） | 1 张审批表 + 1 条状态挂起/恢复通道 + 1 个策略判定 + 前端审批卡 | 能（造样本，但恢复语义要真机走一遍） |
 | `MA-10` | 执行链超时治理（次数主 + 时间兜底） | 轮次一用完就判失败，三层时间闸层级错位 | 无（`MA-9` 反过来依赖它） | 3 个配置 + 1 个出口语义 + 1 列 + 1 个扫描条件 | 能（造样本 + 对比实验） |
 
@@ -1134,14 +1134,17 @@ subagent-acp/src/run.ts
 #### ⑤ 我们的做法：只做 log-only
 
 ```text
-规则集（最小起步，5~8 条）：
+规则集（最小起步，6~8 条）：
   身份证号 / 手机号 / 银行卡号 / 私钥头（-----BEGIN ... PRIVATE KEY-----）
   云厂商 AK 特征（AKID / LTAI 等前缀）/ 常见 token 前缀（sk- / ghp_ 等）
+  配置项密码（**2026-11-20 新增**：`CONFIG_SECRET`——`password/secret/token/api_key/...` 键后紧跟 `=` / `:` 的值赋值形态；
+  排除占位值 changeme / xxx / `$VAR` 引用等，专治「配置文件整段贴进对话」这一用户最关注场景）
 
-三个挂点（都只记录，不阻断）：
+四个挂点（都只记录，不阻断）：
   ① 用户输入进对话前
   ② 子任务产物落库前
   ③ LLM 请求出站前
+  ④ 附件正文进 Prompt / 进知识库前（**2026-11-20 新增**：对话/澄清链的附件正文经 `{{ATTACHMENT_CONTEXT}}` 拼装绕过③，`internal_read_attachment` 直读对象存储亦绕过③——唯一能看到附件完整原文的位置是 `ChatAttachmentParseWorker.parse` 的 `markReady` **之前**，markReady 后正文即注入 Prompt / ingest 进 KB，故挂④于此处）
 
 记录内容（关键）：
   规则 id / 挂点 / 命中位置（字段名 + 字符偏移）/ 命中片段的 SHA-256
@@ -1587,9 +1590,9 @@ subagent-acp/src/run.ts
 | `MA-5` | 工具面按需加载 | 第一步「目录 + 按需取」落地并有运行期实证（生效集 18 工具含 `internal_load_tool`、描述注入 7223→4202 字符）；收益达成待更长观察期 | `plan/HelloAI MA-5 工具面按需加载实施计划（2026-11-19）.md` |
 | `MA-6` | 状态契约外化 | 待开始（**等触发条件**：A2A B 档开始设计投影 / 开只读端点） | 未开 |
 | `MA-7` | ACP 适配器小样 | 待开始 | 未开 |
-| `MA-8` | 安全扫描只记不拦 | 待开始 | 未开 |
-| `MA-9` | 敏感动作审批（拦截 → 询问 → 恢复） | 待开始（**前置 `MA-8`**：规则集即「什么该问」的判据源；**前置 `MA-10`**：挂起豁免） | 未开 |
-| `MA-10` | 执行链超时治理（次数主 + 时间兜底） | 待开始（改动 1 可独立开工且收益即时） | 未开 |
+| `MA-8` | 安全扫描只记不拦 | 验证中（**四条挂点 + 7 条规则已落地，含单测 27+7 例**：三挂点 `INPUT/ARTIFACT/LLM_OUTBOUND` + 新增挂点④ `ATTACHMENT`（附件原文唯一可拦点，`markReady` 前）；规则新增 `CONFIG_SECRET`（配置键值赋值形态，排除占位值）；前端 `RequirementChat.vue` 命中附件加敏感标记胶囊与提示行；观察期未跑出真实误报率 ⇒ 按 §2.2 停止条件不标「已完成」） | 已开 |
+| `MA-9` | 敏感动作审批（拦截 → 询问 → 恢复） | 待开始（**前置 `MA-8` 已落地**：规则集即「什么该问」的判据源；**前置 `MA-10` 已落地**：挂起豁免 `ExecutionProgressRecorder.touchWithApprovalAwareness` + `ExecutionCompensationTask.isAwaitingApproval` 均已就位） | 未开 |
+| `MA-10` | 执行链超时治理（次数主 + 时间兜底） | 验证中（**四条改动已全部落地**：尽力交付 / 次数分档+hint 覆盖 / 无进展兜底+审批豁免 / 删子任务链 turnDeadline；`ci-gate.sh` 5 门禁全绿。**观察期未跑 `noProgressDetectionEnforced=true` 的真实分布** ⇒ 按观察期纪律不标「已完成」） | 已开 |
 
 > 状态词沿用差距表 §0 的九态词表（本文只用 `待开始` / `设计中` / `实现中` / `验证中` / `已完成` / `暂缓` / `明确不做`）。
 >
@@ -1607,3 +1610,5 @@ subagent-acp/src/run.ts
 | 2026-11-18 | `MA-1` ⑤ 端点名订正：`GET /api/sub-tasks/{id}/execution-result` → **`GET /api/sub-tasks/getExecutionResultById/{id}`**，与 `SubTaskController` 既有「动词 + `ById/{id}`」风格一致 | `MA-1` 实施计划勘察时发现原写法会引入第二套端点命名 |
 | 2026-11-19 | 新增 **`MA-9` 敏感动作审批（拦截 → 询问 → 恢复）**，八项扩为九项；§2 总览 / §2.1 批次 / §2.2 停止条件 / §7 状态表同步登记。定位：`MA-8` 只做「发现」，`MA-9` 补「询问 + 恢复」；`MA-9` 前置 `MA-8`（规则集是「什么该问」的判据源）。参考实现只取三家**代码强制**面：DSH 升档查表与审批四态（`escalation.ts:64-67,141,209`）、Octop 惰性过期与策略持久化（`hitl/store.py:11,136-138`、`hitl_session.py:47-61`）、AgentTeams 的审批等级 OFF 审计（`worker_approval.go:307-311`）；并明确标出三家**都没有**的两件事——「允许加密访问」第三档与凭据识别，须本项目自定 | 用户提出「期望拦截提示卡（允许 / 允许加密访问 / 禁止）」；实测算例：全仓 `Approval` 零命中、内部 17 工具无提问能力、`PAUSED` 无回挂起前状态的边 |
 | 2026-11-19 | **新增 `MA-10` 执行链超时治理（次数主 + 时间兜底）**，九项扩为十项；`MA-9` 增加第二个硬前置 `MA-10`。§1 口径 / §2 总览+依赖图 / §2.1 批次 / §2.2 停止条件 / §4 新增整节（八段骨架）/ §7 状态表 / §8 同步登记。**`MA-9` 五处订正**：①恢复路径「`BLOCKED`→`PAUSED`→`IN_PROGRESS` 两跳」实测不成立（`SubTaskStateMachine:31` 无该边）⇒ 改为同 turn 阻塞、零状态迁移；②「跨 turn 挂几小时」放弃（撞 `LoopCheckpoint` V66 边界：不回放消息历史，跨 turn 必然 round+1 = 第二次派单）；③策略三档降为**两档**（Agent 在当前体系拿不到任何凭证 ⇒ 明文/加密两档都指向空目标，第三档留契约位）；④首个动作类型从 `READ_CREDENTIAL` 改为 `SANDBOX_EXEC`（前者代码中不存在）；⑤⑦/⑧ 补「等待被超时看门狗打死」与「`tool_timeout` 先返回导致模型绕过」两条风险 | 问题「单工具超时 / turn 截止 / RUNNING 超时是如何处理的，开源代码是否也是写死时间」⇒ 核实发现本项目已有次数主闸（`internalMaxIterations=20`/`external=5`）但**轮次耗尽判 `FAILED`**，且三层时间闸层级倒挂（10min 遮蔽 30min，后者在子任务链上是死代码）；对照七家框架（LangChain 15 / LangGraph 25 / OpenAI SDK 10 / CrewAI 25 / Mastra 20 / AI SDK 20 步 / Claude 无默认）确认「次数主 + 时间闸默认关闭」是行业形态，且撞线后应「交出部分成果」而非抛错。用户决策：**改蓝图原文、`MA-9` 复用共享机制不再单独造一套** |
+| 2026-11-20 | **`MA-8` 补挂点④ `ATTACHMENT` + 规则 `CONFIG_SECRET`**（用户最关注项「上传/粘贴配置文件会不会提示」的落地）。**三洞实测**：①对话/澄清链附件正文经 `ChatAttachmentPromptRenderer` 的 `{{ATTACHMENT_CONTEXT}}` 拼装绕过挂点③；②`internal_read_attachment` 直读对象存储绕过③；③消息 content 挂点① 只扫正文不扫附件。**选点**：`ChatAttachmentParseWorker.parse` 的 `markReady` 之前是唯一能看到附件完整原文的位置（之后正文即注入 Prompt / ingest KB），故新增挂点④；扫描经 `SensitiveScanRecorder.scanAttachmentAndRecord` 带 `conversationId + attachmentId` 回溯到具体文件，命中数三态写入 `chat_attachment.scan_hit_count`（`V153` 追加列，`null`=未扫描 / `0`=无命中 / `>0`=命中），`ChatAttachmentVO` 与 `RequirementChat.vue` 带出——**上传即告知**（胶囊标记 + 提示行），不弹卡。**规则**：`CONFIG_SECRET` 识别 `password/secret/token/api_key/...` 键后 `=` / `:` 赋值形态，排除占位值（changeme / xxx / `$VAR` 引用）。**顺带修复真实缺陷**：①原先附件根本没被扫描（非「只记不拦」，是「根本没记」）；②scan 异常曾冒泡导致整条附件解析 FAILED、用户须重传（挂点④ 调用点整体 try-catch，观测不伤主链，判据 27）。验证：`SensitiveContentScannerTest` 27/27、新增 `ChatAttachmentParseWorkerScanTest` 7/7（三态 / 开关关闭 / scan 异常不阻断）；`ci-gate.sh --no-clean` 待本轮复跑确认（先前因 target 残留旧 V153 重复版本失败，残留已删） | 用户追问「上传附件 / 粘贴含敏感性配置文件内容，平台会弹出提示么？还是只拦截？」；实测三通路均绕过既有三挂点，且扫描器从未在附件上运行过 |
+| 2026-11-20 | **`MA-8` 与 `MA-10` 落地**（本轮代码改动，零方案订正）。`MA-8`：6 条规则枚举唯一事实源 `SensitiveScanRule` + 3 挂点 `SensitiveScanPoint` + 纯判据 `SensitiveContentScanner`（身份证过 GB 11643 校验位 / 银行卡过 Luhn，抗误报）+ 唯一「扫+记」入口 `SensitiveScanRecorder`（**payload 结构上不含原文，只留 SHA-256 + 偏移**）+ 时间线码 `sensitive_content_detected`；三挂点收口于 `RequirementMessageServiceImpl.addMessage` user 分支（澄清/助理/流式/编辑重跑四路共用）、`ExecutionResultHandler` 成功分支（扫 `output` 非 `parts` 全文）、`AgentRuntimeContextAssembler`（`userPrompt` 装配后，覆盖「依赖产物把上游密钥传到下游」）。`MA-10`：**改动 1（尽力交付）落点重构**——原方案「`AgentLoopResult.maxIterations` 改 `success`」实测不可行（该字段被 `FinalReportFenceHook` 收尾轮判据 / `BusinessSurfaceLoopRunner` / 多个既有单测共同消费）⇒ 改为新增 `isPartialDelivery()` 判据 + **只改消费侧映射**，既实现尽力交付又不掩盖「循环层未自然终止」真值；`VERIFICATION` 出口闸以 `naturalStop` 前置**显式豁免尽力交付**（模型没有第 21 轮可以补围栏）。改动 2：`resolveMaxIterations` 分档 + `sub_task.context.maxIterationsHint` 覆盖（装配层解析一次注入 `AgentContext`，执行层是唯一消费点故钳制也收口于此；`MIN_MAX_ITERATIONS=2` 是循环体结构性下限不是运维偏好）。改动 3：新增列 `agent_execution_record.last_progress_at`（`V153`）+ 扫描条件 `COALESCE(last_progress_at, start_time)`（**存量 NULL 回落保证等价**）+ `ExecutionProgressRecorder` 双写点（循环回调合并写 + 审批感知续命）+ `ExecutionCompensationTask` 按 `noProgressDetectionEnforced` 分岔（**默认 false = 只 warn 不处置，与 `MA-4` 第一段同源观察期纪律**）。改动 4：删子任务链 `turnDeadlineSeconds` 装配（`LoopCancellation.ofToolTimeoutOnly`），业务面 `BusinessSurfaceLoopRunner:189` 保留。验证：`ci-gate.sh --no-clean` **5 门禁全绿 0 失败**（含 B 级集成 55 例）；定向单测 `RuntimeMaxIterationsResolutionTest` 11 / `RuntimePartialDeliveryTest` 13 / `ExecutionProgressRecorderTest` 9 / `ExecutionCompensationTaskTest` 7（原 3 + 新增 4）/ `SensitiveContentScannerTest` 20 全绿；`check-arch-freeze` 未超基线；`verify-event-key-parity` PASS=5 | 用户「MA-8 + MA-7 开工吧，代码要符合规范，建议从 MA8 一直到 MA10」；实施中撞出两处真实缺陷：`PRIVATE_KEY_HEADER` 漏捕获组致 `No group 1` 崩溃（改为「漏写括号退化为精度损失而非运行期崩溃」双保险）、`maxIterationsHint=0` 绕过装配层过滤后仍被 `Math.min` 抬到下限（证明钳制必须在消费点收口）；另修 `ExecutionContext` 三处测试缺 mock（`ExecutionResultHandlerTest` / `ExecutionResultHandlerDeliveryGateTest` / `AgentRuntimeContextAssemblerTest`）与 `RuntimeTurnExecutorTest.shouldMapTokenUsageOnFailure` 选例失真（改动 1 已把「非空正文 + 有工具」改判 SUCCESS ⇒ 改走空产出护栏保住原判据） |

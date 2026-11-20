@@ -110,6 +110,10 @@ class ExecutionResultHandlerIntegrationTest {
     @Mock
     private DeliveryEvidenceEvaluator deliveryEvidenceEvaluator;
 
+    // MA-8（2026-11-20）：敏感内容扫描挂点；集成用例不断言扫描结果（仅防构造 NPE）
+    @Mock
+    private com.helloai.core.agent.observability.SensitiveScanRecorder sensitiveScanRecorder;
+
     private ExecutionResultHandler handler;
 
     @BeforeEach
@@ -117,7 +121,7 @@ class ExecutionResultHandlerIntegrationTest {
         handler = new ExecutionResultHandler(subTaskQueryPort, subTaskCommandPort, taskTimelinePort, failureTracker,
                 agentService, applicationEventPublisher, conversationService, executionArtifactService,
                 taskRunningSpecPort, new ExecutionOutputParser(), executorDoneIssuesBackfiller, agentEventRecorder,
-                agentSessionService, agentExecutionRecordService, deliveryEvidenceEvaluator);
+                agentSessionService, agentExecutionRecordService, deliveryEvidenceEvaluator, sensitiveScanRecorder);
         // 模拟 Spring @Transactional 已开启（afterCommit 注册需要激活的同步管理器）
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.initSynchronization();

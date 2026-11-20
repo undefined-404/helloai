@@ -5,10 +5,13 @@ import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.SensitiveScanPoint;
+import com.helloai.common.constant.SubTaskContextKeys;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.common.constant.UncertaintyKind;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.observability.SensitiveScanRecorder;
 import com.helloai.core.agent.support.AgentChatModelResolver;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventQueryService;
@@ -19,6 +22,7 @@ import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
 import com.helloai.core.agent.runtime.ExecutionEnvironment;
+import com.helloai.core.agent.runtime.ExecutionProgressRecorder;
 import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
@@ -108,6 +112,11 @@ public class AgentRuntimeContextAssembler {
      */
     private final AgentEventQueryService agentEventQueryService;
 
+    /** 敏感内容扫描挂点（`MA-8` 第一段：只记不拦）。 */
+    private final SensitiveScanRecorder sensitiveScanRecorder;
+    /** 执行进展写点（`MA-10` 改动 3：无进展兜底的写侧）。 */
+    private final ExecutionProgressRecorder executionProgressRecorder;
+
     /**
      * 装配 Runtime 真身执行上下文（消费侧在 startIfNeeded 之后、执行之前调用）。
      *
@@ -146,6 +155,14 @@ public class AgentRuntimeContextAssembler {
         String userPrompt = buildUserPrompt(subTask, promptSection, dependencySection.section, recovery,
                 completedTrace);
 
+        // MA-8 挂点③：LLM 请求出站前扫描（log-only，不阻断、不改 prompt 内容）。
+        // 为什么扫 userPrompt 而不是整条消息数组：userPrompt 才是本类装配出的「出站正文」，
+        // system 段是平台模板（不可能含用户密钥），历史消息另在对话域。扫这一处覆盖
+        // 「依赖产物里带着上游贴的密钥传到下游」这个最容易漏的路径（蓝图 §4 `MA-8` ⑥）。
+        sensitiveScanRecorder.scanAndRecord(
+                SensitiveScanPoint.LLM_OUTBOUND, userPrompt, "userPrompt",
+                subTask.taskId(), subTaskId, AgentRole.EXECUTOR, agent.getId());
+
         // 2) 启用工具并集（命令 tools ∪ 命中技能 requiredTools，与旧链同语义）
         // REF-1.3：此处**刻意不做** ToolRegistry.resolve——生效形态（条件可用摘除 + 动态描述）
         // 的唯一接线点是 RuntimeTurnExecutor（resolve 的结果决定模型可见工具）。
@@ -167,8 +184,13 @@ public class AgentRuntimeContextAssembler {
 
         // 4.1) 循环进度落库回调（P0-C checkpoint：AgentLoop 每轮 iteration 边界 merge
         // snapshot.loop；服务侧 best-effort，lambda 只做透传）
-        LoopCheckpointListener loopCheckpointListener = checkpoint ->
-                agentSessionService.saveLoopCheckpoint(subTaskId, runTurn, checkpoint);
+        // MA-10 改动 3：同一回调顺带刷新 agent_execution_record.last_progress_at（无进展兜底的写点）。
+        // 为什么合在这里而不是新起一条回调：LoopCheckpoint 本来就每轮写一次，
+        // 合并成同一次轮末动作，避免「每轮两处写同一类进度事实」的分叉（判据 4）。
+        LoopCheckpointListener loopCheckpointListener = checkpoint -> {
+            agentSessionService.saveLoopCheckpoint(subTaskId, runTurn, checkpoint);
+            executionProgressRecorder.touch(subTaskId);
+        };
 
         // 5) spec 装配可观测（与旧链同键同事件名）
         taskTimelinePort.recordEvent(subTask.taskId(), subTaskId, TimelineEventCode.SUB_TASK_SPEC_CONTEXT_LOADED.code(),
@@ -212,6 +234,7 @@ public class AgentRuntimeContextAssembler {
                 .chatModel(chatModel)
                 .eventRecorder(agentEventRecorder)
                 .loopCheckpointListener(loopCheckpointListener)
+                .maxIterationsHint(resolveMaxIterationsHint(subTask))
                 .build();
     }
 
@@ -273,6 +296,54 @@ public class AgentRuntimeContextAssembler {
                     subTaskId, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 解析子任务级轮次预算提示（`MA-10` 改动 2，键 {@link SubTaskContextKeys#MAX_ITERATIONS_HINT}）。
+     *
+     * <p><b>只解析不钳制</b>：本方法回答「hint 说了什么」，不回答「该不该采信」。上限钳制在
+     * 执行侧 {@code RuntimeTurnExecutor#resolveMaxIterations}——那里才知道当前档位默认值是多少，
+     * 也只有那里的结果真正喂给 {@code ChatModelToolLoop}。若这里顺手钳一遍，就会变成
+     * 「两处各有一套边界」，迟早分叉（判据 4）。</p>
+     *
+     * <p><b>解析失败一律返回 {@code null}</b>（= 未给 hint）而不是抛异常：拆解阶段的模型输出不可信，
+     * 一个写错的 hint 不该让整个子任务执行不了。{@code null} 的语义是「回落档位默认」，
+     * 与改造前逐字一致。</p>
+     *
+     * <p><b>为什么接受字符串形态</b>：{@code sub_task.context} 是 JSONB，经
+     * {@code JacksonTypeHandler} 反序列化后数字可能落成 {@code Integer} / {@code Long} / {@code String}
+     * （取决于写方怎么给、以及是否有前端编辑路径写回）。只认 {@code Number} 会让「拆解侧写
+     * {@code "18"}」这种情况静默失效——而静默失效正是判据 10 警告的那类缺陷。</p>
+     */
+    private Integer resolveMaxIterationsHint(SubTaskSnapshot subTask) {
+        Map<String, Object> context = subTask.context();
+        if (context == null) {
+            return null;
+        }
+        Object raw = context.get(SubTaskContextKeys.MAX_ITERATIONS_HINT);
+        if (raw == null) {
+            return null;
+        }
+        int value;
+        if (raw instanceof Number number) {
+            value = number.intValue();
+        } else {
+            try {
+                value = Integer.parseInt(String.valueOf(raw).trim());
+            } catch (NumberFormatException e) {
+                log.debug("maxIterationsHint 非数字，回落档位默认: subTaskId={}, raw={}",
+                        subTask.id(), raw);
+                return null;
+            }
+        }
+        if (value <= 0) {
+            // 非正整数一律视为「未给」：0 / 负数喂给循环体会被 AgentLoopInput 回落默认，
+            // 但那样「显式写 0」与「没写」在可观测面上就分不清了，故在此收口。
+            log.debug("maxIterationsHint 非正整数，回落档位默认: subTaskId={}, raw={}",
+                    subTask.id(), raw);
+            return null;
+        }
+        return value;
     }
 
     /**

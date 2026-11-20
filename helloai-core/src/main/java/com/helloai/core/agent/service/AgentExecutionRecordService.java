@@ -131,6 +131,41 @@ public interface AgentExecutionRecordService extends IService<AgentExecutionReco
     List<AgentExecutionRecord> listByStatusStartedBefore(ExecutionStatus status, OffsetDateTime before);
 
     // ══════════════════════════════════════════════════════════════
+    //  MA-10 改动 3：「无进展」兜底（取代固定总时长判定）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 扫描「长时间无进展」的 RUNNING 执行记录（`MA-10` 改动 3）。
+     *
+     * <p><b>与 {@link #listByStatusStartedBefore} 的差别</b>：后者按 {@code start_time}（总时长）判，
+     * 把「慢但有效」与「卡死」判成同一件事；本方法按 {@code last_progress_at}（有没有在推进）判，
+     * 只在真正停住时才开火。</p>
+     *
+     * <p><b>存量行兼容</b>：{@code last_progress_at} 为 {@code NULL} 的历史行回落 {@code start_time}
+     * 判定（{@code COALESCE(last_progress_at, start_time) &lt; before}），保证改造前后行为一致。</p>
+     *
+     * @param before 进展时间阈值（{@code COALESCE(last_progress_at, start_time) < before} 视为无进展）
+     * @return 命中记录列表（可能为空，绝不返回 null）
+     */
+    List<AgentExecutionRecord> listRunningWithoutProgressBefore(OffsetDateTime before);
+
+    /**
+     * 更新「最近进展时间」为当前时间（`MA-10` 改动 3 的写点，best-effort）。
+     *
+     * <p><b>为什么按 subTaskId 定位而不是 recordId</b>：进展写点分布在循环回调与工具边界，
+     * 那里能拿到的稳定标识是 {@code subTaskId}（{@code ToolInvocationContext} 携带），
+     * 而 recordId 需额外查询。且同一子任务在任一时刻最多一条 RUNNING 记录
+     * （{@link #hasPendingOrRunning} 的既有约束），按 subTaskId + status=RUNNING 定位唯一。</p>
+     *
+     * <p><b>不返回是否命中</b>：写点只关心「尽量记上」，未命中（记录已终态 / 已被回收）
+     * 属正常竞态，不值得让调用方分支处理。</p>
+     *
+     * @param subTaskId 子任务 ID；{@code null} 直接忽略
+     * @param at        进展时间（{@code null} 用当前时间）
+     */
+    void touchProgress(Long subTaskId, OffsetDateTime at);
+
+    // ══════════════════════════════════════════════════════════════
     //  B5.2 Fleet 成本选人：成本画像聚合（agent_execution_record 派生）
     // ══════════════════════════════════════════════════════════════
 

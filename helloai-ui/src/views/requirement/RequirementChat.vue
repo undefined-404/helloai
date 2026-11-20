@@ -859,6 +859,14 @@
                         <Document v-else />
                       </el-icon>
                       <span class="attachment-name">{{ item.fileName }}</span>
+                      <!-- MA-8：命中疑似敏感内容时在胶囊上打标（悬停看明细；不阻断、不弹窗） -->
+                      <el-icon
+                        v-if="hasSensitiveHit(item)"
+                        class="attachment-sensitive-flag"
+                        :title="`检测到 ${item.sensitiveScanHitCount} 处疑似敏感信息（${sensitiveRulesText(item)}）`"
+                      >
+                        <WarningFilled />
+                      </el-icon>
                       <span class="attachment-state">{{ attachmentStateText(item) }}</span>
                       <button
                         type="button"
@@ -875,6 +883,24 @@
                     >
                       <el-icon class="attachment-icon is-loading"><Loading /></el-icon>
                       <span class="attachment-name">上传中…</span>
+                    </span>
+                  </div>
+                  <!-- MA-8：敏感命中的汇总提示条。
+                       为什么单独一条而不是逐个胶囊挂 tooltip：
+                       「文件里有密钥」这件事的价值在于**发送前**让用户看见，
+                       tooltip 要悬停才出现，多数人不会去看；但也不能做成阻塞弹窗
+                       （log-only 阶段误报率未知，弹窗会打断正常业务）。 -->
+                  <div
+                    v-if="sensitiveHitSummary.count > 0"
+                    class="attachment-sensitive-tip"
+                    role="status"
+                  >
+                    <el-icon><WarningFilled /></el-icon>
+                    <span class="attachment-sensitive-text">
+                      检测到{{ sensitiveHitSummary.fileCount }} 份附件共
+                      {{ sensitiveHitSummary.count }} 处疑似敏感信息（{{
+                        sensitiveHitSummary.rules
+                      }}），内容仍会正常发送
                     </span>
                   </div>
                   <div class="composer-input-row">
@@ -1390,7 +1416,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled, Grid, TopRight, Histogram, Clock, Microphone, ArrowUp } from '@element-plus/icons-vue'
+import { Loading, Connection, Delete, MagicStick, CopyDocument, CaretTop, CaretBottom, Refresh, MoreFilled, Plus, Search, Share, Download, Document, CircleClose, EditPen, Close, Check, CircleCheckFilled, Grid, TopRight, Histogram, Clock, Microphone, ArrowUp, WarningFilled } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { promptEnhanceApi } from '@/api/promptEnhance'
 import { taskApi } from '@/api/task'
@@ -2025,14 +2051,79 @@ function attachmentChipClass(item: ChatAttachmentItem): string {
   const status = (item.parseStatus ?? '').toLowerCase()
   const base = status ? `attachment-chip--${status}` : ''
   // ATT-3：未参与本轮时叠加「降级态」（灰字 + 无底色；不用删除线，否则像已删除）
-  return isAttachmentExcluded(item) ? `${base} attachment-chip--excluded`.trim() : base
+  const sensitive = hasSensitiveHit(item) ? 'attachment-chip--sensitive' : ''
+  // MA-8：敏感命中标记与「本轮不参与」是两件事，可同时出现
+  return [base, sensitive, isAttachmentExcluded(item) ? 'attachment-chip--excluded' : '']
+    .filter(Boolean)
+    .join(' ')
+}
+
+/**
+ * `MA-8`：该附件是否命中疑似敏感内容。
+ *
+ * <p><b>必须按三态判，不能写 {@code !item.sensitiveScanHitCount}</b>：{@code null} 是
+ * 「未扫描」、{@code 0} 是「扫过没命中」，两种都不该提示，但把 null 当 0 会让
+ * 「解析失败没扫」被静默当成「干净」——用户会以为文件已经检查过了。</p>
+ */
+function hasSensitiveHit(item: ChatAttachmentItem): boolean {
+  return typeof item.sensitiveScanHitCount === 'number' && item.sensitiveScanHitCount > 0
+}
+
+/**
+ * 规则 code → 人话标签（与后端 `SensitiveScanRule.label` 对齐；未知 code 原样显示，不吞掉）。
+ */
+const SENSITIVE_RULE_LABELS: Record<string, string> = {
+  id_card: '身份证号',
+  mobile: '手机号',
+  bank_card: '银行卡号',
+  private_key: '私钥',
+  cloud_ak: '云厂商密钥',
+  api_token: 'API 令牌',
+  config_secret: '配置项密码',
+}
+
+/**
+ * `MA-8`：本次已上传附件里的敏感命中汇总（驱动输入框上方那条提示）。
+ *
+ * <p>只在<b>发送前</b>统计 {@code userAttachments}——这是用户还来得及处置的唯一时刻。
+ * 命中条数为 0 或未扫描（null）都不计入，也不存在「未知条数」这个显示态。</p>
+ */
+const sensitiveHitSummary = computed(() => {
+  let count = 0
+  let fileCount = 0
+  const rules = new Set<string>()
+  for (const item of userAttachments.value) {
+    if (!hasSensitiveHit(item)) continue
+    count += item.sensitiveScanHitCount ?? 0
+    fileCount += 1
+    for (const code of (item.sensitiveScanRules ?? '').split(',')) {
+      const trimmed = code.trim()
+      if (trimmed) rules.add(trimmed)
+    }
+  }
+  const labels = Array.from(rules)
+    .map((code) => SENSITIVE_RULE_LABELS[code] ?? code)
+    // 排序让同一份文件重复渲染时文案稳定（否则每次刷新顺序可能不同，看起来像内容变了）
+    .sort()
+  return { count, fileCount, rules: labels.join('、') }
+})
+
+/** 命中规则的人话描述（用于胶囊 tooltip 与提示条文案）。 */
+function sensitiveRulesText(item: ChatAttachmentItem): string {
+  const raw = (item.sensitiveScanRules ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (raw.length === 0) return ''
+  return raw.map((code) => SENSITIVE_RULE_LABELS[code] ?? code).join('、')
 }
 
 function attachmentChipTitle(item: ChatAttachmentItem): string {
   const size = item.fileSize ? `${(item.fileSize / 1024).toFixed(0)}KB` : ''
   const reason = item.parseError ? `；${item.parseError}` : ''
   const participation = isAttachmentExcluded(item) ? '本轮不参与（点击恢复）' : '本轮参与（点击取消）'
-  return `${item.fileName}${size ? ' · ' + size : ''}${reason} · ${participation}`
+  // MA-8：把命中信息放进 tooltip——用户悬停即可知道「哪份文件、哪里可疑」，不必点开
+  const sensitive = hasSensitiveHit(item)
+    ? `；⚠ 检测到 ${item.sensitiveScanHitCount} 处疑似敏感信息（${sensitiveRulesText(item)}），不阻断`
+    : ''
+  return `${item.fileName}${size ? ' · ' + size : ''}${reason}${sensitive} · ${participation}`
 }
 
 // 编辑已发送消息（对齐 ChatGPT/DeepSeek/Kimi「编辑消息」交互）：
@@ -4848,6 +4939,41 @@ onBeforeUnmount(() => {
   border-color: var(--ha-border-light);
   background: var(--ha-surface-hover);
   cursor: default;
+}
+/* MA-8：敏感命中标记。
+   用琥珀色而非红色：命中的是「疑似」，平台未阻断、内容照常发送，
+   红框会让用户以为文件被拒；琥珀色表达「请你自己看一眼」。 */
+.attachment-chip--sensitive {
+  border-color: rgba(217, 119, 6, 0.55);
+}
+.attachment-sensitive-flag {
+  font-size: 14px;
+  color: #d97706;
+  flex-shrink: 0;
+}
+/* 汇总提示条：发送前的最后一次告知。刻意做成「信息条」而非「确认弹窗」——
+   log-only 阶段误报率未知，弹窗会把正常业务打断（蓝图 §4 MA-8 ⑥）。 */
+.attachment-sensitive-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  border-radius: 8px;
+  background: rgba(217, 119, 6, 0.08);
+  font-size: 12px;
+  line-height: 1.6;
+  color: #b45309;
+}
+.attachment-sensitive-tip .el-icon {
+  font-size: 14px;
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+.attachment-sensitive-text {
+  flex: 1;
+  min-width: 0;
 }
 .attachment-close {
   display: inline-flex;

@@ -302,4 +302,17 @@ export interface ChatAttachmentItem {
    * 胶囊条只展示 user；平台产物进右侧「产物」侧栏。
    */
   source?: 'user' | 'platform' | string | null
+  /**
+   * `MA-8`：疑似敏感内容命中条数（**三态，不能当布尔用**）。
+   *
+   * - `null` / `undefined` = 未扫描（解析未完成 / SKIPPED / 扫描开关关闭）→ 不提示
+   * - `0` = 扫过、未命中 → 不提示
+   * - `>0` = 命中 → 胶囊上打「敏感」标记并提示
+   *
+   * 判据来源：后端 `ChatAttachment.sensitiveScanHitCount` 的三态约定。
+   * 把 null 当 0 会让「没扫」与「扫了干净」在界面上不可区分。
+   */
+  sensitiveScanHitCount?: number | null
+  /** `MA-8`：命中规则 code（逗号分隔，如 `config_secret,api_token`）；`null` = 未命中或未扫描。 */
+  sensitiveScanRules?: string | null
 }

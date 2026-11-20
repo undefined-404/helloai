@@ -67,6 +67,10 @@ class ExecutionResultHandlerDeliveryGateTest {
     private com.helloai.core.agent.event.AgentEventRecorder agentEventRecorder;
     @Mock
     private DeliveryEvidenceEvaluator deliveryEvidenceEvaluator;
+    // MA-8（2026-11-20）：产物落库前的敏感内容扫描；成功后无条件调用（@InjectMocks 缺 mock 注入 null 会 NPE）。
+    // 本类只断言交付闸判据，不涉及扫描结果（扫描由 SensitiveContentScannerTest 覆盖）。
+    @Mock
+    private com.helloai.core.agent.observability.SensitiveScanRecorder sensitiveScanRecorder;
 
     @InjectMocks
     private ExecutionResultHandler executionResultHandler;

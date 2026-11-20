@@ -84,17 +84,31 @@ public interface ChatAttachmentMapper extends BaseMapper<ChatAttachment> {
             + "WHERE id = #{id} AND parse_status = 'PENDING' AND deleted = 0")
     int markParsing(@Param("id") Long id);
 
-    /** 解析成功：落正文与元信息，清空历史错误。 */
+    /**
+     * 解析成功：落正文与元信息，清空历史错误。同时落 `MA-8` 附件敏感扫描摘要。
+     *
+     * <p><b>为什么扫描摘要与正文合并到同一条 UPDATE</b>：两者是「这次解析的同一份结果」。
+     * 拆成两条写会留下一个可观测的中间态（正文已就位、摘要为空），前端轮询恰好落在中间态
+     * 就显示「未扫描」——而实际上它扫过了（判据 4：同一事实不允许双写分叉）。
+     * 一次 UPDATE 由数据库保证原子，前端要么看到「未扫描」的历史态，要么看到完整结果。</p>
+     *
+     * @param scanHitCount 命中条数；{@code null} = 未扫描（扫描开关关闭时如实留空，不写 0）
+     * @param scanRules    命中规则 code（逗号分隔）；{@code null} = 未命中或未扫描
+     */
     @Update("UPDATE chat_attachment SET parse_status = 'READY', extracted_text = #{text}, "
             + "extracted_chars = #{chars}, page_count = #{pageCount}, parser = #{parser}, "
-            + "charset_name = #{charset}, parse_error = NULL, update_time = CURRENT_TIMESTAMP "
+            + "charset_name = #{charset}, parse_error = NULL, "
+            + "sensitive_scan_hit_count = #{scanHitCount}, sensitive_scan_rules = #{scanRules}, "
+            + "update_time = CURRENT_TIMESTAMP "
             + "WHERE id = #{id} AND deleted = 0")
     int markReady(@Param("id") Long id,
                   @Param("text") String text,
                   @Param("chars") Integer chars,
                   @Param("pageCount") Integer pageCount,
                   @Param("parser") String parser,
-                  @Param("charset") String charset);
+                  @Param("charset") String charset,
+                  @Param("scanHitCount") Integer scanHitCount,
+                  @Param("scanRules") String scanRules);
 
     /** 解析失败（可重试）：只落错误摘要，不覆盖已有正文。 */
     @Update("UPDATE chat_attachment SET parse_status = 'FAILED', parse_error = #{error}, "

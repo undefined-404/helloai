@@ -55,6 +55,23 @@ public class ChatAttachmentVO {
 
     private OffsetDateTime createTime;
 
+    /**
+     * `MA-8`：疑似敏感内容命中条数（<b>三态</b>，前端须区分）。
+     *
+     * <ul>
+     *   <li>{@code null} = 未扫描（解析未完成 / SKIPPED / 扫描开关关闭）→ 不提示；</li>
+     *   <li>{@code 0} = 扫过、未命中 → 不提示；</li>
+     *   <li>{@code >0} = 命中，前端提示「检测到 N 处疑似敏感信息（不阻断）」。</li>
+     * </ul>
+     *
+     * <p>刻意<b>不返回命中位置与原文</b>：那等于把密钥再复制一遍到界面上（二次泄露）。
+     * 用户需要核对时自己去打开原文件——平台只负责「告知这里有问题」。</p>
+     */
+    private Integer sensitiveScanHitCount;
+
+    /** `MA-8`：命中规则 code（逗号分隔）；{@code null} = 未命中或未扫描。 */
+    private String sensitiveScanRules;
+
     public static ChatAttachmentVO from(ChatAttachment entity) {
         if (entity == null) {
             return null;
@@ -73,6 +90,8 @@ public class ChatAttachmentVO {
         vo.setParser(entity.getParser());
         vo.setSource(entity.getUploaderUserId() == null ? "platform" : "user");
         vo.setCreateTime(entity.getCreateTime());
+        vo.setSensitiveScanHitCount(entity.getSensitiveScanHitCount());
+        vo.setSensitiveScanRules(entity.getSensitiveScanRules());
         return vo;
     }
 

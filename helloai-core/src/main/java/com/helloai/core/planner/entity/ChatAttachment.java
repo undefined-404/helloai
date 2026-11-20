@@ -80,4 +80,27 @@ public class ChatAttachment extends BaseEntity {
 
     /** 已入 RAG 时的 source（chat:{conversationId}:{attachmentId}）。 */
     private String kbSource;
+
+    /**
+     * `MA-8` 挂点④：附件正文疑似敏感内容的命中条数。
+     *
+     * <p><b>三态语义必须区分</b>（判据 10「显式声明」）：</p>
+     * <ul>
+     *   <li>{@code null} = <b>未扫描</b>（解析失败 / SKIPPED / 扫描开关关闭）——前端不显示提示；</li>
+     *   <li>{@code 0} = <b>扫过，未命中</b>——前端也不显示提示，但与 null 在库里可区分；</li>
+     *   <li>{@code >0} = 命中，前端提示用户「检测到 N 处疑似敏感信息」。</li>
+     * </ul>
+     *
+     * <p>为什么用 {@code INT} 而非 {@code BOOLEAN}：命中多处与一处对用户的信息量不同
+     * （「1 处」可以逐个核对，「20 处」应当整体挪走），且聚合时能直接统计分布。</p>
+     */
+    private Integer sensitiveScanHitCount;
+
+    /**
+     * `MA-8` 挂点④：命中规则的稳定 code（逗号分隔）。
+     *
+     * <p>只存 {@code SensitiveScanRule.code()}，<b>不存原文</b>——与事件 payload 同一口径，
+     * 避免附件表变成第二个泄露源。</p>
+     */
+    private String sensitiveScanRules;
 }

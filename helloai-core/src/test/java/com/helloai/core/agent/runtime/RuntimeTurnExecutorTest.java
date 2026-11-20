@@ -217,13 +217,22 @@ class RuntimeTurnExecutorTest {
         assertThat(payloadCaptor.getValue()).containsEntry("tokens", 42);
     }
 
+    /**
+     * 失败终态仍要透出 tokenUsage（成本核算 / 归因不能因为判失败就丢数据）。
+     *
+     * <p><b>MA-10 改动 1 后的口径订正</b>：原用例用 {@code maxIterations("cut", 5, 4, 30)}
+     * （正文非空 + 有工具）验证失败分支，但改动 1 已把该形态改判 **SUCCESS**（尽力交付），
+     * 故改用「空正文 + 0 工具」这一仍走失败分支的形态（空产出护栏 Guard A），
+     * 保住原判据（失败也带 tokenUsage）而不挡住改动 1。
+     * 「正文非空 ⇒ SUCCESS 且 tokenUsage 保留」由 {@code RuntimePartialDeliveryTest} 覆盖。</p>
+     */
     @Test
-    @DisplayName("tokenUsage 映射：失败终态（MAX_ITERATIONS 部分消耗）同样携带累加值")
+    @DisplayName("tokenUsage 映射：失败终态（空产出护栏，部分消耗）同样携带累加值")
     void shouldMapTokenUsageOnFailure() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
         when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
-        when(agentLoop.run(any())).thenReturn(AgentLoopResult.maxIterations("cut", 5, 4, 30));
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.maxIterations("", 5, 0, 30));
 
         AgentExecutionResult result = new RuntimeTurnExecutor(
                 agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)

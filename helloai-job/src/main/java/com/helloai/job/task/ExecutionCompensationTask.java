@@ -5,6 +5,7 @@ import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
+import com.helloai.common.constant.SubTaskContextKeys;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
@@ -62,6 +63,27 @@ public class ExecutionCompensationTask {
         List<AgentExecutionRecord> runningStuck = agentExecutionRecordService
                 .listByStatusStartedBefore(ExecutionStatus.RUNNING, now.minus(runningTimeout));
 
+        // MA-10 改动 3：「无进展」扫描（取代「总时长」判定）。
+        // 纪律（与 MA-4 第一段同源）：noProgressDetectionEnforced=false 时只观察——命中的记录
+        // 只记日志，仍走上面的旧判据；置 true 后旧判据不再参与（本段接管）。
+        List<AgentExecutionRecord> noProgressStuck = List.of();
+        if (executionProperties.isNoProgressDetectionEnforced()) {
+            noProgressStuck = agentExecutionRecordService.listRunningWithoutProgressBefore(
+                    now.minus(Duration.ofMinutes(executionProperties.getNoProgressTimeoutMinutes())));
+            runningStuck = List.of();
+        } else {
+            // 观察期：只统计，不处置。目的是先拿到「有哪些任务会被无进展判据命中」的真实分布，
+            // 再决定阈值与是否接管（若直接接管，误杀会立刻变成 BLOCKED + 自动重派）。
+            noProgressStuck = agentExecutionRecordService.listRunningWithoutProgressBefore(
+                    now.minus(Duration.ofMinutes(executionProperties.getNoProgressTimeoutMinutes())));
+            for (AgentExecutionRecord record : noProgressStuck) {
+                log.warn("无进展观察（不处置）: subTaskId={}, startTime={}, lastProgressAt={}, 阈值={}分钟",
+                        record.getSubTaskId(), record.getStartTime(), record.getLastProgressAt(),
+                        executionProperties.getNoProgressTimeoutMinutes());
+            }
+            noProgressStuck = List.of();
+        }
+
         for (AgentExecutionRecord record : runningStuck) {
             // G-006：外部路径的 RUNNING 行由「租约回收 / 2 小时超时 / 状态退出」收口，
             // 不走本补偿。原因：本任务的判定是「平台内执行命令超过 runningTimeoutMinutes」，
@@ -80,9 +102,55 @@ public class ExecutionCompensationTask {
                             + executionProperties.getRunningTimeoutMinutes() + " minutes");
         }
 
-        if (!pendingStuck.isEmpty() || !runningStuck.isEmpty()) {
-            log.info("执行记录补偿: PENDING超时={}, RUNNING超时={}",
-                    pendingStuck.size(), runningStuck.size());
+        for (AgentExecutionRecord record : noProgressStuck) {
+            if (!isPlatformExecution(record)) {
+                log.debug("跳过外部执行记录的无进展补偿: subTaskId={}, accessType={}",
+                        record.getSubTaskId(), record.getAccessType());
+                continue;
+            }
+            // MA-9 复用点：等待人工审批期间「没有进展」是预期内的，不该判死。
+            // 判定只读 sub_task.context.pendingApproval（不引入审批表依赖）。
+            if (isAwaitingApproval(record)) {
+                log.info("跳过审批等待中的执行记录（无进展豁免）: subTaskId={}", record.getSubTaskId());
+                continue;
+            }
+            log.error("Execution no-progress timeout: eventId={}, subTaskId={}, lastProgressAt={}",
+                    record.getEventId(), record.getSubTaskId(), record.getLastProgressAt());
+            compensateRecordAtomically(
+                    record,
+                    "RUNNING no-progress timeout: no progress for "
+                            + executionProperties.getNoProgressTimeoutMinutes() + " minutes");
+        }
+
+        if (!pendingStuck.isEmpty() || !runningStuck.isEmpty() || !noProgressStuck.isEmpty()) {
+            log.info("执行记录补偿: PENDING超时={}, RUNNING超时={}, 无进展超时={}",
+                    pendingStuck.size(), runningStuck.size(), noProgressStuck.size());
+        }
+    }
+
+    /**
+     * 该执行记录是否处于「等人工审批」状态（`MA-9` 复用点，`MA-10` 改动 3 的豁免分支）。
+     *
+     * <p>只读 {@code sub_task.context.pendingApproval} 的存在性——本任务不需要知道审批的业务模型
+     * （谁批的、几档策略、有效期多久），那是 `MA-9` 的事。这条边界让两个项各自可独立回滚。</p>
+     *
+     * <p><b>读失败按「未等待」</b>：读不到 context 时给出豁免会凭空延长执行，
+     * 比误判一次超时更危险（前者永不收敛）。</p>
+     */
+    private boolean isAwaitingApproval(AgentExecutionRecord record) {
+        Long subTaskId = record.getSubTaskId();
+        if (subTaskId == null) {
+            return false;
+        }
+        try {
+            SubTask subTask = subTaskService.getById(subTaskId);
+            if (subTask == null || subTask.getContext() == null) {
+                return false;
+            }
+            return subTask.getContext().get(SubTaskContextKeys.PENDING_APPROVAL) != null;
+        } catch (Exception e) {
+            log.debug("审批挂起判定失败（按未等待处理）: subTaskId={}, err={}", subTaskId, e.getMessage());
+            return false;
         }
     }
 

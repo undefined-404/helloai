@@ -1,6 +1,8 @@
 package com.helloai.core.planner.attachment;
 
 import com.helloai.common.constant.ChatAttachmentParseStatus;
+import com.helloai.common.constant.SensitiveScanPoint;
+import com.helloai.core.agent.observability.SensitiveScanRecorder;
 import com.helloai.core.knowledge.KnowledgeBaseService;
 import com.helloai.core.planner.entity.ChatAttachment;
 import com.helloai.core.planner.mapper.ChatAttachmentMapper;
@@ -39,6 +41,8 @@ public class ChatAttachmentParseWorker {
     private final ArtifactStorage artifactStorage;
     private final DocumentParserRouter documentParserRouter;
     private final KnowledgeBaseService knowledgeBaseService;
+    /** `MA-8` 挂点④：附件正文敏感扫描（旁路观测，绝不抛出，失败不影响解析结果）。 */
+    private final SensitiveScanRecorder sensitiveScanRecorder;
 
     /** 与渲染侧同源的窗口配置：判定「是否超预算」必须用同一个值，否则 ingest 门槛与注入预算脱节。 */
     @Value("${helloai.attachment.context-window-tokens:128000}")
@@ -85,11 +89,45 @@ public class ChatAttachmentParseWorker {
             byte[] content = artifactStorage.load(attachment.getStorageUrl());
             ParsedContent parsed = documentParserRouter.parse(kind,
                     new ParsedInput(attachment.getFileName(), attachment.getMimeType(), content));
-            chatAttachmentMapper.markReady(attachmentId, parsed.text(), parsed.chars(),
-                    parsed.pageCount(), parsed.parser(), parsed.charset());
-            log.info("附件解析完成: id={}, kind={}, parser={}, chars={}, pages={}, truncated={}, costMs={}",
+
+            // MA-8 挂点④：附件正文落库前扫描（log-only，不阻断、不脱敏、不改写正文）。
+            // 为什么必须在这里扫：
+            //   ① 挂点① 只看消息 content，文件正文是另一条通路；
+            //   ② 挂点③ 只覆盖子任务执行链的 userPrompt，对话/澄清链的附件正文由
+            //      ChatAttachmentPromptRenderer 拼装，不经那个装配点；
+            //   ③ internal_read_attachment 直读对象存储，同样绕过挂点③。
+            // 本处是「正文进入任何 Prompt 之前」唯一能看到完整原文的位置。
+            // 为什么在 markReady 之前：markReady 之后正文即被随地注入 Prompt / ingest 进 KB。
+            //
+            // 三态约定（落库列 sensitive_scan_hit_count 的语义）：
+            //   null = 未扫描（开关关闭 / 扫描失败）· 0 = 扫过未命中 · >0 = 命中
+            // 故这里用 Integer（可空）而非 int：写 0 会让「没扫」与「扫了干净」不可区分。
+            Integer scanHitCount = null;
+            String scanRules = null;
+            if (sensitiveScanRecorder.isEnabled()) {
+                try {
+                    SensitiveScanRecorder.ScanSummary scan = sensitiveScanRecorder.scanAttachmentAndRecord(
+                            SensitiveScanPoint.ATTACHMENT, parsed.text(), "extracted_text",
+                            attachment.getConversationId(), attachment.getId());
+                    scanHitCount = scan != null ? scan.hitCount() : null;
+                    scanRules = (scan != null && !scan.isEmpty())
+                            ? String.join(",", scan.ruleCodes()) : null;
+                } catch (RuntimeException scanError) {
+                    // ★ 本调用点显式兜底（其余五个挂点不兜）：附件解析的失败代价高得多——
+                    // 异常冒泡会落成 markFailed，用户必须重新上传并重跑解析；
+                    // 而观测能力的价值远低于「文件能正常用」。宁可丢一次扫描记录，不能丢解析。
+                    log.warn("附件敏感扫描异常，按未扫描处理（不影响解析）: id={}, err={}",
+                            attachmentId, scanError.toString());
+                }
+            }
+
+            int updated = chatAttachmentMapper.markReady(attachmentId, parsed.text(), parsed.chars(),
+                    parsed.pageCount(), parsed.parser(), parsed.charset(), scanHitCount, scanRules);
+            log.info("附件解析完成: id={}, kind={}, parser={}, chars={}, pages={}, truncated={}, "
+                            + "scanHits={}, scanRules={}, updated={}, costMs={}",
                     attachmentId, kind, parsed.parser(), parsed.chars(), parsed.pageCount(),
-                    parsed.truncated(), System.currentTimeMillis() - startedAt);
+                    parsed.truncated(), scanHitCount, scanRules, updated,
+                    System.currentTimeMillis() - startedAt);
             maybeIngestToKb(attachment, parsed);
         } catch (AttachmentParseException e) {
             chatAttachmentMapper.markFailed(attachmentId, summarize(e.getMessage()));

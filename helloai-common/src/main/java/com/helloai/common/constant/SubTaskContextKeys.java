@@ -125,6 +125,41 @@ public final class SubTaskContextKeys {
      */
     public static final String NO_DELIVERABLE = "noDeliverable";
 
+    /**
+     * 等待人工审批的挂起标记（{@code Map}：{@code approvalId / actionType / requestedAt}，`MA-9`）。
+     *
+     * <p>语义 = 「本子任务正在等同一个人点确认，这段时间没有进展<b>但不该判死</b>」。</p>
+     *
+     * <p><b>写入</b>：{@code ApprovalGateService}（`MA-9` 唯一写点，审批请求落库后同步写本键，
+     * 答复 / 过期 / 拒绝时清除）。<b>读取</b>：{@code ExecutionCompensationTask}
+     * （`MA-10` 改动 3 的豁免分支）与子任务详情接口。</p>
+     *
+     * <p><b>为什么用 context 而不建独立状态</b>：`MA-9` 明确「同 turn 阻塞、零状态迁移」——
+     * 子任务仍在 {@code IN_PROGRESS}，不新增状态、不新增边。豁免判定只读本键的存在性，
+     * 不引入对审批表的依赖（`MA-10` 不需要知道审批业务模型）。</p>
+     *
+     * <p><b>键缺失 = 未在等审批</b>（正常执行），与「审批已答完但没清干净」不同——
+     * 后者是缺陷，由 `MA-9` 的清理逻辑保证。</p>
+     */
+    public static final String PENDING_APPROVAL = "pendingApproval";
+
+    /**
+     * 子任务级轮次预算提示（{@code Integer}，`MA-10` 改动 2）。
+     *
+     * <p>语义 = 「拆解阶段由 planner 按任务类型给出的执行轮次预算」。缺省（不存在 / 非正整数）
+     * ⇒ 回落到接入类型分档默认（{@code internalMaxIterations} / {@code externalMaxIterations}），
+     * 行为与改造前一致。</p>
+     *
+     * <p><b>为什么必须支持子任务级覆盖</b>：全局 20 轮是「文档写作 12~14 轮 + 沙箱数轮」的
+     * 经验值，不是预算。文档写作 14 轮够用，代码重构 20 轮不够——同一个数字不可能对两类任务
+     * 都合适（蓝图 §4 `MA-10` 改动 2）。</p>
+     *
+     * <p><b>为什么要上限钳制</b>：planner 给的数字可能离谱（模型输出 500），必须钳到
+     * 一个有意义的区间，否则一次拆解就能把单任务成本放大 25 倍。钳制逻辑在
+     * {@code RuntimeTurnExecutor#resolveMaxIterations}（唯一消费点）。</p>
+     */
+    public static final String MAX_ITERATIONS_HINT = "maxIterationsHint";
+
     private SubTaskContextKeys() {
     }
 }

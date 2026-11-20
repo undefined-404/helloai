@@ -1,6 +1,9 @@
 package com.helloai.core.planner.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.SensitiveScanPoint;
+import com.helloai.core.agent.observability.SensitiveScanRecorder;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.memory.service.UserMemoryService;
 import com.helloai.core.planner.mapper.RequirementMessageMapper;
@@ -23,6 +26,7 @@ public class RequirementMessageServiceImpl
         implements RequirementMessageService {
 
     private final UserMemoryService userMemoryService;
+    private final SensitiveScanRecorder sensitiveScanRecorder;
 
     /**
      * 向澄清会话追加一条消息（seq = 当前最大序号 + 1）。
@@ -63,6 +67,12 @@ public class RequirementMessageServiceImpl
         // userId 在同步线程取好传参（@Async 线程无 UserContext/Sa-Token）；
         // 异步触发不落主链路事务，best-effort 失败仅记日志。
         if ("user".equals(role)) {
+            // MA-8 挂点①：用户输入进对话前扫描（log-only，不阻断；失败不影响落库）。
+            // 收口在此而非各 Controller：澄清 / 助理 / 流式 / 编辑重跑四条路径都经本方法，
+            // 分别在 Controller 挂会漏掉「编辑消息重跑」这类不经 Controller 的入口。
+            sensitiveScanRecorder.scanAndRecord(
+                    SensitiveScanPoint.INPUT, content, "message",
+                    null, null, AgentRole.PLANNER, null);
             try {
                 userMemoryService.triggerFromMessage(CurrentUser.userId(), content);
             } catch (Exception e) {

@@ -5,6 +5,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
+import com.helloai.common.constant.SensitiveScanPoint;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.AgentResult;
@@ -29,6 +30,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.agent.observability.FailureCategory;
+import com.helloai.core.agent.observability.SensitiveScanRecorder;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -94,6 +96,8 @@ public class ExecutionResultHandler {
     private final AgentExecutionRecordService agentExecutionRecordService;
     /** 交付物登记闸判据组件（`MA-4` 第一段：只观察、不改行为）。 */
     private final DeliveryEvidenceEvaluator deliveryEvidenceEvaluator;
+    /** 敏感内容扫描挂点（`MA-8` 第一段：只记不拦）。 */
+    private final SensitiveScanRecorder sensitiveScanRecorder;
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
@@ -380,6 +384,12 @@ public class ExecutionResultHandler {
         }
 
         if (report.isSuccess()) {
+            // MA-8 挂点②：子任务产物落库前扫描（log-only，不阻断、不改状态、不影响附件物化）。
+            // 扫 output 而非 parts 全文：parts 可能有多个大文件正文，逐份全扫会拖慢提交主链；
+            // output 是「交付正文」，模型自己生成的密钥/凭证最可能出现在这里。
+            sensitiveScanRecorder.scanAndRecord(
+                    SensitiveScanPoint.ARTIFACT, report.getOutput(), "output",
+                    subTask.taskId(), report.getSubTaskId(), AgentRole.EXECUTOR, report.getAgentId());
             // MA-4 第一段：交付物登记闸（只观察、不改行为）。
             // 仅对 source=EXTERNAL 的成功提交评估判据：不通过 → log.warn + 时间线事件
             // delivery_gate_miss，不阻断、不改状态、不写 gateFindings（观察期后再议第二段）。

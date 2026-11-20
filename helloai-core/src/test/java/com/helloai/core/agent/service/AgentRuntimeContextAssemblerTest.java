@@ -108,6 +108,14 @@ class AgentRuntimeContextAssemblerTest {
     @Mock
     private AgentEventQueryService agentEventQueryService;
 
+    /** MA-8（2026-11-20）：敏感内容扫描挂点；本测试不断言扫描结果（仅防构造 NPE）。 */
+    @Mock
+    private com.helloai.core.agent.observability.SensitiveScanRecorder sensitiveScanRecorder;
+
+    /** MA-10 改动 3（2026-11-20）：循环进展写点；本测试不断言写入（仅防构造 NPE）。 */
+    @Mock
+    private com.helloai.core.agent.runtime.ExecutionProgressRecorder executionProgressRecorder;
+
     @Mock
     private ChatModel mockChatModel;
 
@@ -124,7 +132,7 @@ class AgentRuntimeContextAssemblerTest {
                 new AgentChatModelResolver(agentChatClientService, agentLlmCredentialResolver, properties),
                 taskTimelinePort, taskRunningSpecPort, agentSkillSpecService, agentQualityProfileService,
                 agentSessionService, conversationService, attachmentPort, subTaskQueryPort,
-                agentEventRecorder, agentEventQueryService);
+                agentEventRecorder, agentEventQueryService, sensitiveScanRecorder, executionProgressRecorder);
     }
 
     // #region 状态守卫

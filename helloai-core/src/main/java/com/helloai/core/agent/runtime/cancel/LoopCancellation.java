@@ -44,6 +44,26 @@ public record LoopCancellation(CancellationToken token, long toolTimeoutMillis) 
         return new LoopCancellation(deadline, toolTimeoutMillis);
     }
 
+    /**
+     * 只装配单工具超时、<b>不装配本轮总时长闸</b>（`MA-10` 改动 4）。
+     *
+     * <p><b>为什么要有这个入口，而不是让调用方写 {@code of(0, x)}</b>：{@code 0} 的含义
+     * （「不限」）写在 {@link #of} 的参数注释里，调用点看不到；一个裸 {@code 0} 在阅读时
+     * 更像「忘了填」而不是「有意不限」。子任务执行链现在正是「有意不限」——次数才是主闸
+     * （蓝图 §4 `MA-10`：{@code turnDeadlineSeconds} 在子任务链上被 10 分钟看门狗遮蔽，
+     * 从未有机会开火，属死代码）。有名字的入口让这个意图在调用点自解释。</p>
+     *
+     * <p>剩余风险（单轮极慢）由单工具超时 + 「无进展」扫描双兜底覆盖，不再叠一道总时长。</p>
+     *
+     * @param toolTimeoutMillis 单工具超时毫秒；{@code <= 0} = 不限（退化为 {@link #none()}）
+     */
+    public static LoopCancellation ofToolTimeoutOnly(long toolTimeoutMillis) {
+        if (toolTimeoutMillis <= 0) {
+            return NONE;
+        }
+        return new LoopCancellation(CancellationToken.NONE, toolTimeoutMillis);
+    }
+
     /** 是否需要装配装饰器（token 非「不限」或工具超时开启）。 */
     public boolean active() {
         return token != CancellationToken.NONE || toolTimeoutMillis > 0;

@@ -23,6 +23,27 @@ public interface AgentExecutionRecordMapper extends BaseMapper<AgentExecutionRec
     List<AgentExecutionRecord> selectByStatusAndStartTimeBefore(@Param("status") ExecutionStatus status,
                                                                  @Param("before") OffsetDateTime before);
 
+    /**
+     * MA-10 改动 3：扫描「长时间无进展」的 RUNNING 记录。
+     *
+     * <p>{@code COALESCE(last_progress_at, start_time)} 是<b>存量兼容</b>的关键：
+     * 历史行没有 {@code last_progress_at}（列是新加的），回落 {@code start_time} 使改造前后
+     * 判定等价。过滤下推在 SQL（不在应用层全表捞出后过滤）。</p>
+     */
+    @Select("SELECT * FROM agent_execution_record WHERE status = 'RUNNING' "
+            + "AND COALESCE(last_progress_at, start_time) < #{before} AND deleted = 0")
+    List<AgentExecutionRecord> selectRunningWithoutProgressBefore(@Param("before") OffsetDateTime before);
+
+    /**
+     * MA-10 改动 3 写点：更新该子任务在跑记录的进展时间。
+     *
+     * <p>只命中 {@code status='RUNNING'} 的行——已终态 / 已被回收的记录不该再有进展；
+     * {@code update_time} 一并刷新，让「行被改过」这件事本身也可见。</p>
+     */
+    @Update("UPDATE agent_execution_record SET last_progress_at = #{at}, update_time = CURRENT_TIMESTAMP "
+            + "WHERE sub_task_id = #{subTaskId} AND status = 'RUNNING' AND deleted = 0")
+    int touchProgress(@Param("subTaskId") Long subTaskId, @Param("at") OffsetDateTime at);
+
     @Update("UPDATE agent_execution_record SET status = #{status}, error_msg = #{errorMsg}, update_time = CURRENT_TIMESTAMP WHERE id = #{id}")
     int updateStatus(@Param("id") Long id, @Param("status") ExecutionStatus status, @Param("errorMsg") String errorMsg);
 

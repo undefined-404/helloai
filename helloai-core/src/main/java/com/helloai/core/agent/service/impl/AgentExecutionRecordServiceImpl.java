@@ -279,6 +279,39 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  MA-10 改动 3：「无进展」兜底
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    public List<AgentExecutionRecord> listRunningWithoutProgressBefore(OffsetDateTime before) {
+        return baseMapper.selectRunningWithoutProgressBefore(before);
+    }
+
+    /**
+     * 更新进展时间（best-effort）。
+     *
+     * <p><b>用 Mapper 直连而不是 lambdaUpdate</b>：本写点每秒可能被多个执行线程调用，
+     * 走 MyBatis-Plus 的 lambda wrapper 每条都要额外拼 SQL 与反射取列名；
+     * 而这里条件极简（subTaskId + RUNNING + deleted=0）且已下推到 SQL，直连注解更省。
+     * 二者语义等价，均为单语句写（CODE_STYLE §14.3）。</p>
+     *
+     * <p><b>不抛异常</b>：进展写点挂在执行主链的循环回调上，写失败只能降级为「这一轮没记上进展」，
+     * 绝不允许反向影响执行（若因此判超时，是「观测能力伤主链」，比不记更糟）。</p>
+     */
+    @Override
+    public void touchProgress(Long subTaskId, OffsetDateTime at) {
+        if (subTaskId == null) {
+            return;
+        }
+        try {
+            baseMapper.touchProgress(subTaskId, at != null ? at : OffsetDateTime.now());
+        } catch (Exception e) {
+            log.warn("进展时间更新失败（best-effort，不影响执行）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  B5.2 Fleet 成本选人：成本画像聚合
     // ══════════════════════════════════════════════════════════════
 

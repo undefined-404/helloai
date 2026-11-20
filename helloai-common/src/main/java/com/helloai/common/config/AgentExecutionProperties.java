@@ -68,7 +68,16 @@ public class AgentExecutionProperties {
      *
      * <p>内部执行者要多步调工具、读附件、写产物，故独立分档高于外部一次性（{@link #externalMaxIterations}）。
      * 默认 20：文档写作类「调研 + 成文」需 12~14 轮，沙箱写文件 + 反复跑校验脚本还会再吃数轮，故留余量；
-     * 异常长跑由 {@link #turnDeadlineSeconds} 兜住，提示词侧已明确「自查最多 1 次、正文优先」。</p>
+     * 提示词侧已明确「自查最多 1 次、正文优先」。</p>
+     *
+     * <p><b>异常长跑由谁兜住（`MA-10` 改动 4 后已变更，2026-11-19）</b>：<b>不再是</b>
+     * {@link #turnDeadlineSeconds}——子任务链已删除该闸的装配（它在那里从未有机会开火）。
+     * 现在是<b>次数主 + 两道兜底</b>：轮次耗尽 ⇒ 尽力交付（`AgentLoopResult#isPartialDelivery`）；
+     * 单工具卡住 ⇒ {@link #toolCallTimeoutMillis}；整轮不推进 ⇒ {@link #noProgressTimeoutMinutes}
+     * 的「无进展」扫描。业务面保留 {@link #turnDeadlineSeconds}（那里无 execution record）。</p>
+     *
+     * <p><b>off-by-one</b>：{@code ChatModelToolLoop} 从第 {@code maxIterations - 1} 轮起禁用工具强制收尾
+     * ⇒ 实际可用工具轮次 = 本值减 1，调整时按此口径算。</p>
      */
     private int internalMaxIterations = 20;
 
@@ -79,6 +88,21 @@ public class AgentExecutionProperties {
      * 与 {@code AgentLoopInput.DEFAULT_MAX_ITERATIONS} 一致；配置项为空白时回落该默认。</p>
      */
     private int externalMaxIterations = 5;
+
+    /**
+     * 子任务级轮次预算（{@code sub_task.context.maxIterationsHint}）的**上限钳制**（`MA-10` 改动 2）。
+     *
+     * <p><b>为什么必须钳</b>：hint 由 planner 在拆解阶段写入，来源是模型输出——模型完全可能给
+     * {@code 500} 这种离谱值。不钳制等于「一次拆解就能把单任务成本放大 25 倍」，
+     * 且 {@code ChatModelToolLoop} 会老老实实跑满那么多轮 LLM 调用。</p>
+     *
+     * <p><b>默认 50</b>：比内部档（{@link #internalMaxIterations} 默认 20）留一倍余量，够「重代码
+     * 任务」用；再往上就属于「任务本身该拆得更细」，不是加轮次能解决的。</p>
+     *
+     * <p><b>下限不用本配置</b>：见 {@code RuntimeTurnExecutor#MIN_MAX_ITERATIONS}——那个下限不是
+     * 「运维偏好」而是循环体的结构性约束（收尾轮 off-by-one），不可配置化。</p>
+     */
+    private int maxIterationsHintCeiling = 50;
 
     /**
      * 内部 LLM 系统提示词的**部署级 persona 前缀**（REF-8.1.2，对齐 DSH `deployment:persona-prefix`）。
@@ -94,11 +118,20 @@ public class AgentExecutionProperties {
     // ────────────────────────────────────────────────────────────
 
     /**
-     * 单次 Agent Turn（一次子任务执行尝试 / 一次业务面调用）的取消截止时间（秒，REF-8.6 取消/超时树）。
+     * 单次 Agent Turn（一次业务面调用 / 外部路径）的取消截止时间（秒，REF-8.6 取消/超时树）。
      *
      * <p>自驱动取消源：到期后循环在下一个动作边界停止（不再发起新模型/工具调用），结果带
      * {@code finishReason=CANCELLED}，弥补此前「任一轮卡住只能事后靠外部超时回收」的缺口。
      * 默认 1800（30 分钟）是「正常绝不触发、异常必被拦住」的量级；{@code <= 0} = 不限。</p>
+     *
+     * <p><b>`MA-10` 改动 4 后只作用于业务面（2026-11-19 订正）</b>：子任务执行链
+     * （{@code RuntimeTurnExecutor}）已<b>删除</b>本闸的装配——在那里它被
+     * {@link #runningTimeoutMinutes} 遮蔽、从未开火，属死代码。业务面
+     * （{@code BusinessSurfaceLoopRunner}，需求对话 / 评审）<b>保留</b>，因为那里没有
+     * {@code agent_execution_record}、也就没有「无进展」兜底，本闸是它唯一的异常保护。</p>
+     *
+     * <p><b>不要再把它加回子任务链</b>：次数主 + 时间兜底的正确形态是<b>一道</b>兜底，
+     * 留两道就会出现「为什么这个任务 12 分钟死、那个 40 分钟才死」这种解释不了的现象。</p>
      */
     private long turnDeadlineSeconds = 1800L;
 
@@ -207,6 +240,36 @@ public class AgentExecutionProperties {
 
     /** RUNNING 执行记录超时分钟数，默认 10。 */
     private int runningTimeoutMinutes = 10;
+
+    /**
+     * 「无进展」兜底阈值（分钟，`MA-10` 改动 3）。
+     *
+     * <p><b>取代 {@link #runningTimeoutMinutes} 的判定口径</b>：RUNNING 扫描从「start_time + 10 分钟」
+     * （固定总时长）改为「{@code COALESCE(last_progress_at, start_time)} + 本阈值」（有没有在推进）。
+     * 固定总时长把「慢但有效」与「卡死」判成同一件事——20 轮 × 慢工具 5 分钟超时 = 100 分钟，
+     * 与 10 分钟毫无关系。</p>
+     *
+     * <p><b>默认 45 分钟</b>（{@code toolCallTimeoutMillis} 的 9 倍）：蓝图 §4 `MA-10` ⑦ 要求
+     * 「必须比单工具超时明显更长（至少 3~4 倍）」，否则「一个正在跑第 2 轮、工具本就慢」的任务
+     * 会被判无进展。取 9 倍是留出一轮内「多点工具调用 + 模型思考」的余量：单轮内即使连续三个
+     * 工具各耗时接近上限，进展写点仍在工具边界更新，不会被误判。</p>
+     *
+     * <p><b>与 {@link #runningTimeoutMinutes} 的关系</b>：后者保留但不再参与 RUNNING 判定
+     * （仅用于日志文案与外部路径说明），避免改动 4 收敛层级时漏掉读取方。</p>
+     */
+    private int noProgressTimeoutMinutes = 45;
+
+    /**
+     * 「无进展」检测开关（`MA-10` 改动 3 观察期纪律）。
+     *
+     * <p><b>默认 {@code false}（只 warn、不判超时）</b>：与 `MA-4` 第一段同一条纪律
+     * 「先观察不改行为」。开启时 {@code ExecutionCompensationTask} 对命中的记录<b>只记日志与事件</b>，
+     * 仍按旧的 {@code runningTimeoutMinutes} 判超时；观察一段拿到真实分布后再置 {@code true}
+     * 让它真正接管（届时旧判据停用）。</p>
+     *
+     * <p>置 {@code true} 后：命中即判超时（旧判据不再生效）。</p>
+     */
+    private boolean noProgressDetectionEnforced = false;
 
     /** DB Poller 扫描周期（毫秒）。默认 1000 ms。 */
     private long pollerIntervalMs = 1000L;
