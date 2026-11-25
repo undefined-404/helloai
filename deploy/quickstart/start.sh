@@ -60,6 +60,11 @@ Environment overrides (edit .env instead of the shell):
   HELLOAI_HTTP_PORT     host port for the web entry (default 8080)
   HELLOAI_SANDBOX_PORT  host port for the sandbox server (default 8090, loopback)
   HELLOAI_JVM_XMX       backend heap (default 2g)
+
+Optional sandbox /workspace volume (--with-sandbox only; off by default):
+  SANDBOX_VOLUME_ENABLED    true to mount /workspace from one host directory
+  SANDBOX_VOLUME_HOST_PATH  absolute host dir; REQUIRED when the above is true
+                            (one directory is shared by ALL tasks today)
 EOF
 }
 
@@ -201,6 +206,62 @@ validate_env() {
   if [ "$WITH_SANDBOX" -eq 1 ]; then
     env_require SANDBOX_API_KEY
   fi
+}
+
+# Validate the optional /workspace volume switch (SL-10).
+#
+# Kept separate from validate_env because it has a DIFFERENT failure policy:
+#   validate_env guards keys the stack cannot run without, so it dies always.
+#   This one guards an OPT-IN extra whose default is "off" -- so a half-filled
+#   config (enabled=true but no path) is a user mistake worth failing on, while
+#   a fully empty one is the normal state and must stay silent.
+#
+# Exports SANDBOX_VOLUME_ENABLED/HOST_PATH for compose only when the switch is
+#   actually on; when off, compose falls back to its own defaults (false / empty)
+#   and the [storage] allowlist keeps its never-matching placeholder.
+validate_volume() {
+  local enabled path
+  enabled="$(env_get SANDBOX_VOLUME_ENABLED)"
+  path="$(env_get SANDBOX_VOLUME_HOST_PATH)"
+  # `enabled` is only ever "true" or empty/false; anything else is a typo and
+  #   would otherwise be treated as false by compose without telling anyone.
+  case "$enabled" in
+    ""|false|False|FALSE|0) ;;
+    true|True|TRUE|1) ;;
+    *) die "SANDBOX_VOLUME_ENABLED must be true or false (got '$enabled')" ;;
+  esac
+  case "$enabled" in
+    true|True|TRUE|1) ;;
+    *)
+      # Off: a leftover path is harmless but almost always a half-finished edit,
+      #   so say so instead of silently ignoring it.
+      if [ -n "$path" ]; then
+        warn "SANDBOX_VOLUME_HOST_PATH is set but SANDBOX_VOLUME_ENABLED=false; the volume stays off."
+      fi
+      export SANDBOX_VOLUME_ENABLED=false
+      unset SANDBOX_VOLUME_HOST_PATH 2>/dev/null || true
+      return 0
+      ;;
+  esac
+  if [ -z "$path" ]; then
+    die "SANDBOX_VOLUME_ENABLED=true needs SANDBOX_VOLUME_HOST_PATH (an absolute host directory)."
+  fi
+  # Relative paths are rejected: the sandbox server resolves the path in ITS OWN
+  #   namespace on the host daemon, so a value like ./workspace would point at a
+  #   directory that does not exist there.
+  case "$path" in
+    /*|[A-Za-z]:[\\/]*) ;;
+    *) die "SANDBOX_VOLUME_HOST_PATH must be an absolute path (got '$path')." ;;
+  esac
+  # The directory must already exist: the sandbox server refuses to create it,
+  #   and a missing path surfaces later as an opaque mount failure.
+  [ -d "$path" ] || die "SANDBOX_VOLUME_HOST_PATH directory does not exist: $path"
+  if [ "$WITH_SANDBOX" -ne 1 ]; then
+    die "SANDBOX_VOLUME_ENABLED=true requires --with-sandbox (without the sandbox server there is no volume to mount)."
+  fi
+  export SANDBOX_VOLUME_ENABLED=true
+  export SANDBOX_VOLUME_HOST_PATH="$path"
+  log "sandbox /workspace volume: ON ($path, shared by all tasks)"
 }
 
 # ---------------------------------------------------------------- preflight
@@ -457,6 +518,9 @@ main() {
   check_arch
   check_memory
   check_port
+  # Runs AFTER the .env is sourced above: it reads the values through env_get and
+  #   re-exports the normalised ones, so a typo in .env cannot reach compose.
+  validate_volume
 
   if [ "$OFFLINE" -eq 1 ]; then
     load_offline

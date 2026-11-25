@@ -145,6 +145,14 @@ services:
       SANDBOX_ENABLED: ${SANDBOX_ENABLED:-false}
       SANDBOX_URL: ${SANDBOX_URL:-http://opensandbox-server:8090}
       SANDBOX_API_KEY: ${SANDBOX_API_KEY:-}
+      # /workspace volume switch (SL-10). Opt-in and OFF by default, exactly like
+      #   deploy/app. When on, the executor mounts /workspace rw and the reviewer
+      #   ro (EROFS) from THIS one host directory, so the two containers share a
+      #   workspace instead of each keeping a private writable layer.
+      # The same SANDBOX_VOLUME_HOST_PATH is fed to the [storage] allowlist in the
+      #   opensandbox-config below -- one value, two consumers, no second key.
+      SANDBOX_VOLUME_ENABLED: ${SANDBOX_VOLUME_ENABLED:-false}
+      SANDBOX_VOLUME_HOST_PATH: ${SANDBOX_VOLUME_HOST_PATH:-}
     networks:
       - default
       - opensandbox-net
@@ -297,6 +305,21 @@ configs:
       drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
       no_new_privileges = true
       pids_limit = 4096
+
+      [storage]
+      # Host bind mounts are REJECTED unless the prefix is allowlisted here.
+      #   The pinned release-1.1.0 treats an EMPTY list as "reject everything"
+      #   (upstream breaking change #750/#751) -- so this section is REQUIRED,
+      #   not optional, once SANDBOX_VOLUME_ENABLED=true.
+      # The default below is a placeholder that never exists on a real host, NOT
+      #   an empty string: `[""]` would be a one-entry list whose prefix is empty
+      #   and would therefore match every path, i.e. allow everything. A path that
+      #   cannot exist is the only safe default -- an unset volume is then denied
+      #   by the server instead of silently permitted.
+      # Single source of truth is SANDBOX_VOLUME_HOST_PATH in .env, shared with the
+      #   app service above. Changing it requires:
+      #     docker compose up -d --force-recreate opensandbox-server
+      allowed_host_paths = ["${SANDBOX_VOLUME_HOST_PATH:-__helloai_volume_disabled__}"]
 
       [ingress]
       mode = "direct"

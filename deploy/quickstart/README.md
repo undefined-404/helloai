@@ -132,6 +132,33 @@ cp ../helloai-offline-core-0.2.1.tar.gz .    # 必须放脚本同目录
 > ⚠️ **改端口只能解决「与不带沙箱的栈共存」**：两个 `opensandbox-server` 同时运行会
 > 争夺 20000-32000 的沙箱端口段（它们共用同一个 docker.sock），必须只跑一个。
 
+#### 可选：`/workspace` 卷挂载（默认关闭）
+
+沙箱默认每个容器自带一份可写 `/workspace`，执行器和审核器各写各的。开启卷挂载后，
+两者从**同一个宿主目录**分别挂 rw / ro（审核器侧为 EROFS），审核就能看到执行器真实写下的文件。
+
+在 `.env` 里加两行，然后重新 `./start.sh --with-sandbox`：
+
+```bash
+SANDBOX_VOLUME_ENABLED=true
+SANDBOX_VOLUME_HOST_PATH=/absolute/path/to/workspace   # 必须是已存在的绝对路径
+```
+
+约束与注意事项：
+
+| 项 | 说明 |
+|---|---|
+| 默认值 | `false`。关闭时行为与升级前完全一致，无需迁移 |
+| 路径要求 | 必须是**绝对路径且目录已存在**；相对路径、不存在的目录、拼写错误的开关值都会被 start.sh 直接拒绝 |
+| 前置条件 | 必须配 `--with-sandbox`（没有沙箱服务就没有卷可挂） |
+| ⚠️ **所有任务共用一个目录** | 当前平台只有一份全局 `host-path`，**同时跑多个任务会互相覆盖**。只建议单用户试用；按任务隔离是后续 `workspace-root` 的工作 |
+| 改路径后 | 必须 `docker compose up -d --force-recreate opensandbox-server`（白名单在启动时读取） |
+
+> 白名单机制：宿主目录必须在 `opensandbox-config` 的 `[storage].allowed_host_paths`
+> 里登记，否则沙箱服务拒绝挂载。该值与 `SANDBOX_VOLUME_HOST_PATH` 同源，不需要改两处。
+> 未配置时列表里是一个不存在的占位路径（而非空串），因此「没配置」会安全地被拒绝，
+> 不会变成「放行一切」。
+
 ---
 
 ## 3. 目录与端口
