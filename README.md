@@ -106,14 +106,19 @@ curl -fsSL …/install.sh | HELLOAI_REF=v0.2.1 bash -s -- --with-sandbox
 # 1. 克隆
 git clone https://gitee.com/undefined_404/helloai.git && cd helloai
 
-# 2. 启动中间件（PostgreSQL / Redis / RabbitMQ / MinIO）
+# 2. 准备 OpenSandbox 配置（含本机工作区白名单，不入库，故需先复制模板）
+cp opensandbox-config.example.toml opensandbox-config.toml
+#    不改也能正常起：默认拒绝一切宿主路径挂载
+#    （只有跑带卷沙箱时才需改 [storage].allowed_host_paths，见文件内注释）
+
+# 3. 启动中间件（PostgreSQL / Redis / RabbitMQ / MinIO / OpenSandbox server）
 docker compose up -d
 
-# 3. 启动后端（Flyway 自动建表；本地开发请用 local profile，见下方警告）
+# 4. 启动后端（Flyway 自动建表；本地开发请用 local profile，见下方警告）
 mvn clean package -DskipTests
 java -jar helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar --spring.profiles.active=local
 
-# 4. 启动前端
+# 5. 启动前端
 cd helloai-ui && npm install && npm run dev
 ```
 

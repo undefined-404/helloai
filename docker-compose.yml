@@ -168,48 +168,13 @@ services:
 configs:
   # OpenSandbox server 配置文件（server 侧 config.toml，官方 example 裁剪）。
   # execd / egress 为 server 建沙箱时的运行时辅助镜像（非用户任务镜像）。
+  # 2026-11-24 由 content: 改为 file: 引用（非 swarm 模式下 content 变更不同步，
+  # config.toml 挂载内容不随改版更新，实测容器重建后仍为旧内容）。
+  # 被引用的 opensandbox-config.toml 不入库（含本机工作区白名单），首次使用先
+  #     cp opensandbox-config.example.toml opensandbox-config.toml
+  # 再按注释改 [storage].allowed_host_paths（不改=拒绝一切宿主路径挂载）。
   opensandbox-config:
-    content: |
-      [server]
-      host = "0.0.0.0"
-      port = 8090
-      api_key = "${OPEN_SANDBOX_API_KEY:-dev-test-key}"
-
-      [proxy]
-      # 生命周期 server 挂在 opensandbox-net，而经 docker.sock 建的沙箱走 Docker
-      # bridge 网络 —— 经宿主发布端口路由，而非不可达的沙箱 IP。
-      resolve_internal = false
-
-      [log]
-      level = "INFO"
-
-      [runtime]
-      type = "docker"
-      # execd：沙箱内部执行守护进程（每个沙箱容器启动时注入）
-      execd_image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:v1.1.0"
-      # execd_image = "opensandbox/execd:v1.1.0"   # Docker Hub 备选（网络受限用阿里云源）
-
-      [egress]
-      # egress：网络出口 sidecar（networkPolicy egress 白名单 + Credential Vault 凭据侧车）
-      image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:v1.1.7"
-      # image = "opensandbox/egress:v1.1.7"        # Docker Hub 备选
-      readiness_timeout_seconds = 30.0
-
-      [docker]
-      network_mode = "bridge"
-      host_ip = "host.docker.internal"
-      # Windows 宿主存在动态端口排除段（55347-56346 等，见 `netsh interface ipv4
-      # show excludedportrange protocol=tcp`），原 40000-60000 会撞上这些被排
-      # 除端口导致 egress sidecar 绑不上宿主端口（小结，见 LOG）。2026-10-31
-      # 收敛到 20000-32000，避开全部排除段。
-      port_range_min = 20000
-      port_range_max = 32000
-      drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
-      no_new_privileges = true
-      pids_limit = 4096
-
-      [ingress]
-      mode = "direct"
+    file: ./opensandbox-config.toml
 
 volumes:
   postgres_data:

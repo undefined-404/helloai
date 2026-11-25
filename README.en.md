@@ -165,14 +165,20 @@ For local development / customization. **You must `git clone` the source first**
 # 1. Clone (prerequisite for mvn / npm)
 git clone https://gitee.com/undefined_404/helloai.git && cd helloai
 
-# 2. Start middleware (PostgreSQL / Redis / RabbitMQ / MinIO)
+# 2. Prepare the OpenSandbox config (holds a machine-local workspace allowlist,
+#    so it is gitignored -- copy the template first)
+cp opensandbox-config.example.toml opensandbox-config.toml
+#    Leaving it unchanged still works: every host path mount is rejected by default.
+#    Only edit [storage].allowed_host_paths when you run sandboxes with bind mounts.
+
+# 3. Start middleware (PostgreSQL / Redis / RabbitMQ / MinIO / OpenSandbox server)
 docker compose up -d
 
-# 3. Start the backend (Flyway migrates the schema automatically; default profile is dev, use local for local dev, see warning below)
+# 4. Start the backend (Flyway migrates the schema automatically; default profile is dev, use local for local dev, see warning below)
 mvn clean package -DskipTests
 java -jar helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar --spring.profiles.active=local
 
-# 4. Start the frontend
+# 5. Start the frontend
 cd helloai-ui && npm install && npm run dev
 ```
 

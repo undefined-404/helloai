@@ -46,6 +46,11 @@ Desktop.ini
 *.log
 logs/
 
+# --- 本地实例配置（模板入库，真实文件不入库）---
+# opensandbox-config.example.toml 是模板；真实文件含本机绝对路径
+# （[storage].allowed_host_paths 沙箱工作区白名单），换机器/换人都要改，不入仓。
+opensandbox-config.toml
+
 # --- Maven wrapper ---
 !.mvn/wrapper/maven-wrapper.jar
 

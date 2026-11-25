@@ -59,7 +59,7 @@
 
 | # | 锚点 | 现状事实 |
 |---|---|---|
-| 1 | 沙箱卷挂载（OpenSandbox） | `allowed_host_paths` 白名单 + `file:` 独立引用 + `/workspace` 卷内语义已通（G-037 实测）；仓库本体不进沙箱；**白名单现只有 `E:/yhzx/1027/unip-review-workspace`**（`opensandbox-config.toml:51`） |
+| 1 | 沙箱卷挂载（OpenSandbox） | `allowed_host_paths` 白名单 + `file:` 独立引用 + `/workspace` 卷内语义已通（G-037 实测）；仓库本体不进沙箱；**白名单现只有 `E:/yhzx/1027/unip-review-workspace`**（本机 `opensandbox-config.toml` 的 `[storage]` 段；该文件入库被 `gitignore` 排除，模板见 `opensandbox-config.example.toml`） |
 | 2 | 执行器形态 | 技能型执行（宿主循环 + 持久 shell + 文件工具直读），无「repo 拷贝进工作区」环节；JGit 接管 clone/diff 不改变执行内核 |
 | 3 | 平台仓库触达 | 平台进程唯一 `ProcessBuilder` 为 `PgDumpRunner`；无 git 操作能力 |
 | 4 | 产物通道 | `attachment` 方向已支持产物登记；缺「执行中代码文件」增量提交语义 |
@@ -103,7 +103,7 @@
 - **做什么**：任务声明 `repo`（地址 + 分支/commit 锁定）→ 平台 JGit 克隆到任务工作区 → 经沙箱卷挂载进 **`/workspace/repo`**（只读基线，防止篡改）。
 - **★clone 深度待 `GT-0` 定（2026-11-24 晚实测，先记约束不预设结论）**：`--depth 1` 能让 agent 工作区变轻（浅克隆后提交、`git diff <baseSha> HEAD`、push 回全量 bare 均实测可用），但**浅克隆下 `merge-base` 返回 RC=1、merge 报 `refusing to merge unrelated histories`**；`--unshallow` 后 RC=0，`--depth=100` 亦 RC=0。⇒ **合并（`GT-8`）必须落在全量或足够深的裸仓上，浅克隆只可作 agent 工作区**。本步骤的「任务工作区」属哪一类，由 `GT-0` 第 ③ 项（单任务多 agent 独立 clone 的体积/耗时）出结论后校准——**在结论出来前不把「浅克隆」写死为默认**。
 - **硬前置 A（隔离）**：`application.yml:199-200` 只有一份全局 `volume.host-path`，`SandboxFactory.applyWorkspaceVolume()` 直接读全局配置 ⇒ **今天所有任务开卷就是同一个目录**。须新增 `workspace-root`，目录取 `{root}/{kind}-{ownerId}`，`SandboxFactory.create()` 改接收解析后的 hostPath（槽键已带 kind/ownerId/spec/access，改动集中在 factory 签名与调用点）。
-- **硬前置 B（白名单）**：`opensandbox-config.toml:51` 现只有 `E:/yhzx/1027/unip-review-workspace`；该字段是 **path prefixes** allowlist ⇒ 登记 root 一次即覆盖 `{root}/{taskId}/...` 子目录，不必逐任务登记；改后需 `--force-recreate`。**版本陷阱**：钉住的 release-1.1.0 实测「空列表=全拒」（server breaking change #750/#751），不要照 latest 文档把白名单清空。
+- **硬前置 B（白名单）**：本机 `opensandbox-config.toml`（不入库，模板 `opensandbox-config.example.toml`）的 `[storage] allowed_host_paths` 现只有 `E:/yhzx/1027/unip-review-workspace`（G-037 试点工作区）；该字段是 **path prefixes** allowlist ⇒ 登记 root 一次即覆盖 `{root}/{taskId}/...` 子目录，不必逐任务登记；改后需 `--force-recreate`。**版本陷阱**：钉住的 release-1.1.0 实测「空列表=全拒」（server breaking change #750/#751），不要照 latest 文档把白名单清空。
 - **挂载点修正**：**必须 `/workspace/repo` 而非 `/workspace`**——`DeliverableReader` 在 `/workspace` 下按 depth=2 挑最新 `.md`，仓库挂进根目录会让 `README.md`/`CLAUDE.md` 被误当交付物；同时给 `DeliverableReader` 加「跳过 repo 子树」。
 - **本批次建议顺带做 `GT-10`**：`GT-2` 改的正是卷挂载链路（`SandboxFactory` 签名 / `application.yml` 的 `workspace-root` / 宿主目录解析），而 `GT-10` 的 app 容器 bind mount 依赖同一个 `SANDBOX_VOLUME_HOST_PATH` 变量——两件事同批实施可一次到位，避免 `GT-10` 单独改一遍后又被 `GT-2` 的链路改动作废。
 - **验收判据**：clone 成功后沙箱内 `git status` / `git diff` 可查；工作区与远端基线条目一致；commit 锁定在基线 sha；**两个不同任务/agent 的卷目录互不覆盖**；交付物回读不捞到仓库内 `.md`。

@@ -1,0 +1,65 @@
+# OpenSandbox server 配置模板（本地开发）。
+#
+# 用法：cp opensandbox-config.example.toml opensandbox-config.toml
+#      真实文件已被 .gitignore 忽略，可放心写本机绝对路径（沙箱工作区白名单）。
+#
+# 由仓库根 docker-compose.yml 的 `opensandbox-config` 以 file: 引用挂载（content: 在非
+# swarm 模式下存在变更不同步问题，2026-11-24 改为 file:）。
+# 注意：file 引用的文件内容不做 ${} 插值，api_key 此处写开发占位。
+#
+# 本文件只服务仓库根 docker-compose.yml（本地中间件栈）。服务器部署
+# （deploy/app、deploy/quickstart）各自内联 content 并读 SANDBOX_VOLUME_HOST_PATH，
+# 不读本文件。
+
+[server]
+host = "0.0.0.0"
+port = 8090
+api_key = "dev-test-key"
+
+[proxy]
+# 生命周期 server 挂在 opensandbox-net，而经 docker.sock 建的沙箱走 Docker
+# bridge 网络 —— 经宿主发布端口路由，而非不可达的沙箱 IP。
+resolve_internal = false
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "docker"
+# execd：沙箱内部执行守护进程（每个沙箱容器启动时注入）
+execd_image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:v1.1.0"
+# execd_image = "opensandbox/execd:v1.1.0"   # Docker Hub 备选（网络受限用阿里云源）
+
+[egress]
+# egress：网络出口 sidecar（networkPolicy egress 白名单 + Credential Vault 凭据侧车）
+image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:v1.1.7"
+# image = "opensandbox/egress:v1.1.7"        # Docker Hub 备选
+readiness_timeout_seconds = 30.0
+
+[docker]
+network_mode = "bridge"
+host_ip = "host.docker.internal"
+# Windows 宿主存在动态端口排除段（55347-56346 等，见 `netsh interface ipv4
+# show excludedportrange protocol=tcp`），原 40000-60000 会撞上这些被排
+# 除端口导致 egress sidecar 绑不上宿主端口（小结，见 LOG）。2026-10-31
+# 收敛到 20000-32000，避开全部排除段。
+port_range_min = 20000
+port_range_max = 32000
+drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
+no_new_privileges = true
+pids_limit = 4096
+
+[ingress]
+mode = "direct"
+
+# 允许 bind mount 的宿主机路径前缀白名单（OpenSandbox release-1.1.0 默认空列表
+# = 拒绝一切宿主路径挂载，见 server breaking change #750/#751）。
+# 该字段是 path prefixes allowlist：登记一次 root 即覆盖 {root}/... 子目录，
+# 不必逐任务登记。
+#
+# 本机要跑带卷沙箱（G-037 任务约束试点、GT-10 工作区可见性等）时，把下面这行改成
+# 自己的工作区根绝对路径，然后 `docker compose up -d --force-recreate opensandbox-server`。
+# 占位值故意不可命中：未改即「一律拒绝」，不放行任何宿主路径。
+# 不要写成 [""]——空串是「空前缀」，等于放行一切（deploy/app 的 SL-10 注释有同款提醒）。
+[storage]
+allowed_host_paths = ["__REPLACE_WITH_YOUR_SANDBOX_WORKSPACE_ROOT__"]
