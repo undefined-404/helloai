@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -52,6 +53,9 @@ public class AssistantSearchQueryPlanner {
               并给出可直接检索的独立关键词；此时 search_query 不得为空。
             - 历史中的「这次 / 上面 / 刚才」等指代必须结合历史改写为独立主题；相对时间转绝对日期。
             - 若附件已能完整回答，attachment_intent 设为 answerable；否则按 needs_external / none 判定。
+            - **用户点名了「哪几份附件」时，必须把序号填进 attachment_targets**（1-based，对应
+              「本轮附件」清单里的 `附件N`）；只说「附件」不指向具体某份时填 `[]`。
+              这是本链唯一的附件作用域信号——漏填就意味着会话里全部附件的正文都会进来。
             """;
 
     /** 平台内数据类问题的意图标记（进 plan.attachmentIntent，供调用方选择提示文案）。 */
@@ -75,21 +79,36 @@ public class AssistantSearchQueryPlanner {
     /**
      * 生成本轮检索计划。
      *
+     * <p><b>为什么需要 {@code searchAllowed}</b>（`G-043`）：本方法一次调用同时产出
+     * <b>两个互不相关</b>的结论——「本轮附件作用域是哪些」与「要不要联网」。原实现把整个
+     * 调用包在 {@code conversation.webSearchEnabled} 门控里，等于让「不联网」顺带否决
+     * 「判定附件作用域」。而工作台默认 {@code webSearchEnabled=false}，于是
+     * {@code attachment_targets} <b>在生产默认配置下永远不会被解析</b>——用户说
+     * 「就按第 2 张图来」，后端只知道「该看附件」，不知道「看哪几张」。
+     * 拆出本参数后，开关只否决联网这一个结论，附件作用域照常产出。</p>
+     *
      * @param conversation   助理会话（提供历史、附件与 Planner 选择）
      * @param userMessage    本轮用户原话
      * @param hasAttachments 本会话是否挂了附件；仅此时 {@code answerable} 才允许跳过联网
+     * @param searchAllowed  本会话是否允许真正发起联网检索（{@code webSearchEnabled}）；
+     *                       为 {@code false} 时 {@code skipSearch} 恒真，但附件作用域照常返回
      */
     public AssistantSearchPlan plan(RequirementConversation conversation, String userMessage,
-                                    boolean hasAttachments) {
-        if (conversation == null || !properties.isEnabled()
-                || !Boolean.TRUE.equals(conversation.getWebSearchEnabled())) {
+                                    boolean hasAttachments, boolean searchAllowed) {
+        if (conversation == null || !properties.isEnabled()) {
+            return AssistantSearchPlan.disabledPlan();
+        }
+        // 不联网 + 无附件 ⇒ 「要不要搜」与「看哪几份附件」两个结论都已经确定，
+        // 没有为它们花一次决策 LLM 调用的理由。
+        if (!searchAllowed && !hasAttachments) {
             return AssistantSearchPlan.disabledPlan();
         }
         // 先按确定性规则分诊：明确指向「平台内数据」的问题直接跳过联网，不花一次决策 LLM 调用。
         // 只认强信号且不含外部时效词，命中才短路；边界情况仍交给下面的 LLM 决策（宁多不误跳）。
-        if (looksLikeInternalDataQuestion(userMessage)) {
+        // 不联网时不必分诊「要不要搜」，但仍要跑决策拿附件作用域 ⇒ 加 searchAllowed 门控。
+        if (searchAllowed && looksLikeInternalDataQuestion(userMessage)) {
             log.info("助理检索决策: conversationId={}, skipSearch=true（平台内数据，规则短路）", conversation.getId());
-            return new AssistantSearchPlan(null, true, false, INTERNAL_DATA);
+            return new AssistantSearchPlan(null, true, false, INTERNAL_DATA, List.of());
         }
         long t0 = System.currentTimeMillis();
         try {
@@ -115,13 +134,20 @@ public class AssistantSearchQueryPlanner {
                 query = null;
             }
             boolean answerable = decision.attachmentIntent() == AttachmentIntent.ANSWERABLE;
-            boolean skipSearch = !needSearch || (answerable && hasAttachments);
+            // 不联网时恒跳过：skipSearch 的语义是「本轮不发起检索」，不是「检索无用」。
+            boolean skipSearch = !searchAllowed || !needSearch || (answerable && hasAttachments);
             String attachmentIntent = decision.attachmentIntent() == null
                     ? "unknown" : decision.attachmentIntent().wireValue();
-            log.info("助理检索决策: conversationId={}, query={}, attachmentIntent={}, skipSearch={}, costMs={}",
-                    conversation.getId(), query, attachmentIntent, skipSearch,
+            // `G-043`：作用域信号必须与 intent 一起流出——只取 intent 丢掉 targets，
+            // 就会出现「知道该看附件、但不知道看哪几份」⇒ 只能全量注入。
+            // 越界序号由下游 `resolveScope` 再兜一次（那里知道实际附件数）。
+            List<Integer> attachmentTargets = decision.attachmentTargets() == null
+                    ? List.of() : decision.attachmentTargets();
+            log.info("助理检索决策: conversationId={}, query={}, attachmentIntent={}, attachmentTargets={}, "
+                            + "skipSearch={}, costMs={}",
+                    conversation.getId(), query, attachmentIntent, attachmentTargets, skipSearch,
                     System.currentTimeMillis() - t0);
-            return new AssistantSearchPlan(query, skipSearch, false, attachmentIntent);
+            return new AssistantSearchPlan(query, skipSearch, false, attachmentIntent, attachmentTargets);
         } catch (Exception e) {
             log.warn("助理检索决策失败（降级规则检索）: conversationId={}, err={}",
                     conversation.getId(), e.getMessage());
@@ -145,18 +171,30 @@ public class AssistantSearchQueryPlanner {
      * @param skipSearch        附件已能独立回答且确有计划附件时为 true
      * @param degraded          决策失败，已降级为规则检索
      * @param attachmentIntent  附件意图（仅日志与排障）
+     * @param attachmentTargets 本轮指向的附件序号（1-based，与清单一致）；null/空 = 不限。
+     *                          <p><b>`G-043`</b>：此前本 record 只有上面四个字段，
+     *                          {@code attachment_targets} <b>整条无解析</b>——工作台里用户说
+     *                          「就按第 2 张图来」不生效，只能全量注入。这不是前端没做，
+     *                          是<b>后端没接</b>：决策 LLM 明明输出了该字段
+     *                          （{@code ChatRoundDecisionParser} 一直在解析），但助理链
+     *                          拿到 {@link ChatRoundDecision} 后只取了 {@code attachmentIntent}，
+     *                          把作用域信号整个丢掉了。</p>
+     *                          <p><b>为什么放在本 record 而不是另开一个参数</b>：附件作用域是
+     *                          「本轮决策」的一部分，必须与 {@code attachmentIntent} 同生命周期
+     *                          一起流到渲染点；拆成两个参数就会出现「intent 生效了、targets 忘了传」
+     *                          这种只有一半作用域的状态。</p>
      */
     public record AssistantSearchPlan(String priorityQuery, boolean skipSearch, boolean degraded,
-                                      String attachmentIntent) {
+                                      String attachmentIntent, List<Integer> attachmentTargets) {
 
         /** 未启用 / 开关关闭：不调用 LLM，也不跳过规则检索。 */
         public static AssistantSearchPlan disabledPlan() {
-            return new AssistantSearchPlan(null, false, false, "disabled");
+            return new AssistantSearchPlan(null, false, false, "disabled", List.of());
         }
 
         /** 决策失败：无优先词、不跳过检索，行为与改造前一致。 */
         public static AssistantSearchPlan degradedPlan() {
-            return new AssistantSearchPlan(null, false, true, "degraded");
+            return new AssistantSearchPlan(null, false, true, "degraded", List.of());
         }
     }
 }

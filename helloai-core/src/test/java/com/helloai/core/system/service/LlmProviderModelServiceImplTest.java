@@ -102,14 +102,14 @@ class LlmProviderModelServiceImplTest {
     void saveProviderModels_valid_replacesAllAndMarksDefault() {
         when(mapper.delete(any())).thenReturn(1);
 
-        service.saveProviderModels(1L, "deepseek", List.of("deepseek-v4-flash", "deepseek-v4-pro"), "deepseek-v4-flash");
+        service.saveProviderModels(1L, "deepseek", List.of("deepseek-flash", "deepseek-v4-pro"), "deepseek-flash");
 
         verify(mapper).delete(any(LambdaQueryWrapper.class));
         ArgumentCaptor<LlmProviderModel> captor = ArgumentCaptor.forClass(LlmProviderModel.class);
         verify(mapper, times(2)).insert(captor.capture());
         List<LlmProviderModel> inserted = captor.getAllValues();
         assertThat(inserted).extracting(LlmProviderModel::getModelName)
-                .containsExactly("deepseek-v4-flash", "deepseek-v4-pro");
+                .containsExactly("deepseek-flash", "deepseek-v4-pro");
         assertThat(inserted.get(0).getIsDefault()).isEqualTo(1);
         assertThat(inserted.get(1).getIsDefault()).isZero();
         assertThat(inserted.get(0).getProviderCode()).isEqualTo("deepseek");
@@ -151,7 +151,7 @@ class LlmProviderModelServiceImplTest {
     void addModel_duplicate_throws() {
         when(mapper.selectCount(any())).thenReturn(1L);
 
-        assertThatThrownBy(() -> service.addModel(1L, "deepseek", "deepseek-v4-flash", false))
+        assertThatThrownBy(() -> service.addModel(1L, "deepseek", "deepseek-flash", false))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("模型已存在");
         verify(mapper, never()).insert(any(LlmProviderModel.class));
@@ -201,9 +201,9 @@ class LlmProviderModelServiceImplTest {
     @Test
     @DisplayName("deleteModel：删除默认模型被拒绝")
     void deleteModel_defaultModel_throws() {
-        when(mapper.selectOne(any(), anyBoolean())).thenReturn(model(2L, "deepseek-v4-flash", 1, 1));
+        when(mapper.selectOne(any(), anyBoolean())).thenReturn(model(2L, "deepseek-flash", 1, 1));
 
-        assertThatThrownBy(() -> service.deleteModel(1L, "deepseek-v4-flash"))
+        assertThatThrownBy(() -> service.deleteModel(1L, "deepseek-flash"))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不能删除默认模型");
         verify(mapper, never()).deleteById(any(Long.class));
@@ -236,10 +236,10 @@ class LlmProviderModelServiceImplTest {
     @Test
     @DisplayName("toggleModel：禁用最后一个启用模型（默认或非默认）时被拒绝")
     void toggleModel_disableDefaultWithNoOtherEnabled_throws() {
-        when(mapper.selectOne(any(), anyBoolean())).thenReturn(model(2L, "deepseek-v4-flash", 1, 1));
+        when(mapper.selectOne(any(), anyBoolean())).thenReturn(model(2L, "deepseek-flash", 1, 1));
         when(mapper.selectCount(any())).thenReturn(0L);
 
-        assertThatThrownBy(() -> service.toggleModel(1L, "deepseek-v4-flash", false))
+        assertThatThrownBy(() -> service.toggleModel(1L, "deepseek-flash", false))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不能禁用最后一个启用模型");
         verify(mapper, never()).updateById(any(LlmProviderModel.class));
@@ -274,12 +274,12 @@ class LlmProviderModelServiceImplTest {
     @Test
     @DisplayName("toggleModel：禁用默认模型但存在其他启用模型时允许")
     void toggleModel_disableDefaultWithOtherEnabled_ok() {
-        LlmProviderModel target = model(2L, "deepseek-v4-flash", 1, 1);
+        LlmProviderModel target = model(2L, "deepseek-flash", 1, 1);
         when(mapper.selectOne(any(), anyBoolean())).thenReturn(target);
         when(mapper.selectCount(any())).thenReturn(1L);
         when(mapper.updateById(any(LlmProviderModel.class))).thenReturn(1);
 
-        service.toggleModel(1L, "deepseek-v4-flash", false);
+        service.toggleModel(1L, "deepseek-flash", false);
 
         assertThat(target.getEnabled()).isZero();
         verify(mapper).updateById(target);

@@ -461,7 +461,10 @@ public class RequirementConversationController {
     @PostMapping("/sendMessageById/{id}")
     public R<ClarifyConversationDetail> sendMessageById(@PathVariable("id") Long id,
                                                     @Valid @RequestBody ClarifyMessageRequest req) {
-        return R.ok(requirementClarifyService.sendMessage(id, req.getMessage(), req.getSelectedOptions()));
+        // `G-048`：同步端点此前不接收 attachmentIds，流式一失败退同步，用户勾选就被静默丢弃。
+        // 补传后两条入口的附件参数完全同构（同一份 DTO、同一份透传链），兜底切换对用户无感。
+        return R.ok(requirementClarifyService.sendMessage(id, req.getMessage(), req.getSelectedOptions(),
+                req.getAttachmentIds()));
     }
 
     /**

@@ -13,6 +13,8 @@ import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.observability.SensitiveScanRecorder;
 import com.helloai.core.agent.support.AgentChatModelResolver;
+import com.helloai.core.agent.support.AttachmentMediaAssembler;
+import com.helloai.core.agent.support.ImageInputCapabilityPolicy;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventQueryService;
 import com.helloai.core.agent.event.AgentEventRecorder;
@@ -26,12 +28,16 @@ import com.helloai.core.agent.runtime.ExecutionProgressRecorder;
 import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
 import com.helloai.core.shared.util.UpstreamAttachmentRenderer;
 import com.helloai.core.agent.output.ExecutionRecordProtocol;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.AttachmentRef;
+import com.helloai.core.agent.port.ConversationMediaRefPort;
+import com.helloai.core.agent.port.MediaRef;
+import com.helloai.core.agent.port.ConstraintRefSnapshot;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskRunningSpecPort;
@@ -41,6 +47,7 @@ import com.helloai.core.agent.tool.EnabledToolNames;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.content.Media;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -78,6 +85,10 @@ import java.util.stream.Collectors;
  * 子任务走 {@link SubTaskQueryPort}（{@link SubTaskSnapshot} 快照，含 `dependsOn` 与 `uncertainties` 投影）、
  * 附件走 {@link AttachmentPort}（{@link AttachmentRef}，其 `contentLoadable` 与不确定性的 `assumption`
  * 均由 <b>task 侧映射器</b>派生后透传，本域不复制 task 常量）、执行记录走 {@link TaskRunningSpecPort}。
+ * 会话图片走 {@link ConversationMediaRefPort}（`VU-8`：task 域附件与会话附件两表无桥，
+ * 该端口只在 planner 侧解析 {@code task.context.conversationId}，本域不认识这个键）。
+ * `G-042` 起该端口再按<b>本子任务声明的附件</b>收窄作用域；{@code sub_task.context} 仍是
+ * <b>原样透传</b>——哪个键代表附件声明同属 planner 域私有约定，本域同样不认识。
  * 端口归属见 §7.2：消费方 agent <b>低于</b>提供方 task ⇒ 契约落消费方、适配器落提供方。</p>
  *
  * <p><b>容错纪律</b>：best-effort 降级——会话 / 对话流 / 画像 / 依赖段 / 恢复上下文任一部分失败均降级不阻断执行；
@@ -102,6 +113,25 @@ public class AgentRuntimeContextAssembler {
     private final ConversationService conversationService;
     /** 附件端口（原 {@code AttachmentService}；W11 端口化，读快照 {@link AttachmentRef}）。 */
     private final AttachmentPort attachmentPort;
+
+    /** 附件 → 多模态媒体装载（`VU-1`；与核验证据装配器共用同一判据，防两处漂移）。 */
+    private final AttachmentMediaAssembler attachmentMediaAssembler;
+
+    /**
+     * 任务关联会话的图片引用（`VU-8`）：执行面的<b>用户输入源</b>。
+     *
+     * <p>与 {@code AttachmentPort}（上游产出）并列——两者是同一份「本轮要送模型的图」的
+     * 两个来源，装载时合并成一次（共用 5 张预算），不各自截断。</p>
+     */
+    private final ConversationMediaRefPort conversationMediaRefPort;
+
+    /**
+     * 「本次请求能不能带图」的唯一判定（`VU-10`）。
+     *
+     * <p>与对话面 {@code AgentChatClientServiceImpl#applyUserMessage} 共用同一实现：
+     * 两边各写一份会让同一个模型在两条链上表现不一致（判据 4）。</p>
+     */
+    private final ImageInputCapabilityPolicy imageInputCapabilityPolicy;
     /** 子任务只读端口（原 {@code SubTaskService}；W11 端口化，读快照 {@link SubTaskSnapshot}）。 */
     private final SubTaskQueryPort subTaskQueryPort;
     private final AgentEventRecorder agentEventRecorder;
@@ -154,6 +184,12 @@ public class AgentRuntimeContextAssembler {
                 ? findTraceSafely(subTaskId, recovery.turn()) : List.of();
         String userPrompt = buildUserPrompt(subTask, promptSection, dependencySection.section, recovery,
                 completedTrace);
+
+        // `VU-10`：媒体装载 + 能力闸（唯一判定在 ImageInputCapabilityPolicy，与对话面同源）。
+        // 刻意放在 sensitiveScan 之前：能力闸会往 userPrompt 追加「看不到图」的说明，
+        // 那句也是出站正文的一部分，必须一并过扫描（MA-8 挂点③的口径是「扫出站正文」）。
+        MediaResolution mediaResolution = resolveMedia(subTask, dependencySection, agent);
+        userPrompt = mediaResolution.apply(userPrompt);
 
         // MA-8 挂点③：LLM 请求出站前扫描（log-only，不阻断、不改 prompt 内容）。
         // 为什么扫 userPrompt 而不是整条消息数组：userPrompt 才是本类装配出的「出站正文」，
@@ -235,7 +271,138 @@ public class AgentRuntimeContextAssembler {
                 .eventRecorder(agentEventRecorder)
                 .loopCheckpointListener(loopCheckpointListener)
                 .maxIterationsHint(resolveMaxIterationsHint(subTask))
+                .media(mediaResolution.media())
                 .build();
+    }
+
+    /**
+     * 合并「用户上传的图」与「上游产出的图」，装载为本次请求的媒体（`VU-8`）。
+     *
+     * <p><b>为什么在这里做（装配入口）而不是各来源各做</b>：数量上限约束的是<b>请求</b>，
+     * 不是来源。两次装载 = 两份上限，将来再接第三个来源就会变成 15 张。
+     * 合并到唯一一处，「一次请求最多几张图」才有唯一的答案（判据 4）。</p>
+     *
+     * <p><b>会话图排在上游图之前</b>：上限截断时先保用户自己给的图——那是需求输入，
+     * 上游产出只是参考（理由见 {@code AttachmentMediaAssembler#loadMerged}）。</p>
+     *
+     * <p><b>整体 fail-open</b>：两个来源任一查询失败都退化为「那个来源没有图」，
+     * 绝不阻断执行。媒体是增强而非必要条件。</p>
+     *
+     * <p><b>★能力闸（`VU-10`）</b>：装载前先问「本次实际调用的模型声明可读图片吗」。
+     * 不声明就<b>一张都不装</b>，并把这件事写进 user prompt（{@link #MEDIA_NOT_VISIBLE_NOTE}）。
+     * 理由是两条硬约束的交汇：</p>
+     * <ul>
+     *   <li><b>provider 侧</b>：给不支持图片的模型发图必被 400 拒收，而报错文本与真实原因
+     *       无关（"invalid content"），排查成本远高于少送一张图；本项目 DB 里
+     *       {@code deepseek-v4-pro} 只声明 {@code ["text"]}（官方文档：pro 确不支持图像理解）。</li>
+     *   <li><b>★SDK 侧（`V155` 实测补充）</b>：还有一种比 400 更坏的情形——provider 支持、
+     *       SDK 却静默丢弃。`spring-ai-deepseek` 的 {@code DeepSeekChatModel#createRequest}
+     *       对 USER 消息只取 {@code getText()}、无 media 分支 ⇒ 图被丢掉且**不报错**，
+     *       模型只能回「看不到」。故 deepseek 全系已按 fail-close 声明 text-only；
+     *       恢复条件见 {@code V155} 头部。</li>
+     *   <li><b>I-4 禁假装看过</b>：静默不装图会让模型把「没有图」当成事实继续编。
+     *       必须显式告知「附件里有图但当前模型看不了，不要凭文件名推测」。</li>
+     * </ul>
+     *
+     * <p><b>零图不查能力</b>：判定要查一次模型元数据，无图时查它没有意义。这与
+     * 「零媒体零变化」是同一条纪律——加媒体通道不得给纯文本链路增加任何行为或开销。</p>
+     *
+     * <p><b>为什么判定在装配层而不在循环层</b>：循环（{@code ChatModelToolLoop}）只拿到
+     * {@code ChatModel} 对象，拿不到 {@code Agent.modelType}；让它去查就依赖 system 域服务，
+     * 破坏「循环无业务数据访问」的边界，且违反 {@code AgentLoopInput} javadoc 里
+     * 「循环本体一行不改」的硬约束。</p>
+     */
+    private MediaResolution resolveMedia(SubTaskSnapshot subTask, DependencySectionResult dependencySection,
+                                         Agent agent) {
+        ConversationMediaRefPort.ScopedMediaRefs scopedImages;
+        try {
+            // `G-042`：按「本子任务声明的附件」取图，而不是整个会话的图。
+            // context 原样透传、由提供方解析——哪个键代表附件声明是 planner 域私有约定，
+            // 本域不认识它（同 `VU-8` 里「入参不是 conversationId」的理由）。
+            scopedImages = conversationMediaRefPort.listScopedImages(
+                    subTask.taskId(), subTask.id(), subTask.context());
+            // 契约写的是「绝不返回 null」，但那是调用方与实现方之间的口头约定，不是编译器能保证的。
+            // 端口实现可以替换（`VU-8` 就换过一次提供方），返回 null 时如果在这里 NPE，
+            // 等于「媒体增强」把整条执行链打断——与 best-effort 纪律正好相反。
+            if (scopedImages == null) {
+                log.warn("会话图片端口返回 null（违反契约），按无图处理: subTaskId={}, taskId={}",
+                        subTask.id(), subTask.taskId());
+                scopedImages = ConversationMediaRefPort.ScopedMediaRefs.empty();
+            }
+        } catch (Exception e) {
+            // 端口契约要求绝不抛异常，此处再兜一层：接口实现可以换，执行链不能因此断
+            log.warn("会话图片引用获取失败，按无图处理: subTaskId={}, taskId={}, err={}",
+                    subTask.id(), subTask.taskId(), e.getMessage());
+            scopedImages = ConversationMediaRefPort.ScopedMediaRefs.empty();
+        }
+        List<MediaRef> conversationImages = scopedImages.refs();
+        // `G-042`：回落会话全量时**必须显式告知模型**。否则模型把「看到的是全量」当成
+        // 「这些都和我相关」——那正是本项要修的缺陷换个形式重现。
+        // 与 `VU-10` 的「看不到图」说明并存：两者都是出站正文的一部分，都要过敏感扫描。
+        String scopeNote = scopedImages.fallbackNote();
+        // 能力闸放在装载之前：不支持的模型连字节都不读（省掉一次 MinIO / 库往返），
+        // 且避免「读了一堆字节又全部丢弃」这种只有成本没有收益的路径。
+        if (!imageInputCapabilityPolicy.supportsImageInput(agent)) {
+            boolean hasAnyImage = !conversationImages.isEmpty()
+                    || !dependencySection.images.isEmpty();
+            if (!hasAnyImage) {
+                // 零图：不注入任何说明。「本来就没图」与「有图但看不到」是两回事，
+                // 后者才需要告知（给纯文本链路加一句无意义的说明等于噪声）。
+                // 此处 scopeNote 恒为 null：回落说明只在会话里确实有图时才产生
+                // （{@code ofFallback} 的前提就是待回落清单非空）。
+                return new MediaResolution(scopeNote, List.of());
+            }
+            log.info("模型未声明图片输入，本次媒体降级为纯文本并显式告知: subTaskId={}, modelType={}, "
+                            + "conversationImages={}, upstreamImages={}",
+                    subTask.id(), agent == null ? null : agent.getModelType(),
+                    conversationImages.size(), dependencySection.images.size());
+            return new MediaResolution(joinNotes(scopeNote, ImageInputCapabilityPolicy.MEDIA_NOT_VISIBLE_NOTE),
+                    List.of());
+        }
+        List<Media> media = attachmentMediaAssembler.loadMerged(dependencySection.images, conversationImages);
+        // ★可观测点：真机验证时「这次请求到底带了几张图、来源各几张」在日志里直接可读，
+        // 不必靠「模型回答得像不像看过图」推断（`VU-8` 判据① 的观测支撑）。
+        // 只在「有图或有候选」时打 info：纯文本子任务的执行日志不该被这行淹没。
+        if (!media.isEmpty()) {
+            log.info("媒体装载完成: subTaskId={}, modelType={}, scoped={}, conversationImages={}, "
+                            + "upstreamImages={}, sent={}",
+                    subTask.id(), agent == null ? null : agent.getModelType(), scopedImages.scoped(),
+                    conversationImages.size(), dependencySection.images.size(), media.size());
+        }
+        return new MediaResolution(scopeNote, media);
+    }
+
+    /** 两段说明按序拼接（任一为 null 则退化为另一段；都为 null 返回 null = 零变化）。 */
+    private static String joinNotes(String first, String second) {
+        if (first == null || first.isBlank()) {
+            return second == null || second.isBlank() ? null : second;
+        }
+        if (second == null || second.isBlank()) {
+            return first;
+        }
+        return first + "\n" + second;
+    }
+
+    /**
+     * 媒体装载结果：本次要送的图 + 需要追加进 prompt 的降级说明（`VU-10`）。
+     *
+     * <p><b>为什么用 record 一次返回两件事</b>：图与「看不到图」的说明是<b>同一个判定的两个
+     * 产物</b>。若拆成两个方法（一个返回 media、一个返回 note），两者会在不同时刻各查一次
+     * 能力 / 各判一次空表，出现「送了图又说看不到」这种自相矛盾（判据 4）。
+     * 这正是 `VU-8` 里 {@code RenderedPrompt} 的同一形态。</p>
+     *
+     * @param promptSuffix 追加到 user prompt 末尾的说明；{@code null} = 无需追加（零变化）
+     * @param media        本次请求实际携带的媒体；空表 = 纯文本
+     */
+    private record MediaResolution(String promptSuffix, List<Media> media) {
+
+        /** 取最终 user prompt：有说明则追加，否则<b>逐字</b>返回原值（零媒体零变化）。 */
+        String apply(String userPrompt) {
+            if (promptSuffix == null) {
+                return userPrompt;
+            }
+            return (userPrompt == null ? "" : userPrompt) + "\n\n" + promptSuffix;
+        }
     }
 
     /**
@@ -490,6 +657,26 @@ public class AgentRuntimeContextAssembler {
         // G-011 D6 三段增量（空值零注入）：执行约束补偿 + 不确定性分级申报 + 事实回源声明
         if (subTask.constraints() != null && !subTask.constraints().isBlank()) {
             sb.append("执行约束（不许改的事）: ").append(subTask.constraints()).append("\n");
+        }
+        // G-037 约束文档引用（空值零注入）：只注入 ref+scope 摘要；正文由 agent 用
+        // internal_list_constraint_docs / internal_load_constraint_doc 按需读取（目录/正文分离）
+        if (subTask.constraintRefs() != null && !subTask.constraintRefs().isEmpty()) {
+            List<String> refLines = new ArrayList<>();
+            for (ConstraintRefSnapshot ref : subTask.constraintRefs()) {
+                if (ref == null || ref.ref() == null || ref.ref().isBlank()) {
+                    continue;
+                }
+                String kind = ref.kind() == null ? "" : ref.kind();
+                if (ref.scope() == null || ref.scope().isEmpty()) {
+                    refLines.add(kind + ":" + ref.ref());
+                } else {
+                    refLines.add(kind + ":" + ref.ref() + "[scope: " + String.join(",", ref.scope()) + "]");
+                }
+            }
+            if (!refLines.isEmpty()) {
+                sb.append("约束文档引用（正文用 internal_load_constraint_doc 读取）: ")
+                        .append(String.join("；", refLines)).append("\n");
+            }
         }
         if (subTask.uncertainties() != null && !subTask.uncertainties().isEmpty()) {
             sb.append("不确定性申报:\n");
@@ -931,6 +1118,7 @@ public class AgentRuntimeContextAssembler {
             int loadedCount = 0;
             int truncatedCount = 0;
             int idx = 1;
+            List<AttachmentRef> images = new ArrayList<>();
             for (Long depId : dependsOn) {
                 SubTaskSnapshot dep = depMap.get(depId);
                 if (dep == null) {
@@ -944,7 +1132,10 @@ public class AgentRuntimeContextAssembler {
                 if (depSummary != null && !depSummary.isBlank()) {
                     sb.append("**产出摘要**: ").append(depSummary).append('\n');
                 }
-                String content = loadUpstreamContent(dep);
+                UpstreamContent upstream = loadUpstreamContent(dep);
+                // `VU-1`：前置产出的图片走媒体通道（与文本通道并行，互不替代）
+                images.addAll(upstream.images());
+                String content = upstream.text();
                 if (content == null || content.isBlank()) {
                     sb.append("（该前置子任务无可用产出内容）\n\n");
                     continue;
@@ -971,7 +1162,8 @@ public class AgentRuntimeContextAssembler {
                 }
                 sb.append('\n');
             }
-            return new DependencySectionResult(sb.toString(), dependsOn.size(), loadedCount, truncatedCount, false);
+            return new DependencySectionResult(sb.toString(), dependsOn.size(), loadedCount, truncatedCount, false,
+                    List.copyOf(images));
         } catch (Exception e) {
             log.warn("依赖产出上下文装配失败，降级跳过注入: subTaskId={}, err={}", subTask.id(), e.getMessage());
             return DependencySectionResult.degraded(dependsOn.size());
@@ -987,17 +1179,35 @@ public class AgentRuntimeContextAssembler {
      *
      * <p><b>R2（审计 §15.4）</b>：拼接走 {@link UpstreamAttachmentRenderer} 逐附件配额渲染
      * （主附件保底 + 次要最低配额 + 逐附件 {@code [TRUNCATED] file=...} 标注），第二个及以后附件不再整体不可见。</p>
+     *
+     * <p><b>`VU-1` 两条通道分离</b>：图片走<b>媒体通道</b>（{@link AttachmentMediaAssembler}，
+     * 随消息发给模型），其余附件走<b>文本通道</b>（渲染进 Prompt）。此前所有 {@code contentLoadable}
+     * 附件都被 {@code new String(bytes, UTF_8)} 无差别解码——图片被当 UTF-8 解出来是乱码，
+     * 既污染 Prompt 又让模型看不到真正的图。音频/视频同属媒体族但当前模型不吃，
+     * <b>两条通道都不进</b>（送进去会被 provider 直接 400）。</p>
      */
-    private String loadUpstreamContent(SubTaskSnapshot dep) {
+    private UpstreamContent loadUpstreamContent(SubTaskSnapshot dep) {
         try {
             List<AttachmentRef> attachments = attachmentPort.listActive(dep.id());
             if (attachments != null && !attachments.isEmpty()) {
                 List<AttachmentRef> ordered = new ArrayList<>(attachments);
                 Collections.reverse(ordered);
                 List<UpstreamAttachmentRenderer.LoadedAttachment> loaded = new ArrayList<>();
+                // `VU-8`：图片只收集<b>引用</b>，字节留到与用户上传的图合并后统一装载——
+                // 分两次装载会让 5 张上限按「来源种数」放大（各截断一次 = 实际 10 张）
+                List<AttachmentRef> images = new ArrayList<>();
                 for (AttachmentRef attachment : ordered) {
                     try {
                         if (!attachment.contentLoadable()) {
+                            continue;
+                        }
+                        // 图片：转媒体通道，绝不进文本解码（否则二进制被当 UTF-8 读成乱码塞进 Prompt）
+                        if (AttachmentMediaAssembler.isInlineImage(attachment)) {
+                            images.add(attachment);
+                            continue;
+                        }
+                        // 媒体族非图片（音频/视频）：既不解码为文本，也不进媒体通道
+                        if (AttachmentContentPolicy.isMedia(attachment.mimeType(), attachment.fileName())) {
                             continue;
                         }
                         byte[] bytes = attachmentPort.loadContent(attachment.id());
@@ -1014,14 +1224,17 @@ public class AgentRuntimeContextAssembler {
                     }
                 }
                 if (!loaded.isEmpty()) {
-                    return UpstreamAttachmentRenderer.render(loaded, UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS);
+                    return new UpstreamContent(
+                            UpstreamAttachmentRenderer.render(loaded, UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS),
+                            images);
                 }
+                return new UpstreamContent(SubTaskOutputExtractor.extractExecutionOutput(dep.context()), images);
             }
         } catch (Exception e) {
             log.warn("读取前置物化附件内容失败，回退原始产出: subTaskId={}, err={}",
                     dep.id(), e.getMessage());
         }
-        return SubTaskOutputExtractor.extractExecutionOutput(dep.context());
+        return new UpstreamContent(SubTaskOutputExtractor.extractExecutionOutput(dep.context()), List.of());
     }
 
     /**
@@ -1136,30 +1349,42 @@ public class AgentRuntimeContextAssembler {
         return EnabledToolNames.union(tools, skillRequiredTools);
     }
 
-    /** 依赖产出段装配结果：渲染文本 + 可观测统计。 */
+    /** 依赖产出段装配结果：渲染文本 + 可观测统计 + 前置图片引用（`VU-8` 改为引用，不再直接给媒体）。 */
     private static final class DependencySectionResult {
         private final String section;
         private final int depCount;
         private final int loadedCount;
         private final int truncatedCount;
         private final boolean degraded;
+        /**
+         * 前置产出的图片<b>引用</b>（空 = 无，纯文本链路行为与改造前逐字一致）。
+         *
+         * <p>`VU-8`：由 {@code List<Media>} 改为 {@code List<AttachmentRef>}——字节装载必须与
+         * 用户上传的图<b>合并后统一做一次</b>，否则每多一个来源就多一份 5 张的预算。</p>
+         */
+        private final List<AttachmentRef> images;
 
         private DependencySectionResult(String section, int depCount, int loadedCount, int truncatedCount,
-                                        boolean degraded) {
+                                        boolean degraded, List<AttachmentRef> images) {
             this.section = section;
             this.depCount = depCount;
             this.loadedCount = loadedCount;
             this.truncatedCount = truncatedCount;
             this.degraded = degraded;
+            this.images = images;
         }
 
         private static DependencySectionResult empty() {
-            return new DependencySectionResult("", 0, 0, 0, false);
+            return new DependencySectionResult("", 0, 0, 0, false, List.of());
         }
 
         private static DependencySectionResult degraded(int depCount) {
-            return new DependencySectionResult("", depCount, 0, 0, true);
+            return new DependencySectionResult("", depCount, 0, 0, true, List.of());
         }
+    }
+
+    /** 单个前置产出装载结果（`VU-1`）：文本正文本体 + 图片引用，两条通道互不替代。 */
+    private record UpstreamContent(String text, List<AttachmentRef> images) {
     }
 
     // #endregion Prompt 装配

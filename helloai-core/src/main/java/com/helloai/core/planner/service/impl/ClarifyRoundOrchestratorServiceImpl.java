@@ -181,6 +181,12 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     @Override
     public ClarifyConversationDetail sendMessage(Long conversationId, String message,
                                                  List<ClarifySelection> selections) {
+        return sendMessage(conversationId, message, selections, null);
+    }
+
+    @Override
+    public ClarifyConversationDetail sendMessage(Long conversationId, String message,
+                                                 List<ClarifySelection> selections, List<Long> selectedIds) {
         if (message == null || message.isBlank()) {
             throw new BizException("消息不能为空");
         }
@@ -209,7 +215,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         // 确认卡状态处理（抽为共享方法 resolvePendingClarifyConfirm，与流式同一口径）：
         // 确认 ⇒ 切 CLARIFY + 清标记；其他消息 ⇒ 清标记继续自由对话
         resolvePendingClarifyConfirm(conversation, selections);
-        return doRound(conversation, trimmed, replyParser.buildSelectionPayload(selections));
+        return doRound(conversation, trimmed, replyParser.buildSelectionPayload(selections), selectedIds);
     }
 
     /**
@@ -266,9 +272,11 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         }
         log.info("澄清会话重试一轮 LLM: conversationId={}", conversationId);
         RequirementMessage lastUser = messages.get(messages.size() - 1);
+        // 重试不重放勾选：勾选是「那一次发送」的瞬时信号，未随之持久化；
+        // 传 null（未指定）让作用域回落到模型判定/全量，而不是凭空造一个「全排除」。
         return runRoundCore(conversation,
                 lastUser.getContent() == null ? "" : lastUser.getContent(),
-                lastUser.getPayload());
+                lastUser.getPayload(), null);
     }
 
     /**
@@ -345,17 +353,24 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         if (edited.hasSkill()) {
             return executeSkillRound(conversation, edited.skillName(), edited.text(), "EDIT");
         }
-        return runRoundCore(conversation, target.getContent(), target.getPayload());
+        // 编辑重发同样不重放勾选（同 retryRound 的理由：勾选是瞬时信号，未持久化）
+        return runRoundCore(conversation, target.getContent(), target.getPayload(), null);
     }
 
     @Override
     public ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage) {
-        return doRound(conversation, userMessage, null);
+        return doRound(conversation, userMessage, null, null);
     }
 
     @Override
     public ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage,
                                              String userPayload) {
+        return doRound(conversation, userMessage, userPayload, null);
+    }
+
+    @Override
+    public ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage,
+                                             String userPayload, List<Long> selectedIds) {
         Long conversationId = conversation.getId();
         // 显式技能：用户在「＋→技能」里选了产出型技能包（[skill:name] 前缀）。
         // 语义是「这一轮就出文件」——当场注入技能包、跑 CLI、把产物落成会话附件，
@@ -366,7 +381,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         // /task 直达拆解命令（任意模式优先）：切 CLARIFY + 终稿直出轮，
         // LLM 产出 final 即自动建任务（信息严重不足自动降级追问，不建任务）
         if (commandSearch.isTaskCommand(userMessage)) {
-            return runTaskDirectRound(conversation, userMessage);
+            return runTaskDirectRound(conversation, userMessage, selectedIds);
         }
         // 转方案类斜杠命令检测（/planner|/plan，跳过决策）：直接进入澄清轮
         if (commandSearch.isChatMode(conversation) && commandSearch.isPlannerCommand(userMessage)) {
@@ -385,7 +400,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
             conversationService.updateById(conversation);
             return null;
         });
-        return runRoundCore(conversation, userMessage, userPayload);
+        return runRoundCore(conversation, userMessage, userPayload, selectedIds);
     }
 
     /** 锁内取最新轮数；行被并发删除时退回调用方快照（不阻断本轮落库）。 */
@@ -417,9 +432,11 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
                     conversationId, from, RequirementClarifyService.MODE_CLARIFY);
             return null;
         });
-        // 锁已释放；切换轮不做联网搜索（后续再评估）；澄清模板基于全量历史直接产草案/追问
+        // 锁已释放；切换轮不做联网搜索（后续再评估）；澄清模板基于全量历史直接产草案/追问。
+        // selectedIds 传 null：切换轮由斜杠命令触发，本轮没有前端勾选信号（勾选属于「发消息」动作），
+        // 走未指定回落才是正确语义——传空集会误判成「用户排除了全部附件」。
         RequirementConversation conversation = commandSearch.requireActive(conversationId);
-        return runLlmRound(conversation, null, true, null);
+        return runLlmRound(conversation, null, true, null, null);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -432,7 +449,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
      * retry 继续跑决策与搜索，与 sendMessage 完全同语义。
      */
     private ClarifyConversationDetail runRoundCore(RequirementConversation conversation,
-                                                   String userMessage, String userPayload) {
+                                                   String userMessage, String userPayload,
+                                                   List<Long> selectedIds) {
         // PA-12 v1.1：超阈值时先压缩（失败不阻断本轮；压缩只改喂模型的上下文，原文不动）
         try {
             contextCompactor.compact(conversation.getId(), false);
@@ -441,7 +459,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
                     conversation.getId(), e.getMessage());
         }
         if (commandSearch.isClarifyMode(conversation)) {
-            return runClarifySearchRound(conversation, userMessage, userPayload);
+            return runClarifySearchRound(conversation, userMessage, userPayload, selectedIds);
         }
         RoundDecision roundDecision = makeRoundDecision(conversation, userMessage);
         if (roundDecision.decision().isClarify()) {
@@ -456,18 +474,20 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
                 roundDecision.decision(), roundDecision.degraded());
         return runLlmRound(conversation, webSearchOutcome,
                 roundDecision.decision().shouldInjectAttachment(),
-                roundDecision.decision().attachmentTargets());
+                roundDecision.decision().attachmentTargets(), selectedIds);
     }
 
     /** CLARIFY 模式轮次（V45 语义）：绕过决策，开关开启则按规则搜索后主回复。 */
     private ClarifyConversationDetail runClarifySearchRound(RequirementConversation conversation,
-                                                            String userMessage, String userPayload) {
+                                                            String userMessage, String userPayload,
+                                                            List<Long> selectedIds) {
         WebSearchOutcome webSearchOutcome = null;
         if (commandSearch.isWebSearchEnabled(conversation)) {
             webSearchOutcome = webSearchOrchestrator.doWebSearch(
                     commandSearch.resolveSearchSource(conversation.getId(), userMessage, userPayload));
         }
-        return runLlmRound(conversation, webSearchOutcome, true, null);
+        // `G-044`：clarify 分支也必须带 selectedIds——这正是「转入方案模式后勾选失效」的修复点
+        return runLlmRound(conversation, webSearchOutcome, true, null, selectedIds);
     }
 
     /**
@@ -557,7 +577,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
      * /task 直达拆解轮：需求描述即终稿输入，跳过多轮澄清直接产出终稿并建任务（信息严重不足自动降级追问）。
      */
     private ClarifyConversationDetail runTaskDirectRound(RequirementConversation conversation,
-                                                         String userMessage) {
+                                                         String userMessage,
+                                                         List<Long> selectedIds) {
         Long conversationId = conversation.getId();
         // RC-1 每会话互斥：/task 直达拆解轮前置段（切 mode + 落 user 消息 + 自增轮数）持锁串行化；
         // runFinalizeLlmRound 是同步 LLM，锁必须在其中前释放（§4.1：临界区只覆盖前置段）。
@@ -594,24 +615,29 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
             webSearchOutcome = webSearchOrchestrator.doWebSearch(
                     commandSearch.resolveSearchSource(conversationId, outerExtra, null));
         }
-        return runFinalizeLlmRound(conversation, webSearchOutcome);
+        return runFinalizeLlmRound(conversation, webSearchOutcome, selectedIds);
     }
 
     /** 终稿直出 LLM 轮（/task 专用）：final 自动建任务、question 降级为普通追问。 */
     private ClarifyConversationDetail runFinalizeLlmRound(RequirementConversation conversation,
-                                                          WebSearchOutcome webSearchOutcome) {
+                                                          WebSearchOutcome webSearchOutcome,
+                                                          List<Long> selectedIds) {
         Long conversationId = conversation.getId();
         String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         // 显式技能：把技能正文（frontmatter 之外的执行规范）追加到 prompt 末尾。
         // 追加而非另开参数：模板是完整指令集，末尾段的「本轮显式技能」语义上就是本轮附加约束。
         String skillInstruction = skillDirective.renderInstruction(latestUserSkill(conversationId));
-        String prompt = promptRenderService.renderFinalizePrompt(conversationId, webSearchContext) + skillInstruction;
+        // `VU-8`：Prompt 与图片引用一次产出（作用域同源；分两次算会让清单与送图不一致）
+        ClarifyPromptRenderService.RenderedPrompt rendered =
+                promptRenderService.renderFinalizePromptWithMedia(conversationId, webSearchContext, selectedIds);
+        String prompt = rendered.prompt() + skillInstruction;
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
                 .userPrompt(prompt)
                 .context(Map.of("conversationId", conversationId, "scene", "requirement_finalize"))
                 .requiredCapabilities(Map.of())
+                .mediaRefs(rendered.mediaRefs())
                 .build();
         AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
         if (!result.isSuccess()) {
@@ -620,7 +646,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         ClarifyReply reply = replyParser.parseReply(result.getOutput());
         // P1-3：description 四小节不全 → 同轮纠偏重试一次（fail-open，不阻断建任务）
         reply = promptRenderService.applyDescriptionSectionGuard(conversation, planner, prompt,
-                "requirement_finalize", reply);
+                "requirement_finalize", reply, rendered.mediaRefs());
         if ("final".equals(reply.getType())) {
             String note = reply.getMessage() != null && !reply.getMessage().isBlank()
                     ? reply.getMessage() : "已生成终稿";
@@ -680,6 +706,9 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     public RoundDecision makeRoundDecision(RequirementConversation conversation, String userMessage) {
         Long conversationId = conversation.getId();
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        // `VU-8`：决策轮<b>不</b>送图——这一轮的产物是「要不要搜/是什么意图」的元数据，
+        // 图对它没有信息增益，却要付一次字节读取 + 一块 prompt 预算。
+        // 送图发生在主回复轮（此时作用域已由决策结论定下：attachmentIntent / attachmentTargets）。
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
                 .userPrompt(promptRenderService.renderDecisionPrompt(conversation, userMessage))
@@ -746,7 +775,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
     private ClarifyConversationDetail runLlmRound(RequirementConversation conversation,
                                                   WebSearchOutcome webSearchOutcome,
                                                   boolean includeAttachment,
-                                                  java.util.List<Integer> attachmentTargets) {
+                                                  java.util.List<Integer> attachmentTargets,
+                                                  List<Long> selectedIds) {
         Long conversationId = conversation.getId();
         // 双模式分派：CLARIFY（含 NULL 老数据）走澄清模板 + JSON 协议解析；
         // CHAT 走通用助手模板，纯文本直接落库
@@ -754,16 +784,19 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
 
         String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
-        String prompt = clarifyMode
-                ? promptRenderService.renderClarifyPrompt(conversationId, webSearchContext)
-                : promptRenderService.renderChatPrompt(conversationId, webSearchContext, includeAttachment,
-                        attachmentTargets);
+        // `VU-8`：一次渲染同时产出 Prompt 与图片引用——分两次调会重算作用域（勾选/序号/全量），
+        // 两次结果在边界情况下可能不一致，症状是「清单说只看第 2 份、实际送了第 1 份的图」
+        ClarifyPromptRenderService.RenderedPrompt rendered = clarifyMode
+                ? promptRenderService.renderClarifyPromptWithMedia(conversationId, webSearchContext, selectedIds)
+                : promptRenderService.renderChatPromptWithMedia(conversationId, webSearchContext,
+                        includeAttachment, attachmentTargets, selectedIds);
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
-                .userPrompt(prompt)
+                .userPrompt(rendered.prompt())
                 .context(Map.of("conversationId", conversationId,
                         "scene", clarifyMode ? "requirement_clarify" : "requirement_chat"))
                 .requiredCapabilities(Map.of())
+                .mediaRefs(rendered.mediaRefs())
                 .build();
         AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
         if (!result.isSuccess()) {
@@ -781,8 +814,8 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
 
         ClarifyReply reply = replyParser.parseReply(result.getOutput());
         // P1-3：description 四小节不全 → 同轮纠偏重试一次（fail-open，不阻断终稿落库）
-        reply = promptRenderService.applyDescriptionSectionGuard(conversation, planner, prompt,
-                "requirement_clarify", reply);
+        reply = promptRenderService.applyDescriptionSectionGuard(conversation, planner, rendered.prompt(),
+                "requirement_clarify", reply, rendered.mediaRefs());
         // TD-8：LLM 产出追问 + 用户连续 N 轮无新信息 ⇒ 收敛轮（强制按现有
         // 信息出终稿，不再追问）。判据客观：用户回答是否携带新信息（selections/纯文本），
         // progress 自评不参与门控（计划「不做的」）。
@@ -791,7 +824,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
                 stallConvergeRounds())) {
             log.info("澄清轮 stall 收敛: conversationId={}, 连续无信息用户回答 ≥{} 轮，强制出终稿",
                     conversationId, stallConvergeRounds());
-            return runConvergeRound(conversation, webSearchOutcome);
+            return runConvergeRound(conversation, webSearchOutcome, selectedIds);
         }
         persistClarifyOutcome(conversation, reply, webSearchOutcome);
         return new ClarifyConversationDetail(conversation,
@@ -807,19 +840,24 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
      * 收敛轮不建任务——stall 不代表用户已确认需求，自动建任务会放大误判。</p>
      */
     private ClarifyConversationDetail runConvergeRound(RequirementConversation conversation,
-                                                       WebSearchOutcome webSearchOutcome) {
+                                                       WebSearchOutcome webSearchOutcome,
+                                                       List<Long> selectedIds) {
         Long conversationId = conversation.getId();
         String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         // 显式技能：把技能正文（frontmatter 之外的执行规范）追加到 prompt 末尾。
         // 追加而非另开参数：模板是完整指令集，末尾段的「本轮显式技能」语义上就是本轮附加约束。
         String skillInstruction = skillDirective.renderInstruction(latestUserSkill(conversationId));
-        String prompt = promptRenderService.renderFinalizePrompt(conversationId, webSearchContext) + skillInstruction;
+        // `VU-8`：Prompt 与图片引用一次产出（作用域同源）
+        ClarifyPromptRenderService.RenderedPrompt rendered =
+                promptRenderService.renderFinalizePromptWithMedia(conversationId, webSearchContext, selectedIds);
+        String prompt = rendered.prompt() + skillInstruction;
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
                 .userPrompt(prompt)
                 .context(Map.of("conversationId", conversationId, "scene", "requirement_finalize"))
                 .requiredCapabilities(Map.of())
+                .mediaRefs(rendered.mediaRefs())
                 .build();
         AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
         if (!result.isSuccess()) {
@@ -827,7 +865,7 @@ public class ClarifyRoundOrchestratorServiceImpl implements ClarifyRoundOrchestr
         }
         ClarifyReply reply = replyParser.parseReply(result.getOutput());
         reply = promptRenderService.applyDescriptionSectionGuard(conversation, planner, prompt,
-                "requirement_finalize", reply);
+                "requirement_finalize", reply, rendered.mediaRefs());
         if ("final".equals(reply.getType())) {
             log.info("澄清收敛产出终稿: conversationId={}, finalTitle={}", conversationId, reply.getTitle());
         } else {

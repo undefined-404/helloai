@@ -119,7 +119,9 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
 
         // CLARIFY 模式：绕过意图决策，规则搜索后真流式主回复（结构化 JSON 正文流式展示）
         if (commandSearch.isClarifyMode(conversation)) {
-            return runClarifyStream(conversation, trimmed, userPayload);
+            // `G-044`：CLARIFY 流式段同样要带勾选集——此前这条分支连参数都没有，
+            // 导致「转入方案模式后勾选失效」在流式通道上也成立（同步侧同样缺，两处同批修）
+            return runClarifyStream(conversation, trimmed, userPayload, attachmentIds);
         }
 
         // CHAT 模式主回复段（决策 + 三态搜索 + 流式主回复），与 streamCreate 首轮共用
@@ -227,12 +229,16 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
         // 主回复 prompt 构造（与 runLlmRound CHAT 分支同构：固定 CHAT 模板）
         String webSearchContext = outcome != null ? outcome.toContextText() : "";
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        // `VU-8`：一次渲染同时产出 Prompt 与图片引用（两次调会重算作用域，可能不一致）
+        ClarifyPromptRenderService.RenderedPrompt rendered =
+                promptRenderService.renderChatPromptWithMedia(conversationId, webSearchContext,
+                        includeAttachment, attachmentTargets, attachmentIds);
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
-                .userPrompt(promptRenderService.renderChatPrompt(conversationId, webSearchContext, includeAttachment,
-                        attachmentTargets, attachmentIds))
+                .userPrompt(rendered.prompt())
                 .context(Map.of("conversationId", conversationId, "scene", "requirement_chat"))
                 .requiredCapabilities(Map.of())
+                .mediaRefs(rendered.mediaRefs())
                 .build();
         // 先补发「检索结果」进度帧（此时检索确已完成），再进主回复流
         Flux<ChatStreamEvent> resultSteps = steps.size() > 1
@@ -321,7 +327,8 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
      * {@code executeStream} 增量流——token 转发给前端打字机展示，完整 output 收集后落库（追问卡/终稿）→ done。
      */
     private Flux<ChatStreamEvent> runClarifyStream(RequirementConversation conversation,
-                                                   String userMessage, String userPayload) {
+                                                   String userMessage, String userPayload,
+                                                   List<Long> attachmentIds) {
         // ★过程数据：思考全文 + 检索步骤随 payload 落库（done 后仍可回看）
         StringBuilder thinking = new StringBuilder();
         List<String> steps = new ArrayList<>();
@@ -341,23 +348,27 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                     if (planned != null) {
                         steps.add(RoundProgressText.searchResult(outcome));
                     }
-                    return runClarifyMainReply(conversation, userMessage, outcome, steps, thinking);
+                    return runClarifyMainReply(conversation, userMessage, outcome, steps, thinking,
+                            attachmentIds);
                 }));
     }
 
     /** CLARIFY 主回复段（检索完成后）：流式主回复 → 解析落库（含过程数据）→ done。 */
     private Flux<ChatStreamEvent> runClarifyMainReply(RequirementConversation conversation, String userMessage,
                                                       WebSearchOutcome outcome, List<String> steps,
-                                                      StringBuilder thinking) {
+                                                      StringBuilder thinking, List<Long> attachmentIds) {
         Long conversationId = conversation.getId();
         String webSearchContext = outcome != null ? outcome.toContextText() : "";
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
-        String prompt = promptRenderService.renderClarifyPrompt(conversationId, webSearchContext);
+        // `VU-8`：一次渲染同时产出 Prompt 与图片引用（两次调会重算作用域，可能不一致）
+        ClarifyPromptRenderService.RenderedPrompt rendered =
+                promptRenderService.renderClarifyPromptWithMedia(conversationId, webSearchContext, attachmentIds);
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
-                .userPrompt(prompt)
+                .userPrompt(rendered.prompt())
                 .context(Map.of("conversationId", conversationId, "scene", "requirement_clarify"))
                 .requiredCapabilities(Map.of())
+                .mediaRefs(rendered.mediaRefs())
                 .build();
         Flux<ChatStreamEvent> resultSteps = steps.size() > 1
                 ? Flux.just(ChatStreamEvent.progress(steps.get(steps.size() - 1)))
@@ -378,8 +389,8 @@ public class ClarifyStreamServiceImpl implements ClarifyStreamService {
                 .concatWith(Flux.defer(() -> {
                     // 与 runLlmRound 同语义解析落库（描述守卫纠偏走同步 LLM，罕见路径可接受）
                     ClarifyReply reply = replyParser.parseReply(buffer.toString());
-                    reply = promptRenderService.applyDescriptionSectionGuard(conversation, planner, prompt,
-                            "requirement_clarify", reply);
+                    reply = promptRenderService.applyDescriptionSectionGuard(conversation, planner, rendered.prompt(),
+                            "requirement_clarify", reply, rendered.mediaRefs());
                     orchestrator.persistClarifyOutcome(conversation, reply, outcome,
                             new RoundProcess(thinking.toString(), steps));
                     log.info("流式澄清轮完成并落库: conversationId={}, thinkingChars={}, steps={}",

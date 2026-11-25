@@ -502,7 +502,7 @@ public class McpAgentReportServiceImpl implements McpAgentReportService {
      * 写进 {@code agent.skills}，选人处随即按这些标签派发 ⇒ 「声明不越出模型实际能力」
      * 被本入口绕过（实测：{@code inner-deepseek-flash-excutor} 被塞了
      * {@code web-search} + {@code eng-web-research}，而其模型
-     * {@code deepseek-v4-flash} 的 {@code webSearch=false}）。
+     * {@code deepseek-flash} 的 {@code webSearch=false}）。
      * 现改为：<b>标准技能与技能包</b>走注册链同款判据
      * （{@link AgentSkillDeriver#STANDARD_SKILLS} ∪ frontmatter
      * {@code requiredBaseCapabilities} 引用边），越界项<b>丢弃并告警</b>，

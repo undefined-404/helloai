@@ -61,6 +61,17 @@ public interface ClarifyRoundOrchestratorService {
     /** 向会话追加一条用户消息并走一轮 LLM（可携带结构化选项回答快照）。 */
     ClarifyConversationDetail sendMessage(Long conversationId, String message, List<ClarifySelection> selections);
 
+    /**
+     * 同上，并携带本轮勾选的附件集（`G-044` / `G-048`）。
+     *
+     * <p>补齐此重载的原因：同步链路（含流式失败后的兜底入口）此前不接收附件勾选，
+     * 用户在兜底时被静默丢弃勾选——而此刻用户往往正在重试，最需要一致的语义。</p>
+     *
+     * @param selectedIds {@code null}=未指定（回落模型判定/全量），{@code []}=明确一个都不要
+     */
+    ClarifyConversationDetail sendMessage(Long conversationId, String message,
+                                          List<ClarifySelection> selections, List<Long> selectedIds);
+
     /** 重试上一轮 LLM（仅当最后一条消息是 user；不新增 user 消息、不加轮数）。 */
     ClarifyConversationDetail retryRound(Long conversationId);
 
@@ -76,6 +87,17 @@ public interface ClarifyRoundOrchestratorService {
 
     /** 一轮澄清（含可选的选择快照 payload）。 */
     ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage, String userPayload);
+
+    /**
+     * 一轮澄清（含选择快照 payload + 本轮勾选的附件集）。
+     *
+     * <p><b>`G-044`</b>：{@code selectedIds} 必须能到达渲染层，否则「勾选排除」在 CLARIFY / FINALIZE
+     * 轮次里完全失效（只有 CHAT 轮生效）。三个重载按参数递增委托，最终都汇聚到本方法。</p>
+     *
+     * @param selectedIds 本轮用户勾选的附件 id；{@code null}=未指定（走回落），{@code []}=明确一个都不要
+     */
+    ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage,
+                                      String userPayload, List<Long> selectedIds);
 
     /**
      * 切换到方案澄清模式并跑一轮（原门面 {@code switchToClarify} 核心）：先落库附加文本

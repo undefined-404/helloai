@@ -17,13 +17,43 @@ import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+/**
+ * DeepSeek 专用 ChatClient 工厂（官方 SDK 通道）。
+ *
+ * <p><b>2026-11-25 起停用（{@link Deprecated}）</b>：不再被
+ * {@link LlmProviderChatClientFactoryRegistry} 路由（deepseek 改走 OpenAI 兼容通道）。</p>
+ *
+ * <p><b>停用原因</b>：`spring-ai-deepseek:1.1.8` 的 {@code DeepSeekChatModel#createRequest}
+ * 对 USER 消息只构造 {@code new ChatCompletionMessage(message.getText(), Role.USER)}，
+ * <b>没有 media 分支</b>——图片被静默丢弃且 provider 不报错（对照实验与官方文档证明
+ * deepseek-flash 本身支持图像理解，详见迁移 V155 头部「② 能力订正的依据」）。
+ * 该静默失效违反 I-4「禁假装看过」（模型拿不到像素却可能按文件名编造）。
+ * 修复（方案 A）：改走 {@link OpenAiCompatibleProtocolFactory}（OpenAiChatModel 的
+ * {@code mapToMediaContent} 可装配图片），能力声明于迁移 V156 加回 image。</p>
+ *
+ * <p><b>为什么保留本类（不删除）</b>：</p>
+ * <ol>
+ *   <li>{@code verify-provider-catalog-parity.sh} 检查 5（D-e）以本类
+ *       {@link #DEFAULT_MODEL} 常量作为 deepseek 末位兜底的校验载体；</li>
+ *   <li>恢复点：若上游 SDK 修复 media 分支（或自建带 image_url 的 ChatModel），
+ *       可重新启用本工厂并反向迁移 V156（同步改回能力声明口径）。</li>
+ * </ol>
+ *
+ * <p><b>方案 A 的代价记录</b>：OpenAI 兼容通道（spring-ai-openai）响应侧不解析
+ * DeepSeek 的 {@code reasoning_content} ⇒ 丢失 thinking 展示；正文与工具调用不受影响。</p>
+ *
+ * @deprecated 停用日期 2026-11-25：deepseek 改走 OpenAI 兼容通道（见 V156 与
+ *             {@link LlmProviderChatClientFactoryRegistry} 类注释），本类仅作 D-e 守卫载体与恢复点。
+ */
+@Deprecated
 @Component
 @RequiredArgsConstructor
 public class DeepSeekProviderChatClientFactory implements ProviderChatClientFactory {
 
     private static final String PROVIDER = "deepseek";
-    /** 末位兜底模型：须恒等于目录默认位（`llm_provider_model.is_default=1`）。旧值 'deepseek-chat' 已不在目录内（V101）。 */
-    private static final String DEFAULT_MODEL = "deepseek-v4-flash";
+    /** 末位兜底模型：须恒等于目录默认位（`llm_provider_model.is_default=1`）。
+     * V155 起为官方现行名 `deepseek-flash`（旧值 'deepseek-v4-flash' 是废弃别名）。 */
+    private static final String DEFAULT_MODEL = "deepseek-flash";
 
     private final ToolCallingManager toolCallingManager;
     private final RetryTemplate retryTemplate;

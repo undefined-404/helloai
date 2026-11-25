@@ -16,7 +16,7 @@ import java.util.function.Supplier;
 /**
  * Provider ChatModel 全局缓存。
  *
- * <p>目标：避免 AgentChatClientService 每条 LLM 调用都新建 DeepSeekChatModel/DeepSeekApi，
+ * <p>目标：避免 AgentChatClientService 每条 LLM 调用都新建 ChatModel/Api，
  * 减少 TCP 连接重建 / RestClient 连接池抖动 / 超时配置不一致等问题。</p>
  *
  * <h3>缓存粒度</h3>
@@ -37,7 +37,9 @@ import java.util.function.Supplier;
  * 修复产品缺陷——原 key 不含 model，改模型不生效直到重启）。未引入容量上限（bounded cache）以
  * 保持简单；若监控发现内存压力显著时再升级为 LRU。</p>
  *
- * @see DeepSeekProviderChatClientFactory 使用方
+ * @see OpenAiCompatibleProtocolFactory 使用方（含 deepseek，2026-11-25 起）
+ * @see AnthropicCompatibleProtocolFactory 使用方
+ * @see DeepSeekProviderChatClientFactory 历史使用方（已停用 @Deprecated，仅 D-e 守卫载体）
  */
 @Slf4j
 @Component

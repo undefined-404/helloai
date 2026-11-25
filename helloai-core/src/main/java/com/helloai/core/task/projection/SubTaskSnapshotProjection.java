@@ -1,7 +1,9 @@
 package com.helloai.core.task.projection;
 
+import com.helloai.core.agent.port.ConstraintRefSnapshot;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.UncertaintySnapshot;
+import com.helloai.core.task.entity.ConstraintRef;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
 
@@ -64,6 +66,7 @@ public final class SubTaskSnapshotProjection {
                 .version(subTask.getVersion())
                 .dependsOn(subTask.dependsOnIdList())
                 .uncertainties(toUncertaintySnapshots(subTask.getUncertainties()))
+                .constraintRefs(toConstraintRefSnapshots(subTask.getConstraintRefs()))
                 .build();
     }
 
@@ -104,6 +107,21 @@ public final class SubTaskSnapshotProjection {
             }
             snapshots.add(new UncertaintySnapshot(uncertainty.getKind(), uncertainty.getNote(),
                     Uncertainty.KIND_ASSUMPTION.equals(uncertainty.getKind())));
+        }
+        return snapshots;
+    }
+
+    /** G-037：约束引用实体 → agent 域快照（逐字段透传、null 元素跳过；值域单源在 common 的 ConstraintRefKind）。 */
+    public static List<ConstraintRefSnapshot> toConstraintRefSnapshots(List<ConstraintRef> refs) {
+        if (refs == null || refs.isEmpty()) {
+            return List.of();
+        }
+        List<ConstraintRefSnapshot> snapshots = new ArrayList<>(refs.size());
+        for (ConstraintRef ref : refs) {
+            if (ref == null) {
+                continue;
+            }
+            snapshots.add(new ConstraintRefSnapshot(ref.getKind(), ref.getRef(), ref.getScope()));
         }
         return snapshots;
     }

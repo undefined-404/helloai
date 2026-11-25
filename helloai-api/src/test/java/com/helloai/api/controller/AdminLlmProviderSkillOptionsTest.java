@@ -48,11 +48,11 @@ class AdminLlmProviderSkillOptionsTest {
     @InjectMocks
     private AdminLlmProviderController controller;
 
-    private static final String MODEL = "deepseek:deepseek-v4-flash";
+    private static final String MODEL = "deepseek:deepseek-flash";
 
     private LlmProviderModel model(boolean reasoning, boolean webSearch) {
         LlmProviderModel m = new LlmProviderModel();
-        m.setModelName("deepseek-v4-flash");
+        m.setModelName("deepseek-flash");
         Map<String, Object> caps = new LinkedHashMap<>();
         caps.put("input", List.of("text", "image", "pdf"));
         caps.put("output", List.of("text"));

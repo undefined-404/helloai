@@ -392,13 +392,15 @@ helloai:
   # 此处 api-key 为空时 provider 未生效（目录不可选、注册平台内 LLM Agent 被拒）；
   # base-url / default-model 作为默认值保留（可被系统设置页覆盖）。
   # key/base-url 参考 E:\yhzx\1027\springai 的 spring.ai.* 配置。
-  # 四个 provider 均有 ProviderChatClientFactory 实现：deepseek 官方SDK，
+  # 四个 provider 均有工厂实现：deepseek 走 OpenAI 兼容接口（2026-11-25 方案 A 起，
+  # 替换官方 SDK——其 createRequest 无 media 分支、图片静默丢弃；见 V156），
   # moonshot/dashscope 走 OpenAI 兼容接口，minimax 走 Anthropic 兼容接口
   providers:
     deepseek:
       api-key: ${DEEPSEEK_API_KEY:}
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
-      default-model: ${DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
+      # 官方现行名（V155 对齐《模型细节》文档）；'deepseek-v4-flash' 为废弃别名，勿再使用
+      default-model: ${DEEPSEEK_CHAT_MODEL:deepseek-flash}
       connect-timeout-ms: ${DEEPSEEK_CONNECT_TIMEOUT_MS:5000}
       # 读超时与 AgentProviderProperties 默认值对齐（3 分钟，覆盖整合报告/推理模型长输出）
       read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:180000}

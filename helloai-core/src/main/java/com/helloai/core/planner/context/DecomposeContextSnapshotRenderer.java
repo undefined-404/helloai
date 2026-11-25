@@ -4,6 +4,7 @@ import com.helloai.common.constant.ChatAttachmentParseStatus;
 import com.helloai.core.knowledge.KnowledgeBaseService;
 import com.helloai.core.knowledge.KnowledgeSearchResult;
 import com.helloai.core.planner.entity.ChatAttachment;
+import com.helloai.core.planner.attachment.ChatAttachmentPromptRenderer;
 import com.helloai.core.planner.policy.TaskContextKeys;
 import com.helloai.core.planner.service.ChatAttachmentService;
 import com.helloai.core.task.port.SubTaskView;
@@ -15,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -47,8 +49,15 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DecomposeContextSnapshotRenderer {
 
-    /** 附件清单条数上限（名称 + 类型 + 可读性，不含正文）。 */
-    static final int MAX_ATTACHMENTS = 20;
+    /**
+     * 附件清单条数上限（名称 + 类型 + 可读性，不含正文）。
+     *
+     * <p><b>`G-046`：本常量不再是独立数字</b>，直接引用
+     * {@link ChatAttachmentPromptRenderer#MAX_INJECTED_ATTACHMENTS}。理由：这里的清单与
+     * 注入侧渲染的是<b>同一个「会话附件清单」</b>，两处上限不同就会出现「拆解期看到 20 件、
+     * 执行期模型只看到 5 张」这种同一个问题两种答案的状态（判据 4：同一事实只能一个事实源）。</p>
+     */
+    static final int MAX_ATTACHMENTS = ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS;
 
     /** 知识库命中条数上限。 */
     static final int MAX_KB_HITS = 5;
@@ -87,9 +96,25 @@ public class DecomposeContextSnapshotRenderer {
      * @return 恒非空；任何小节取数失败只降级该小节
      */
     public String render(TaskView task) {
+        return render(task, null);
+    }
+
+    /**
+     * 渲染快照正文，附件段使用**调用方已经渲染好的清单**（`G-042`）。
+     *
+     * <p><b>为什么要有这个重载</b>：拆解链路需要把清单序号解析回附件 ID，而序号与实体的对应关系
+     * 必须与写进 prompt 的那一份<b>逐字相同</b>。若本方法自己再查一次库，就等于把同一件事算两遍
+     * （判据 32），差值全落在「两次查询之间用户又传了一张图」上。</p>
+     *
+     * @param task    当前待拆解任务
+     * @param listing 已渲染的附件清单；{@code null} = 自行渲染（行为与单参重载一致）
+     * @return 恒非空；任何小节取数失败只降级该小节
+     */
+    public String render(TaskView task, AttachmentListing listing) {
+        AttachmentListing effective = listing != null ? listing : renderAttachmentListing(task);
         StringBuilder sb = new StringBuilder();
         sb.append("### 附件清单（会话输入，仅名称与可读性，不含正文）\n");
-        sb.append(renderAttachments(task)).append('\n');
+        sb.append(effective.text()).append('\n');
         sb.append("### 平台知识库命中（摘要，不是全文）\n");
         sb.append(renderKnowledge(task)).append('\n');
         sb.append("### 历史任务的子任务骨架（只作结构参考，不得照抄内容）\n");
@@ -100,42 +125,79 @@ public class DecomposeContextSnapshotRenderer {
 
     // ── 附件 ──────────────────────────────────────────────
 
-    private String renderAttachments(TaskView task) {
+    /**
+     * 拆解期附件清单的**一次渲染产物**（`G-042`）：清单正文 + 与之一一对应的附件实体。
+     *
+     * <p><b>为什么必须一次产出、不能分两次取</b>（判据 32）：清单正文进 prompt 后，Planner 要跑
+     * 十几分钟才回结果；若回结果后再查一次附件把「序号 → 附件 ID」解析出来，这十几分钟里用户
+     * 新传的附件会插进查询结果的<b>头部</b>（{@code listLatestByConversation} 是倒序取最新），
+     * 于是第 1 号从「竞品截图」变成「刚传的发票」——LLM 说「本子任务用附件 2」，落到库里却是另一张图。
+     * 这个错误不会报错、不会告警，只是默默送错图，正是最难查的一类。故清单与实体的对应关系
+     * <b>在渲染那一刻就冻结</b>，随 prompt 一起传下去。</p>
+     *
+     * @param text        清单 Markdown 片段（恒非空）
+     * @param attachments 与清单序号 1..N 对齐的附件（按上传正序）；清单为空时为空表
+     */
+    public record AttachmentListing(String text, List<ChatAttachment> attachments) {
+
+        /** 无附件的常量形态（省掉调用方的 null 判断）。 */
+        public static AttachmentListing empty(String text) {
+            return new AttachmentListing(text, List.of());
+        }
+    }
+
+    /**
+     * 渲染附件清单并同时返回对应实体（`G-042`）。
+     *
+     * <p>序号口径与对话面 {@code ChatAttachmentPromptRenderer} 完全一致：<b>1-based、上传正序</b>，
+     * 与用户在界面上看到的顺序、与 {@code attachment_targets} 的序号同一份语义。不另立序，
+     * 否则同一个会话在两处（对话面 / 拆解面）的「附件 2」会指向不同文件。</p>
+     *
+     * @param task 当前待拆解任务
+     * @return 清单正文 + 对齐的附件列表（绝不返回 null）
+     */
+    public AttachmentListing renderAttachmentListing(TaskView task) {
         try {
             Long conversationId = conversationIdOf(task);
             if (conversationId == null) {
-                return "- （该任务非澄清链路创建，无关联会话，故无会话附件）";
+                return AttachmentListing.empty("- （该任务非澄清链路创建，无关联会话，故无会话附件）");
             }
-            List<ChatAttachment> attachments = chatAttachmentService.listByConversation(conversationId);
-            if (attachments == null || attachments.isEmpty()) {
-                return EMPTY_ATTACHMENTS;
+            // `G-046`：取「最新的 N 件」而不是「最早的 N 件」。原实现先全量查（ASC）再截前 N，
+            // 超限时被丢弃的恰恰是用户最新上传的——而拆解要理解的正是最新那批需求材料。
+            List<ChatAttachment> latest = chatAttachmentService
+                    .listLatestByConversation(conversationId, MAX_ATTACHMENTS);
+            if (latest == null || latest.isEmpty()) {
+                return AttachmentListing.empty(EMPTY_ATTACHMENTS);
             }
+            List<ChatAttachment> attachments = new ArrayList<>(latest);
+            // 转回上传正序：清单顺序须与用户界面、与 attachment_targets 的 1-based 序号一致
+            Collections.reverse(attachments);
+            // 序号只在「真正列出来的条目」上递增：文件名缺失的条目下面会被 continue 掉，
+            // 若用 for 下标当序号，被跳过的条目会让后面的序号整体前移，与返回的列表错位。
+            List<ChatAttachment> listed = new ArrayList<>(attachments.size());
             StringBuilder sb = new StringBuilder();
-            int shown = 0;
             for (ChatAttachment a : attachments) {
                 if (a == null || a.getFileName() == null || a.getFileName().isBlank()) {
                     continue;
                 }
-                if (shown >= MAX_ATTACHMENTS) {
-                    break;
-                }
-                sb.append("- ").append(a.getFileName())
+                listed.add(a);
+                sb.append("- 附件 ").append(listed.size()).append("：").append(a.getFileName())
                         .append("｜类型：").append(nullToDash(a.getFileType()))
                         .append("｜可读性：").append(readability(a.getParseStatus()))
                         .append('\n');
-                shown++;
             }
-            if (shown == 0) {
-                return EMPTY_ATTACHMENTS;
+            if (listed.isEmpty()) {
+                return AttachmentListing.empty(EMPTY_ATTACHMENTS);
             }
-            if (attachments.size() > shown) {
-                sb.append("- （共 ").append(attachments.size())
-                        .append(" 件，仅展示前 ").append(shown).append(" 件）");
+            if (latest.size() >= MAX_ATTACHMENTS) {
+                // 达到上限即可能还有更早的未列出——用「至少」而非「共」，不编造准确总数
+                sb.append("- （本次展示最新 ").append(listed.size())
+                        .append(" 件；若会话附件更多，更早的未列出）");
             }
-            return sb.toString().trim();
+            return new AttachmentListing(sb.toString().trim(), List.copyOf(listed));
         } catch (Exception e) {
             log.warn("拆解期快照：附件清单取数失败，已降级: err={}", e.getMessage());
-            return "- （附件清单取数失败，按无附件处理）";
+            return AttachmentListing.empty("- （附件清单取数失败，按无附件处理）");
         }
     }
 

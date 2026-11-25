@@ -10,7 +10,10 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.support.ImageInputCapabilityPolicy;
+import com.helloai.core.system.service.LlmProviderModelQueryService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -21,6 +24,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.content.Media;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
@@ -35,9 +39,21 @@ import java.util.List;
  * <p>先以稳定 mock 模式接入 Spring AI ChatClient，确保平台内执行链路可在本地稳定验证。
  * 后续切真实 Provider 时，复用这里的 ChatClient 组装入口即可。</p>
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AgentChatClientServiceImpl implements AgentChatClientService {
+
+    /**
+     * 模型看不到图时的显式说明（不变量 I-4「禁假装看过」的落地产物）。
+     *
+     * <p><b>`VU-10` 起文案本体外移到 {@link ImageInputCapabilityPolicy#MEDIA_NOT_VISIBLE_NOTE}</b>：
+     * 执行面 {@code AgentRuntimeContextAssembler} 也要注入同一句，两处各写一份必然漂移
+     * （一边说「看不到」、另一边忘了说，模型就会凭文件名编造图片内容）。
+     * 本常量保留为别名，使既有测试断言与调用点零改动。</p>
+     */
+    static final String MEDIA_NOT_VISIBLE_NOTE =
+            ImageInputCapabilityPolicy.MEDIA_NOT_VISIBLE_NOTE;
 
     private final AgentExecutionProperties executionProperties;
     // 存在性探测必须保持 ObjectProvider（完全惰性）：ChatClientAutoConfiguration 的
@@ -48,6 +64,26 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
     private final ObjectProvider<ChatClient.Builder> chatClientBuilderProvider;
     private final LlmProviderChatClientFactoryRegistry providerRegistry;
     private final LlmCallConcurrencyGuard llmCallConcurrencyGuard;
+    /**
+     * 模型能力查询（`VU-9` 不变量 I-2 的数据源）。
+     *
+     * <p>注入的是 system 域的查询服务接口（不是 Mapper、不是实体）：{@code agent → system}
+     * 属 §6 允许的向下依赖，且该服务已由 {@code AgentSkillPolicyService} 等多处消费，
+     * 属既有稳定契约。</p>
+     *
+     * <p><b>`VU-10` 起本类不再直接用它</b>：判定已收口到 {@link ImageInputCapabilityPolicy}，
+     * 执行面需要同一判定。字段保留是因为 {@link #buildChatModel} 等路径仍按 provider
+     * 建模型（与本判定无关），且去掉字段会扩大本批改动面。</p>
+     */
+    private final LlmProviderModelQueryService llmProviderModelQueryService;
+
+    /**
+     * 「本次请求能不能带图」的唯一判定（`VU-10` 收口）。
+     *
+     * <p>与执行面 {@code AgentRuntimeContextAssembler} 共用同一实现——两边各写一份会让
+     * 同一模型在两条链上表现不一致（判据 4）。</p>
+     */
+    private final ImageInputCapabilityPolicy imageInputCapabilityPolicy;
 
     /**
      * 使用 Spring AI ChatClient 生成回复。
@@ -63,6 +99,13 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
 
     public ChatResponse generate(Agent agent, String systemPrompt, String userPrompt,
                                  String provider, String apiKeyPlaintext, Double temperature) {
+        return generate(agent, systemPrompt, userPrompt, provider, apiKeyPlaintext, temperature, List.of());
+    }
+
+    @Override
+    public ChatResponse generate(Agent agent, String systemPrompt, String userPrompt,
+                                 String provider, String apiKeyPlaintext, Double temperature,
+                                 List<Media> media) {
         if (!executionProperties.isEnabled()) {
             throw new BizException("平台内 Agent 执行链已关闭");
         }
@@ -73,7 +116,7 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
             llmCallConcurrencyGuard.acquire();
         }
         try {
-            return doGenerate(agent, systemPrompt, userPrompt, provider, apiKeyPlaintext, temperature);
+            return doGenerate(agent, systemPrompt, userPrompt, provider, apiKeyPlaintext, temperature, media);
         } finally {
             if (throttled) {
                 llmCallConcurrencyGuard.release();
@@ -82,7 +125,8 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
     }
 
     private ChatResponse doGenerate(Agent agent, String systemPrompt, String userPrompt,
-                                    String provider, String apiKeyPlaintext, Double temperature) {
+                                    String provider, String apiKeyPlaintext, Double temperature,
+                                    List<Media> media) {
         ChatClient chatClient = buildChatClient(agent, provider, apiKeyPlaintext);
 
         ChatClient.ChatClientRequestSpec prompt = chatClient.prompt();
@@ -93,8 +137,7 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
         if (temperature != null) {
             prompt = prompt.options(ChatOptions.builder().temperature(temperature).build());
         }
-        return prompt
-                .user(userPrompt != null ? userPrompt : "")
+        return applyUserMessage(prompt, agent, userPrompt, media)
                 .call()
                 .chatResponse();
     }
@@ -112,6 +155,12 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
 
     public Flux<LlmStreamChunk> generateStream(Agent agent, String systemPrompt, String userPrompt,
                                                String provider, String apiKeyPlaintext) {
+        return generateStream(agent, systemPrompt, userPrompt, provider, apiKeyPlaintext, List.of());
+    }
+
+    @Override
+    public Flux<LlmStreamChunk> generateStream(Agent agent, String systemPrompt, String userPrompt,
+                                               String provider, String apiKeyPlaintext, List<Media> media) {
         if (!executionProperties.isEnabled()) {
             throw new BizException("平台内 Agent 执行链已关闭");
         }
@@ -119,7 +168,7 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
         if (throttled) {
             llmCallConcurrencyGuard.acquire();
         }
-        return Flux.defer(() -> doGenerateStream(agent, systemPrompt, userPrompt, provider, apiKeyPlaintext))
+        return Flux.defer(() -> doGenerateStream(agent, systemPrompt, userPrompt, provider, apiKeyPlaintext, media))
                 .doFinally(signal -> {
                     if (throttled) {
                         llmCallConcurrencyGuard.release();
@@ -142,15 +191,14 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
      * （正文或思考都为空）——只丢空块，保留空白与换行（它们是正文的一部分）。</p>
      */
     private Flux<LlmStreamChunk> doGenerateStream(Agent agent, String systemPrompt, String userPrompt,
-                                                  String provider, String apiKeyPlaintext) {
+                                                  String provider, String apiKeyPlaintext, List<Media> media) {
         ChatClient chatClient = buildChatClient(agent, provider, apiKeyPlaintext);
 
         ChatClient.ChatClientRequestSpec prompt = chatClient.prompt();
         if (StringUtils.hasText(systemPrompt)) {
             prompt = prompt.system(systemPrompt);
         }
-        return prompt
-                .user(userPrompt != null ? userPrompt : "")
+        return applyUserMessage(prompt, agent, userPrompt, media)
                 .stream()
                 .chatResponse()
                 .flatMapIterable(response -> {
@@ -169,6 +217,59 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
                 });
     }
 
+    /**
+     * 组装 user 消息（同步 / 流式共用的<b>唯一</b>入口，`VU-9`）。
+     *
+     * <p><b>为什么抽出这一步</b>：媒体相关的判定有三条（能力 / 空媒体保原样 / 图文同条），
+     * 同步与流式各写一份必然漂移——这正是 §2 #20「同一判据只修了一个消费方」的教训。
+     * 两处调用本方法，判定只有一份。</p>
+     *
+     * <p><b>能力判定为什么在这里（不变量 I-2）</b>：{@code agent} 是<b>本次实际要调用的</b>
+     * Agent（可能已被 {@code AgentModelPin} 或会话级 {@code modelType} 覆盖过），
+     * 从这里解析出的 {@code modelType} 才等于「请求真正发往的模型」。
+     * 计划里的原话是「前端选中 ≠ 实际调用」，写成先判后发就复刻了
+     * OpenCode {@code #60736}（维护者判定：note 是每次构建请求时按实际使用的模型加的）。</p>
+     *
+     * <p><b>三态降级（不变量 I-4）</b>：</p>
+     * <ul>
+     *   <li><b>能看</b> —— 模型声明 {@code input} 含 {@code image} ⇒ 图以 {@code media(...)} 随正文送出；</li>
+     *   <li><b>看不到（显式降级）</b> —— 模型不支持图文、或装载后一张都不剩 ⇒ 仍送纯文本，
+     *       并<b>在正文后追加一行显式说明</b>，让模型知道「有图但你看不到」而不是「用户没给图」。
+     *       这一行是「禁假装看过」的落地：模型对着一张不存在的图编内容是当前最坏的失败形态；</li>
+     *   <li><b>无媒体</b> —— 走原 {@code .user(String)}，请求体逐字不变（回归面不放大）。</li>
+     * </ul>
+     *
+     * <p><b>装载失败一律降级不外抛</b>：单张图读取异常在
+     * {@code AttachmentMediaAssembler} 内已逐条 catch；若整批都失败，走上面的「看不到」分支。</p>
+     */
+    private ChatClient.ChatClientRequestSpec applyUserMessage(ChatClient.ChatClientRequestSpec spec,
+                                                              Agent agent, String userPrompt, List<Media> media) {
+        String text = userPrompt != null ? userPrompt : "";
+        if (media == null || media.isEmpty()) {
+            // 零媒体：与原实现逐字一致，不调带 media 的重载
+            return spec.user(text);
+        }
+        if (!supportsImageInput(agent)) {
+            //  ★I-4：降级必须显式。原样送文本 + 明确告知「图在但看不到」，
+            //  绝不让模型把「没有图」当成事实继续编。
+            log.info("模型不支持图片输入，{} 张图降级为纯文本并显式告知: modelType={}",
+                    media.size(), agent == null ? null : agent.getModelType());
+            return spec.user(text + "\n\n" + MEDIA_NOT_VISIBLE_NOTE);
+        }
+        return spec.user(user -> user.text(text).media(media.toArray(new Media[0])));
+    }
+
+    /**
+     * 模型元数据是否声明可读图片。
+     *
+     * <p><b>判定本体已外移到 {@link ImageInputCapabilityPolicy}</b>（`VU-10`）：执行面
+     * {@code AgentRuntimeContextAssembler} 需要同一判定，两处各写一份必然分叉
+     * （判据 4）——最坏形态是同一条链「对话面能看图、执行面不能看」。
+     * 本方法只做委托，保留调用点可读性（{@code applyUserMessage} 里语义自解释）。</p>
+     */
+    private boolean supportsImageInput(Agent agent) {
+        return imageInputCapabilityPolicy.supportsImageInput(agent);
+    }
     /**
      * 构建底层 ChatModel（P0-B-2）：mock 模式返回 MockChatModel；真实模式经
      * providerRegistry.createChatModel 返回缓存实例（与 buildChatClient 共享同一模型）。

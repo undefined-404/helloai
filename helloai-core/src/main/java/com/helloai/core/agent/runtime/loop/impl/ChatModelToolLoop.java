@@ -23,6 +23,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.content.Media;
 import org.springframework.ai.model.tool.DefaultToolCallingChatOptions;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -147,7 +148,20 @@ public class ChatModelToolLoop implements AgentLoop {
         if (StringUtils.hasText(input.systemPrompt())) {
             messages.add(new SystemMessage(input.systemPrompt()));
         }
-        messages.add(new UserMessage(input.userPrompt() != null ? input.userPrompt() : ""));
+        // `VU-1`：有媒体走 builder 装配（text 与 media 同条消息，多模态模型的常见前提——
+        // 图与指令必须同一条 user 消息，否则模型会把图当成孤立附件、失去指令锚点）。
+        // 无媒体<b>必须</b>走原来的 `new UserMessage(text)`：不为「统一写法」而让全部既有
+        // 纯文本链路的请求体多一个空 media 字段（`UserMessage` 的 media 默认即空表，
+        // 但走 builder 会隐式补 metadata 等默认值，请求体字节不可能保证逐字相同）。
+        List<Media> media = input.media();
+        if (media.isEmpty()) {
+            messages.add(new UserMessage(input.userPrompt() != null ? input.userPrompt() : ""));
+        } else {
+            messages.add(UserMessage.builder()
+                    .text(input.userPrompt() != null ? input.userPrompt() : "")
+                    .media(media)
+                    .build());
+        }
 
         int iterations = 0;
         int toolCallCount = 0;

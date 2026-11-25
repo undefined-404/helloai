@@ -300,12 +300,12 @@ class LlmProviderCatalogServiceTest {
         void shouldKeepUsableModel() {
             stubUsableProvider("deepseek", "DeepSeek");
             when(modelQueryService.listAllRefs()).thenReturn(List.of(
-                    ref("deepseek", "deepseek-v4-flash", true, true)));
+                    ref("deepseek", "deepseek-flash", true, true)));
 
             List<LlmProviderCatalogService.ModelOption> options = catalogService.listModelOptions();
 
             assertThat(options).singleElement().satisfies(o -> {
-                assertThat(o.modelType()).isEqualTo("deepseek:deepseek-v4-flash");
+                assertThat(o.modelType()).isEqualTo("deepseek:deepseek-flash");
                 assertThat(o.defaultModel()).isTrue();
             });
         }
@@ -352,12 +352,12 @@ class LlmProviderCatalogServiceTest {
         void shouldSkipOrphanModel() {
             stubUsableProvider("deepseek", "DeepSeek");
             when(modelQueryService.listAllRefs()).thenReturn(List.of(
-                    ref("deepseek", "deepseek-v4-flash", true, false),
+                    ref("deepseek", "deepseek-flash", true, false),
                     ref("ghost", "ghost-model", true, false)));
 
             assertThat(catalogService.listModelOptions())
                     .extracting(LlmProviderCatalogService.ModelOption::modelName)
-                    .containsExactly("deepseek-v4-flash");
+                    .containsExactly("deepseek-flash");
         }
 
         @Test
@@ -366,12 +366,12 @@ class LlmProviderCatalogServiceTest {
             stubUsableProvider("deepseek", "DeepSeek");
             when(modelQueryService.listAllRefs()).thenReturn(List.of(
                     ref("deepseek", "disabled-model", false, true),
-                    ref("deepseek", "deepseek-v4-flash", true, false),
+                    ref("deepseek", "deepseek-flash", true, false),
                     ref("deepseek", "deepseek-v4-pro", true, true)));
 
             assertThat(catalogService.listModelOptions())
                     .extracting(LlmProviderCatalogService.ModelOption::modelName)
-                    .containsExactly("deepseek-v4-pro", "deepseek-v4-flash");
+                    .containsExactly("deepseek-v4-pro", "deepseek-flash");
         }
     }
 }

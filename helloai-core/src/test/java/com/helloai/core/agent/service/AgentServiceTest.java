@@ -351,12 +351,12 @@ class AgentServiceTest {
     @DisplayName("validateAgentSkills：标准技能越出模型能力（web-search）→ 抛 BizException")
     void validateSkills_standardSkillOutOfWhitelist_throws() {
         AgentService service = newSpyService();
-        when(llmProviderModelQueryService.findCapabilityProfileByModelType("deepseek:deepseek-v4-flash"))
-                .thenReturn(capability("deepseek:deepseek-v4-flash",
+        when(llmProviderModelQueryService.findCapabilityProfileByModelType("deepseek:deepseek-flash"))
+                .thenReturn(capability("deepseek:deepseek-flash",
                         List.of("thinking"), List.of("shell", "code-review")));
 
         assertThatThrownBy(() -> service.validateAgentSkills(
-                "deepseek:deepseek-v4-flash", List.of("web-search", "shell")))
+                "deepseek:deepseek-flash", List.of("web-search", "shell")))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不支持技能")
                 .hasMessageContaining("web-search")
@@ -368,11 +368,11 @@ class AgentServiceTest {
     @DisplayName("validateAgentSkills：白名单内标准技能 + 自定义技能 → 通过")
     void validateSkills_whitelistAndCustom_pass() {
         AgentService service = newSpyService();
-        when(llmProviderModelQueryService.findCapabilityProfileByModelType("deepseek:deepseek-v4-flash"))
-                .thenReturn(capability("deepseek:deepseek-v4-flash",
+        when(llmProviderModelQueryService.findCapabilityProfileByModelType("deepseek:deepseek-flash"))
+                .thenReturn(capability("deepseek:deepseek-flash",
                         List.of("thinking"), List.of("shell", "code-review")));
 
-        service.validateAgentSkills("deepseek:deepseek-v4-flash",
+        service.validateAgentSkills("deepseek:deepseek-flash",
                 List.of("thinking", "shell", "kubernetes"));
     }
 
@@ -386,23 +386,23 @@ class AgentServiceTest {
         service.validateAgentSkills("legacy:old-model", List.of("python"));   // 未识别模型放行
         service.validateAgentSkills(null, List.of("python"));                 // modelType 空放行
         service.validateAgentSkills("  ", List.of("python"));
-        service.validateAgentSkills("deepseek:deepseek-v4-flash", null);       // skills 空放行
-        service.validateAgentSkills("deepseek:deepseek-v4-flash", List.of(" "));
+        service.validateAgentSkills("deepseek:deepseek-flash", null);       // skills 空放行
+        service.validateAgentSkills("deepseek:deepseek-flash", List.of(" "));
     }
 
     @Test
     @DisplayName("deriveSkillsForRegistration：API_KEY_LLM + 已识别模型 → 能力驱动（thinking 锁定 + 白名单过滤）")
     void deriveSkills_capabilityDriven() {
         AgentService service = newSpyService();
-        when(llmProviderModelQueryService.findCapabilityProfileByModelType("deepseek:deepseek-v4-flash"))
-                .thenReturn(capability("deepseek:deepseek-v4-flash",
+        when(llmProviderModelQueryService.findCapabilityProfileByModelType("deepseek:deepseek-flash"))
+                .thenReturn(capability("deepseek:deepseek-flash",
                         List.of("thinking"), List.of("shell", "code-review")));
 
         Agent agent = new Agent();
         agent.setAccessType(AgentAccessType.API_KEY_LLM);
         agent.setName("planner");
         agent.setRemark("计划编排");
-        agent.setModelType("deepseek:deepseek-v4-flash");
+        agent.setModelType("deepseek:deepseek-flash");
 
         List<String> skills = service.deriveSkillsForRegistration(agent, List.of("thinking", "web-search", "shell"));
 

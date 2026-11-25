@@ -28,6 +28,7 @@ import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.ConversationService;
+import com.helloai.core.agent.support.ImageInputCapabilityPolicy;
 import com.helloai.core.task.port.AttachmentView;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.port.SubTaskView;
@@ -173,7 +174,9 @@ class SubTaskReviewServiceTest {
                 new ReviewExecutionEngine(platformAgentExecutionService, conversationService,
                         taskTimelineService, new VerdictParser(new ObjectMapper()),
                         new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
-                        subTaskService, reviewProperties, mock(ReviewEvidenceMaterializer.class)),
+                        subTaskService, reviewProperties, mock(ReviewEvidenceMaterializer.class),
+                        // VU-2：本测不涉及媒体，能力判定按不支持（false）
+                        mock(ImageInputCapabilityPolicy.class)),
                 taskTimelineService, executionCommandService, dispatchProperties,
                 conversationService, recordReviewService, redissonClient,
                 reviewLockTtlResolver,

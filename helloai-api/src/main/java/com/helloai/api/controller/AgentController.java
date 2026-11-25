@@ -216,7 +216,7 @@ public class AgentController {
             // Agent 注册非法入参由 500 收敛为 400，经 GlobalExceptionHandler 透出）。
             if (colonIdx <= 0 || colonIdx == modelType.length() - 1) {
                 throw new com.helloai.common.base.BizException(400,
-                        "modelType 格式错误，应为 providerCode:modelName，例如 deepseek:deepseek-v4-flash");
+                        "modelType 格式错误，应为 providerCode:modelName，例如 deepseek:deepseek-flash");
             }
             String providerCode = modelType.substring(0, colonIdx);
             String modelName = modelType.substring(colonIdx + 1);

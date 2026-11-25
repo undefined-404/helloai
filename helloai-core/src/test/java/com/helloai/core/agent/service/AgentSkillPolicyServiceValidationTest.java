@@ -60,10 +60,10 @@ class AgentSkillPolicyServiceValidationTest {
     @Test
     @DisplayName("角色下模型重复 → BizException(code=409)")
     void duplicateModelInRoleIsConflict() {
-        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-flash")).thenReturn(true);
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-flash")).thenReturn(true);
         when(agentMapper.selectCount(any())).thenReturn(1L);
 
-        assertThatThrownBy(() -> service.validateModelType("deepseek:deepseek-v4-flash", AgentRole.EXECUTOR, null))
+        assertThatThrownBy(() -> service.validateModelType("deepseek:deepseek-flash", AgentRole.EXECUTOR, null))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("同一角色下只能注册一个")
                 .satisfies(e -> assertThat(((BizException) e).getCode()).isEqualTo(409));

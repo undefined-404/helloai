@@ -6,6 +6,9 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.service.AgentChatClientService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.support.AttachmentMediaAssembler;
+import com.helloai.core.agent.support.ImageInputCapabilityPolicy;
+import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.agent.chat.LlmCallConcurrencyGuard;
 import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.domain.AgentResult;
@@ -96,16 +99,25 @@ class PlatformAgentExecutionServiceTest {
         ObjectProvider<ChatClient.Builder> builderProvider = Mockito.mock(ObjectProvider.class);
         LlmProviderChatClientFactoryRegistry registry = Mockito.mock(LlmProviderChatClientFactoryRegistry.class);
         LlmCallConcurrencyGuard guard = new LlmCallConcurrencyGuard(properties);
-        AgentChatClientService chatClientService = new AgentChatClientServiceImpl(properties, builderProvider, registry, guard);
+        // VU-9：能力查询（本组用例无媒体，applyUserMessage 不触达它；mock 返回 null 即「不支持」）
+        // VU-10：能力判定已外移到 ImageInputCapabilityPolicy，用真实策略包住同一个 mock
+        LlmProviderModelQueryService queryService = Mockito.mock(LlmProviderModelQueryService.class);
+        AgentChatClientService chatClientService = new AgentChatClientServiceImpl(properties, builderProvider,
+                registry, guard, queryService, new ImageInputCapabilityPolicy(queryService));
         ApiKeyAgentExecutor apiKeyAgentExecutor =
-                new ApiKeyAgentExecutor(chatClientService, agentLlmCredentialResolver, properties);
+                new ApiKeyAgentExecutor(chatClientService, agentLlmCredentialResolver, properties,
+                        // VU-9：本组用例的任务均不带 mediaRefs ⇒ 装载器不被触达，mock 即可
+                        Mockito.mock(AttachmentMediaAssembler.class));
         AgentExecutorRouter router = new AgentExecutorRouter(List.of(apiKeyAgentExecutor));
         // REF-8.5：真实循环入口（本组用例的任务均不带 scene ⇒ supports() 恒 false ⇒ 单次链路，
         // 顺带以真实判定证明「非白名单面零行为变化」）
         BusinessSurfaceLoopRunner loopRunner = new BusinessSurfaceLoopRunner(
                 chatClientService, agentLlmCredentialResolver, agentMcpServerService,
                 agentSkillSpecService, properties, toolRegistry, toolExecutor, agentLoop,
-                toolCallbackProvider);
+                toolCallbackProvider,
+                // VU-2：媒体能力判定 + 装载器（本组用例不带 mediaRefs ⇒ 不被触达）
+                Mockito.mock(ImageInputCapabilityPolicy.class),
+                Mockito.mock(AttachmentMediaAssembler.class));
         platformAgentExecutionService = new PlatformAgentExecutionServiceImpl(
                 agentService, router, heartbeatService, properties, agentSkillSpecService, loopRunner);
     }

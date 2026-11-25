@@ -78,7 +78,9 @@ helloai:
       # 默认 pro，与 dev/server 对齐：体验版的核心卖点是「整合报告」，
       #   flash 会降一档质量。注意 local 刻意用 flash（日常调试更快更省），
       #   这与本文件不同是**有意的**，不是漏改。
-      #   想省钱：在 .env 里设 DEEPSEEK_CHAT_MODEL=deepseek-v4-flash。
+      #   想省钱：在 .env 里设 DEEPSEEK_CHAT_MODEL=deepseek-flash。
+      #   注意默认值 deepseek-v4-pro 是官方现行名（V155 对齐文档），无需改；
+      #   'deepseek-v4-flash' 已废弃，勿再写入。
       default-model: ${DEEPSEEK_CHAT_MODEL:deepseek-v4-pro}
       read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:600000}
     moonshot:

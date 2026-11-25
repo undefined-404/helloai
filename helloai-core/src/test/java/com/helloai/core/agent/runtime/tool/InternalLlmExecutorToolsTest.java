@@ -61,11 +61,14 @@ class InternalLlmExecutorToolsTest {
     @SuppressWarnings("unchecked")
     private final ObjectProvider<com.helloai.core.agent.tool.ToolRegistry> toolRegistryProvider =
             mock(ObjectProvider.class);
+    /** G-037：约束文档目录（internal_list_constraint_docs / internal_load_constraint_doc 白名单事实源）。 */
+    private final com.helloai.core.shared.constraint.ConstraintDocCatalog constraintDocCatalog =
+            mock(com.helloai.core.shared.constraint.ConstraintDocCatalog.class);
     private final InternalLlmExecutorTools tools =
             new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService,
                     subTaskCommandPort, sandboxExecutionService, skillExecutionSupport,
                     skillArtifactExportService, conversationService, sandboxCallLedger,
-                    toolRegistryProvider);
+                    toolRegistryProvider, constraintDocCatalog);
 
     /** REF-8.1 A1 强制闸门：本类工具仅可由内部执行链调用，单测需先绑定执行链上下文。 */
     @BeforeEach
@@ -314,6 +317,79 @@ class InternalLlmExecutorToolsTest {
 
         assertThat(result).isEqualTo("## 代码评审规范\n正文……");
         verify(agentSkillSpecService).loadBody("eng-code-review");
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  G-037：internal_list/load_constraint_doc（约束文档目录 + 按需取）
+    // ────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("G-037 internal_list_constraint_docs：目录视图只含元数据（ref/title/summary/sections），不含正文")
+    void shouldListConstraintDocs() {
+        when(constraintDocCatalog.list()).thenReturn(List.of(
+                new com.helloai.core.shared.constraint.ConstraintDocCatalog.ConstraintDocEntry(
+                        "code-style", "doc/HelloAI_CODE_STYLE.md", "HelloAI 代码开发规范", "代码契约……",
+                        List.of(new com.helloai.core.shared.constraint.ConstraintDocCatalog.ConstraintDocSectionMeta(
+                                "s5", "Core 业务域结构", "^# 5\\. ")))));
+
+        Object result = tools.internalListConstraintDocs();
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> list = (List<Map<String, Object>>) result;
+        assertThat(list).hasSize(1);
+        assertThat(list.get(0))
+                .containsEntry("ref", "code-style")
+                .containsEntry("title", "HelloAI 代码开发规范")
+                .containsEntry("summary", "代码契约……");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> sections = (List<Map<String, Object>>) list.get(0).get("sections");
+        assertThat(sections).hasSize(1);
+        assertThat(sections.get(0)).containsEntry("id", "s5").containsEntry("title", "Core 业务域结构");
+        verify(constraintDocCatalog).list();
+    }
+
+    @Test
+    @DisplayName("G-037 internal_load_constraint_doc：按 ref+scope 读取章节正文（section 含 id/title/content）")
+    void shouldLoadConstraintDoc() {
+        when(constraintDocCatalog.load("code-style", List.of("s5", "s6"))).thenReturn(
+                new com.helloai.core.shared.constraint.ConstraintDocCatalog.ConstraintDocLoadResult(
+                        "code-style", "HelloAI 代码开发规范",
+                        List.of(new com.helloai.core.shared.constraint.ConstraintDocCatalog.LoadedSection(
+                                "s5", "Core 业务域结构", "## 5. 正文……")),
+                        false, null));
+
+        Object result = tools.internalLoadConstraintDoc("code-style", List.of("s5", "s6"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> out = (Map<String, Object>) result;
+        assertThat(out)
+                .containsEntry("ref", "code-style")
+                .containsEntry("title", "HelloAI 代码开发规范");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> sections = (List<Map<String, Object>>) out.get("sections");
+        assertThat(sections).hasSize(1);
+        assertThat(sections.get(0))
+                .containsEntry("id", "s5")
+                .containsEntry("title", "Core 业务域结构")
+                .containsEntry("content", "## 5. 正文……");
+        verify(constraintDocCatalog).load("code-style", List.of("s5", "s6"));
+    }
+
+    @Test
+    @DisplayName("G-037 internal_load_constraint_doc：不可用降级返 {ref, unavailable:true, reason}，不抛异常")
+    void shouldReportUnavailableConstraintDoc() {
+        when(constraintDocCatalog.load("evil", null)).thenReturn(
+                com.helloai.core.shared.constraint.ConstraintDocCatalog.ConstraintDocLoadResult
+                        .unavailable("evil", "未登记的约束文档 ref: evil"));
+
+        Object result = tools.internalLoadConstraintDoc("evil", null);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> out = (Map<String, Object>) result;
+        assertThat(out)
+                .containsEntry("ref", "evil")
+                .containsEntry("unavailable", true)
+                .containsEntry("reason", "未登记的约束文档 ref: evil");
     }
 
     // ────────────────────────────────────────────────────────────

@@ -6,10 +6,13 @@ import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
+import com.helloai.core.agent.port.MediaRef;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.agent.support.ImageInputCapabilityPolicy;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.task.entity.TaskTimeline;
+import com.helloai.core.task.port.ConstraintRefView;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.port.UncertaintyView;
 import com.helloai.core.task.service.SubTaskService;
@@ -103,6 +106,15 @@ public class ReviewExecutionEngine {
     private final SubTaskService subTaskService;
     private final ReviewProperties reviewProperties;
     private final ReviewEvidenceMaterializer evidenceMaterializer;
+    /**
+     * 「本次核验所用 reviewer 模型能不能看图」的唯一判定（`VU-2`）。
+     *
+     * <p>注入的是 {@code agent.support} 的同一个策略组件——与对话面
+     * （{@code AgentChatClientServiceImpl}）、执行面（{@code AgentRuntimeContextAssembler}）
+     * <b>同源</b>。核验侧若自写一份判据，就会出现「同一个 reviewer 模型在执行面能看图、
+     * 在核验面不能」这种最难排查的形态（判据 4）。</p>
+     */
+    private final ImageInputCapabilityPolicy imageInputCapabilityPolicy;
 
     /**
      * 单次核验（不改状态不落库）：渲染 Prompt → LLM 调用 → 对话流双写 → 解析判定；
@@ -134,8 +146,17 @@ public class ReviewExecutionEngine {
      * @return 结构化判定 + 静态校验 findings；LLM 调用失败/超时、或不可解析且即时重试仍失败时 verdict 为 null
      */
     public ExecutionOutcome execute(SubTaskView subTask, AgentProfileSnapshot reviewer, ReviewChannel channel) {
-        return execute(subTask, reviewer, channel, buildEvidenceView(subTask),
-                materializeEvidenceQuietly(subTask));
+        // `VU-2`：能力判定 → 证据装配（含媒体引用与说明，一次算完）→ 执行。
+        // 判定必须用 reviewer 实际绑定的模型（`AgentProfileSnapshot.modelType`），
+        // 而不是「核验场景该用什么模型」——两者在本项目会因 provider 回落而分叉（不变量 I-2）。
+        // 用短路写而不是 `reviewer == null ? null : ...`：后者会得出一个「可能为 null 的实参」，
+        // 一旦将来有人再加同名重载就又是歧义（本类已因此撞过一次编译错）。
+        boolean mediaVisible = reviewer != null
+                && imageInputCapabilityPolicy.supportsImageInputByModelType(reviewer.modelType());
+        ReviewEvidenceAssembler.EvidenceContent content =
+                reviewEvidenceAssembler.buildEvidenceContent(subTask, mediaVisible);
+        return execute(subTask, reviewer, channel, buildEvidenceView(subTask, content),
+                content.mediaRefs(), materializeEvidenceQuietly(subTask));
     }
 
     /**
@@ -152,7 +173,10 @@ public class ReviewExecutionEngine {
     public ExecutionOutcome executeWithEvidence(SubTaskView subTask, AgentProfileSnapshot reviewer,
                                                 ReviewChannel channel, ReviewEvidenceView evidence) {
         if (evidence != null) {
-            return execute(subTask, reviewer, channel, evidence, null);
+            // `VU-2`：冻结复判**不送当前活的媒体**——与 F3「冻结路径不物化」同一条理由：
+            // 复判重放的是原判冻结的文本证据，若同时把返工后的当前图片送进消息，
+            // 模型就会「照着冻结文本判、眼里却看着新图」，漂移检测被活通道污染。
+            return execute(subTask, reviewer, channel, evidence, List.of(), null);
         }
         return execute(subTask, reviewer, channel);
     }
@@ -160,10 +184,27 @@ public class ReviewExecutionEngine {
     /**
      * 装配本次核验的证据视图（五段文本）：Prompt 渲染、编码检测（`RV-7`）与
      * 驳回侧冻结（`RV-6`）共用同一来源，避免三处各读一遍附件正文。
+     *
+     * <p>`VU-2` 起媒体说明是第 8 段（{@link ReviewEvidenceView#mediaVisibility()}）；
+     * 本无参入口按<b>看不到图</b>装配（保守默认），想启用看图用
+     * {@link #buildEvidenceView(SubTaskView, boolean)}。</p>
      */
     public ReviewEvidenceView buildEvidenceView(SubTaskView subTask) {
-        ReviewEvidenceAssembler.EvidenceContent content =
-                reviewEvidenceAssembler.buildEvidenceContent(subTask);
+        return buildEvidenceView(subTask, false);
+    }
+
+    /**
+     * 证据视图（显式媒体能力口径）：供冻结侧（`RV-6`）与方法内部共用。
+     *
+     * @param mediaVisible 判定当时所用模型是否能看图（决定媒体段的措辞与是否列图）
+     */
+    public ReviewEvidenceView buildEvidenceView(SubTaskView subTask, boolean mediaVisible) {
+        return buildEvidenceView(subTask, reviewEvidenceAssembler.buildEvidenceContent(subTask, mediaVisible));
+    }
+
+    /** 证据视图（装配结果已就绪）：避免同一份证据在一条链上被装配两次（判据 32）。 */
+    private ReviewEvidenceView buildEvidenceView(SubTaskView subTask,
+                                                 ReviewEvidenceAssembler.EvidenceContent content) {
         return new ReviewEvidenceView(
                 reviewEvidenceAssembler.extractExecutionOutput(subTask),
                 reviewEvidenceAssembler.buildAttachmentList(subTask),
@@ -171,17 +212,18 @@ public class ReviewExecutionEngine {
                 reviewEvidenceAssembler.verificationSignal(reviewEvidenceAssembler.extractRawOutput(subTask)),
                 renderSelfReviewSignal(subTask),
                 content.mechanicalCheck(),
-                content.evidenceLedger());
+                content.evidenceLedger(),
+                content.mediaVisibility());
     }
 
     private ExecutionOutcome execute(SubTaskView subTask, AgentProfileSnapshot reviewer,
                                      ReviewChannel channel, ReviewEvidenceView evidence,
-                                     String materializationNote) {
+                                     List<MediaRef> mediaRefs, String materializationNote) {
         String prompt = renderPrompt(subTask, evidence);
         if (materializationNote != null && !materializationNote.isBlank()) {
             prompt = prompt + "\n" + materializationNote;
         }
-        Attempt attempt = runOnce(subTask, reviewer, channel, prompt, false);
+        Attempt attempt = runOnce(subTask, reviewer, channel, prompt, mediaRefs, false);
         if (attempt == null) {
             // 调用异常 / 超时 / 结果失败：已记 execution_failed，**不重试**
             // （重试会再吃一次读超时，把单次核验的最坏时长从 1 倍推到 2 倍，而这类失败与输出格式无关）
@@ -196,7 +238,7 @@ public class ReviewExecutionEngine {
             log.warn("自动核验输出不可解析，立即重试一次: subTaskId={}, rawOutput={}",
                     subTask.id(), VerdictParser.summarize(attempt.rawOutput(), 300));
             Attempt retried = runOnce(subTask, reviewer, channel,
-                    prompt + UNPARSEABLE_RETRY_SUFFIX, true);
+                    prompt + UNPARSEABLE_RETRY_SUFFIX, mediaRefs, true);
             if (retried == null) {
                 return ExecutionOutcome.empty();
             }
@@ -246,10 +288,11 @@ public class ReviewExecutionEngine {
      *
      * @param retry 是否为不可解析后的即时重试：真则在对话流消息类型上加 {@code _retry} 后缀，
      *              使同一子任务的两次尝试在前端可分辨（否则会看到两条同类型 prompt / verdict）
+     * @param mediaRefs 随本次核验送模型的图片引用（`VU-2`；空表 = 不送图，行为与改造前一致）
      * @return 解析结果 + 原始输出；调用异常 / 超时 / 结果失败时返回 {@code null}（已记 execution_failed 事件）
      */
     private Attempt runOnce(SubTaskView subTask, AgentProfileSnapshot reviewer,
-                            ReviewChannel channel, String prompt, boolean retry) {
+                            ReviewChannel channel, String prompt, List<MediaRef> mediaRefs, boolean retry) {
         Long subTaskId = subTask.id();
         String kindSuffix = retry ? "_retry" : "";
         AgentResult result;
@@ -265,6 +308,9 @@ public class ReviewExecutionEngine {
                     .requiredCapabilities(Map.of())
                     // G-016 契约层技能注入：核验与执行同一技能清单（mergeSkills 恒非 null）
                     .skills(subTaskService.mergeSkills(subTask.id()))
+                    // `VU-2`：图片引用（只存引用不存字节）——字节在请求装配层按能力判定后读，
+                    // 两处消费方（业务面循环 / 回落单次链路）共用同一份引用
+                    .mediaRefs(mediaRefs == null ? List.of() : mediaRefs)
                     .build();
             result = platformAgentExecutionService.executeSync(reviewer.id(), agentTask);
         } catch (Exception e) {
@@ -466,6 +512,9 @@ public class ReviewExecutionEngine {
 
     /**
      * 加载核验 Prompt 模板并替换占位符（证据/附件占位由装配器产出）。
+     * `VU-2`：增 {{MEDIA_VISIBILITY}}（媒体可见性说明，四态见 `ReviewEvidenceAssembler#resolveMediaScope`），
+     * 与模板 `## 随证据提供的图片` 段同批落地——模板加占位而实现未替换时，残留的
+     * {@code {{…}}} 会被 {@code ReviewPromptRenderTest} 抓出来。
      * G-011 D7：增 {{CONSTRAINTS}} + {{UNCERTAINTIES}} 渲染（空时「（无）」），
      * 清偿 G-010 后置缺口③（审查侧 constraints 此前未消费）。
      * G-010 收口：增 {{REQUIRED_SKILLS}} 渲染——审查侧此前只拿到合并后的技能<b>能力</b>
@@ -494,6 +543,7 @@ public class ReviewExecutionEngine {
                 .replace("{{DELIVERABLE}}", VerdictParser.nullToEmpty(subTask.deliverable()))
                 .replace("{{ACCEPTANCE}}", VerdictParser.nullToEmpty(subTask.acceptance()))
                 .replace("{{CONSTRAINTS}}", renderConstraints(subTask))
+                .replace("{{CONSTRAINT_REFS}}", renderConstraintRefs(subTask))
                 .replace("{{REQUIRED_SKILLS}}", renderRequiredSkills(subTask))
                 .replace("{{UNCERTAINTIES}}", renderUncertainties(subTask))
                 .replace("{{SELF_REVIEW_SIGNAL}}", evidence.selfReviewSignal())
@@ -504,7 +554,11 @@ public class ReviewExecutionEngine {
                         "（无机械预检结论）"))
                 .replace("{{EVIDENCE_LEDGER}}", blankToPlaceholder(evidence.evidenceLedger(),
                         "（无附件注入台账）"))
-                .replace("{{VERIFICATION_SIGNAL}}", evidence.verificationSignal());
+                .replace("{{VERIFICATION_SIGNAL}}", evidence.verificationSignal())
+                // `VU-2`：无媒体附件时给一句明确的「没有图」，而不是留空——
+                // 留空会让模型把「本段为空」当成「平台忘了告诉我」，进而凭文件名猜图（不变量 I-4）
+                .replace("{{MEDIA_VISIBILITY}}", blankToPlaceholder(evidence.mediaVisibility(),
+                        "（本提交未附带图片附件）"));
     }
 
     private static String blankToPlaceholder(String value, String placeholder) {
@@ -515,6 +569,31 @@ public class ReviewExecutionEngine {
     private String renderConstraints(SubTaskView subTask) {
         return subTask.constraints() != null && !subTask.constraints().isBlank()
                 ? subTask.constraints() : "（无）";
+    }
+
+    /**
+     * G-037：约束文档引用渲染——非空逐项以「；」连接（{@code kind:ref[scope: ...]}），
+     * 空列表/全非法项时「（无）」。只携带摘要，正文由执行侧 internal_load_constraint_doc 读取，
+     * 审查侧不加载文档（fail-open：引用缺失不应阻断核验）。
+     */
+    private String renderConstraintRefs(SubTaskView subTask) {
+        List<ConstraintRefView> refs = subTask.constraintRefs();
+        if (refs == null || refs.isEmpty()) {
+            return "（无）";
+        }
+        List<String> parts = new ArrayList<>();
+        for (ConstraintRefView ref : refs) {
+            if (ref == null || ref.ref() == null || ref.ref().isBlank()) {
+                continue;
+            }
+            String kind = ref.kind() == null ? "" : ref.kind();
+            if (ref.scope() == null || ref.scope().isEmpty()) {
+                parts.add(kind + ":" + ref.ref());
+            } else {
+                parts.add(kind + ":" + ref.ref() + "[scope: " + String.join(",", ref.scope()) + "]");
+            }
+        }
+        return parts.isEmpty() ? "（无）" : String.join("；", parts);
     }
 
     /**

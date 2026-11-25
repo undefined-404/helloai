@@ -17,6 +17,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
+import com.helloai.core.shared.constraint.ConstraintDocCatalog;
 import com.helloai.core.planner.context.DecomposeContextSnapshotRenderer;
 import com.helloai.core.planner.entity.PlanAttempt;
 import com.helloai.core.planner.entity.PlanDraft;
@@ -35,6 +36,7 @@ import com.helloai.core.planner.service.impl.PlannerDecomposeAsyncServiceImpl;
 import com.helloai.core.planner.support.PlanDraftFindingsStore;
 import com.helloai.core.planner.support.PlanGateRunner;
 import com.helloai.core.task.support.SubTaskGateFindingsStore;
+import com.helloai.core.task.port.ConstraintRefDraft;
 import com.helloai.core.task.port.SubTaskDraft;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.port.TaskView;
@@ -139,6 +141,10 @@ class PlannerDecomposeAsyncServiceImplTest {
     @Mock
     private PlanDraftService planDraftService;
 
+    /** `G-037` 约束文档目录：默认空桩——既有用例不关心目录内容，只保证目录注入不拖垮拆解。 */
+    @Mock
+    private ConstraintDocCatalog constraintDocCatalog;
+
     /** 展开深度分档（设计 §7）：用真实实例——分档表本身就是被测语义，mock 掉断言会退化。 */
     private final com.helloai.common.config.PlannerDecomposeProperties plannerDecomposeProperties =
             new com.helloai.common.config.PlannerDecomposeProperties();
@@ -181,7 +187,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 platformAgentExecutionService, taskTimelineService,
                 agentService, agentSkillSpecService, contextSnapshotRenderer, new ObjectMapper(),
                 transactionManager, planAttemptService, planDraftRoundService, planDraftMapper,
-                planDraftService, new PlanDraftFindingsStore(planDraftMapper));
+                planDraftService, new PlanDraftFindingsStore(planDraftMapper), constraintDocCatalog);
 
         // 暂存区 findings 存储用真实实现（写/清同源是被测语义）；mapper 用最小内存桩承接读改写
         lenient().when(planDraftMapper.selectById(anyLong())).thenAnswer(inv -> {
@@ -664,6 +670,91 @@ class PlannerDecomposeAsyncServiceImplTest {
                 .contains("skill-20 v1.0.0")
                 .contains("仅展示前 20 项");
         assertThat(prompt).doesNotContain("skill-21");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  G-037 任务约束类型化试点：目录注入 + constraintRefs 落库
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("G-037：登记约束文档 → 拆解 Prompt 注入目录摘要（ref/title/summary/可引用章节），占位符无残留")
+    void shouldInjectConstraintDocCatalogIntoDecomposePrompt() {
+        when(constraintDocCatalog.list()).thenReturn(List.of(
+                new ConstraintDocCatalog.ConstraintDocEntry(
+                        "code-style", "doc/HelloAI_CODE_STYLE.md", "HelloAI 代码开发规范", "代码契约……",
+                        List.of(new ConstraintDocCatalog.ConstraintDocSectionMeta(
+                                "s5", "Core 业务域结构", "^# 5\\. ")))));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"文档产出","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
+                        """, "stop", "llm", 100));
+        staged(draft(11L));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
+        assertThat(captor.getValue().getUserPrompt())
+                .contains("- ref=code-style — HelloAI 代码开发规范：代码契约……")
+                .contains("可引用章节: s5(Core 业务域结构)")
+                .doesNotContain("{{CONSTRAINT_DOC_CATALOG}}");
+    }
+
+    @Test
+    @DisplayName("G-037：目录为空 → 占位符渲染降级文案（fail-open，不拖垮拆解）")
+    void shouldRenderFallbackWhenNoConstraintDocs() {
+        when(constraintDocCatalog.list()).thenReturn(List.of());
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"普通执行","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容"}]
+                        """, "stop", "llm", 100));
+        staged(draft(11L));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
+        assertThat(captor.getValue().getUserPrompt())
+                .contains("（平台暂无登记约束文档）")
+                .doesNotContain("{{CONSTRAINT_DOC_CATALOG}}");
+    }
+
+    @Test
+    @DisplayName("G-037：constraintRefs 落库——kind 白名单 + DOCUMENT ref 必填 + scope 无空项，非法元素丢弃")
+    void shouldFilterConstraintRefsAndPersist() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [
+                          {"title":"文档产出","content":"c","deliverable":"交付物说明文档清单","acceptance":"验收判据说明文字内容",
+                           "constraintRefs":[
+                             {"kind":"DOCUMENT","ref":"code-style","scope":["s5","s6"]},
+                             {"kind":"GHOST","ref":"x","scope":[]},
+                             {"kind":"DOCUMENT","ref":"","scope":[]},
+                             {"kind":"TEXT","ref":"aa","scope":[""]}
+                           ]}
+                        ]
+                        """, "stop", "llm", 100));
+        staged(draft(11L));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
+        SubTaskDraft saved = captor.getValue().get(0);
+        // 只有首条全合法：kind 白名单 + ref 非空且 scope 无空白项
+        assertThat(saved.constraintRefs()).hasSize(1);
+        ConstraintRefDraft kept = saved.constraintRefs().get(0);
+        assertThat(kept.kind()).isEqualTo("DOCUMENT");
+        assertThat(kept.ref()).isEqualTo("code-style");
+        assertThat(kept.scope()).containsExactly("s5", "s6");
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -1946,5 +2037,81 @@ class PlannerDecomposeAsyncServiceImplTest {
         verify(taskService).casStatusForAttempt(
                 TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
     }
-}
 
+    // ══════════════════════════════════════════════════════════════
+    //  G-042 附件作用域：LLM 声明的清单序号 → sub_task.context.mediaRefIds
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("G-042：声明的附件序号解析成 chat_attachment.id 并落 context（越界/非法元素只丢自己）")
+    void shouldResolveAttachmentRefsIntoContext() {
+        when(contextSnapshotRenderer.renderAttachmentListing(any())).thenReturn(
+                attachmentListing(101L, 102L, 103L));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [
+                          {"title":"用第二张图","content":"c","deliverable":"交付物说明文档清单",
+                           "acceptance":"验收判据说明文字内容","attachmentRefs":[2, 99, "x", 2]},
+                          {"title":"不用图","content":"c","deliverable":"交付物说明文档清单",
+                           "acceptance":"验收判据说明文字内容","attachmentRefs":[]}
+                        ]
+                        """, "stop", "llm", 100));
+        staged(draft(11L), draft(12L));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
+        // 第 1 条：序号 2 → id 102；越界 99 与非数字 "x" 被丢弃；重复的 2 去重
+        assertThat(captor.getValue().get(0).context())
+                .containsEntry(SubTaskContextKeys.MEDIA_REF_IDS, List.of(102L));
+        // 第 2 条：空数组 = 未声明 ⇒ 不写键（保持 context 干净，读取侧按键缺失回落）
+        assertThat(captor.getValue().get(1).context())
+                .doesNotContainKey(SubTaskContextKeys.MEDIA_REF_IDS);
+    }
+
+    @Test
+    @DisplayName("G-042：清单为空却声明了序号（模型编造）⇒ 不写键、不抛错，回落会话全量")
+    void shouldIgnoreRefsWhenListingEmpty() {
+        when(contextSnapshotRenderer.renderAttachmentListing(any())).thenReturn(
+                DecomposeContextSnapshotRenderer.AttachmentListing.empty("- （无与会话关联的附件）"));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"某步","content":"c","deliverable":"交付物说明文档清单",
+                          "acceptance":"验收判据说明文字内容","attachmentRefs":[1]}]
+                        """, "stop", "llm", 100));
+        staged(draft(11L));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
+        verify(planDraftRoundService).writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                nullable(OffsetDateTime.class), captor.capture());
+        assertThat(captor.getValue().get(0).context())
+                .doesNotContainKey(SubTaskContextKeys.MEDIA_REF_IDS);
+    }
+
+    /** 构造一份按上传正序排列的附件清单（id 顺序即序号 1..N）。 */
+    private static DecomposeContextSnapshotRenderer.AttachmentListing attachmentListing(Long... ids) {
+        List<com.helloai.core.planner.entity.ChatAttachment> attachments = new ArrayList<>();
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < ids.length; i++) {
+            com.helloai.core.planner.entity.ChatAttachment a =
+                    new com.helloai.core.planner.entity.ChatAttachment();
+            a.setId(ids[i]);
+            a.setFileName("f" + ids[i] + ".png");
+            a.setMimeType("image/png");
+            a.setFileSize(10L);
+            attachments.add(a);
+            text.append("- 附件 ").append(i + 1).append("：f").append(ids[i]).append(".png\n");
+        }
+        return new DecomposeContextSnapshotRenderer.AttachmentListing(text.toString().trim(), attachments);
+    }
+}

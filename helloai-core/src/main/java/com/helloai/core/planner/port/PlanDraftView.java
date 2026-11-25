@@ -2,6 +2,7 @@ package com.helloai.core.planner.port;
 
 import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.TaskPriority;
+import com.helloai.core.task.port.ConstraintRefDraft;
 import com.helloai.core.task.port.UncertaintyDraft;
 
 import java.time.OffsetDateTime;
@@ -33,6 +34,22 @@ public record PlanDraftView(
         List<UncertaintyDraft> uncertainties,
         List<String> dependsOnCodes,
         Map<String, Object> context,
-        OffsetDateTime updateTime
+        OffsetDateTime updateTime,
+        /** 类型化约束引用（`G-037`；草案暂存，空列表 = 无契约引用）。 */
+        List<ConstraintRefDraft> constraintRefs
 ) {
+
+    /**
+     * 兼容构造：不含 {@code constraintRefs}（`G-037` 之前的调用方与测试沿用；
+     * 委托补 {@code null}，投影层按空引用零注入处理）。
+     */
+    public PlanDraftView(Long id, Long taskId, String code, Integer round, Integer draftSeq,
+                         String title, String content, String deliverable, String acceptance,
+                         AcceptanceKind acceptanceKind, TaskPriority priority, Integer contract,
+                         List<String> requiredSkills, String constraints, List<UncertaintyDraft> uncertainties,
+                         List<String> dependsOnCodes, Map<String, Object> context, OffsetDateTime updateTime) {
+        this(id, taskId, code, round, draftSeq, title, content, deliverable, acceptance,
+                acceptanceKind, priority, contract, requiredSkills, constraints, uncertainties,
+                dependsOnCodes, context, updateTime, null);
+    }
 }

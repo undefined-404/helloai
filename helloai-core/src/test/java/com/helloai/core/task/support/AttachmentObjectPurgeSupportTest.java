@@ -1,6 +1,7 @@
 package com.helloai.core.task.support;
 
 import com.helloai.common.base.BizException;
+import com.helloai.core.system.port.ChatAttachmentReferencePort;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.mapper.AttachmentMapper;
@@ -11,6 +12,7 @@ import org.mockito.ArgumentCaptor;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -34,13 +36,18 @@ class AttachmentObjectPurgeSupportTest {
 
     private AttachmentMapper attachmentMapper;
     private ArtifactStorage artifactStorage;
+    private ChatAttachmentReferencePort chatAttachmentReferencePort;
     private AttachmentObjectPurgeSupport support;
 
     @BeforeEach
     void setUp() {
         attachmentMapper = mock(AttachmentMapper.class);
         artifactStorage = mock(ArtifactStorage.class);
-        support = new AttachmentObjectPurgeSupport(attachmentMapper, artifactStorage);
+        chatAttachmentReferencePort = mock(ChatAttachmentReferencePort.class);
+        support = new AttachmentObjectPurgeSupport(attachmentMapper, artifactStorage, chatAttachmentReferencePort);
+        // 默认：会话侧无活跃引用（各用例可覆盖）。不 stub 会让 Mockito 对 Set 返回 null ⇒ NPE 在 addAll 时炸，
+        // 这里是「默认无引用」的显式声明，不是为了让测试变绿。
+        when(chatAttachmentReferencePort.listActiveObjectKeysIn(any())).thenReturn(Set.of());
     }
 
     private Attachment att(Long id, String objectKey, String storageUrl) {
@@ -150,5 +157,74 @@ class AttachmentObjectPurgeSupportTest {
         verify(artifactStorage, never()).removeObject(anyString(), anyString());
         verify(attachmentMapper, never()).selectActiveObjectKeysIn(any());
         verify(attachmentMapper, never()).selectAllIncludingDeleted();
+        // 外部地址不参与回收 ⇒ 连跨表护栏都不该查（查了就是浪费一次 DB）
+        verify(chatAttachmentReferencePort, never()).listActiveObjectKeysIn(any());
+    }
+
+    // ------------------------------------------------------------------
+    // G-047 跨表护栏：同 objectKey 双行方案的地基
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("G-047 跨表护栏：会话附件仍活跃引用同一 objectKey → 跳过回收（不得删掉会话在用的字节）")
+    void purge_shouldSkipWhenStillReferencedByChatAttachment() {
+        Attachment target = att(1L, "chat/conv-1/a.png", "minio://helloai-artifacts/chat/conv-1/a.png");
+        when(artifactStorage.supports(anyString())).thenReturn(true);
+        // 本表（attachment）无活跃引用
+        when(attachmentMapper.selectActiveObjectKeysIn(any())).thenReturn(List.of());
+        // 但会话侧仍有活跃行指向同一对象 ⇒ 必须跳过
+        when(chatAttachmentReferencePort.listActiveObjectKeysIn(any()))
+                .thenReturn(Set.of("chat/conv-1/a.png"));
+
+        support.purgeAfterCommit(List.of(target));
+
+        verify(artifactStorage, never()).removeObject(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("G-047 跨表护栏：两侧都无活跃引用 → 正常回收（护栏不能把常态也拦掉）")
+    void purge_shouldRemoveWhenNeitherSideReferences() {
+        Attachment target = att(1L, "k/1.md", "minio://helloai-artifacts/k/1.md");
+        when(artifactStorage.supports(anyString())).thenReturn(true);
+        when(attachmentMapper.selectActiveObjectKeysIn(any())).thenReturn(List.of());
+        when(chatAttachmentReferencePort.listActiveObjectKeysIn(any())).thenReturn(Set.of());
+
+        support.purgeAfterCommit(List.of(target));
+
+        verify(artifactStorage).removeObject("helloai-artifacts", "k/1.md");
+    }
+
+    @Test
+    @DisplayName("G-047 跨表护栏：入参与本表护栏同一份候选 key（同一份事实不得各算一遍）")
+    void purge_crossTableGuardShouldUseSameCandidateKeys() {
+        Attachment a = att(1L, "k/1.md", "minio://helloai-artifacts/k/1.md");
+        Attachment b = att(2L, "k/2.md", "minio://helloai-artifacts/k/2.md");
+        when(artifactStorage.supports(anyString())).thenReturn(true);
+        when(attachmentMapper.selectActiveObjectKeysIn(any())).thenReturn(List.of());
+
+        support.purgeAfterCommit(List.of(a, b));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Collection<String>> local = ArgumentCaptor.forClass(Collection.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Collection<String>> cross = ArgumentCaptor.forClass(Collection.class);
+        verify(attachmentMapper).selectActiveObjectKeysIn(local.capture());
+        verify(chatAttachmentReferencePort).listActiveObjectKeysIn(cross.capture());
+        assertThat(cross.getValue()).containsExactlyInAnyOrderElementsOf(local.getValue());
+    }
+
+    @Test
+    @DisplayName("G-047 fail-safe：跨表护栏查询抛错 ⇒ 保守跳过回收（不删对象、不冒泡）")
+    void purge_shouldSkipConservativelyWhenCrossTableGuardFails() {
+        Attachment target = att(1L, "k/1.md", "minio://helloai-artifacts/k/1.md");
+        when(artifactStorage.supports(anyString())).thenReturn(true);
+        when(attachmentMapper.selectActiveObjectKeysIn(any())).thenReturn(List.of());
+        when(chatAttachmentReferencePort.listActiveObjectKeysIn(any()))
+                .thenThrow(new RuntimeException("planner db down"));
+
+        assertThatCode(() -> support.purgeAfterCommit(List.of(target))).doesNotThrowAnyException();
+
+        // 护栏不可信 ⇒ 宁可不删
+        verify(artifactStorage, never()).removeObject(anyString(), anyString());
     }
 }

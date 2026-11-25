@@ -47,7 +47,7 @@ helloai:
     deepseek:
       # 与 dev/server 同键；**值刻意不同**：本地默认 flash（日常调试更快更省），
       # dev/server 默认 pro（整合报告长输出）。需要时设 DEEPSEEK_CHAT_MODEL 切换。
-      default-model: ${DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
+      default-model: ${DEEPSEEK_CHAT_MODEL:deepseek-flash}
       read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:600000}
     moonshot:
       read-timeout-ms: ${MOONSHOT_READ_TIMEOUT_MS:600000}

@@ -90,6 +90,7 @@ public final class SubTaskResponseMapper {
         response.setAssignedAgent(subTask.getAssignedAgentId());
         response.setRequiredSkills(subTask.getRequiredSkills());
         response.setConstraints(subTask.getConstraints());
+        response.setConstraintRefs(subTask.getConstraintRefs());
         response.setUncertainties(subTask.getUncertainties());
         // 执行上下文与依赖
         response.setContext(subTask.getContext());

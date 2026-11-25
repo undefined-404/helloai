@@ -10,11 +10,15 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentChatClientService;
+import com.helloai.core.agent.support.AttachmentMediaAssembler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.content.Media;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
+
+import java.util.List;
 
 /**
  * API_KEY_LLM 执行器占位实现。
@@ -28,14 +32,18 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
     private final AgentChatClientService agentChatClientService;
     private final AgentLlmCredentialResolver agentLlmCredentialResolver;
     private final AgentExecutionProperties executionProperties;
+    /** 媒体引用 → 媒体装载（`VU-9`）：与执行链同一装载器，判据不写第二份。 */
+    private final AttachmentMediaAssembler attachmentMediaAssembler;
 
     public ApiKeyAgentExecutor(
             AgentChatClientService agentChatClientService,
             AgentLlmCredentialResolver agentLlmCredentialResolver,
-            AgentExecutionProperties executionProperties) {
+            AgentExecutionProperties executionProperties,
+            AttachmentMediaAssembler attachmentMediaAssembler) {
         this.agentChatClientService = agentChatClientService;
         this.agentLlmCredentialResolver = agentLlmCredentialResolver;
         this.executionProperties = executionProperties;
+        this.attachmentMediaAssembler = attachmentMediaAssembler;
     }
 
     @Override
@@ -43,13 +51,15 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
         final String provider = AgentProviderResolver.resolveProvider(agent, executionProperties.getProvider());
 
         String vaultApiKey = resolveApiKey(agent, provider);
+        List<Media> media = loadMedia(task);
         ChatResponse response = agentChatClientService.generate(
                 agent,
                 task.getSystemPrompt(),
                 task.getUserPrompt(),
                 provider,
                 vaultApiKey,
-                task.getTemperature()
+                task.getTemperature(),
+                media
         );
         // 分离正文与思考过程：推理模型（如 Minimax ）的 thinking 块不混入 output
         ChatResponseContentExtractor.ExtractedContent extracted = ChatResponseContentExtractor.extract(response);
@@ -93,14 +103,38 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
         final String provider = AgentProviderResolver.resolveProvider(agent, executionProperties.getProvider());
         return Flux.defer(() -> {
             String vaultApiKey = resolveApiKey(agent, provider);
+            // 媒体装载放进 defer：与凭据解析同一时点（订阅时才真正读存储），
+            // 且「请求不发就不读字节」——流式被 dispose 时不该产生无用的存储读取
             return agentChatClientService.generateStream(
                     agent,
                     task.getSystemPrompt(),
                     task.getUserPrompt(),
                     provider,
-                    vaultApiKey
+                    vaultApiKey,
+                    loadMedia(task)
             );
         });
+    }
+
+    /**
+     * 装载本轮媒体（`VU-9`）：把 {@link AgentTask#getMediaRefs()} 的<b>引用</b>交给装载器读字节。
+     *
+     * <p><b>这里是「引用 → 字节」的唯一时点</b>，理由见 {@code AgentTask.mediaRefs} 的 javadoc：
+     * 能力判定必须发生在知道实际模型之后（不变量 I-2），而实际模型只有走到
+     * {@code AgentChatClientService} 才确定。此处装载只是「按引用取数」，
+     * <b>不判能力</b>——判能力的责任在 {@code AgentChatClientService#applyUserMessage}。</p>
+     *
+     * <p><b>异常不外抛</b>：{@code loadInlineImages} 内部逐条 catch；它自身抛出的概率极低
+     * （仅空入参等），但媒体是增强而非必要条件，一律降级为空表而不是让整轮失败。</p>
+     */
+    private List<Media> loadMedia(AgentTask task) {
+        try {
+            return attachmentMediaAssembler.loadInlineImages(task.getMediaRefs());
+        } catch (RuntimeException e) {
+            log.warn("媒体装载失败，本轮按无媒体处理: subTaskId={}, err={}",
+                    task.getSubTaskId(), e.toString());
+            return List.of();
+        }
     }
 
     @Override

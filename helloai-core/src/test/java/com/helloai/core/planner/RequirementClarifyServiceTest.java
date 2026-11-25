@@ -179,6 +179,8 @@ class RequirementClarifyServiceTest {
     private ClarifyRoundOrchestratorServiceImpl orchestrator;
     private ClarifyFinalizeServiceImpl finalizeService;
     private ClarifyCommandSearchServiceImpl commandSearch;
+    /** `G-041`：会话删除要硬删附件，门面新增该依赖（默认无附件 ⇒ 返回 0，不影响存量用例）。 */
+    private ChatAttachmentService chatAttachmentService;
 
     /**
      * 对话内技能执行的两个 mock（SKX-13 起技能轮改为「提交即返回 + 后台跑」）：
@@ -193,6 +195,7 @@ class RequirementClarifyServiceTest {
 
     @BeforeEach
     void setUp() {
+        chatAttachmentService = mock(ChatAttachmentService.class);
         // 元词过滤（2026-10-23 附件+联网修复）：本类存量用例走的是「规划器无产出 →
         // 兜底规则截断」这条路径，而兜底前新增了 isRetrievable 判定。这里放行，
         // 保持存量语义不变；元词过滤本身的语义在 SearchQueryPlannerServiceImplTest 覆盖。
@@ -253,7 +256,7 @@ class RequirementClarifyServiceTest {
                 roundLocker, skillDirective);
         clarifyService = new RequirementClarifyServiceImpl(
                 conversationService, messageService, taskService, plannerAgentPicker,
-                orchestrator, streamService, finalizeService, commandSearch);
+                orchestrator, streamService, finalizeService, commandSearch, chatAttachmentService);
 
         // 会话 lambdaUpdate 链式 stub：默认全部成功；CAS 失败用例在测试内重钉 update() 返回 false。
         // eq/set 用 lenient：非 finalize 路径用例不触发链，避免 UnnecessaryStubbingException
@@ -1102,16 +1105,35 @@ class RequirementClarifyServiceTest {
     }
 
     @Test
-    @DisplayName("delete：仅 ABANDONED 放行；消息与会话逻辑删除各一次")
+    @DisplayName("delete：仅 ABANDONED 放行；附件硬删 + 消息与会话逻辑删除各一次")
     void shouldDeleteAbandonedConversation() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setStatus(RequirementClarifyService.STATUS_ABANDONED);
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        when(chatAttachmentService.deleteByConversation(CONV_ID)).thenReturn(3);
+
+        clarifyService.delete(CONV_ID);
+
+        // `G-041`：会话删除必须连带硬删附件，否则子任务装配仍能把图送给模型
+        verify(chatAttachmentService).deleteByConversation(CONV_ID);
+        verify(messageService).removeByConversation(CONV_ID);
+        verify(conversationService).removeById(CONV_ID);
+    }
+
+    @Test
+    @DisplayName("G-041 顺序：附件必须在删会话之前清（先删会话则残留附件再无入口可清）")
+    void deleteShouldPurgeAttachmentsBeforeConversation() {
         RequirementConversation conversation = activeConversation();
         conversation.setStatus(RequirementClarifyService.STATUS_ABANDONED);
         when(conversationService.getById(CONV_ID)).thenReturn(conversation);
 
         clarifyService.delete(CONV_ID);
 
-        verify(messageService).removeByConversation(CONV_ID);
-        verify(conversationService).removeById(CONV_ID);
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(
+                chatAttachmentService, messageService, conversationService);
+        inOrder.verify(chatAttachmentService).deleteByConversation(CONV_ID);
+        inOrder.verify(messageService).removeByConversation(CONV_ID);
+        inOrder.verify(conversationService).removeById(CONV_ID);
     }
 
     @Test
@@ -1122,6 +1144,8 @@ class RequirementClarifyServiceTest {
         assertThatThrownBy(() -> clarifyService.delete(CONV_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("仅已放弃的会话可删除");
+        // 守卫先于任何写入：附件也不能被提前清掉
+        verify(chatAttachmentService, never()).deleteByConversation(anyLong());
         verify(messageService, never()).removeByConversation(anyLong());
         verify(conversationService, never()).removeById(anyLong());
     }
@@ -1134,6 +1158,7 @@ class RequirementClarifyServiceTest {
         assertThatThrownBy(() -> clarifyService.delete(CONV_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("澄清会话不存在");
+        verify(chatAttachmentService, never()).deleteByConversation(anyLong());
         verify(messageService, never()).removeByConversation(anyLong());
         verify(conversationService, never()).removeById(anyLong());
     }
@@ -2729,7 +2754,8 @@ class RequirementClarifyServiceTest {
         // 用户点选看起来「没生效」。用 spy 钉死 4 参版本的透传，防再次退化。
         ClarifyStreamServiceImpl spyStream = spy(streamService);
         new RequirementClarifyServiceImpl(conversationService, messageService, taskService,
-                plannerAgentPicker, orchestrator, spyStream, finalizeService, commandSearch)
+                plannerAgentPicker, orchestrator, spyStream, finalizeService, commandSearch,
+                chatAttachmentService)
                 .streamRound(CONV_ID, "你好", null, List.of(7L, 9L));
 
         verify(spyStream).streamRound(CONV_ID, "你好", null, List.of(7L, 9L));

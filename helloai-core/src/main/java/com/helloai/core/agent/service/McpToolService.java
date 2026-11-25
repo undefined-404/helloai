@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import com.helloai.core.agent.command.ExecutionPart;
+import com.helloai.core.agent.port.ConstraintRefSnapshot;
 import com.helloai.core.agent.port.UncertaintySnapshot;
 import lombok.Data;
 
@@ -325,6 +326,18 @@ public interface McpToolService {
         private String acceptance;
         /** 执行约束（不许改 / 不许越界事项；COARSE 档必填，其余档位可空）。 */
         private String constraints;
+        /**
+         * 类型化约束文档引用（`G-037`）：`[{kind, ref, scope}]`，与 {@link #constraints} 并存。
+         *
+         * <p><b>为什么外部 Agent 必须看到它</b>：内部 LLM 执行者另有
+         * {@code internal_list_constraint_docs} / {@code internal_load_constraint_doc} 两个工具，
+         * 可按 {@code ref + scope} 按需读取契约正文；外部 Agent 没有进程内工具通道，只能靠下行载荷。
+         * 不下发本字段时，外部执行者根本不知道「有哪些项目契约要遵守」，内外两侧测出来的是
+         * <b>工具差异</b>而非模型差异（判据：规则存在 ≠ 全路径强制——只注入内部通道等于只覆盖一半入口）。</p>
+         *
+         * <p>空列表 = 该子任务未声明契约引用（与 {@code uncertainties} 同款防御口径，绝不为 null）。</p>
+         */
+        private List<ConstraintRefSnapshot> constraintRefs;
         /** 不确定性申报（ASSUMPTION 可自行验证 / 推翻；UNCONFIRMED 须先验证，验证不了走 reportBlocked）。 */
         private List<UncertaintySnapshot> uncertainties;
         /** 子任务级 ∪ 任务级技能标签（合并清单，与执行侧注入 / 审查侧核验同源）。 */

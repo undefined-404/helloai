@@ -54,6 +54,7 @@ import java.util.Map;
  * @param version         乐观锁版本，可空（W7 追加）
  * @param dependsOn       前置子任务 ID 列表（**已做 Long 归一化**，绝非 null；W7 追加）
  * @param uncertainties   不确定性申报投影（绝不为 null；W7 追加）
+ * @param constraintRefs  类型化约束引用投影（`G-037`；绝不为 null，空列表 = 无契约引用）
  */
 @Builder
 public record SubTaskSnapshot(Long id, SubTaskStatus status, Long taskId, Long assignedAgentId,
@@ -61,5 +62,22 @@ public record SubTaskSnapshot(Long id, SubTaskStatus status, Long taskId, Long a
                               String content, String deliverable, String acceptance, String constraints,
                               String priority, Integer isContract, OffsetDateTime deadline,
                               Integer reworkCount, Integer attemptTotal, Integer version,
-                              List<Long> dependsOn, List<UncertaintySnapshot> uncertainties) {
+                              List<Long> dependsOn, List<UncertaintySnapshot> uncertainties,
+                              List<ConstraintRefSnapshot> constraintRefs) {
+
+    /**
+     * 兼容构造：不含 {@code constraintRefs}（`G-037` 之前的调用方与测试沿用；委托补空列表
+     * —— 本快照约定「绝不为 null，空列表 = 无契约引用」，与 {@code SubTaskSnapshotProjection}
+     * 的投影结果同形）。
+     */
+    public SubTaskSnapshot(Long id, SubTaskStatus status, Long taskId, Long assignedAgentId,
+                           Map<String, Object> context, String title,
+                           String content, String deliverable, String acceptance, String constraints,
+                           String priority, Integer isContract, OffsetDateTime deadline,
+                           Integer reworkCount, Integer attemptTotal, Integer version,
+                           List<Long> dependsOn, List<UncertaintySnapshot> uncertainties) {
+        this(id, status, taskId, assignedAgentId, context, title, content, deliverable, acceptance,
+                constraints, priority, isContract, deadline, reworkCount, attemptTotal, version,
+                dependsOn, uncertainties, List.of());
+    }
 }

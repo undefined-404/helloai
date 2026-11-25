@@ -151,7 +151,11 @@ class ArchetypeDimensionsSectionTest {
         Set<String> supported = Set.of(
                 "TASK_TITLE", "TASK_DESCRIPTION", "TASK_ARCHETYPE", "TASK_REQUIRED_SKILLS",
                 "SKILL_CATALOG", "EXECUTOR_PROFILE", "TASK_DIFFICULTY", "GRANULARITY",
-                "REQUIREMENT_PACKAGE", "TASK_CONTEXT_SNAPSHOT", "EXECUTION_ENV", "SUBTASK_COUNT_RULE");
+                "REQUIREMENT_PACKAGE", "TASK_CONTEXT_SNAPSHOT", "EXECUTION_ENV", "SUBTASK_COUNT_RULE",
+                "CONSTRAINT_DOC_CATALOG",
+                // `G-037` 第 1 项修复（声明环改为「默认契约集预选骨架 + LLM 只做减法」）新增；
+                // 渲染点：PlannerDecomposeAsyncServiceImpl 主拆解与单条重写两处 .replace
+                "CONSTRAINT_DEFAULT_SET");
         Set<String> found = new LinkedHashSet<>();
         Matcher matcher = PLACEHOLDER.matcher(loadTemplate());
         while (matcher.find()) {
@@ -161,7 +165,7 @@ class ArchetypeDimensionsSectionTest {
                 .as("渲染器支持集合必须覆盖模板实际用到的全部占位符")
                 .containsAll(found);
         assertThat(found)
-                .as("模板应恰好用满 12 项；少了说明有段内容漏注入，多了说明渲染器没跟上")
+                .as("模板应恰好用满 " + supported.size() + " 项；少了说明有段内容漏注入，多了说明渲染器没跟上")
                 .hasSize(supported.size());
     }
 

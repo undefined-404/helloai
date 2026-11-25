@@ -393,11 +393,19 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
                             u.kind(), u.note(), u.ref(), u.blockedBy()))
                     .toList();
         }
+        List<com.helloai.core.task.port.ConstraintRefDraft> refs = List.of();
+        if (v.constraintRefs() != null && !v.constraintRefs().isEmpty()) {
+            refs = v.constraintRefs().stream()
+                    .map(r -> r == null ? null : new com.helloai.core.task.port.ConstraintRefDraft(
+                            r.kind(), r.ref(), r.scope()))
+                    .filter(r -> r != null)
+                    .toList();
+        }
         return new com.helloai.core.task.port.SubTaskDraft(
                 v.taskId(), v.title(), v.content(), v.deliverable(), v.acceptance(),
                 v.priority(), v.isContract(), v.requiredSkills(), v.constraints(),
                 SubTaskStatus.PENDING, v.context(), uncertainties,
-                v.acceptanceKind(), null, v.draftCode());
+                v.acceptanceKind(), null, v.draftCode(), refs);
     }
 
     private List<SubTaskView> finishConfirm(TaskView task, List<SubTaskView> confirmed) {

@@ -159,5 +159,27 @@ public interface PlannerAnalysisService {
          */
         @JsonProperty("uncertainties")
         private JsonNode uncertaintiesNode;
+
+        /**
+         * 类型化约束引用（`G-037`，可选）：约束文档引用列表（ref + scope）。
+         * 用 JsonNode 承接（同 {@code uncertaintiesNode} 防御模式）：LLM 输出非法形态
+         * （字符串 / 数字 / 嵌套对象）不击穿整批拆解解析；元素级校验与非法 kind 过滤
+         * 在 {@code PlannerDecomposeAsyncServiceImpl} 统一处理。
+         */
+        @JsonProperty("constraintRefs")
+        private JsonNode constraintRefsNode;
+
+        /**
+         * 本子任务引用的会话附件序号（`G-042`，可选）：元素为「拆解期附件清单」里的 1-based 序号。
+         *
+         * <p>用 JsonNode 承接（同 {@code uncertaintiesNode} / {@code constraintRefsNode} 防御模式）：
+         * 模型可能给出字符串、浮点、嵌套对象等非法形态，元素级校验放在
+         * {@code PlannerDecomposeAsyncServiceImpl} 统一做——一个坏元素只丢自己，不击穿整批拆解。</p>
+         *
+         * <p><b>缺失 / 空数组 = 未声明</b> ⇒ 该子任务回落会话全量图片（行为等于改造前），
+         * 并在执行期 prompt 里显式标注回落原因。</p>
+         */
+        @JsonProperty("attachmentRefs")
+        private JsonNode attachmentRefsNode;
     }
 }

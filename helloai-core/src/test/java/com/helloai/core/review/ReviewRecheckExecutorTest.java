@@ -14,6 +14,7 @@ import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.agent.support.ImageInputCapabilityPolicy;
 import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
 import com.helloai.core.review.support.ReviewEvidenceMaterializer;
@@ -101,7 +102,9 @@ class ReviewRecheckExecutorTest {
                 platformAgentExecutionService, conversationService, taskTimelineService,
                 new VerdictParser(new ObjectMapper()),
                 evidenceAssembler,
-                subTaskService, new ReviewProperties(), mock(ReviewEvidenceMaterializer.class));
+                subTaskService, new ReviewProperties(), mock(ReviewEvidenceMaterializer.class),
+                // VU-2：复判不送图，能力判定按不支持（false）
+                mock(ImageInputCapabilityPolicy.class));
         executor = new ReviewRecheckExecutor(recordReviewService, subTaskService,
                 reviewerPicker, taskTimelineService, agentQualityProfileService, engine,
                 conversationService, evidenceAssembler);

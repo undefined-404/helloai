@@ -1,6 +1,8 @@
 package com.helloai.core.system.port;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 会话附件引用读取端口（§6.146 端口反转）：与 {@link ArtifactReferencePort} 并列，
@@ -30,4 +32,20 @@ public interface ChatAttachmentReferencePort {
      * @return 全部会话附件引用（绝不返回 null）
      */
     List<ArtifactReference> listAllIncludingDeleted();
+
+    /**
+     * <b>跨表对象回收护栏</b>：在给定候选 {@code objectKey} 集合中，返回仍被本表
+     * <b>活跃行（{@code deleted = 0}）</b>引用的子集。
+     *
+     * <p>与 {@link ArtifactReferencePort#listActiveObjectKeysIn(Collection)} 对称：那一侧供 planner 域
+     * 回收会话附件对象前查 {@code attachment} 表，本侧供 task 域回收子任务产物前查
+     * {@code chat_attachment} 表。两侧必须都做——只补一侧等于把误删风险换个方向。</p>
+     *
+     * <p><b>谁调它</b>：task 域 {@code AttachmentObjectPurgeSupport} 回收对象前。task(2) → system(5)
+     * 属合法向下依赖，且不跨域直捅 Mapper。</p>
+     *
+     * @param keys 候选 objectKey 集合（用方保证非空、已去重）
+     * @return 其中仍存在活跃行引用的 objectKey（可能重复；绝不返回 null）
+     */
+    Set<String> listActiveObjectKeysIn(Collection<String> keys);
 }

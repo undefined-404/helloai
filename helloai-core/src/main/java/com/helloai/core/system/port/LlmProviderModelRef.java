@@ -20,7 +20,7 @@ package com.helloai.core.system.port;
  * 避免每个消费点各写一遍 {@code Integer.valueOf(1).equals(...)}。</p>
  *
  * @param providerCode 供应商编码（小写，如 deepseek）
- * @param modelName    模型名（如 deepseek-v4-flash）
+ * @param modelName    模型名（如 deepseek-flash）
  * @param enabled      是否启用（注册表内的「可用」位）
  * @param defaultModel 是否为该供应商的默认模型
  * @param sortOrder    列表排序（数值越小越靠前，可空）

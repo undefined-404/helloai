@@ -40,7 +40,7 @@ class AgentAccessTypeSwitchTest {
     @Test
     @DisplayName("切到内部 LLM 且已有模型 ⇒ 放行，能力默认值补齐且保留既有覆盖")
     void switchesToLlmKeepingOverrides() {
-        Agent agent = agent(AgentAccessType.CLI_CLIENT, "deepseek:deepseek-v4-flash");
+        Agent agent = agent(AgentAccessType.CLI_CLIENT, "deepseek:deepseek-flash");
         Map<String, Object> overrides = new HashMap<>();
         overrides.put("supportsMCP", false);   // 显式覆盖：切换后必须保留
         agent.setCapabilities(overrides);
@@ -56,7 +56,7 @@ class AgentAccessTypeSwitchTest {
     @Test
     @DisplayName("切到 CLI ⇒ 先判离线（等心跳打卡再上线），能力按新类型补齐")
     void switchesToCliAsOffline() {
-        Agent agent = agent(AgentAccessType.API_KEY_LLM, "deepseek:deepseek-v4-flash");
+        Agent agent = agent(AgentAccessType.API_KEY_LLM, "deepseek:deepseek-flash");
         agent.setOnlineStatus(AgentOnlineStatus.ONLINE);
 
         AgentAccessTypeSwitch.apply(agent, AgentAccessType.CLI_CLIENT);
@@ -72,7 +72,7 @@ class AgentAccessTypeSwitchTest {
     @Test
     @DisplayName("同类型 / null ⇒ 不改动（编辑弹窗原值提交不产生副作用）")
     void noOpForSameOrNullType() {
-        Agent agent = agent(AgentAccessType.CLI_CLIENT, "deepseek:deepseek-v4-flash");
+        Agent agent = agent(AgentAccessType.CLI_CLIENT, "deepseek:deepseek-flash");
         agent.setOnlineStatus(AgentOnlineStatus.IDLE);
 
         AgentAccessTypeSwitch.apply(agent, AgentAccessType.CLI_CLIENT);

@@ -13,6 +13,7 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskArchetype;
 import com.helloai.common.constant.TaskPriority;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.common.constant.ConstraintRefKind;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.common.constant.UncertaintyKind;
 import com.helloai.core.agent.SkillNormalizer;
@@ -23,6 +24,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
+import com.helloai.core.planner.entity.ChatAttachment;
 import com.helloai.core.planner.entity.PlanAttempt;
 import com.helloai.core.planner.mapper.PlanDraftMapper;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
@@ -48,6 +50,7 @@ import com.helloai.core.planner.support.ContractSlotNormalizer;
 import com.helloai.core.planner.support.PlanDraftFindingsStore;
 import com.helloai.core.planner.support.PlanDraftViewMapper;
 import com.helloai.core.planner.support.PlanGateRunner;
+import com.helloai.core.task.port.ConstraintRefDraft;
 import com.helloai.core.task.port.SubTaskDraft;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.port.TaskView;
@@ -76,6 +79,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -166,6 +170,9 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
 
     /** 暂存区门禁结论写点（替代仅服务执行表的 `SubTaskGateFindingsStore`）。 */
     private final PlanDraftFindingsStore planDraftFindingsStore;
+
+    /** 约束文档目录（`G-037`）：{{CONSTRAINT_DOC_CATALOG}} 的目录摘要来源（白名单 manifest）。 */
+    private final com.helloai.core.shared.constraint.ConstraintDocCatalog constraintDocCatalog;
 
     /**
      * 拆解落库段的显式事务边界。
@@ -604,6 +611,8 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                 .replace("{{DRAFT_SKILLS}}", skills)
                 .replace("{{DRAFT_CONSTRAINTS}}", constraints)
                 .replace("{{SKILL_CATALOG}}", renderSkillCatalog())
+                .replace("{{CONSTRAINT_DOC_CATALOG}}", renderConstraintDocCatalog())
+                .replace("{{CONSTRAINT_DEFAULT_SET}}", renderConstraintDefaultSet(archetype))
                 .replace("{{TASK_CONTEXT_SNAPSHOT}}", renderSnapshotSafely(task))
                 .replace("{{REQUIREMENT_PACKAGE}}", renderRequirementPackage(task))
                 .replace("{{EXECUTION_ENV}}", renderExecutionEnv(task));
@@ -691,7 +700,11 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         PlannerAgentRef planner = plannerAgentPicker.pickForTask(taskId);
         // G-010：粒度判定提前到主流程，renderPrompt 渲染与 buildDrafts 的 COARSE 校验共用一次判定
         PlannerGranularityResolver.GranularityDecision decision = granularityDecision(task);
-        String prompt = renderPrompt(task, decision);
+        // `G-042`：附件清单与 prompt 必须同一次产出。清单写进 prompt 后 Planner 要跑十几分钟，
+        // 若回来再查一次库把序号解析成附件，这期间用户新传的图会插到倒序结果头部，
+        // 同一个序号就指向了另一份文件（判据 32：作用域与产出一次算完）。
+        RenderedDecomposePrompt renderedPrompt = renderPrompt(task, decision);
+        String prompt = renderedPrompt.prompt();
 
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
@@ -717,7 +730,8 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         // 每轮从 0001 重起会与上一轮（reject/废除后可能仍软删在库）的行同号——
         // 撞 `uk_plan_draft_code`，且冲突会被上层误判成幂等命中。
         int rootSeqStart = planDraftMapper.findMaxRootSeq(taskId) + 1;
-        List<SubTaskDraft> drafts = buildDrafts(task, items, planner, decision, attemptId, rootSeqStart);
+        List<SubTaskDraft> drafts = buildDrafts(task, items, planner, decision, attemptId, rootSeqStart,
+                renderedPrompt.attachmentListing());
 
         // ══ 事务边界：从这里到状态推进，要么全成功要么全回滚 ══
         PersistOutcome outcome = txTemplate().execute(
@@ -901,8 +915,11 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
      * 与执行侧 resolve 命中注入、审查侧核验同一清单——拆解规划须与技能规范对齐）。
      * G-011：注入需求包段（{{REQUIREMENT_PACKAGE}}，防御式读取 task.context.requirementPackage）。
      * `TD-3`：注入 {{TASK_ARCHETYPE}} 与 {{SUBTASK_COUNT_RULE}}，并按原型择一拆分维度小节。
-     * `TD-6`：注入 {{TASK_CONTEXT_SNAPSHOT}}（附件 / 知识库 / 历史任务骨架，只给「有什么」）。 */
-    private String renderPrompt(TaskView task, PlannerGranularityResolver.GranularityDecision decision) {
+     * `TD-6`：注入 {{TASK_CONTEXT_SNAPSHOT}}（附件 / 知识库 / 历史任务骨架，只给「有什么」）。
+     * `G-042`：<b>返回 prompt 与附件清单一对</b>——清单是 prompt 里那段「附件 1/2/3」的
+     * 实体对照表，调用方拿它把 LLM 回的序号解析成附件 ID。 */
+    private RenderedDecomposePrompt renderPrompt(TaskView task,
+                                                 PlannerGranularityResolver.GranularityDecision decision) {
         ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
         if (!resource.exists()) {
             throw new BizException("未找到拆解 Prompt 模板: " + PROMPT_TEMPLATE_PATH);
@@ -915,6 +932,9 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         }
         TaskArchetype archetype = task.taskArchetype() != null
                 ? task.taskArchetype() : TaskArchetype.DEFAULT();
+        // 清单只渲染一次：既进 prompt 的 {{TASK_CONTEXT_SNAPSHOT}}，又原样带回去做序号解析
+        DecomposeContextSnapshotRenderer.AttachmentListing listing =
+                renderAttachmentListingSafely(task);
         String rendered = template
                 .replace("{{TASK_TITLE}}", task.title() != null ? task.title() : "")
                 .replace("{{TASK_DESCRIPTION}}",
@@ -923,15 +943,28 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                 .replace("{{TASK_ARCHETYPE}}", archetype.name())
                 .replace("{{TASK_REQUIRED_SKILLS}}", renderRequiredSkills(task.requiredSkills()))
                 .replace("{{SKILL_CATALOG}}", renderSkillCatalog())
+                .replace("{{CONSTRAINT_DOC_CATALOG}}", renderConstraintDocCatalog())
+                .replace("{{CONSTRAINT_DEFAULT_SET}}", renderConstraintDefaultSet(archetype))
                 .replace("{{EXECUTOR_PROFILE}}", decision.profile())
                 .replace("{{TASK_DIFFICULTY}}", TaskAgentPolicy.difficulty(task.agentPolicy()).name())
                 .replace("{{GRANULARITY}}", decision.granularity().name())
                 .replace("{{REQUIREMENT_PACKAGE}}", renderRequirementPackage(task))
-                .replace("{{TASK_CONTEXT_SNAPSHOT}}", renderSnapshotSafely(task))
+                .replace("{{TASK_CONTEXT_SNAPSHOT}}", renderSnapshotSafely(task, listing))
                 .replace("{{EXECUTION_ENV}}", renderExecutionEnv(task))
                 .replace("{{SUBTASK_COUNT_RULE}}", renderSubtaskCountRule(task));
         // TD-3：六个拆分维度块全在模板内，此处只保留当前原型那一块（缺块即抛，不静默降级）
-        return ArchetypeDimensionsSection.select(rendered, archetype);
+        return new RenderedDecomposePrompt(
+                ArchetypeDimensionsSection.select(rendered, archetype), listing);
+    }
+
+    /**
+     * 拆解 prompt 与它引用的附件清单（`G-042`）：两者是**同一次渲染的两个产物**。
+     *
+     * <p>分开返回而不是「各自再算一次」，是因为清单序号与 prompt 里的文字必须逐字对应；
+     * 各算一次就会分叉（判据 32）。</p>
+     */
+    private record RenderedDecomposePrompt(
+            String prompt, DecomposeContextSnapshotRenderer.AttachmentListing attachmentListing) {
     }
 
     /** G-011：需求包段渲染——task.context.requirementPackage 经防御式解析后五字段逐项列表；
@@ -973,14 +1006,39 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
      * 快照取不到只是拆得糙一点，拆解失败则整件事做不了——代价不对等。</p>
      */
     private String renderSnapshotSafely(TaskView task) {
+        return renderSnapshotSafely(task, null);
+    }
+
+    /** 同上，附件段使用调用方已渲染好的清单（`G-042`；{@code null} = 自行渲染）。 */
+    private String renderSnapshotSafely(TaskView task,
+                                       DecomposeContextSnapshotRenderer.AttachmentListing listing) {
         try {
-            String snapshot = contextSnapshotRenderer.render(task);
+            String snapshot = contextSnapshotRenderer.render(task, listing);
             return snapshot != null && !snapshot.isBlank()
                     ? snapshot : "- （本次无可用上下文快照）";
         } catch (Exception e) {
             log.warn("拆解期上下文快照渲染失败，已降级为空快照（不阻断拆解）: taskId={}, err={}",
                     task.id(), e.getMessage());
             return "- （上下文快照渲染失败，按无额外材料处理）";
+        }
+    }
+
+    /**
+     * `G-042`：附件清单渲染，**异常一律降级为空清单**（同 {@link #renderSnapshotSafely} 的理由）。
+     *
+     * <p>降级方向必须是「当作没有附件」而不是「当作有」：若返回一份臆造的清单，模型给出的序号
+     * 会全部解析失败；返回空清单则模型填 `[]`，执行期回落会话全量——后者是改造前的行为，安全。</p>
+     */
+    private DecomposeContextSnapshotRenderer.AttachmentListing renderAttachmentListingSafely(TaskView task) {
+        try {
+            DecomposeContextSnapshotRenderer.AttachmentListing listing =
+                    contextSnapshotRenderer.renderAttachmentListing(task);
+            return listing != null ? listing
+                    : DecomposeContextSnapshotRenderer.AttachmentListing.empty("- （附件清单不可用）");
+        } catch (Exception e) {
+            log.warn("拆解期附件清单渲染失败，已降级为空清单（不阻断拆解）: taskId={}, err={}",
+                    task.id(), e.getMessage());
+            return DecomposeContextSnapshotRenderer.AttachmentListing.empty("- （附件清单渲染失败，按无附件处理）");
         }
     }
 
@@ -1071,6 +1129,61 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
               .append(" 项；未展示技能不参与指派）");
         }
         return sb.toString().trim();
+    }
+
+    /**
+     * 约束文档目录渲染（`G-037`）：每文档一行「ref — title — summary（章节: id(id title), ...）」；
+     * 空目录降级文案。目录不含正文，正文由执行侧 {@code internal_load_constraint_doc} 按需取。
+     */
+    private String renderConstraintDocCatalog() {
+        List<com.helloai.core.shared.constraint.ConstraintDocCatalog.ConstraintDocEntry> entries =
+                constraintDocCatalog.list();
+        if (entries == null || entries.isEmpty()) {
+            return "（平台暂无登记约束文档）";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (com.helloai.core.shared.constraint.ConstraintDocCatalog.ConstraintDocEntry e : entries) {
+            sb.append("- ref=").append(e.ref()).append(" — ").append(e.title())
+              .append("：").append(e.summary());
+            if (e.sections() != null && !e.sections().isEmpty()) {
+                sb.append("；可引用章节: ");
+                sb.append(e.sections().stream()
+                        .map(s -> s.id() + "(" + s.title() + ")")
+                        .collect(java.util.stream.Collectors.joining(", ")));
+            }
+            sb.append('\n');
+        }
+        return sb.toString().trim();
+    }
+
+    /**
+     * 默认契约集渲染（`G-037` 正式引入 §2）：按任务类型预选骨架——
+     * BUILD（交付代码 / 产物质量判定）→ 默认注入已登记 {@code code-style} 的章节全集，LLM 只做 scope 裁剪；
+     * 其它原型 → 提示无默认契约（若实际产出仍涉及代码 / 产物质量，须按「平台约束文档目录」声明引用）。
+     * 未登记 code-style / 空目录 → 降级文案（fail-open，不抛异常）。
+     */
+    private String renderConstraintDefaultSet(TaskArchetype archetype) {
+        if (archetype != TaskArchetype.BUILD) {
+            return "（本任务类型无默认契约集；如实际产出涉及代码 / 产物质量，仍须按「平台约束文档目录」声明引用，不得输出空数组）";
+        }
+        List<com.helloai.core.shared.constraint.ConstraintDocCatalog.ConstraintDocEntry> entries =
+                constraintDocCatalog.list();
+        if (entries == null || entries.isEmpty()) {
+            return "（平台暂无登记约束文档）";
+        }
+        for (com.helloai.core.shared.constraint.ConstraintDocCatalog.ConstraintDocEntry e : entries) {
+            if ("code-style".equals(e.ref())) {
+                String scope = (e.sections() == null || e.sections().isEmpty())
+                        ? "（整文档）"
+                        : "[" + e.sections().stream()
+                                .map(s -> "\"" + s.id() + "\"")
+                                .collect(java.util.stream.Collectors.joining(", ")) + "]";
+                return "默认注入 {kind: DOCUMENT, ref: code-style, scope: " + scope + "}（" + e.title() + "）——"
+                        + "按下文骨架为**每条子任务**声明引用，scope 按子任务实际内容裁剪（可增删章节、可追加其它已登记文档）；"
+                        + "确不适用时须在 constraints 写明不适用理由。";
+            }
+        }
+        return "（未登记默认契约文档 code-style；如实际涉及代码仍须按「平台约束文档目录」声明引用，不得输出空数组）";
     }
 
     /** 技能要求占位符渲染：保持声明序逗号拼接；null/空 → 显式降级文案（行为零变化）。 */
@@ -1181,7 +1294,8 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
      * + D5 兜底审计（openQuestions 无 UNCONFIRMED 继承 WARN）。 */
     private List<SubTaskDraft> buildDrafts(TaskView task, List<PlanDraftItem> items, PlannerAgentRef planner,
                                            PlannerGranularityResolver.GranularityDecision decision,
-                                           String attemptId, int rootSeqStart) {
+                                           String attemptId, int rootSeqStart,
+                                           DecomposeContextSnapshotRenderer.AttachmentListing attachmentListing) {
         Long taskId = task.id();
         // `ADR-008` §19.2：位置身份在**这一处**算出来（单段 <日期><任务内序号>），
         // 写进 SubTaskDraft，由 task 域原样落库。派生已改为独立 Task，不再产生子段编号。
@@ -1204,10 +1318,20 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             List<String> keptSkills = filterRequiredSkills(taskId, item.getRequiredSkills(), planner);
             // G-022 拆解侧前置校验（告警而非阻断）：声明技能须有在岗 Agent 可承接
             auditSkillCoverage(taskId, drafts.size() + 1, item.getTitle(), keptSkills, activeAgentSkillSets, planner);
+            // G-037：类型化约束引用归一（kind 白名单 + DOCUMENT ref 必填 + scope 数组校验，非法元素丢弃）
+            List<ConstraintRefDraft> constraintRefs = normalizeConstraintRefs(taskId, planner, item);
             Map<String, Object> context = new HashMap<>();
             context.put("plannerAgentId", planner.id());
             context.put("plannerAgentName", planner.name());
             context.put("planGeneratedAt", generatedAt);
+            // `G-042`：把 LLM 声明的附件序号解析成 chat_attachment.id 落进 context。
+            // 用渲染期冻结的那一份清单解析（`attachmentListing`），**不重新查库**——
+            // 清单进 prompt 后 Planner 要跑十几分钟，这期间新传的附件会插到倒序结果头部，
+            // 重查一次就会让「附件 2」指向另一张图（判据 32）。
+            List<Long> mediaRefIds = resolveAttachmentRefs(taskId, idx, item, attachmentListing);
+            if (!mediaRefIds.isEmpty()) {
+                context.put(SubTaskContextKeys.MEDIA_REF_IDS, mediaRefIds);
+            }
             // 显式声明的 kind 原文必须随草案保存：acceptance_kind 列经 parse 后无法区分
             // 「显式声明 AUTOMATED」与「未声明」，而门禁对两者的处置不同（block vs warn）。
             String declaredKind = explicitAcceptanceKind(item.getAcceptanceKind());
@@ -1250,11 +1374,95 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                     //
                     // 根层的 seq 用 `rootSeqStart + idx` 而**不是** `idx + 1`：code 是「任务内位置」，
                     // 设计 §3.1 定死「跨轮不重置」，否则第二轮从 0001 起会与第一轮残留行同号。
-                    DraftCode.root(taskDate, rootSeqStart + idx).value()));
+                    DraftCode.root(taskDate, rootSeqStart + idx).value(),
+                    // G-037：类型化约束引用（原样透传已归一化的列表，空 = 无契约引用）
+                    constraintRefs));
         }
         // D5 兜底审计：任务 openQuestions 非空但拆解产物无任何 UNCONFIRMED 继承 → WARN（不阻断）
         auditOpenQuestionsInheritance(task, drafts, planner);
         return drafts;
+    }
+
+    /**
+     * `G-042`：把 LLM 声明的 `attachmentRefs`（1-based 清单序号）解析成 `chat_attachment.id`。
+     *
+     * <p><b>解析基准是渲染期冻结的清单</b>（{@code listing.attachments()}），不是重新查库：
+     * 清单写进 prompt 后 Planner 要跑十几分钟，期间用户新传的附件会插到
+     * {@code listLatestByConversation} 倒序结果的头部，重查一次会让同一个序号指向不同文件。
+     * 这类错误不报错、不告警，只是默默送错图（判据 32）。</p>
+     *
+     * <p><b>逐元素防御</b>：模型输出的形态不可控（字符串 / 浮点 / 嵌套对象 / 越界 / 重复），
+     * 每个坏元素只丢自己——一条草案的附件声明写坏不该让整批拆解失败。这与
+     * {@code uncertainties} / {@code constraintRefs} 的既有处置同口径。</p>
+     *
+     * <p><b>去重且保序</b>：用 {@link LinkedHashSet} 而非 {@code List}，因为下游按此清单取图，
+     * 同一张图重复送两遍既浪费预算（5 张上限按条数算）也没有语义。</p>
+     *
+     * @param taskId  任务 ID（仅用于审计日志）
+     * @param idx     草案下标（0-based，仅用于审计日志）
+     * @param item    LLM 单条输出
+     * @param listing 渲染 prompt 时冻结的附件清单
+     * @return 解析出的附件 ID（去重、按声明顺序）；无声明 / 全部无效时为空表
+     */
+    private List<Long> resolveAttachmentRefs(Long taskId, int idx, PlanDraftItem item,
+                                             DecomposeContextSnapshotRenderer.AttachmentListing listing) {
+        JsonNode node = item.getAttachmentRefsNode();
+        if (node == null || node.isNull() || !node.isArray() || node.isEmpty()) {
+            return List.of();
+        }
+        List<ChatAttachment> available = listing == null ? List.of() : listing.attachments();
+        if (available.isEmpty()) {
+            // 清单为空却声明了序号 ⇒ 模型凭空编造。不记 warn（拆解链路上「空清单」是常态，
+            // 而模型偶尔仍会填一个 1），只 debug；解析结果为空自然回落会话全量。
+            log.debug("附件作用域声明无对应清单，已忽略: taskId={}, draftSeq={}, refs={}",
+                    taskId, idx + 1, node);
+            return List.of();
+        }
+        Set<Long> resolved = new LinkedHashSet<>();
+        int dropped = 0;
+        for (JsonNode element : node) {
+            Integer seq = intOf(element);
+            // 序号 1-based；越界（<=0 或 > N）直接丢弃——「越界等于没填」，不猜意图也不钳制到边界，
+            // 因为钳制会把「模型以为有第 9 张」静默变成「用第 5 张」，比丢弃更偏离原意。
+            if (seq == null || seq < 1 || seq > available.size()) {
+                dropped++;
+                continue;
+            }
+            ChatAttachment attachment = available.get(seq - 1);
+            if (attachment != null && attachment.getId() != null) {
+                resolved.add(attachment.getId());
+            } else {
+                dropped++;
+            }
+        }
+        if (dropped > 0) {
+            log.warn("附件作用域声明含无效元素（已丢弃，不影响其余）: taskId={}, draftSeq={}, dropped={}, size={}",
+                    taskId, idx + 1, dropped, available.size());
+        }
+        return List.copyOf(resolved);
+    }
+
+    /**
+     * 从 JSON 节点取整数（容忍数字与纯数字字符串，其余一律 {@code null}）。
+     *
+     * <p>不像 {@code uncertainties} 那样容忍浮点截断：附件序号是离散位置，{@code 2.7} 既不是
+     * 第 2 张也不是第 3 张，静默截断等于替模型猜——宁可丢弃并计数。</p>
+     */
+    private static Integer intOf(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isIntegralNumber() && node.canConvertToInt()) {
+            return node.intValue();
+        }
+        if (node.isTextual()) {
+            try {
+                return Integer.valueOf(node.textValue().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /**
@@ -1330,6 +1538,59 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                     item.getTitle(), e.getMessage());
             return List.of();
         }
+    }
+
+    /** G-037：拆解 {@code constraintRefs} 原始解析——JsonNode 防御式承接，非法形态回落空列表（不阻断）。 */
+    private List<ConstraintRefDraft> resolveConstraintRefs(PlanDraftItem item) {
+        JsonNode node = item.getConstraintRefsNode();
+        if (node == null || node.isNull() || !node.isArray()) {
+            return List.of();
+        }
+        try {
+            return objectMapper.convertValue(node, new TypeReference<List<ConstraintRefDraft>>() { });
+        } catch (Exception e) {
+            log.warn("拆解 constraintRefs 解析失败，回落空列表（不阻断）: title={}, err={}",
+                    item.getTitle(), e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * G-037：约束引用归一——kind 白名单（{@link ConstraintRefKind}）+ {@code DOCUMENT} ref 必填 +
+     * scope 数组元素非空。非法元素<b>丢弃</b>（fail-safe：宁可少一条引用，不把一份文档误判成另一份），
+     * 丢弃记 WARN 日志、不阻断落库。
+     */
+    private List<ConstraintRefDraft> normalizeConstraintRefs(Long taskId, PlannerAgentRef planner,
+                                                             PlanDraftItem item) {
+        List<ConstraintRefDraft> raw = resolveConstraintRefs(item);
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        List<ConstraintRefDraft> kept = new ArrayList<>(raw.size());
+        for (ConstraintRefDraft r : raw) {
+            if (r == null) {
+                continue;
+            }
+            String kind = r.kind();
+            if (!ConstraintRefKind.isKnown(kind)) {
+                log.warn("拆解 constraintRefs 丢弃非法元素（非法 kind）: taskId={}, title={}, rawKind={}",
+                        taskId, item.getTitle(), String.valueOf(kind));
+                continue;
+            }
+            if (ConstraintRefKind.DOCUMENT.name().equals(kind)
+                    && (r.ref() == null || r.ref().isBlank())) {
+                log.warn("拆解 constraintRefs 丢弃非法元素（DOCUMENT ref 为空）: taskId={}, title={}",
+                        taskId, item.getTitle());
+                continue;
+            }
+            if (r.scope() != null && r.scope().stream().anyMatch(s -> s == null || s.isBlank())) {
+                log.warn("拆解 constraintRefs 丢弃非法元素（scope 含空项）: taskId={}, title={}",
+                        taskId, item.getTitle());
+                continue;
+            }
+            kept.add(r);
+        }
+        return kept;
     }
 
     /**

@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -46,6 +47,9 @@ class DecomposeContextSnapshotRendererTest {
 
     /** 附件正文里的独特标记：只要它出现在渲染结果里，就说明注入了正文。 */
     private static final String BODY_MARKER = "ATTACHMENT-BODY-MUST-NOT-LEAK";
+
+    /** 附件清单展示上限（`G-046`）：与注入侧共用同一个事实源，故从渲染器引用而非另写数字。 */
+    private static final int MAX = DecomposeContextSnapshotRenderer.MAX_ATTACHMENTS;
 
     @Mock
     private ChatAttachmentService chatAttachmentService;
@@ -104,7 +108,10 @@ class DecomposeContextSnapshotRendererTest {
             attachments.add(attachment("竞品清单" + i + "号".repeat(45) + ".xlsx",
                     ChatAttachmentParseStatus.READY));
         }
-        when(chatAttachmentService.listByConversation(CONV_ID)).thenReturn(attachments);
+        // `lenient`：本用例验的是总预算截断，附件清单只是撑预算的素材之一；
+        // 若预算先被历史任务撑爆，附件小节的「本次展示最新 N 件」备注就被 capTotal 切掉，
+        // 届时本桩「未被消费」不该算失败（会随各小节字数分配漂移）。
+        lenient().when(chatAttachmentService.listLatestByConversation(CONV_ID, MAX)).thenReturn(attachments);
         stubKnowledge("竞品报告2025", "结".repeat(400));
         // 历史任务：标题 200 字 + 每条 6 个子任务标题
         List<TaskView> recent = new ArrayList<>();
@@ -148,6 +155,7 @@ class DecomposeContextSnapshotRendererTest {
                 .contains("暂无可参考的历史任务")
                 .contains("需求包见上文");
         verify(chatAttachmentService, never()).listByConversation(anyLong());
+        verify(chatAttachmentService, never()).listLatestByConversation(anyLong(), anyInt());
     }
 
     @Test
@@ -155,7 +163,8 @@ class DecomposeContextSnapshotRendererTest {
     void singleSectionFailureDoesNotBreakOthers() {
         TaskView current = task(TASK_ID, "搭建日报模块", "日报统计",
                 Map.of(TaskContextKeys.CONVERSATION_ID, CONV_ID));
-        when(chatAttachmentService.listByConversation(CONV_ID)).thenThrow(new IllegalStateException("db down"));
+        when(chatAttachmentService.listLatestByConversation(CONV_ID, MAX))
+                .thenThrow(new IllegalStateException("db down"));
         when(knowledgeBaseService.search(anyString(), anyInt(), isNull(), isNull()))
                 .thenThrow(new IllegalStateException("kb down"));
         when(taskService.listRecentViews(anyInt())).thenThrow(new IllegalStateException("task down"));
@@ -178,7 +187,7 @@ class DecomposeContextSnapshotRendererTest {
     void neverLeaksAttachmentBodyOrFullKnowledgeText() {
         TaskView current = task(TASK_ID, "Q3 竞品分析", "分析三家竞品",
                 Map.of(TaskContextKeys.CONVERSATION_ID, CONV_ID));
-        when(chatAttachmentService.listByConversation(CONV_ID)).thenReturn(
+        when(chatAttachmentService.listLatestByConversation(CONV_ID, MAX)).thenReturn(
                 List.of(attachment("竞品清单.xlsx", ChatAttachmentParseStatus.READY)));
         stubKnowledge("竞品报告2025", "甲".repeat(300));
         when(taskService.listRecentViews(anyInt())).thenReturn(List.of());
@@ -210,5 +219,52 @@ class DecomposeContextSnapshotRendererTest {
         assertThat(rendered)
                 .as("当前任务不得作为「历史」出现")
                 .doesNotContain("当前任务标题");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  ④ G-046：附件清单取「最新 N 件」而非「最早 N 件」
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("G-046：超上限时展示<b>最新</b> N 件（丢最早的那批），并显式标注「本次展示最新 N 件」")
+    void attachmentsOverLimitShouldShowNewest() {
+        TaskView current = task(TASK_ID, "按最新 5 张图拆任务", "拆成 5 个子任务",
+                Map.of(TaskContextKeys.CONVERSATION_ID, CONV_ID));
+        int total = MAX + 2;
+        // 服务端返回「最新在前」（DESC）且已按 LIMIT 截到 MAX 条——第 1 个元素是最新的 f26，
+        // 最后是被保留的最老一份 f3；f2 / f1 已被 SQL 层的 LIMIT 挡在外面。
+        List<ChatAttachment> newestFirst = new ArrayList<>();
+        for (int i = total; i > total - MAX; i--) {
+            newestFirst.add(attachment("f" + i + ".png", ChatAttachmentParseStatus.READY));
+        }
+        when(chatAttachmentService.listLatestByConversation(CONV_ID, MAX)).thenReturn(newestFirst);
+        when(knowledgeBaseService.search(anyString(), anyInt(), isNull(), isNull()))
+                .thenReturn(KnowledgeSearchResult.empty("q"));
+        when(taskService.listRecentViews(anyInt())).thenReturn(List.of());
+
+        String rendered = renderer().render(current);
+
+        // ★核心断言：被丢弃的是最早那 2 份，最新那批必须在场（原缺陷恰好相反）
+        assertThat(rendered).doesNotContain("f1.png").doesNotContain("f2.png");
+        assertThat(rendered).contains("f3.png").contains("f" + total + ".png");
+        // 展示顺序仍按上传先后（f3 在 f26 之前），与界面 / 附件序号一致
+        assertThat(rendered.indexOf("f3.png")).isLessThan(rendered.indexOf("f" + total + ".png"));
+        assertThat(rendered).contains("本次展示最新 " + MAX + " 件");
+    }
+
+    @Test
+    @DisplayName("G-046：未达上限时不加「更多未列出」提示（避免一切正常却像被截断）")
+    void attachmentsUnderLimitShouldNotClaimTruncation() {
+        TaskView current = task(TASK_ID, "整理周报", "合并三份周报",
+                Map.of(TaskContextKeys.CONVERSATION_ID, CONV_ID));
+        when(chatAttachmentService.listLatestByConversation(CONV_ID, MAX))
+                .thenReturn(List.of(attachment("周报一.xlsx", ChatAttachmentParseStatus.READY)));
+        when(knowledgeBaseService.search(anyString(), anyInt(), isNull(), isNull()))
+                .thenReturn(KnowledgeSearchResult.empty("q"));
+        when(taskService.listRecentViews(anyInt())).thenReturn(List.of());
+
+        String rendered = renderer().render(current);
+
+        assertThat(rendered).contains("周报一.xlsx").doesNotContain("本次展示最新");
     }
 }

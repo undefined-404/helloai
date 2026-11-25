@@ -185,6 +185,21 @@ public class SubTask extends BaseEntity {
     private String constraints;
 
     /**
+     * 类型化约束引用列表（`G-037` 任务约束类型化试点，V154 JSONB 列）。
+     *
+     * <p>与 {@link #constraints}（裁决文本，COARSE 必填）**并存互补**：constraints 是
+     * 内联在上下文里的「不许改的事」；constraintRefs 是「契约文档引用」——执行者按
+     * {@code ref} + {@code scope} 经 {@code internal_load_constraint_doc} 读取完整规范
+     * 再执行。空数组（默认）= 无文档级契约引用，行为与现状完全一致（存量零影响）。</p>
+     *
+     * <p>读取经 {@link PgJsonbTypeHandler}（显式 typeHandler 绕开 MyBatisPlusConfig 的
+     * 全局 {@code List.class} 注册，避免反序列化成 {@code List<LinkedHashMap>}，
+     * 与 {@link #requiredSkills} 同一模式）。</p>
+     */
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
+    private List<ConstraintRef> constraintRefs;
+
+    /**
      * 不确定性申报（需求准入与不确定性显式管理 G-011，V75 显式 JSONB 列）。
      *
      * <p>拆解侧指派，kind 二值分级：ASSUMPTION 已申报假设（执行者可自行验证 / 推翻，

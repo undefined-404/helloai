@@ -3,7 +3,10 @@ package com.helloai.core.agent.service;
 import com.helloai.core.agent.entity.Agent;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.content.Media;
 import reactor.core.publisher.Flux;
+
+import java.util.List;
 
 /**
  * Spring AI ChatClient 调用入口（平台内 Agent 执行链的 LLM 交互层）。
@@ -36,6 +39,24 @@ public interface AgentChatClientService {
                           String provider, String apiKeyPlaintext, Double temperature);
 
     /**
+     * 带媒体的同步生成（`VU-9`）：媒体与正文<b>同一条 {@code UserMessage}</b>。
+     *
+     * <p><b>能力判定在本方法内部按「本次实际调用的模型」进行</b>（不变量 I-2）：
+     * 调用方只管把「用户点名要看的那几张图」以引用形式交进来，<b>不判断</b>模型能不能看图。
+     * 这条分工是硬性的——{@code agent} 实体在调用方可能已被 {@code AgentModelPin} 换过模型，
+     * 也可能被会话级 {@code modelType} 覆盖，调用方看到的模型与这里将要调用的模型
+     * 不保证一致。写成让调用方先判、这里只发，就复刻了 OpenCode 官方 issue
+     * {@code anomalyco/opencode#60736}。</p>
+     *
+     * <p><b>媒体为空时逐字等价于 6 参重载</b>：走原 {@code .user(String)} 单参重载，
+     * 请求体不多出任何默认值（回归面不放大）。</p>
+     *
+     * @param media 媒体（已装载；{@code null}/空 = 纯文本，行为与 6 参重载一致）
+     */
+    ChatResponse generate(Agent agent, String systemPrompt, String userPrompt,
+                          String provider, String apiKeyPlaintext, Double temperature, List<Media> media);
+
+    /**
      * 流式生成回复（默认平台通道）：以 token 增量 {@link Flux} 输出，订阅时发起调用。
      *
      * <p>语义与 {@link #generate(Agent, String, String)} 完全一致，仅传输形态不同：
@@ -50,6 +71,17 @@ public interface AgentChatClientService {
      */
     Flux<com.helloai.core.agent.chat.LlmStreamChunk> generateStream(Agent agent, String systemPrompt, String userPrompt,
                                 String provider, String apiKeyPlaintext);
+
+    /**
+     * 带媒体的流式生成（`VU-9`）：语义与
+     * {@link #generate(Agent, String, String, String, String, Double, List)} 逐字一致，
+     * 仅传输形态不同。
+     *
+     * <p><b>同/流两条入口必须同批改</b>：只改同步会得到「重发一次就没图了」的错觉
+     * （工作台的重新生成走流式）。</p>
+     */
+    Flux<com.helloai.core.agent.chat.LlmStreamChunk> generateStream(Agent agent, String systemPrompt, String userPrompt,
+                                String provider, String apiKeyPlaintext, List<Media> media);
 
     /**
      * 构建底层 ChatModel（P0-B-2：Runtime AgentLoop 直接持有模型而非 ChatClient）。

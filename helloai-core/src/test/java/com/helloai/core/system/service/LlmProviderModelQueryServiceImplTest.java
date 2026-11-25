@@ -68,14 +68,14 @@ class LlmProviderModelQueryServiceImplTest {
     @Test
     @DisplayName("listByProviderId：正常返回模型列表")
     void listByProviderId_hasData_returnsList() {
-        LlmProviderModel m1 = model("deepseek-v4-flash", 1, 1);
+        LlmProviderModel m1 = model("deepseek-flash", 1, 1);
         LlmProviderModel m2 = model("deepseek-v4-pro", 0, 1);
         when(mapper.selectList(any())).thenReturn(List.of(m1, m2));
 
         List<LlmProviderModel> result = service.listByProviderId(1L);
 
         assertThat(result).hasSize(2);
-        assertThat(result.get(0).getModelName()).isEqualTo("deepseek-v4-flash");
+        assertThat(result.get(0).getModelName()).isEqualTo("deepseek-flash");
     }
 
     @Test
@@ -89,7 +89,7 @@ class LlmProviderModelQueryServiceImplTest {
     @Test
     @DisplayName("listEnabledByProviderCode：providerCode 归一化为小写后查询")
     void listEnabledByProviderCode_normalizesLowercase() {
-        LlmProviderModel m = model("deepseek-v4-flash", 1, 1);
+        LlmProviderModel m = model("deepseek-flash", 1, 1);
         when(mapper.selectList(any())).thenReturn(List.of(m));
 
         List<LlmProviderModel> result = service.listEnabledByProviderCode("DeepSeek");
@@ -113,13 +113,13 @@ class LlmProviderModelQueryServiceImplTest {
     @Test
     @DisplayName("findDefaultByProviderId：存在默认模型时返回实体")
     void findDefaultByProviderId_found_returnsModel() {
-        LlmProviderModel m = model("deepseek-v4-flash", 1, 1);
+        LlmProviderModel m = model("deepseek-flash", 1, 1);
         when(mapper.selectOne(any())).thenReturn(m);
 
         LlmProviderModel result = service.findDefaultByProviderId(1L);
 
         assertThat(result).isNotNull();
-        assertThat(result.getModelName()).isEqualTo("deepseek-v4-flash");
+        assertThat(result.getModelName()).isEqualTo("deepseek-flash");
     }
 
     @Test
@@ -155,7 +155,7 @@ class LlmProviderModelQueryServiceImplTest {
     void isModelAvailable_enabledModel_returnsTrue() {
         when(mapper.selectCount(any())).thenReturn(1L);
 
-        assertThat(service.isModelAvailable("deepseek", "deepseek-v4-flash")).isTrue();
+        assertThat(service.isModelAvailable("deepseek", "deepseek-flash")).isTrue();
     }
 
     @Test
@@ -176,11 +176,11 @@ class LlmProviderModelQueryServiceImplTest {
     @Test
     @DisplayName("findCapabilityByModelType：命中模型返回携带能力谓词的实体")
     void findCapabilityByModelType_found_returnsModel() {
-        LlmProviderModel m = model("deepseek-v4-flash", 1, 1);
+        LlmProviderModel m = model("deepseek-flash", 1, 1);
         m.setCapabilities(ModelCapabilities.conservative().toRawMap());
         when(mapper.selectOne(any())).thenReturn(m);
 
-        LlmProviderModel result = service.findCapabilityByModelType("deepseek:deepseek-v4-flash");
+        LlmProviderModel result = service.findCapabilityByModelType("deepseek:deepseek-flash");
 
         assertThat(result).isNotNull();
         assertThat(result.getCapabilities()).containsKeys("input", "output", "reasoning");
@@ -189,11 +189,11 @@ class LlmProviderModelQueryServiceImplTest {
     @Test
     @DisplayName("findCapabilityProfileByModelType（M-9 换内容）：命中 ⇒ 谓词快照；未命中/非法 ⇒ null")
     void findCapabilityProfileByModelType_wrapsPredicateOrNull() {
-        LlmProviderModel m = model("deepseek-v4-flash", 1, 1);
+        LlmProviderModel m = model("deepseek-flash", 1, 1);
         m.setCapabilities(ModelCapabilities.conservative().toRawMap());
         when(mapper.selectOne(any())).thenReturn(m);
 
-        LlmProviderModelProfile profile = service.findCapabilityProfileByModelType("deepseek:deepseek-v4-flash");
+        LlmProviderModelProfile profile = service.findCapabilityProfileByModelType("deepseek:deepseek-flash");
         assertThat(profile).isNotNull();
         assertThat(profile.capabilities()).isNotNull();
         assertThat(profile.capabilities().inputModalities()).containsExactly("text");
@@ -227,7 +227,7 @@ class LlmProviderModelQueryServiceImplTest {
         when(mapper.selectOne(any())).thenReturn(null);
         assertThat(service.findCapabilityByModelType("deepseek:deepseek-v5")).isNull();
         // 非法格式：无冒号 / 空段 / blank 整体
-        assertThat(service.findCapabilityByModelType("deepseek-v4-flash")).isNull();
+        assertThat(service.findCapabilityByModelType("deepseek-flash")).isNull();
         assertThat(service.findCapabilityByModelType("deepseek:")).isNull();
         assertThat(service.findCapabilityByModelType("  ")).isNull();
         assertThat(service.findCapabilityByModelType(null)).isNull();
@@ -248,7 +248,7 @@ class LlmProviderModelQueryServiceImplTest {
     @Test
     @DisplayName("listEnabledByProviderId：正常返回启用模型列表")
     void listEnabledByProviderId_returnsEnabledList() {
-        when(mapper.selectList(any())).thenReturn(Collections.singletonList(model("deepseek-v4-flash", 1, 1)));
+        when(mapper.selectList(any())).thenReturn(Collections.singletonList(model("deepseek-flash", 1, 1)));
 
         List<LlmProviderModel> result = service.listEnabledByProviderId(1L);
 

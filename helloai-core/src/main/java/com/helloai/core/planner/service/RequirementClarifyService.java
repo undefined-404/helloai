@@ -88,6 +88,18 @@ public interface RequirementClarifyService {
                                           List<ClarifySelection> selections);
 
     /**
+     * 向会话追加一条用户消息并走一轮 LLM 澄清（带本轮勾选的附件集）。
+     *
+     * <p><b>`G-044` / `G-048`</b>：同步链路（含流式失败后的兜底）此前不接收附件勾选，
+     * 导致用户勾选在兜底时被静默丢弃。补此重载让同步与流式的附件参数完全同构。</p>
+     *
+     * @param selectedIds 本轮用户勾选的附件 id；{@code null}=未指定（走模型判定/全量回落），
+     *                    {@code []}=用户明确排除了全部附件（<b>一张都不送</b>，不回落）
+     */
+    ClarifyConversationDetail sendMessage(Long conversationId, String message,
+                                          List<ClarifySelection> selections, List<Long> selectedIds);
+
+    /**
      * 重试上一轮 LLM：仅当最后一条消息是 user（即上轮 LLM 失败、助手回复缺失）时可用；
      * 不新增 user 消息、不加轮数（失败那轮已计入 round_count）。
      *

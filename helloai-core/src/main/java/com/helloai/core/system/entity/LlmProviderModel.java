@@ -28,7 +28,7 @@ public class LlmProviderModel extends BaseEntity {
     /** 冗余 provider_code，便于按 code 查询（Agent 注册时校验）。 */
     private String providerCode;
 
-    /** 模型名称，如 deepseek-v4-flash / kimi-k2.5 / qwen3.7-plus。 */
+    /** 模型名称，如 deepseek-flash / kimi-k2.5 / qwen3.7-plus。 */
     private String modelName;
 
     /** 是否默认模型：1=是，0=否。每个 Provider 必须有一个默认模型（应用层校验）。 */

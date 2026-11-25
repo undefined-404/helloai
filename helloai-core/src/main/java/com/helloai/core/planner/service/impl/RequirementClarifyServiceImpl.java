@@ -3,6 +3,7 @@ package com.helloai.core.planner.service.impl;
 import com.helloai.common.base.BizException;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.service.ChatAttachmentService;
 import com.helloai.core.planner.service.ClarifyCommandSearchService;
 import com.helloai.core.planner.service.ClarifyFinalizeService;
 import com.helloai.core.planner.service.ClarifyRoundOrchestratorService;
@@ -87,6 +88,13 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     private final ClarifyStreamService streamService;
     private final ClarifyFinalizeService finalizeService;
     private final ClarifyCommandSearchService commandSearch;
+    /**
+     * 会话附件（`G-041`）：会话删除时硬删附件行 + 回收对象。
+     *
+     * <p><b>为什么直接依赖本域 Service 而非绕端口</b>：{@code chat_attachment} 与调用方同属
+     * planner 域，{@code planner → planner} 不涉及跨域，端口化只会多一层空转发。</p>
+     */
+    private final ChatAttachmentService chatAttachmentService;
 
     // ══════════════════════════════════════════════════════════════
     //  会话生命周期
@@ -151,6 +159,12 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     public ClarifyConversationDetail sendMessage(Long conversationId, String message,
                                                  List<ClarifySelection> selections) {
         return orchestrator.sendMessage(conversationId, message, selections);
+    }
+
+    @Override
+    public ClarifyConversationDetail sendMessage(Long conversationId, String message,
+                                                 List<ClarifySelection> selections, List<Long> selectedIds) {
+        return orchestrator.sendMessage(conversationId, message, selections, selectedIds);
     }
 
     /**
@@ -252,9 +266,15 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 删除已放弃会话：校验 ABANDONED → 消息逻辑删 → 会话逻辑删，两表同事务。
+     * 删除已放弃会话：校验 ABANDONED → 附件硬删（`G-041`）→ 消息逻辑删 → 会话逻辑删，同事务。
      * <p>仅 ABANDONED 放行：ABANDONED 会话按 abandon 前置校验必然无 task_id（终稿未确认），
      * 删除不触碰任务侧；FINALIZED 会话承载任务追溯，禁止删除。</p>
+     *
+     * <p><b>`G-041`：附件必须硬删，且必须在删会话之前</b>——{@code chat_attachment.conversation_id}
+     * 没有 {@code REFERENCES}（`V121`），删会话不会级联；而执行面取图只过滤附件自己的
+     * {@code deleted} 位、<b>不校验会话是否还活着</b>，于是会话删了以后子任务照旧能把图送给模型。
+     * 顺序不能反：先删会话再删附件，中途失败会留下「会话没了、附件还活着」且**再无入口清理**
+     * 的僵尸数据（会话列表已看不到它）；反之最坏只是「附件清了、会话还在」，重试即可。</p>
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -272,9 +292,11 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             throw new BizException("仅已放弃的会话可删除，当前状态: " + conversation.getStatus()
                     + ", conversationId=" + conversationId);
         }
+        int purgedAttachments = chatAttachmentService.deleteByConversation(conversationId);
         messageService.removeByConversation(conversationId);
         conversationService.removeById(conversationId);
-        log.info("澄清会话已删除（软删）: conversationId={}", conversationId);
+        log.info("澄清会话已删除（附件{}条硬删 + 消息/会话软删）: conversationId={}, attachments={}",
+                purgedAttachments, conversationId, purgedAttachments);
     }
 
     /**

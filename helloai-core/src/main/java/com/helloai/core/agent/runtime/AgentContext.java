@@ -6,6 +6,7 @@ import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import lombok.Builder;
 import lombok.Value;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.content.Media;
 
 import java.util.Collections;
 import java.util.List;
@@ -95,4 +96,22 @@ public class AgentContext {
      * 见 {@code RuntimeTurnExecutor#resolveMaxIterations}）。</p>
      */
     Integer maxIterationsHint;
+
+    /**
+     * 随首条 user 消息发送的多模态媒体（`VU-1`）；空 = 纯文本，行为与改造前逐字一致。
+     *
+     * <p><b>为什么类型是 Spring AI 的 {@link Media} 而非本域自制快照</b>：本上下文是
+     * 「交给 {@code AgentLoop} 直接喂模型」的执行输入，媒体最终形态就是
+     * {@code org.springframework.ai.content.Media}。中间再定义一个 {@code MediaRef} 只会
+     * 在装配层多一次「快照 → Media」的无意义转换，且让循环要依赖两种类型（§2.3 禁止无谓抽象）。</p>
+     *
+     * <p><b>为什么不传字节 / 附件 ID</b>：读取字节与 MIME 判定属<b>装配层</b>职责——
+     * 装配层持有 {@code AttachmentPort}、能按 {@code AttachmentRef.contentLoadable} 判可读性；
+     * 执行器边界仍是「只执行、不查业务数据」（与 {@link #maxIterationsHint} 同一条纪律）。</p>
+     *
+     * <p><b>为什么 {@code @Builder.Default} 必须是不可变空表</b>：{@code null} 会迫使每个
+     * 消费点各写一次 null 判断；空表让「无媒体」只有一种表意（同 {@code skills} / {@code tools}）。</p>
+     */
+    @Builder.Default
+    List<Media> media = Collections.emptyList();
 }

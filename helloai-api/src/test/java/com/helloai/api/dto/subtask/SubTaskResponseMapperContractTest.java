@@ -1,6 +1,7 @@
 package com.helloai.api.dto.subtask;
 
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.task.entity.ConstraintRef;
 import com.helloai.core.task.entity.SubTask;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -123,6 +124,7 @@ class SubTaskResponseMapperContractTest {
         entity.setScoreGrade("S");
         entity.setScoreFactors(Map.of("timeScore", 88, "qualityScore", 75));
         entity.setDependsOn(List.of(1L, 2L));
+        entity.setConstraintRefs(List.of(new ConstraintRef("DOCUMENT", "code-style", List.of("s5", "s6"))));
 
         SubTaskResponse response = SubTaskResponseMapper.toResponse(entity);
 
@@ -135,6 +137,10 @@ class SubTaskResponseMapperContractTest {
         assertThat(response.getScoreFactors()).containsEntry("timeScore", 88);
         // 计算型字段：依赖列表走 dependsOnIdList() 归一化
         assertThat(response.getDependsOn()).containsExactly(1L, 2L);
+        // 类型化约束引用（G-037）：列表原样搬移，供前端详情/草案展示
+        assertThat(response.getConstraintRefs()).hasSize(1);
+        assertThat(response.getConstraintRefs().get(0).getKind()).isEqualTo("DOCUMENT");
+        assertThat(response.getConstraintRefs().get(0).getScope()).containsExactly("s5", "s6");
         // 冗余展示字段由 Controller 回填，映射器不得伪造
         assertThat(response.getTaskTitle()).isNull();
         assertThat(response.getAssignedAgentName()).isNull();

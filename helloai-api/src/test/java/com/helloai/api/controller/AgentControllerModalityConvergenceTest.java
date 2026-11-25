@@ -58,7 +58,7 @@ class AgentControllerModalityConvergenceTest {
     @InjectMocks
     private AgentController controller;
 
-    private static final String MODEL = "deepseek:deepseek-v4-flash";
+    private static final String MODEL = "deepseek:deepseek-flash";
 
     private static LlmProviderModelProfile profile(String... inputModalities) {
         return new LlmProviderModelProfile(
@@ -103,7 +103,7 @@ class AgentControllerModalityConvergenceTest {
     @Test
     @DisplayName("T8①：模型支持 image 且客户端传 true ⇒ 保持 true（客户端传 false ⇒ false）")
     void imageSupportedRespectsClientChoice() {
-        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-flash")).thenReturn(true);
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-flash")).thenReturn(true);
         when(llmProviderModelQueryService.findCapabilityProfileByModelType(MODEL))
                 .thenReturn(profile("text", "image"));
 
@@ -119,7 +119,7 @@ class AgentControllerModalityConvergenceTest {
     @Test
     @DisplayName("T8②：模型支持 image 但客户端传 false ⇒ 保持 false（只缩不放）")
     void imageSupportedButClientFalse() {
-        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-flash")).thenReturn(true);
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-flash")).thenReturn(true);
         when(llmProviderModelQueryService.findCapabilityProfileByModelType(MODEL))
                 .thenReturn(profile("text", "image"));
 
@@ -133,7 +133,7 @@ class AgentControllerModalityConvergenceTest {
     @Test
     @DisplayName("T8③：模型不支持 image 而客户端传 true ⇒ 落 false（收敛）")
     void imageUnsupportedConvergesToFalse() {
-        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-flash")).thenReturn(true);
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-flash")).thenReturn(true);
         when(llmProviderModelQueryService.findCapabilityProfileByModelType(MODEL))
                 .thenReturn(profile("text"));
 
@@ -149,7 +149,7 @@ class AgentControllerModalityConvergenceTest {
     @Test
     @DisplayName("T8④：模型支持 video ⇒ video 落 true（逐模态独立收敛）")
     void videoSupportedConvergesToTrue() {
-        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-flash")).thenReturn(true);
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-flash")).thenReturn(true);
         when(llmProviderModelQueryService.findCapabilityProfileByModelType(MODEL))
                 .thenReturn(profile("text", "video"));
 
@@ -165,7 +165,7 @@ class AgentControllerModalityConvergenceTest {
     @Test
     @DisplayName("T8⑤：pdf 等未知模态 token 不影响三键（只认 image/audio/video）")
     void unknownModalityTokenIgnored() {
-        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-flash")).thenReturn(true);
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-flash")).thenReturn(true);
         when(llmProviderModelQueryService.findCapabilityProfileByModelType(MODEL))
                 .thenReturn(profile("text", "image", "pdf"));
 
@@ -207,7 +207,7 @@ class AgentControllerModalityConvergenceTest {
     @Test
     @DisplayName("T8⑧：其余能力键不受收敛影响（supportsPull/maxConcurrentTasks 原样保留）")
     void otherCapabilityKeysUntouched() {
-        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-flash")).thenReturn(true);
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-flash")).thenReturn(true);
         when(llmProviderModelQueryService.findCapabilityProfileByModelType(MODEL))
                 .thenReturn(profile("text", "image"));
 

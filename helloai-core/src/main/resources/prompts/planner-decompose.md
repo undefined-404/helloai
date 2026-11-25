@@ -4,7 +4,9 @@
   占位符（共 12 项，由服务端替换）：
     {{TASK_TITLE}} / {{TASK_DESCRIPTION}} / {{TASK_ARCHETYPE}} / {{TASK_REQUIRED_SKILLS}} /
     {{SKILL_CATALOG}} / {{EXECUTOR_PROFILE}} / {{TASK_DIFFICULTY}} / {{GRANULARITY}} /
-    {{REQUIREMENT_PACKAGE}} / {{TASK_CONTEXT_SNAPSHOT}} / {{EXECUTION_ENV}} / {{SUBTASK_COUNT_RULE}}
+    {{REQUIREMENT_PACKAGE}} / {{TASK_CONTEXT_SNAPSHOT}} / {{EXECUTION_ENV}} / {{SUBTASK_COUNT_RULE}} /
+    {{CONSTRAINT_DOC_CATALOG}}（G-037：类型化约束文档目录，可声明给子任务）/
+    {{CONSTRAINT_DEFAULT_SET}}（G-037：平台按任务类型预选的默认契约集骨架，LLM 只做 scope 裁剪）
   拆解四要素：目标 / 交付物 / 验收标准 / 优先级（见下文「拆解要求（四要素）」）。
 
   ★「拆解维度」小节内的六个块各用一对 HTML 注释标记包裹：起始标记写明原型名、结束标记固定
@@ -61,6 +63,20 @@
 
 {{SKILL_CATALOG}}
 
+## 平台约束文档目录（G-037：可声明给子任务的类型化约束引用）
+
+{{CONSTRAINT_DOC_CATALOG}}
+
+> 约束文档是**项目级契约**（如代码规范 `code-style`），与技能（怎么做）不同：约束文档描述「**不许违反的红线**」（模块边界 / 依赖方向 / Service 规范），子任务可按其内容特点声明引用。声明后执行侧会把该引用注入执行者上下文、执行者可读取全文；审查侧按同一引用核验。**只声明与本子任务强相关的文档与章节**，不要全量声明、不要复制正文。
+
+## 平台默认契约集（G-037：预选骨架，只做减法）
+
+{{CONSTRAINT_DEFAULT_SET}}
+
+> 这是平台按任务类型**预选**的默认契约骨架（兜底，不是建议）：默认按下文骨架声明，再按子任务实际内容裁剪 scope（增删章节）、可追加其它已登记文档。**空数组不是合法输出**——确不适用（纯问答、无产物质量判定）时，必须在 `constraints` 中写明**不适用理由**，否则执行侧拿不到约束锚、审查侧无从核验，链路退化为无约束执行。
+>
+> **诊断类 / 审查类任务同样必须声明引用**（不是只有改代码才声明）：「按 `code-style` s8 Service 规范逐条核验 XxxService 是否合规」这类任务**恰恰最依赖规范**——没读规范就无法判定合规。这类任务的 scope 就是审查判据的依据，审查侧按同一 scope 核验引用。下方「改造类声明」示例只是形态示范，不代表只有改造类任务才声明。
+
 > 子任务的 `requiredSkills` 只能取上面目录内已登记的标签；未登记的标签会在落库时被丢弃。
 
 ## 执行环境与拆解粒度
@@ -87,7 +103,9 @@
 6. **契约（contract）**：本子任务是否为「契约定义」子任务（true / false）。契约定义子任务的 deliverable 是接口签名 / 数据模型 / 错误码表等跨子任务契约文档，其产出会全局注入所有下游子任务的执行上下文，因此必须排在整个 DAG 的最上游（第 1 位、无前置依赖），且一个任务至多 1 个。**仅 BUILD 原型允许出现 true**，其余原型一律 false。
 7. **技能对齐（仅当任务技能要求非空）**：任务声明了技能要求时，子任务的规划内容与验收标准必须与对应技能规范对齐（例如声明 eng-doc-standard 时产出须符合文档规范、声明 eng-verification 时验收须含可复现验证证据）；平台会按同一技能清单在执行侧注入规范、审查侧核验，拆解侧必须与之一致。
 8. **技能指派（requiredSkills，G-010）**：本子任务需要什么平台技能（只能取「平台技能目录」内已登记标签）；FINE 粒度逐步指派、STANDARD/COARSE 可空。声明了 requiredSkills 的子任务，执行侧会按该技能注入规范、审查侧按同一清单核验。
-9. **约束（constraints，G-010）**：本子任务"不许改的事"（边界 / 红线 / 不许越界事项）；仅 COARSE 粒度必填，其余档位可空。
+9. **约束（constraints，G-010）与约束文档引用（constraintRefs，G-037）**：
+   - `constraints`：本子任务"不许改的事"（边界 / 红线 / 不许越界事项）；仅 COARSE 粒度必填，其余档位可空。
+   - `constraintRefs`：本子任务需要遵守的**项目契约文档引用**（只能取「平台约束文档目录」内已登记 ref，通常 1~2 份；每份可限定 scope 章节子集）。适用场景：任务涉及代码改造时声明 `code-style` 的对应章节（如改 task 域代码 → `["s5","s6","s8"]`）。**默认契约集已按任务类型预选骨架（见上），你的职责是做减法**——按子任务实际内容增删章节、可追加其它已登记文档，**不得输出空数组**；确不适用（纯问答、无产物质量判定）时，必须在 `constraints` 中写明「不适用理由」。声明后执行侧会注入引用、审查侧核验，与 requiredSkills 的「声明即注入」同一契约链。
 10. **不确定性申报（uncertainties，G-011 / TD-7）**：四类，**必须按「这个缺口该怎么解决」区分**，不要一律标 `UNCONFIRMED`：
     - `{"kind":"ASSUMPTION"}` —— 拆解中做出的**推断**（执行者可自行验证 / 推翻）；
     - `{"kind":"UNCONFIRMED"}` —— 无法证实、**且不知道该去哪儿查 / 怎么算**的缺口（只能问人）；
@@ -126,6 +144,19 @@
       带上同样依赖该环境的草案。
     - **不需要时不要硬凑**：纯文档 / 纯分析 / 纯决策类子任务若确实不碰代码、不连库，就不申报
       ——**不要为了合规给每条草案都塞一条环境缺口**，噪音会让真缺口失去可见性。
+
+13. **附件作用域（attachmentRefs）**：上文「上下文快照 → 附件清单」里每一份附件都带一个
+    **序号**（`附件 1`、`附件 2`…）。请为**每个**子任务填出它真正需要看的附件序号：
+
+    - **只填与本子任务相关的那几份**。用户传来 5 张图、其中只有「竞品截图」与「竞品分析」子任务
+      相关，就只填那张的序号；**不要**因为「反正都给了」而把所有序号都填上。
+    - **一份都不相关就填 `[]`**（读不到附件的子任务不要让模型看无关图）。
+    - 只填**清单里真实存在**的序号（1 ~ N）。越界序号会被平台直接丢弃，等于没填。
+    - **多份附件共同支撑同一子任务时全部列出**（例如「对照这两张原型图产出差异清单」⇒ 两张都填）。
+    - 附件清单为空（无关联会话 / 会话无附件）时，本字段填 `[]`。
+
+    > 为什么必须由你判：执行期每个子任务只有一次模型调用预算，把整场会话的图都塞进去，
+    > 模型就会把 A 图上的要求当成 B 子任务的要求。这个判断只有拆解时看得见全貌的你能做。
 
 ## 拆解原则（所有交付物类型通用）
 
@@ -232,10 +263,12 @@
     "contract": false,
     "requiredSkills": ["eng-doc-standard"],
     "constraints": "不得修改对外接口签名；失败时停止并上报，不得自动重试写操作",
+    "constraintRefs": [{"kind": "DOCUMENT", "ref": "code-style", "scope": ["s5", "s6"]}],
+    "attachmentRefs": [1, 3],
     "uncertainties": [{"kind": "UNCONFIRMED", "note": "该接口是否有存量调用方未确认", "ref": "U1", "blockedBy": [2, 3]}]
   }
 ]
 
-字段全部必填；acceptanceKind 只能取 AUTOMATED / STRUCTURAL / REVIEWED / ATTESTED，且必须与 acceptance 的写法一致（见第 11 条表格）；priority 只能取 HIGH / MEDIUM / LOW；dependsOn 是整数数组（前置子任务序号，无依赖填 []）；contract 只能取 true / false（契约定义子任务，全任务至多 1 个且必须排第 1 位；仅 BUILD 原型可为 true）；requiredSkills 只能取「平台技能目录」内已登记标签（无则填 []）；constraints 仅 COARSE 粒度必填、其余档位可空；uncertainties 可空数组（无不确定性时填 []，kind 只能取 ASSUMPTION / UNCONFIRMED / TO_LOOK_UP / TO_DERIVE，每条须带本子任务内唯一的 `ref` 与一个 `blockedBy` 整数数组——填该缺口除本草案外还卡住的草案序号，只卡自己就填 []，越界 / 自身序号会被平台丢弃）。
+字段全部必填；acceptanceKind 只能取 AUTOMATED / STRUCTURAL / REVIEWED / ATTESTED，且必须与 acceptance 的写法一致（见第 11 条表格）；priority 只能取 HIGH / MEDIUM / LOW；dependsOn 是整数数组（前置子任务序号，无依赖填 []）；contract 只能取 true / false（契约定义子任务，全任务至多 1 个且必须排第 1 位；仅 BUILD 原型可为 true）；requiredSkills 只能取「平台技能目录」内已登记标签（无则填 []）；constraints 仅 COARSE 粒度必填、其余档位可空；constraintRefs 数组（**默认取「平台默认契约集」骨架并按子任务裁剪，不得输出空数组**——确不适用时须在 constraints 写明不适用理由；kind 只能取 TEXT / DOCUMENT / SKILL——本平台现支持 DOCUMENT，每条的 ref 必须命中「平台约束文档目录」，scope 为章节 id 数组、可省略表示整文档、省略字段将被平台丢弃）；uncertainties 可空数组（无不确定性时填 []，kind 只能取 ASSUMPTION / UNCONFIRMED / TO_LOOK_UP / TO_DERIVE，每条须带本子任务内唯一的 `ref` 与一个 `blockedBy` 整数数组——填该缺口除本草案外还卡住的草案序号，只卡自己就填 []，越界 / 自身序号会被平台丢弃）；attachmentRefs 是整数数组（**「会话附件清单」里的序号，1-based，见第 13 条**；无相关附件填 []）。
 
 **acceptanceKind 不是固定值**——它必须与每一条 acceptance 的文本写法**逐条对应**（AUTOMATED → 命令/断言；STRUCTURAL → 可数量词；REVIEWED → ≥2 条独立审查项；ATTESTED → 谁/何时/留痕），按上面第 11 条表格逐条判定后填写，**禁止全部填 AUTOMATED 或照抄示例**。示例：写「运行 pytest 输出含 3 passed」应标 `AUTOMATED`；写「报告必须含 ≥5 个章节且每章有结论」应标 `STRUCTURAL`；写「2 条审查项逐条 pass/fail」应标 `REVIEWED`；写「由产品负责人 10-25 前拍板，决策记录存 task_timeline」应标 `ATTESTED`。

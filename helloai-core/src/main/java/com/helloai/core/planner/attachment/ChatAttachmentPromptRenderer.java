@@ -1,6 +1,7 @@
 package com.helloai.core.planner.attachment;
 
 import com.helloai.common.constant.ChatAttachmentParseStatus;
+import com.helloai.core.agent.port.MediaRef;
 import com.helloai.core.planner.entity.ChatAttachment;
 import com.helloai.core.knowledge.KnowledgeBaseService;
 import com.helloai.core.knowledge.KnowledgeSearchResult;
@@ -13,6 +14,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -102,6 +104,20 @@ public class ChatAttachmentPromptRenderer {
     private static final String NO_RETRIEVAL = "（本次未检索附件片段：无超预算附件，或检索无命中）";
 
     /**
+     * 注入侧参与的附件份数上限（`G-046`）。
+     *
+     * <p><b>为什么需要它</b>：注入是「有限预算的资源分配」，正文层要按 {@code planContextQuota}
+     * 均分字符预算，清单也要占 prompt。会话里堆了 40 份附件时，全量参与只会让每份都拿到几百字
+     * ——谁都没读全，等于都没读。这个数决定「一次注入最多照顾几份」。</p>
+     *
+     * <p><b>为什么不另立一套数字（判据 4）</b>：拆解期快照
+     * （{@code DecomposeContextSnapshotRenderer#MAX_ATTACHMENTS}）展示的是同一个「会话附件清单」，
+     * 两处口径必须同值——同一个问题「一次注入看几份附件」，全仓只能有一个答案。故本常量是
+     * <b>唯一事实源</b>，那边引用它。</p>
+     */
+    public static final int MAX_INJECTED_ATTACHMENTS = 20;
+
+    /**
      * 当前模型的上下文窗口（token），用于折算会话附件正文预算（`ATT-7`）。
      *
      * <p>取平台的<b>保守下限</b>而非 per-model 动态值：本类拿不到「本轮用哪个模型」的
@@ -185,24 +201,199 @@ public class ChatAttachmentPromptRenderer {
      * @param targets     模型判定的附件序号（1-based）；null/空 = 不限
      */
     public Rendered render(Long conversationId, String query, List<Long> selectedIds, List<Integer> targets) {
-        List<ChatAttachment> attachments = chatAttachmentService.listByConversation(conversationId);
-        if (attachments == null || attachments.isEmpty()) {
-            return new Rendered(NO_ATTACHMENT, NO_ATTACHMENT, NO_RETRIEVAL);
+        return renderWithMedia(conversationId, query, selectedIds, targets).rendered();
+    }
+
+    /**
+     * 渲染结果 + 本轮媒体引用（`VU-9`）：<b>一次查询</b>产出「三层文本 + 要送模型的图」。
+     *
+     * <p><b>为什么合并成一个入口而不是让调用方再调一个 {@code pickImages}</b>：
+     * 两者共用同一份 {@code listByConversation} 结果与<b>同一个 scope 判定</b>
+     * （「本轮用户点名了哪几张附件」）。分成两次调用就要么查两遍库，要么让调用方自己
+     * 复算一遍 scope——后者必然与 {@link #resolveScope} 漂移，出现「清单里说附件 2 在用、
+     * 但送去看图的却是附件 3」这种无法排查的状态（判据 4）。</p>
+     *
+     * <p><b>为什么媒体引用不塞进 {@link Rendered}</b>：{@code Rendered} 有 3 处既有构造点
+     * （{@code NO_ATTACHMENT} 占位、两条 {@code render} 重载），改它的分量数会波及
+     * 全部既有调用方与本类测试；而媒体是<b>新增的可选消费</b>，用并列 record 承载
+     * 可让老调用方零改动（{@code render(...)} 仍返回原 {@code Rendered}）。</p>
+     */
+    public RenderedWithMedia renderWithMedia(Long conversationId, String query, List<Long> selectedIds,
+                                             List<Integer> targets) {
+        AttachmentSet set = loadInjectedSet(conversationId);
+        List<ChatAttachment> attachments = set.attachments();
+        if (attachments.isEmpty()) {
+            return new RenderedWithMedia(
+                    new Rendered(NO_ATTACHMENT, NO_ATTACHMENT, NO_RETRIEVAL), List.of());
         }
         Set<Integer> scope = resolveScope(attachments, selectedIds, targets);
-        return new Rendered(buildManifest(attachments), buildContext(attachments, scope),
+        Rendered rendered = new Rendered(
+                withTruncationNote(buildManifest(attachments), set),
+                withTruncationNote(buildContext(attachments, scope), set),
                 buildRetrieval(conversationId, query, attachments, scope));
+        return new RenderedWithMedia(rendered, pickMediaRefs(attachments, scope));
+    }
+
+    /**
+     * 注入侧要看的附件集合 + 「是否发生截断」的事实（`G-046`）。
+     *
+     * @param attachments 参与注入的附件，<b>按上传先后排列</b>（= 供模型读的顺序）
+     * @param total       会话内活跃附件总数（含被截断掉的）
+     */
+    private record AttachmentSet(List<ChatAttachment> attachments, int total) {
+
+        boolean truncated() {
+            return total > attachments.size();
+        }
+    }
+
+    /**
+     * 装载注入侧的附件集合：<b>超过上限时取最新的 N 份，再按上传先后正序排列</b>（`G-046`）。
+     *
+     * <p><b>原实现的缺陷</b>：{@code listByConversation} 是 {@code ORDER BY create_time ASC}，
+     * 而下游按序截断到上限 ⇒ 会话附件超过 5 张（媒体）/ 20 件（清单）后，
+     * <b>用户后传的永远送不到模型</b>，被保留的恰恰是最早那几张。用户说「看这张图」指的是刚传的，
+     * 结果模型看到的是三小时前的第一张——且没有任何提示。</p>
+     *
+     * <p><b>为什么「倒序取 N 再正序排」而不是「直接倒序注入」</b>：取谁由「最新」决定，
+     * 读的顺序仍应是「用户上传的先后」——清单里的序号 {@code 附件1/2/3} 与
+     * {@code attachment_targets} 的 1-based 序号、以及用户在界面上看到的顺序必须对得上。
+     * 若把倒序结果直接注入，模型说的「附件 1」会是用户眼里最后那份，序号全错位。</p>
+     *
+     * <p><b>为什么不截断就整表读</b>：本方法只在<b>确有截断</b>时才走「倒序取 N」的窄查询；
+     * 未超限（绝大多数会话）仍走原查询，行为与改造前完全一致。</p>
+     */
+    private AttachmentSet loadInjectedSet(Long conversationId) {
+        List<ChatAttachment> all = chatAttachmentService.listByConversation(conversationId);
+        if (all == null || all.isEmpty()) {
+            return new AttachmentSet(List.of(), 0);
+        }
+        if (all.size() <= MAX_INJECTED_ATTACHMENTS) {
+            return new AttachmentSet(all, all.size());
+        }
+        // 超限：只保留最新 N 份（窄查询，SQL 层 LIMIT），再翻回上传正序供清单 / 序号使用
+        List<ChatAttachment> latest = chatAttachmentService
+                .listLatestByConversation(conversationId, MAX_INJECTED_ATTACHMENTS);
+        List<ChatAttachment> ordered = new ArrayList<>(latest);
+        Collections.reverse(ordered);
+        log.info("会话附件超过注入上限，保留最新 N 份: conversationId={}, total={}, injected={}, droppedOldest={}",
+                conversationId, all.size(), ordered.size(), all.size() - ordered.size());
+        return new AttachmentSet(List.copyOf(ordered), all.size());
+    }
+
+    /**
+     * 在清单 / 正文层末尾显式声明「共 M 件，此处只有最新 N 件」（`G-046`）。
+     *
+     * <p><b>为什么必须写出来</b>：不声明的话模型会以为清单就是全部，用户问「一共传了几份」
+     * 或「最早那份写了什么」时它会照着残缺清单编答案。截断本身可接受（预算有限），
+     * <b>静默截断不可接受</b>。</p>
+     */
+    private static String withTruncationNote(String text, AttachmentSet set) {
+        if (!set.truncated()) {
+            return text;
+        }
+        return text + "\n\n（注：本会话共 " + set.total() + " 份附件，此处只含最新的 "
+                + set.attachments().size() + " 份；更早的 "
+                + (set.total() - set.attachments().size())
+                + " 份未注入，如需请用户单独指出或重新上传）";
+    }
+
+    /**
+     * 从本轮作用域内挑出<b>图片</b>附件，产出媒体引用（不读字节，`VU-9` / 不变量 I-3）。
+     *
+     * <p><b>为什么只挑图片、不挑音视频</b>：与 {@code AttachmentMediaAssembler} 同一条理由——
+     * 在用模型的 {@code capabilities.input} 只声明 {@code text/image}，把音视频塞进消息会被
+     * provider 直接拒绝（400）。判定复用 {@link com.helloai.core.shared.util.AttachmentContentPolicy#isMedia}
+     * 的图片子集语义（{@code image/*} 前缀，扩展名兜底），<b>不在这里另写扩展名表</b>。</p>
+     *
+     * <p><b>不看 {@code parseStatus}</b>：图片的 {@code parseStatus} 必然是 {@code SKIPPED}
+     * （无解析器），那正是本项要绕开的状态——若要求 {@code READY} 才能送图，
+     * 这个功能永远不会有输入。</p>
+     */
+    private List<MediaRef> pickMediaRefs(List<ChatAttachment> attachments, Set<Integer> scope) {
+        List<MediaRef> refs = new ArrayList<>();
+        for (int index : scope) {
+            ChatAttachment a = attachments.get(index);
+            if (!AttachmentContentPolicy.isMedia(a.getMimeType(), a.getFileName())) {
+                continue;
+            }
+            // 音视频同属 isMedia 族，只取图片子集：无 image/* 前缀且扩展名不是图片时跳过。
+            if (!isImageAttachment(a)) {
+                continue;
+            }
+            refs.add(MediaRef.ofChatAttachment(a.getId(), a.getFileName(), a.getMimeType(), a.getFileSize()));
+        }
+        // `G-046`：媒体引用必须「最新在前」。
+        // 下游 {@code AttachmentMediaAssembler.loadMerged} 按自己的 {@code MAX_INLINE_COUNT}
+        // 顺序取前 N 条即停（那是<b>请求</b>级预算，本类不该另立一个副本去对齐它——判据 4）。
+        // 既然截断发生在下游、且只能「取前 N」，那本方法唯一能保证保新的办法就是
+        // 把最新的排在前面：N 是多少都不影响结果正确性，多传的尾部自然被丢弃。
+        // 若照上传正序输出，会话 8 图时下游取前 5 恰好是最旧的 5 张——同一缺陷的另一半。
+        Collections.reverse(refs);
+        return List.copyOf(refs);
+    }
+
+    /**
+     * 是否图片附件：{@code image/*} 前缀优先，缺失 / octet-stream 时按扩展名兜底。
+     *
+     * <p><b>与 {@code AttachmentMediaAssembler#isInlineImage} 的关系</b>：那条判据的入参是
+     * agent 域的 {@code AttachmentRef}（task 域产物快照），本条入参是 planner 域实体，
+     * 类型不同无法直接复用；但<b>判定逻辑必须同源</b>——所以这里只做「按 mime 前缀 /
+     * 扩展名判图片」这一最小动作，扩展名集合仍取自
+     * {@link AttachmentContentPolicy}，不新造一个字面量表。</p>
+     */
+    private static boolean isImageAttachment(ChatAttachment a) {
+        String mime = a.getMimeType() != null ? a.getMimeType().toLowerCase(Locale.ROOT) : "";
+        if (!mime.isEmpty() && !"application/octet-stream".equals(mime)) {
+            return mime.startsWith("image/");
+        }
+        // 兜底：AttachmentContentPolicy 的媒体扩展名集里属于图片的那部分
+        String ext = AttachmentContentPolicy.extensionOf(a.getFileName());
+        return IMAGE_EXTENSIONS.contains(ext);
+    }
+
+    /**
+     * 图片扩展名集：<b>只此一处</b>，供 MIME 缺失 / octet-stream 时兜底。
+     *
+     * <p>为什么不直接用 {@code AttachmentContentPolicy.MEDIA_EXTENSIONS}：那是图片+音频+视频
+     * 的总族，直接拿来会把 {@code .mp4} 也判成可送图。</p>
+     */
+    private static final Set<String> IMAGE_EXTENSIONS = Set.of(
+            "png", "jpg", "jpeg", "gif", "webp", "bmp");
+
+    /**
+     * 渲染结果 + 媒体引用。
+     *
+     * @param rendered 三层文本（清单 / 正文 / 检索）
+     * @param mediaRefs 本轮要送模型的图片引用（绝不为 {@code null}；无图时为空表）
+     */
+    public record RenderedWithMedia(Rendered rendered, List<MediaRef> mediaRefs) {
     }
 
     /**
      * 统一计算「本轮参与注入的附件下标集」：显式勾选优先，回落到模型判定的序号。
      *
-     * <p>两种信号都可能失效（勾选的 id 不属于本会话、模型给的序号越界），
-     * 失效时一律回退全量——宁可多给，不要因为一个错误标识就让用户看不到附件。</p>
+     * <p><b>三种输入必须区分（`G-045`）</b>：</p>
+     * <ul>
+     *   <li>{@code selectedIds == null} ⇒ <b>未指定</b>，走回落（模型序号 → 全量）；</li>
+     *   <li>{@code selectedIds == []} ⇒ <b>用户明确一个都不要</b>，返回空集，<b>绝不回落全量</b>。
+     *       原实现用 {@code !isEmpty()} 判分支，把空集当成了「未指定」，于是用户把附件全点掉
+     *       反而得到全部注入——语义完全反转；</li>
+     *   <li>{@code selectedIds} 非空但无一匹配本会话 ⇒ 标识失效（跨会话残留 id / 前端 bug），
+     *       回退并 warn，此时回落是<b>容错</b>而非语义。</li>
+     * </ul>
+     *
+     * <p>为什么「失效回落」和「明确空集」要区别对待：前者是错误输入，容忍它不给用户添堵；
+     * 后者是<b>有效意图</b>，尊重它才是正确行为。把两者混为一谈，用户就再也无法表达
+     * 「这一轮别管这些文件」。</p>
      */
     private Set<Integer> resolveScope(List<ChatAttachment> attachments, List<Long> selectedIds,
                                       List<Integer> targets) {
-        if (selectedIds != null && !selectedIds.isEmpty()) {
+        if (selectedIds != null) {
+            // 明确空集：用户已排除全部附件（前端把附件全点掉就是这一态）
+            if (selectedIds.isEmpty()) {
+                return Set.of();
+            }
             Set<Integer> picked = new LinkedHashSet<>();
             for (int i = 0; i < attachments.size(); i++) {
                 Long id = attachments.get(i).getId();
@@ -478,6 +669,14 @@ public class ChatAttachmentPromptRenderer {
 
     /** 正文：按预算逐份注入，超预算显式标注。 */
     private String buildContext(List<ChatAttachment> attachments, Set<Integer> inScope) {
+        // `G-045`：明确空集 ≠ 全量回落。此时必须显式声明「用户排除了全部」，否则逐份渲染
+        // 出来的都是「本轮未涉及该附件：提问指向的是其他附件」——那句话在空集场景下是
+        // 误导：根本没有「其他附件」，模型会以为自己在看一份不完整的清单。
+        if (attachments != null && !attachments.isEmpty() && inScope.isEmpty()) {
+            return "（用户本轮已排除全部 " + attachments.size()
+                    + " 份附件：不要引用任何附件内容，也不要猜测文件里写了什么；"
+                    + "如确实需要，请明确请用户重新勾选对应文件）";
+        }
         int totalLimit = AttachmentContentPolicy.resolveChatAttachmentTotalLimit(contextWindowTokens);
         int perFileLimit = Math.min(AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT, totalLimit);
         int[] quota = planContextQuota(attachments, totalLimit, perFileLimit, inScope);
@@ -495,11 +694,16 @@ public class ChatAttachmentPromptRenderer {
             }
             String text = a.getExtractedText();
             if (a.getParseStatus() != ChatAttachmentParseStatus.READY || text == null || text.isBlank()) {
-                sb.append(header).append('\n')
-                        .append("（无可用正文")
-                        .append(a.getParseError() == null || a.getParseError().isBlank()
+                // ★VU-9：图片的「无正文」是设计如此（正文通道只走文本），不是缺陷。
+                // 若沿用「（无可用正文：…）」会让模型判定「这张图读不出、当它不存在」，
+                // 与已经送出的图像消息自相矛盾。
+                String fallback = a.getParseStatus() == ChatAttachmentParseStatus.SKIPPED && isImageAttachment(a)
+                        ? "（图片无文本正文：图像内容已另经图像通道送入，请直接依据图像作答）"
+                        : "（无可用正文"
+                          + (a.getParseError() == null || a.getParseError().isBlank()
                                 ? "" : "：" + a.getParseError())
-                        .append("）\n\n");
+                          + "）";
+                sb.append(header).append('\n').append(fallback).append("\n\n");
                 continue;
             }
             int granted = quota[i];
@@ -634,8 +838,24 @@ public class ChatAttachmentPromptRenderer {
             case READY -> "可读";
             case PENDING, PARSING -> "解析中（本轮可能还读不到正文）";
             case FAILED -> "解析失败";
-            case SKIPPED -> "需识别（无正文）";
+            // ★VU-9 三态（不变量 I-4）：图片走媒体通道送出，正文为空是<b>设计如此</b>，
+            // 不能再说「需识别（无正文）」——那句话会让模型以为图看不到，进而对着一张
+            // 已经送到的图说「我看不到图片」。这正是 OpenCode #60736 的成因形态。
+            case SKIPPED -> mediaStatusText(a);
         };
+    }
+
+    /**
+     * {@code SKIPPED} 的状态词：按「是否图片」分两态（第三态「明文看不到」由
+     * {@code AgentChatClientService} 在真正发请求时决定，见下）。
+     *
+     * <p><b>为什么本层不能直接写「已随本轮消息提供图像」</b>：本层不知道实际调用的模型
+     * 能不能看图（模型可能在这之后再被钉住/覆盖）。所以这里只写<b>不含可见性断言</b>的中性
+     * 陈述——「图片，另经图像通道送入」——可见性由请求装配层按实际模型判定后补，
+     * 那里才是唯一知道真相的位置（判据 4：同一事实只留一个事实源）。</p>
+     */
+    private static String mediaStatusText(ChatAttachment a) {
+        return isImageAttachment(a) ? "图片（另经图像通道送入）" : "音视频（正文不可提取）";
     }
 
     private static String sizeText(Long bytes) {

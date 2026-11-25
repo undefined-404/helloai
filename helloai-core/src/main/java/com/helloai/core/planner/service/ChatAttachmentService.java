@@ -63,6 +63,19 @@ public interface ChatAttachmentService {
     /** 按会话列附件（Prompt 注入用；不做鉴权，用方已具备会话上下文）。 */
     List<ChatAttachment> listByConversation(Long conversationId);
 
+    /**
+     * 按会话列<b>最新</b> {@code limit} 份附件，按<b>上传倒序</b>返回（`G-046`）。
+     *
+     * <p><b>为什么与 {@link #listByConversation} 分成两个方法</b>：两者服务相反目的——
+     * 前者供前端轮询与会话管理（用户看着自己传的第 1、2、3 份，倒序会让人以为列表坏了）；
+     * 后者供<b>会截断的注入侧</b>（截断时该保留「用户后传的那几张」，因为「看这张图」
+     * 指的一定是刚传的）。同一份数据两个正确方向，只能两条查询。</p>
+     *
+     * @param conversationId 会话 ID；{@code null} 返回空表
+     * @param limit          最多返回条数（&le; 0 返回空表，不静默当成无限）
+     */
+    List<ChatAttachment> listLatestByConversation(Long conversationId, int limit);
+
     /** 窄查询（PA-5）：按上传/生成用户列会话附件（conversation 源「我的产物」），按上传倒序。 */
     List<ChatAttachment> listByUploaderUserId(Long userId, int limit);
 
@@ -77,8 +90,44 @@ public interface ChatAttachmentService {
     /** 取附件，不存在抛 {@code BizException}(404)。 */
     ChatAttachment getByIdRequired(Long id);
 
-    /** 软删 + 事务提交后 best-effort 回收对象；已删/不存在同样返回成功（幂等，重试安全）。 */
+    /**
+     * <b>硬删单条</b>：物理删行 + 事务提交后 best-effort 回收对象；已删/不存在同样返回成功
+     * （幂等，重试安全）。
+     *
+     * <p><b>为什么是物理删，不是软删（`G-041`）</b>：{@code V121__chat_attachment.sql} 建表注释
+     * 原文即「会话附件随会话删除回收」，本表生命周期与子任务产物的「长期留存」本来就不同。
+     * 留 {@code deleted=1} 的行会永久毒化存储对账——{@code selectStorageRefAllIncludingDeleted}
+     * 把软删行算作「对象仍被引用」，而对象此时已 purge，于是这条记录在对账里**永久报 dangling**，
+     * 且没有任何后续动作能自愈。</p>
+     *
+     * <p><b>对象回收仍在提交后</b>（不回滚可恢复性）：回滚时不能对象已删而行还在。</p>
+     */
     void delete(Long id);
+
+    /**
+     * <b>硬删整个会话的附件</b>（会话删除级联，`G-041`）：物理删行（含历史 {@code deleted=1}
+     * 残留）+ 事务提交后批量回收对象。
+     *
+     * <p><b>为什么单开一个方法而不在调用方循环 {@link #delete(Long)}</b>：</p>
+     * <ul>
+     *   <li><b>性能</b>：每份附件一条 delete + 一次护栏查询 = 会话 20 份就 40 次往返，
+     *       而这里可以 2 条 SQL + 1 次批量护栏；</li>
+     *   <li><b>残留行</b>：{@link #delete(Long)} 只能按 id 处理现存行，看不到「历史软删、
+     *       对象早已 purge」的残留行；而整片清理才可能顺带清掉它们；</li>
+     *   <li><b>正确性</b>：行删除与对象回收必须基于**同一份**行清单（先捞后删），
+     *       分开调两次就会在两次之间出现「捞到的行已变」的窗口。</li>
+     * </ul>
+     *
+     * <p><b>幂等</b>：会话无附件、或附件已全删，均返回 0，不抛异常——调用方（会话删除）
+     * 在重试或半截失败后重入时不该因此失败。</p>
+     *
+     * <p><b>护栏</b>：回收前查子任务侧是否仍活跃引用同一 {@code objectKey}（同 objectKey
+     * 双行方案，`G-047`），命中即跳过该对象——会话删图不得打断仍在执行的子任务。</p>
+     *
+     * @param conversationId 会话 ID（{@code null} 直接返回 0，不静默当全表）
+     * @return 物理删除的附件行数
+     */
+    int deleteByConversation(Long conversationId);
 
     /**
      * 登记一份<b>对话产物</b>（技能执行生成的文件）。

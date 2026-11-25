@@ -230,7 +230,7 @@ class WorkbenchQueryServiceImplTest {
     void 模型候选集直接转发_不在本域重算有效性() {
         List<LlmProviderCatalogService.ModelOption> options = List.of(
                 new LlmProviderCatalogService.ModelOption("deepseek", "DeepSeek",
-                        "deepseek-v4-flash", "deepseek:deepseek-v4-flash", true));
+                        "deepseek-flash", "deepseek:deepseek-flash", true));
         when(llmProviderCatalogService.listModelOptions()).thenReturn(options);
 
         assertEquals(options, service.modelOptions());

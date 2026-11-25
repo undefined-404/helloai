@@ -9,6 +9,7 @@ import com.helloai.core.planner.attachment.ContentKind;
 import com.helloai.core.planner.entity.ChatAttachment;
 import com.helloai.core.planner.mapper.ChatAttachmentMapper;
 import com.helloai.core.planner.service.ChatAttachmentService;
+import com.helloai.core.system.port.ArtifactReferencePort;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.system.storage.StoredArtifact;
 import lombok.RequiredArgsConstructor;
@@ -22,7 +23,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -64,6 +67,11 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
     private final ArtifactStorage artifactStorage;
     private final ChatAttachmentProperties properties;
     private final ChatAttachmentParseWorker parseWorker;
+    /**
+     * 跨表回收护栏（G-047）：回收会话附件对象前查 {@code attachment} 表是否仍活跃引用同一 objectKey。
+     * 走 system 域端口而非直捅 task 域 Mapper（§6 依赖方向 + 判据 16 端口归属看方向）。
+     */
+    private final ArtifactReferencePort artifactReferencePort;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -184,6 +192,14 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
     }
 
     @Override
+    public List<ChatAttachment> listLatestByConversation(Long conversationId, int limit) {
+        if (conversationId == null || limit <= 0) {
+            return List.of();
+        }
+        return baseMapper.listLatestByConversationId(conversationId, limit);
+    }
+
+    @Override
     public List<ChatAttachment> listByUploaderUserId(Long userId, int limit) {
         return userId == null || limit <= 0 ? List.of()
                 : baseMapper.listByUploaderUserId(userId, limit);
@@ -213,11 +229,41 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
             log.info("会话附件删除跳过（不存在或已删，幂等）: id={}", id);
             return;
         }
-        removeById(id);
+        // `G-041`：物理删行。getById 已按 @TableLogic 过滤掉 deleted=1 的行，
+        // 走到这里的必然是活跃行；用 Mapper 自定义 DELETE 绕开内置软删改写。
+        baseMapper.physicalDeleteById(id);
         // 对象回收放提交后：回滚时不能把对象删掉（DB 行还在，对象却没了 = 僵尸附件）
-        afterCommit(() -> purgeObjectQuietly(attachment));
+        afterCommit(() -> purgeObjects(List.of(attachment)));
         log.info("会话附件删除: id={}, conversationId={}, fileName={}",
                 id, attachment.getConversationId(), attachment.getFileName());
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>顺序不能换</b>：先捞引用 → 再物理删行 → 提交后回收。反过来（先删行再捞）就捞不到
+     * 任何东西，对象会全部滞留成孤儿；先回收再删行则会制造「对象没了、行还在」的僵尸状态
+     * （事务回滚后无法恢复字节）。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int deleteByConversation(Long conversationId) {
+        if (conversationId == null) {
+            // 不静默降级为「全表」：这是级联删除路径，误传 null 会删掉所有会话的附件
+            log.warn("会话附件整片删除跳过（conversationId 为空）");
+            return 0;
+        }
+        // 含 deleted=1 残留行，与 physicalDeleteByConversationId 同口径（少捞一行=那个对象永不回收）
+        List<ChatAttachment> refs = baseMapper.selectPurgeRefsByConversationId(conversationId);
+        int removed = baseMapper.physicalDeleteByConversationId(conversationId);
+        if (refs == null || refs.isEmpty()) {
+            log.info("会话附件整片删除：该会话无附件行: conversationId={}", conversationId);
+            return removed;
+        }
+        afterCommit(() -> purgeObjects(refs));
+        log.info("会话附件整片删除: conversationId={}, rows={}, purgeCandidates={}",
+                conversationId, removed, refs.size());
+        return removed;
     }
 
     @Override
@@ -364,13 +410,82 @@ public class ChatAttachmentServiceImpl extends ServiceImpl<ChatAttachmentMapper,
         }
     }
 
-    /** 对象回收：失败只告警——删除语义已由软删保证，对象残留交给存储对账兜底。 */
-    private void purgeObjectQuietly(ChatAttachment attachment) {
+    /**
+     * 批量对象回收：护栏判定一次、逐个删对象（`G-041` 由单条扩为整片）。
+     *
+     * <p><b>护栏（G-047）</b>：回收前必须确认没有<b>子任务产物行</b>仍指向同一 {@code objectKey}。
+     * {@code chat_attachment} 与 {@code attachment} 共用同一个桶，一旦按「同 objectKey 双行」
+     * 把主任务图片引用给子任务，同一个对象就被两张表同时指向——此时会话里删一张图若直接
+     * {@code removeObject}，子任务正在引用的字节当场消失，产物审计链路断裂且不可追溯。</p>
+     *
+     * <p><b>为什么护栏查询提到循环外（一次批量查）</b>：{@code listActiveObjectKeysIn} 收的是
+     * <b>候选 key 集合</b>，本来就是批量接口。逐条查会让 20 份附件的会话跑 20 次往返，
+     * 而结论完全等价（同一个方法、同一张表、同一个 {@code deleted=0} 口径）。</p>
+     *
+     * <p><b>fail-safe（三层，全部不得冒泡）</b>：</p>
+     * <ul>
+     *   <li>①<b>护栏查询失败</b> ⇒ 保守跳过<b>本轮全部</b>回收（宁可不删，也不可在护栏失效下
+     *       误删共享对象）。注意这里跳过的是整批而非单条——护栏查不出来时，任何一条都可能
+     *       正被引用，逐条「试删」等于赌运气；</li>
+     *   <li>②<b>单对象删除失败</b> ⇒ 只影响该对象，继续其余（行已删，留对账兜底）；</li>
+     *   <li>③<b>绝不抛出</b>：本方法只在 {@code afterCommit} 里跑，抛异常会污染已提交事务的响应
+     *       （接口 500 但数据其实一致）。</li>
+     * </ul>
+     *
+     * <p><b>日志必须带 {@code bucket} + {@code objectKey}</b>：残留对象没有这两个字段就无法排查，
+     * 这是 `G-047` 复盘时点名的缺口。</p>
+     *
+     * @param attachments 待回收对象对应的附件行（可为 null / 空）
+     */
+    private void purgeObjects(List<ChatAttachment> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return;
+        }
+        // 只保留「有 objectKey 且存储实现支持该地址」的行：外部 https:// 地址不归我们删
+        List<ChatAttachment> candidates = new ArrayList<>(attachments.size());
+        Set<String> candidateKeys = new LinkedHashSet<>();
+        for (ChatAttachment attachment : attachments) {
+            if (attachment == null) {
+                continue;
+            }
+            String objectKey = attachment.getObjectKey();
+            if (objectKey == null || objectKey.isBlank()) {
+                continue;
+            }
+            if (!artifactStorage.supports(attachment.getStorageUrl())) {
+                continue;
+            }
+            candidates.add(attachment);
+            candidateKeys.add(objectKey);
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+        Set<String> stillReferenced;
         try {
-            artifactStorage.removeObject(attachment.getBucketName(), attachment.getObjectKey());
+            stillReferenced = candidateKeys.isEmpty()
+                    ? Set.of()
+                    : new HashSet<>(artifactReferencePort.listActiveObjectKeysIn(candidateKeys));
         } catch (RuntimeException e) {
-            log.warn("会话附件对象回收失败（不影响删除，交给对账兜底）: id={}, bucket={}, key={}, err={}",
-                    attachment.getId(), attachment.getBucketName(), attachment.getObjectKey(), e.toString());
+            // 护栏查询失败：保守跳过整批。绝不冒泡——afterCommit 阶段抛异常会污染已提交事务的响应
+            log.error("会话附件对象回收护栏查询失败，保守跳过本轮回收（best-effort）: candidates={}, keys={}",
+                    candidates.size(), candidateKeys, e);
+            return;
+        }
+        for (ChatAttachment attachment : candidates) {
+            String objectKey = attachment.getObjectKey();
+            String bucket = attachment.getBucketName();
+            if (stillReferenced.contains(objectKey)) {
+                log.info("对象仍被子任务产物引用，跳过回收: id={}, bucket={}, objectKey={}",
+                        attachment.getId(), bucket, objectKey);
+                continue;
+            }
+            try {
+                artifactStorage.removeObject(bucket, objectKey);
+            } catch (RuntimeException e) {
+                log.warn("会话附件对象回收失败（不影响删除，交给对账兜底）: id={}, bucket={}, key={}, err={}",
+                        attachment.getId(), bucket, objectKey, e.toString());
+            }
         }
     }
 

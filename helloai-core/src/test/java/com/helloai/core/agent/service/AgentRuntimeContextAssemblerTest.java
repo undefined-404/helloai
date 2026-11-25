@@ -23,12 +23,19 @@ import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.AttachmentRef;
+import com.helloai.core.agent.port.ChatAttachmentMediaPort;
+import com.helloai.core.agent.port.ConstraintRefSnapshot;
+import com.helloai.core.agent.port.ConversationMediaRefPort;
+import com.helloai.core.agent.port.ConversationMediaRefPort.ScopedMediaRefs;
+import com.helloai.core.agent.port.MediaRef;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskRunningSpecPort;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.port.UncertaintySnapshot;
 import com.helloai.core.agent.support.AgentChatModelResolver;
+import com.helloai.core.agent.support.AttachmentMediaAssembler;
+import com.helloai.core.agent.support.ImageInputCapabilityPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -54,6 +61,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -99,6 +107,25 @@ class AgentRuntimeContextAssemblerTest {
     @Mock
     private AttachmentPort attachmentPort;
 
+    /** VU-9：装配器只装 task 域产物图，本 mock 不被触达（由构造参数一致性要求带入）。 */
+    @Mock
+    private ChatAttachmentMediaPort chatAttachmentMediaPort;
+
+    /** VU-8：任务关联会话的图片引用（执行面的用户输入源）。 */
+    @Mock
+    private ConversationMediaRefPort conversationMediaRefPort;
+
+    /**
+     * `VU-10`：图片能力闸（唯一判定在 {@code ImageInputCapabilityPolicy}）。
+     *
+     * <p><b>默认桩成「支持」</b>：本类绝大多数用例关心的是「媒体装载与合并」，与能力位正交。
+     * 若不桩，Mockito 对 boolean 默认返回 false ⇒ 所有用例都走降级分支、既有的
+     * {@code ConversationMedia} 断言会集体失败（那不是回归，是桩缺失）。能力闸本身
+     * 由 {@code ImageCapabilityGate} 嵌套类专门断言。</p>
+     */
+    @Mock
+    private ImageInputCapabilityPolicy imageInputCapabilityPolicy;
+
     @Mock
     private SubTaskQueryPort subTaskQueryPort;
 
@@ -131,8 +158,14 @@ class AgentRuntimeContextAssemblerTest {
         assembler = new AgentRuntimeContextAssembler(properties,
                 new AgentChatModelResolver(agentChatClientService, agentLlmCredentialResolver, properties),
                 taskTimelinePort, taskRunningSpecPort, agentSkillSpecService, agentQualityProfileService,
-                agentSessionService, conversationService, attachmentPort, subTaskQueryPort,
+                agentSessionService, conversationService, attachmentPort,
+                new AttachmentMediaAssembler(attachmentPort, chatAttachmentMediaPort),
+                conversationMediaRefPort, imageInputCapabilityPolicy, subTaskQueryPort,
                 agentEventRecorder, agentEventQueryService, sensitiveScanRecorder, executionProgressRecorder);
+        // 默认「模型支持看图」：让既有媒体装载用例不受能力闸干扰（能力闸另由专门用例覆盖）。
+        // 必须 lenient —— 状态守卫 / fail-close 等用例根本不走到媒体装载，严格桩会报
+        // UnnecessaryStubbing 而整类红。
+        lenient().when(imageInputCapabilityPolicy.supportsImageInput(any())).thenReturn(true);
     }
 
     // #region 状态守卫
@@ -183,6 +216,8 @@ class AgentRuntimeContextAssemblerTest {
             subTask.setDeliverable("report.md");
             subTask.setAcceptance("全部通过");
             subTask.setConstraints("不要动 X");
+            subTask.setConstraintRefs(List.of(
+                    new ConstraintRefSnapshot("DOCUMENT", "code-style", List.of("s5", "s6"))));
             subTask.setUncertainties(List.of(
                     new UncertaintySnapshot("ASSUMPTION", "假设可用", true),
                     new UncertaintySnapshot("UNCONFIRMED", "接口待确认", false)));
@@ -213,6 +248,7 @@ class AgentRuntimeContextAssemblerTest {
                     .contains("交付物要求: report.md")
                     .contains("验收标准: 全部通过")
                     .contains("执行约束（不许改的事）: 不要动 X")
+                    .contains("约束文档引用（正文用 internal_load_constraint_doc 读取）: DOCUMENT:code-style[scope: s5,s6]")
                     .contains("[ASSUMPTION] 假设可用（可自行验证，推翻即上报）")
                     .contains("[UNCONFIRMED] 接口待确认（须先验证再动手，无法验证则 BLOCKED 上报）")
                     .contains("验收事实回源")
@@ -310,6 +346,7 @@ class AgentRuntimeContextAssemblerTest {
                     .doesNotContain("交付物要求: ")
                     .doesNotContain("验收标准: ")
                     .doesNotContain("执行约束（不许改的事）")
+                    .doesNotContain("约束文档引用")
                     .doesNotContain("不确定性申报")
                     .doesNotContain("## 依赖产出参考")
                     .doesNotContain("## 执行恢复上下文")
@@ -916,6 +953,24 @@ class AgentRuntimeContextAssemblerTest {
                 new LocalProcessEnvironment());
     }
 
+    /**
+     * 桩：会话图片端口按「作用域取到了」返回（`G-042`）。
+     *
+     * <p>等价于「本子任务声明了附件且命中」——这是绝大多数用例想表达的语义。需要表达
+     * <b>回落</b>（未声明 / 声明失效）的用例必须显式用 {@link #stubFallbackImages}，
+     * 因为回落会往 prompt 追加一句说明，用它当默认桩会让不相关的用例也带上那句话。</p>
+     */
+    private void stubScopedImages(MediaRef... refs) {
+        when(conversationMediaRefPort.listScopedImages(any(), any(), any()))
+                .thenReturn(ScopedMediaRefs.ofScoped(List.of(refs)));
+    }
+
+    /** 桩：会话图片端口按「回落会话全量」返回（`G-042`），带一句回落原因。 */
+    private void stubFallbackImages(String note, MediaRef... refs) {
+        when(conversationMediaRefPort.listScopedImages(any(), any(), any()))
+                .thenReturn(ScopedMediaRefs.ofFallback(List.of(refs), note));
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> captureTimelinePayload(String eventType) {
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
@@ -957,6 +1012,181 @@ class AgentRuntimeContextAssemblerTest {
         return agent;
     }
 
+    // #region `VU-8` 会话图片（执行面的用户输入源）
+
+    @Nested
+    @DisplayName("VU-8 会话图片：用户上传的图必须进 AgentContext.media")
+    class ConversationMedia {
+
+        @Test
+        @DisplayName("端口返回会话图 ⇒ 装载进 media 且带正确 MIME（端到端到请求体的前一跳）")
+        void shouldIncludeConversationImages() {
+            stubScopedImages(com.helloai.core.agent.port.MediaRef.ofChatAttachment(
+                    88L, "shot.png", "image/png", 10L));
+            when(chatAttachmentMediaPort.loadChatAttachmentContent(88L)).thenReturn(new byte[]{1, 2, 3});
+
+            AgentContext ctx = invokeAssemble(subTask(), agent(), List.of(), List.of());
+
+            assertThat(ctx.getMedia()).hasSize(1);
+            assertThat(ctx.getMedia().get(0).getMimeType().toString()).isEqualTo("image/png");
+            assertThat(ctx.getMedia().get(0).getName()).isEqualTo("shot.png");
+        }
+
+        @Test
+        @DisplayName("端口返回空表 ⇒ media 为空（纯文本链路行为与改造前逐字一致）")
+        void shouldBeEmptyWhenNoConversationImages() {
+            stubScopedImages();
+
+            assertThat(invokeAssemble(subTask(), agent(), List.of(), List.of()).getMedia()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("端口实现违约抛异常 ⇒ 降级为无图，不阻断装配（fail-open）")
+        void shouldDegradeWhenPortThrows() {
+            when(conversationMediaRefPort.listScopedImages(any(), any(), any()))
+                    .thenThrow(new IllegalStateException("planner 侧查询失败"));
+
+            AgentContext ctx = invokeAssemble(subTask(), agent(), List.of(), List.of());
+
+            assertThat(ctx.getMedia()).isEmpty();
+            assertThat(ctx.getUserPrompt()).isNotBlank();
+        }
+
+        // ── `G-042`：作用域回落必须在 prompt 里显式说明 ──────────────────
+
+        /**
+         * ★本组两条是 `G-042` 的核心判据：<b>回落不能是静默的</b>。
+         *
+         * <p>只改「取哪几张图」而不告知模型「这些其实是全量」，等于让模型把「看到 8 张」
+         * 当成「这 8 张都与我相关」——那正是本项要修的缺陷换个形式重现。判断「是否回落」
+         * 与「生成说明」出自同一个返回值（{@link ScopedMediaRefs}），所以不可能分叉。</p>
+         */
+        @Test
+        @DisplayName("G-042：端口报告「回落会话全量」⇒ 必须把回落原因追加进 userPrompt")
+        void shouldAppendFallbackNoteWhenScopedFallsBack() {
+            stubFallbackImages("（拆解时未声明本子任务需要哪些附件，已带上会话里全部 2 张图，请自行判断哪几张相关。）",
+                    MediaRef.ofChatAttachment(88L, "a.png", "image/png", 10L),
+                    MediaRef.ofChatAttachment(89L, "b.png", "image/png", 10L));
+            when(imageInputCapabilityPolicy.supportsImageInput(any())).thenReturn(true);
+            when(chatAttachmentMediaPort.loadChatAttachmentContent(any()))
+                    .thenReturn(new byte[]{1, 2, 3});
+
+            AgentContext ctx = invokeAssemble(subTask(), agent(), List.of(), List.of());
+
+            // 图照送（回落不等于不给图）
+            assertThat(ctx.getMedia()).hasSize(2);
+            // 但必须告知：模型要知道「这是全量，不是本子任务专属」
+            assertThat(ctx.getUserPrompt()).contains("未声明本子任务需要哪些附件");
+            assertThat(ctx.getUserPrompt()).contains("请自行判断哪几张相关");
+        }
+
+        @Test
+        @DisplayName("G-042：严格按作用域取到 ⇒ prompt 不得出现任何回落文案（零噪声）")
+        void shouldNotAppendAnyNoteWhenStrictlyScoped() {
+            stubScopedImages(MediaRef.ofChatAttachment(88L, "a.png", "image/png", 10L));
+            when(imageInputCapabilityPolicy.supportsImageInput(any())).thenReturn(true);
+            when(chatAttachmentMediaPort.loadChatAttachmentContent(any()))
+                    .thenReturn(new byte[]{1, 2, 3});
+
+            AgentContext ctx = invokeAssemble(subTask(), agent(), List.of(), List.of());
+
+            assertThat(ctx.getMedia()).hasSize(1);
+            assertThat(ctx.getUserPrompt()).doesNotContain("请自行判断哪几张相关");
+            // ★不能断言 "doesNotContain(\"未声明\")"：执行器 prompt 模板自身就含这句
+            // （「历史兼容行为不得在未声明的情况下「优化」移除」），断言一个模板里本来就有的
+            // 子串会永久假绿——它永远成立，缺陷真出现时也不会转红。
+            assertThat(ctx.getUserPrompt()).doesNotContain("未声明本子任务需要哪些附件");
+        }
+
+        @Test
+        @DisplayName("G-042：能力闸关图与回落说明并存时两段都要在（不许互相覆盖）")
+        void shouldKeepBothNotesWhenBlindAndFallenBack() {
+            when(imageInputCapabilityPolicy.supportsImageInput(any())).thenReturn(false);
+            stubFallbackImages("（拆解时未声明本子任务需要哪些附件，已带上会话里全部 1 张图，请自行判断哪几张相关。）",
+                    MediaRef.ofChatAttachment(88L, "a.png", "image/png", 10L));
+
+            AgentContext ctx = invokeAssemble(subTask(), agent(), List.of(), List.of());
+
+            assertThat(ctx.getMedia()).isEmpty();
+            // 两段说明出自两个独立判定，都必须保留：一段说「本来该看几张」，
+            // 一段说「你看不到图」。互相覆盖会让模型漏掉其中一个事实。
+            assertThat(ctx.getUserPrompt()).contains("请自行判断哪几张相关");
+            assertThat(ctx.getUserPrompt()).contains("无法查看图像内容");
+        }
+    }
+
+    @Nested
+    @DisplayName("VU-10 执行面能力闸：模型不支持图片时不送图且显式告知")
+    class ImageCapabilityGate {
+
+        /**
+         * 能力闸的核心用例：`VU-1` 只让执行器「能」收图，但从未问过「这个模型收不收」。
+         * DB 里 `deepseek-v4-pro` 只声明 `["text"]`，local 默认 `deepseek-flash` 才有
+         * `image` ⇒ 换模型就会把图发给不支持的 provider，换来一个与真实原因无关的 400。
+         */
+        @Test
+        @DisplayName("模型不支持 + 有会话图 ⇒ 一张都不送，且 prompt 追加「看不到图」说明")
+        void shouldDropMediaAndWarnWhenModelCannotSeeImages() {
+            when(imageInputCapabilityPolicy.supportsImageInput(any())).thenReturn(false);
+            stubScopedImages(com.helloai.core.agent.port.MediaRef.ofChatAttachment(
+                    88L, "shot.png", "image/png", 10L));
+
+            AgentContext ctx = invokeAssemble(subTask(), agent(), List.of(), List.of());
+
+            // 图不送（送了必 400）
+            assertThat(ctx.getMedia()).isEmpty();
+            // 但必须显式告知，禁止模型凭文件名编造图片内容（不变量 I-4）
+            assertThat(ctx.getUserPrompt()).contains("无法查看图像内容");
+            assertThat(ctx.getUserPrompt()).contains("推测图片内容");
+            // 能力闸在装载之前 ⇒ 字节一次都不读（省掉无收益的 MinIO / 库往返）
+            verify(chatAttachmentMediaPort, never()).loadChatAttachmentContent(88L);
+        }
+
+        @Test
+        @DisplayName("模型不支持 + 无任何图 ⇒ prompt 逐字不变（不给纯文本链路加噪声）")
+        void shouldNotTouchPromptWhenNoMediaAtAll() {
+            when(imageInputCapabilityPolicy.supportsImageInput(any())).thenReturn(false);
+            stubScopedImages();
+
+            AgentContext ctx = invokeAssemble(subTask(), agent(), List.of(), List.of());
+
+            assertThat(ctx.getMedia()).isEmpty();
+            // 「本来就没图」与「有图但看不到」是两回事，后者才需要告知
+            assertThat(ctx.getUserPrompt()).doesNotContain("无法查看图像内容");
+        }
+
+        @Test
+        @DisplayName("模型支持 ⇒ 正常装载，且 prompt 不被追加任何说明")
+        void shouldLoadNormallyWhenModelSupportsImages() {
+            when(imageInputCapabilityPolicy.supportsImageInput(any())).thenReturn(true);
+            stubScopedImages(com.helloai.core.agent.port.MediaRef.ofChatAttachment(
+                    88L, "shot.png", "image/png", 10L));
+            when(chatAttachmentMediaPort.loadChatAttachmentContent(88L)).thenReturn(new byte[]{1, 2, 3});
+
+            AgentContext ctx = invokeAssemble(subTask(), agent(), List.of(), List.of());
+
+            assertThat(ctx.getMedia()).hasSize(1);
+            assertThat(ctx.getUserPrompt()).doesNotContain("无法查看图像内容");
+        }
+
+        @Test
+        @DisplayName("能力判定与 prompt 追加出自同一次判定（不得「送了图又说看不到」）")
+        void shouldNeverSendMediaAndNoteTogether() {
+            when(imageInputCapabilityPolicy.supportsImageInput(any())).thenReturn(false);
+            stubScopedImages(com.helloai.core.agent.port.MediaRef.ofChatAttachment(
+                    88L, "shot.png", "image/png", 10L));
+
+            AgentContext ctx = invokeAssemble(subTask(), agent(), List.of(), List.of());
+
+            boolean sentMedia = !ctx.getMedia().isEmpty();
+            boolean claimedBlind = ctx.getUserPrompt().contains("无法查看图像内容");
+            // 两种状态互斥：这正是把 media 与 note 收进同一个 record 的目的
+            assertThat(sentMedia && claimedBlind).isFalse();
+        }
+    }
+
+    // #endregion
+
     /**
      * 测试内部可变夹具：保留原 task 实体 {@code SubTask} 的同名 setter，使测试方法体零改动；
      * {@link #toSnapshot()} 以 {@link SubTaskSnapshot#builder()} 产出 agent 域不可变快照
@@ -976,6 +1206,7 @@ class AgentRuntimeContextAssemblerTest {
         private String constraints;
         private List<Long> dependsOn;
         private List<UncertaintySnapshot> uncertainties;
+        private List<ConstraintRefSnapshot> constraintRefs;
         private Integer reworkCount;
         private Integer attemptTotal;
 
@@ -1027,6 +1258,10 @@ class AgentRuntimeContextAssemblerTest {
             this.uncertainties = uncertainties;
         }
 
+        void setConstraintRefs(List<ConstraintRefSnapshot> constraintRefs) {
+            this.constraintRefs = constraintRefs;
+        }
+
         void setReworkCount(Integer reworkCount) {
             this.reworkCount = reworkCount;
         }
@@ -1051,6 +1286,7 @@ class AgentRuntimeContextAssemblerTest {
                     .attemptTotal(attemptTotal)
                     .dependsOn(dependsOn)
                     .uncertainties(uncertainties)
+                    .constraintRefs(constraintRefs)
                     .build();
         }
     }

@@ -123,6 +123,7 @@
 字段约束：
 - `intent_reason` 必须与 `intent` 匹配（见上文表格）
 - `attachment_intent` 必须是 `none` / `answerable` / `needs_external` 之一；无附件时必须为 `none`。缺失或取值非法时系统按「未判定」处理（有附件就注入正文、按 `need_search` 决定是否联网），不会报错但会失去附件优先的效果
+- `attachment_targets` 必须是数组（无则填 `[]`，不要写 `null`、不要写成 `[2]` 这样的字符串）。序号必须是上文「本轮附件」清单里出现的 `附件N` 的 N（1-based），越界序号会被忽略。`[]` 表示「不限 / 全部」，**不是**「一个都不要」——用户若明确要求不参考任何附件，系统会另行传入显式空选择，不需要你用本字段表达
 - `clarification_question`：intent 为 clarify 时必填一个非空的具体澄清问题（用于确认卡展示，如"你希望这套方案覆盖哪些核心场景？"）；intent 为 chat 时必须为 null
 - `web_search.need_search` 为 false 时 `web_search.search_query` 置 null 或省略；搜索模式提示为 ALWAYS_ON 时除外（此时须把优化词放入 `search_query`，见第三节）
 

@@ -234,11 +234,11 @@ public interface AgentService extends IService<Agent> {
     /**
      * 校验同一模型在同一角色下唯一。
      *
-     * <p>规则：deepseek-v4-flash 和 kimi-k3 可同时注册为 Planner；
-     * 但 deepseek-v4-flash 不能注册两个 Planner。</p>
+     * <p>规则：deepseek-flash 和 kimi-k3 可同时注册为 Planner；
+     * 但 deepseek-flash 不能注册两个 Planner。</p>
      *
      * @param providerCode Provider Code（如 deepseek）
-     * @param modelName    模型名称（如 deepseek-v4-flash）
+     * @param modelName    模型名称（如 deepseek-flash）
      * @param role         Agent 角色
      * @param excludeAgentId 排除的 Agent ID（编辑时排除自身）
      * @throws com.helloai.common.base.BizException 当同一角色已存在使用该模型的 Agent 时

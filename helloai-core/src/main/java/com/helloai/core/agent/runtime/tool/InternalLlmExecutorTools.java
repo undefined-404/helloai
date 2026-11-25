@@ -95,6 +95,11 @@ public class InternalLlmExecutorTools {
      * {@code InternalToolCallbacks} 的字段注入绕环）同思路。</p>
      */
     private final ObjectProvider<ToolRegistry> toolRegistryProvider;
+    /**
+     * 约束文档目录（`G-037` 任务约束类型化试点）：{@code internal_list_constraint_docs} /
+     * {@code internal_load_constraint_doc} 的白名单事实源（manifest + docRoot 解析，fail-open）。
+     */
+    private final com.helloai.core.shared.constraint.ConstraintDocCatalog constraintDocCatalog;
 
     /** 自报阻塞前置：必须先读过子任务详情（知情拒绝闸门，见 {@code internal_report_blocked}）。 */
     private static final String TOOL_GET_SUB_TASK_DETAIL = "internal_get_sub_task_detail";
@@ -540,6 +545,96 @@ public class InternalLlmExecutorTools {
             @ToolParam(description = "技能名（来自 internal_list_skills）", required = true) String name) {
         requireInternalChain();
         return agentSkillSpecService.loadBody(name);
+    }
+
+    /**
+     * 列出平台全部可引用的<b>约束文档目录</b>（`G-037`：目录 + 按需取，与技能目录同一范式）。
+     *
+     * <p>返回白名单目录（{@code ref} / {@code title} / {@code summary} / {@code sections} 元数据，
+     * <b>不含正文</b>），正文经 {@code internal_load_constraint_doc} 按 {@code ref}+{@code scope}
+     * 惰性加载。区别于任务注入的引用摘要（只见本任务声明的几条），本工具是模型可见的全量视野。</p>
+     *
+     * @return 约束文档目录列表（按登记顺序），每项含 ref / title / summary / sections（id + title）
+     */
+    @Tool(name = "internal_list_constraint_docs", description = """
+            【何时使用】子任务的「约束文档引用」出现、或需要判断当前任务该按哪份项目契约（如代码规范）执行时调用。
+            返回平台登记的约束文档目录（名称 + 摘要 + 章节清单，不含正文）。
+            【Gotchas】
+            - 返回的是目录，任何一份的章节正文需调 internal_load_constraint_doc 按需加载
+            - ref 是白名单注册名，未登记即不可用
+            - 条目带 sandboxPath / repoPath 时，表示规范副本在工作区内的相对位置（工作区根=/workspace；
+              git 仓库场景为仓库内相对路径）——可在工作区直接 cat / grep；不含这两个字段的条目只能调
+              internal_load_constraint_doc 读取（宿主路径对工作区不可见，不要尝试用任何绝对路径找文档）
+            【相关工具】internal_load_constraint_doc
+            """)
+    public Object internalListConstraintDocs() {
+        requireInternalChain();
+        List<com.helloai.core.shared.constraint.ConstraintDocCatalog.ConstraintDocEntry> entries =
+                constraintDocCatalog.list();
+        if (entries == null || entries.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> catalog = entries.stream().map(e -> {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("ref", e.ref());
+            entry.put("title", e.title());
+            entry.put("summary", e.summary());
+            entry.put("sections", e.sections().stream()
+                    .map(s -> Map.of("id", s.id(), "title", s.title()))
+                    .toList());
+            if (e.sandboxPath() != null && !e.sandboxPath().isBlank()) {
+                entry.put("sandboxPath", e.sandboxPath());
+            }
+            if (e.repoPath() != null && !e.repoPath().isBlank()) {
+                entry.put("repoPath", e.repoPath());
+            }
+            return entry;
+        }).toList();
+        return catalog;
+    }
+
+    /**
+     * 按 {@code ref} + {@code scope} 读取约束文档章节正文（`G-037`：正文惰性取，白名单过滤，fail-open）。
+     *
+     * <p><b>与 {@link #internalLoadSkill} 的差异</b>：本工具按「章节子集」取（CODE_STYLE 151 章节，
+     * 一个任务通常只需 2~3 节）；取不到时返回 {@code unavailable} 结构而非抛异常——模型据此知道
+     * 约束不可用，可降级执行，不允许读文档把执行轮拖垮。</p>
+     *
+     * @param ref   约束文档注册名（必须是 {@code internal_list_constraint_docs} 返回的准确 ref）
+     * @param scope 章节 id 子集（可选；空 = 整文档，非空 = 只取列出的章节以控 token）
+     */
+    @Tool(name = "internal_load_constraint_doc", description = """
+            【何时使用】子任务的约束文档引用指明了 ref（+scope 章节）时，需要读取该约束文档的章节正文再开始执行时调用。
+            【Gotchas】
+            - ref 必须是 internal_list_constraint_docs 返回的准确 ref（白名单严格匹配，不归一化）
+            - scope 为空 = 整文档；非空 = 只取列出的章节（省 token，通常 2~3 节足够）
+            - 文件不可读 / 章节未命中时返回 {unavailable:true, reason}，按 reason 处理后仍可降级执行
+            【相关工具】internal_list_constraint_docs
+            """)
+    public Object internalLoadConstraintDoc(
+            @ToolParam(description = "约束文档 ref（来自 internal_list_constraint_docs）", required = true) String ref,
+            @ToolParam(description = "章节 id 子集（可选；空 = 整文档）", required = false) List<String> scope) {
+        requireInternalChain();
+        com.helloai.core.shared.constraint.ConstraintDocCatalog.ConstraintDocLoadResult result =
+                constraintDocCatalog.load(ref, scope);
+        if (result.unavailable()) {
+            Map<String, Object> unavailable = new LinkedHashMap<>();
+            unavailable.put("ref", result.ref());
+            unavailable.put("unavailable", true);
+            unavailable.put("reason", result.reason());
+            return unavailable;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ref", result.ref());
+        out.put("title", result.title());
+        out.put("sections", result.sections().stream().map(s -> {
+            Map<String, Object> section = new LinkedHashMap<>();
+            section.put("id", s.id());
+            section.put("title", s.title());
+            section.put("content", s.content());
+            return section;
+        }).toList());
+        return out;
     }
 
     /**

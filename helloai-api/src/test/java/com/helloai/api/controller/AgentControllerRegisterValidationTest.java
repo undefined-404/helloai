@@ -133,11 +133,11 @@ class AgentControllerRegisterValidationTest {
     @DisplayName("角色下模型重复 → HTTP 409 + 可读消息")
     void duplicateModelInRoleReturns409() {
         when(agentConfig.isAllowRegistration()).thenReturn(true);
-        doThrow(new BizException(409, "角色 EXECUTOR 已存在使用模型 deepseek-v4-flash 的Agent，同一模型在同一角色下只能注册一个"))
+        doThrow(new BizException(409, "角色 EXECUTOR 已存在使用模型 deepseek-flash 的Agent，同一模型在同一角色下只能注册一个"))
                 .when(agentService).validateModelType(any(), any(), any());
 
         int code = statusOf(() -> controller.register(body(
-                "name", "it-agent", "role", "EXECUTOR", "modelType", "deepseek:deepseek-v4-flash")));
+                "name", "it-agent", "role", "EXECUTOR", "modelType", "deepseek:deepseek-flash")));
 
         assertThat(code).isEqualTo(409);
     }

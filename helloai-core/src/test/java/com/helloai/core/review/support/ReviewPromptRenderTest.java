@@ -4,6 +4,7 @@ import com.helloai.common.config.ReviewProperties;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.agent.support.ImageInputCapabilityPolicy;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -15,6 +16,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -37,7 +39,9 @@ class ReviewPromptRenderTest {
         ReviewEvidenceAssembler assembler = mock(ReviewEvidenceAssembler.class);
         when(assembler.extractExecutionOutput(any())).thenReturn("（产出）");
         when(assembler.buildAttachmentList(any())).thenReturn("（清单）");
-        when(assembler.buildEvidenceContent(any())).thenReturn(
+        // VU-2：实现改调两参入口（带上「能否看图」），桩点须同步——只桩单参时
+        // mock 返回 null（而不是走委派），会在下一次解引用处炸出一个与真实原因无关的 NPE
+        when(assembler.buildEvidenceContent(any(), anyBoolean())).thenReturn(
                 new ReviewEvidenceAssembler.EvidenceContent("（正文）", "（台账）", "（机械预检）"));
         when(assembler.extractRawOutput(any())).thenReturn("（原始输出）");
         when(assembler.verificationSignal(anyString())).thenReturn("（证据信号）");
@@ -49,7 +53,9 @@ class ReviewPromptRenderTest {
                 assembler,
                 mock(SubTaskService.class),
                 new ReviewProperties(),
-                mock(ReviewEvidenceMaterializer.class));
+                mock(ReviewEvidenceMaterializer.class),
+                // VU-2：本测只关心「模板占位符 ↔ 渲染实现」零残留，媒体能力按不支持（false）
+                mock(ImageInputCapabilityPolicy.class));
     }
 
     /** 26 位全量构造：只有 requiredSkills 是本次被测字段，其余取最小可用值。 */

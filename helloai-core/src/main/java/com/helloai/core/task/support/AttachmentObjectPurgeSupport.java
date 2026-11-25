@@ -1,5 +1,6 @@
 package com.helloai.core.task.support;
 
+import com.helloai.core.system.port.ChatAttachmentReferencePort;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.mapper.AttachmentMapper;
@@ -40,6 +41,11 @@ import java.util.stream.Collectors;
  * 指向同一 {@code objectKey}，则跳过（避免误删被他人仍引用的对象）。护栏判定走
  * {@link AttachmentMapper#selectActiveObjectKeysIn(java.util.Collection)} <b>窄查询</b>（按候选 key 批量查），
  * 不作全表载入（P2/P3-3 性能收敛）。</p>
+ *
+ * <p><b>跨表护栏（G-047）</b>：{@code attachment}（子任务产物）与 {@code chat_attachment}（会话附件）
+ * 共用同一个桶、仅 {@code objectKey} 前缀不同。同 {@code objectKey} 双行方案下同一个对象可能被两张表
+ * 的行同时指向，因此除本表外还须查会话侧活跃引用（{@link ChatAttachmentReferencePort#listActiveObjectKeysIn}）。
+ * <b>只补一侧等于把误删风险换个方向</b>，两侧必须同批维护。</p>
  */
 @Slf4j
 @Component
@@ -48,6 +54,7 @@ public class AttachmentObjectPurgeSupport {
 
     private final AttachmentMapper attachmentMapper;
     private final ArtifactStorage artifactStorage;
+    private final ChatAttachmentReferencePort chatAttachmentReferencePort;
 
     /**
      * 事务提交后（无活动事务则立即）best-effort 回收这些附件对应的平台可读对象。
@@ -95,6 +102,12 @@ public class AttachmentObjectPurgeSupport {
             Set<String> stillReferencedKeys = candidateKeys.isEmpty()
                     ? Set.of()
                     : new HashSet<>(attachmentMapper.selectActiveObjectKeysIn(candidateKeys));
+            // ② 跨表护栏（G-047）：同一 objectKey 可能同时被会话附件行引用（同 objectKey 双行方案）。
+            //    只查 attachment 表会误删会话仍在用的对象 ⇒ 会话里那张图当场 404。
+            //    口径只认 deleted=0：会话侧已删的行不构成有效使用，否则对象永远等不到回收时机。
+            if (!candidateKeys.isEmpty()) {
+                stillReferencedKeys.addAll(chatAttachmentReferencePort.listActiveObjectKeysIn(candidateKeys));
+            }
             for (Attachment att : candidates) {
                 String objectKey = att.getObjectKey();
                 // 内层 fail-safe：单对象删除失败不影响其余（DB 已删 / 已软删），留对账兜底

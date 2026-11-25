@@ -67,7 +67,7 @@ class AssistantSearchQueryPlannerTest {
         when(platformAgentExecutionService.executeSync(eq(1L), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(decisionJson("none", "AI 行业 最新动态"), "stop", "llm", 100));
 
-        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, false);
+        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, false, true);
 
         assertThat(plan.priorityQuery()).isEqualTo("AI 行业 最新动态");
         assertThat(plan.skipSearch()).isFalse();
@@ -89,7 +89,7 @@ class AssistantSearchQueryPlannerTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(decisionJson("answerable", "手册 第3章"), "stop", "llm", 100));
 
-        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, true);
+        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, true, true);
 
         assertThat(plan.skipSearch()).isTrue();
         assertThat(plan.attachmentIntent()).isEqualTo("answerable");
@@ -103,7 +103,7 @@ class AssistantSearchQueryPlannerTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(decisionJson("answerable", "手册 第3章"), "stop", "llm", 100));
 
-        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, false);
+        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, false, true);
 
         assertThat(plan.skipSearch()).isFalse();
     }
@@ -112,7 +112,7 @@ class AssistantSearchQueryPlannerTest {
     @DisplayName("平台内数据类问题（子任务/进度）：规则短路，不调用决策 LLM、不联网")
     void plan_internalDataQuestion_skipsWithoutLlm() {
         AssistantSearchPlan plan = planner.plan(conversation,
-                "最近的子任务都在做些什么？再测些什么？", false);
+                "最近的子任务都在做些什么？再测些什么？", false, true);
 
         assertThat(plan.skipSearch()).isTrue();
         assertThat(plan.attachmentIntent()).isEqualTo(AssistantSearchQueryPlanner.INTERNAL_DATA);
@@ -127,7 +127,7 @@ class AssistantSearchQueryPlannerTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(decisionJson("none", null, false), "stop", "llm", 100));
 
-        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, false);
+        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, false, true);
 
         assertThat(plan.skipSearch()).isTrue();
         assertThat(plan.priorityQuery()).isNull();
@@ -140,7 +140,7 @@ class AssistantSearchQueryPlannerTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenThrow(new RuntimeException("LLM 不可用"));
 
-        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, false);
+        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, false, true);
 
         assertThat(plan.degraded()).isTrue();
         assertThat(plan.priorityQuery()).isNull();
@@ -148,11 +148,11 @@ class AssistantSearchQueryPlannerTest {
     }
 
     @Test
-    @DisplayName("会话开关关闭：不调用决策 LLM")
-    void plan_disabled_skipsLlm() {
+    @DisplayName("G-043：开关关闭但无附件 ⇒ 两个结论都已确定，不调用决策 LLM")
+    void plan_disabledWithoutAttachments_skipsLlm() {
         conversation.setWebSearchEnabled(false);
 
-        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, true);
+        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, false, false);
 
         assertThat(plan.degraded()).isFalse();
         assertThat(plan.skipSearch()).isFalse();
@@ -160,16 +160,95 @@ class AssistantSearchQueryPlannerTest {
         verifyNoInteractions(promptRenderService, platformAgentExecutionService, plannerAgentPicker);
     }
 
+    // ══════════════════════════════════════════════════════════════
+    //  `G-043`：attachment_targets 必须解析出来，且不能被「不联网」顺带否决
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("G-043：LLM 输出的 attachment_targets 必须透传到 plan（原实现整条丢弃）")
+    void plan_attachmentTargets_arePropagated() {
+        when(promptRenderService.renderDecisionPrompt(conversation, MESSAGE)).thenReturn("P");
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        decisionJson("answerable", "第2张图", new int[]{2}), "stop", "llm", 100));
+
+        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, true, true);
+
+        assertThat(plan.attachmentTargets()).containsExactly(2);
+    }
+
+    @Test
+    @DisplayName("G-043：不联网（webSearchEnabled=false）时仍须解析 attachment_targets")
+    void plan_searchDisabled_stillResolvesTargets() {
+        conversation.setWebSearchEnabled(false);
+        when(promptRenderService.renderDecisionPrompt(conversation, MESSAGE)).thenReturn("P");
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        decisionJson("answerable", "第3张图", new int[]{3}), "stop", "llm", 100));
+
+        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, true, false);
+
+        assertThat(plan.attachmentIntent()).isEqualTo("answerable");
+        assertThat(plan.attachmentTargets()).containsExactly(3);
+        // 不联网 ⇒ skipSearch 恒真（语义是「本轮不发起检索」）
+        assertThat(plan.skipSearch()).isTrue();
+        assertThat(plan.degraded()).isFalse();
+    }
+
+    @Test
+    @DisplayName("G-043：不联网且附件为空 ⇒ 两个结论都已确定，不花一次决策调用")
+    void plan_searchDisabledWithoutAttachments_skipsLlm() {
+        conversation.setWebSearchEnabled(false);
+
+        AssistantSearchPlan plan = planner.plan(conversation, MESSAGE, false, false);
+
+        assertThat(plan.attachmentIntent()).isEqualTo("disabled");
+        assertThat(plan.attachmentTargets()).isEmpty();
+        verifyNoInteractions(promptRenderService, platformAgentExecutionService, plannerAgentPicker);
+    }
+
+    @Test
+    @DisplayName("G-043：不联网时不做「平台内数据」规则短路——仍需跑决策拿附件作用域")
+    void plan_searchDisabled_doesNotShortCircuitInternalData() {
+        conversation.setWebSearchEnabled(false);
+        when(promptRenderService.renderDecisionPrompt(conversation, MESSAGE)).thenReturn("P");
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        decisionJson("answerable", "第1张图", new int[]{1}), "stop", "llm", 100));
+
+        AssistantSearchPlan plan = planner.plan(conversation,
+                "看看我的子任务进度，顺便说下第1张图", true, false);
+
+        // 若被规则短路，attachmentTargets 会丢（INTERNAL_DATA 分支返回空表）
+        assertThat(plan.attachmentIntent()).isEqualTo("answerable");
+        assertThat(plan.attachmentTargets()).containsExactly(1);
+    }
+
     private static String decisionJson(String attachmentIntent, String query) {
         return decisionJson(attachmentIntent, query, true);
     }
 
     private static String decisionJson(String attachmentIntent, String query, boolean needSearch) {
+        return decisionJson(attachmentIntent, query, needSearch, new int[0]);
+    }
+
+    private static String decisionJson(String attachmentIntent, String query, int[] targets) {
+        return decisionJson(attachmentIntent, query, true, targets);
+    }
+
+    private static String decisionJson(String attachmentIntent, String query, boolean needSearch,
+                                       int[] targets) {
         String queryJson = query == null ? "null" : "\"" + query + "\"";
+        StringBuilder targetsJson = new StringBuilder("[");
+        for (int i = 0; i < targets.length; i++) {
+            if (i > 0) targetsJson.append(',');
+            targetsJson.append(targets[i]);
+        }
+        targetsJson.append(']');
         return "{\"intent\":\"chat\",\"intent_reason\":\"direct_answer\","
                 + "\"clarification_question\":null,"
                 + "\"attachment_intent\":\"" + attachmentIntent + "\","
-                + "\"attachment_targets\":[],"
+                + "\"attachment_targets\":" + targetsJson + ","
                 + "\"web_search\":{\"need_search\":" + needSearch + ",\"search_query\":" + queryJson
                 + ",\"reason\":\"时效性\"}}";
     }

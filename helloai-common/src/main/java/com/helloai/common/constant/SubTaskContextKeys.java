@@ -160,6 +160,32 @@ public final class SubTaskContextKeys {
      */
     public static final String MAX_ITERATIONS_HINT = "maxIterationsHint";
 
+    /**
+     * 本子任务**专属引用的会话附件 ID 清单**（{@code List<Long>}，元素为 {@code chat_attachment.id}，`G-042`）。
+     *
+     * <p>语义 = 「拆解时 Planner 判定这几份用户上传的附件与<b>本子任务</b>相关，执行期只需把这几份
+     * 送给模型」。解决的是「多图会话下每个子任务都拿到全会话图片、模型把 A 图的需求落到 B 子任务上」。</p>
+     *
+     * <p><b>为什么存 {@code context} 而不建桥表 / 不写 {@code attachment} 双行</b>：{@code attachment}
+     * 表的每一处消费（交付物闸 {@code DeliveryEvidenceEvaluator}、上游产出装载、契约回流、核验证据集、
+     * MCP 读模型、「我的产物」）都以「这一行 = 某子任务<b>产出</b>的东西」为前提。把用户上传的需求图
+     * 写成 {@code attachment} 行，会让这些判据把「输入」误认成「产出」——最直接的后果是
+     * 交付物闸对所有带图子任务恒为「有产物」。{@code context} 是拆解期的自由 JSONB，天然属于
+     * 「拆解判定」而非「产物登记」，零迁移、零新表、不影响任何既有判据。</p>
+     *
+     * <p><b>写入</b>：{@code PlannerDecomposeAsyncServiceImpl#buildDrafts}（把 LLM 输出的
+     * 1-based 清单序号解析成附件 ID 后落库，越界 / 非法序号直接丢弃）。
+     * <b>读取</b>：{@code ConversationMediaRefPortAdapter}（planner 域，随 {@code taskId}
+     * 一起解析会话）。<b>agent 域不认识本键</b>——它只传 {@code subTaskId}，键的解析责任留在
+     * 提供方，否则键改名会让执行链静默看不到图（判据 4）。</p>
+     *
+     * <p><b>键缺失 / 空数组 = 未声明</b> ⇒ 回落会话全量并**显式标注回落原因**；
+     * 这与「声明了但全部无效」等价（同样回落），刻意不与「明确要 0 张」混为一谈——
+     * 后者在本期没有表达方式，因为 Planner 不可能判定「这个子任务与任何附件都无关」比
+     * 「我漏判了」更可信。</p>
+     */
+    public static final String MEDIA_REF_IDS = "mediaRefIds";
+
     private SubTaskContextKeys() {
     }
 }

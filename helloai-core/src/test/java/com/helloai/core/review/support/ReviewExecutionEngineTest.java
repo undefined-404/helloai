@@ -12,8 +12,10 @@ import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.agent.support.ImageInputCapabilityPolicy;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.task.entity.TaskTimeline;
+import com.helloai.core.task.port.ConstraintRefView;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -27,11 +29,13 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -84,7 +88,8 @@ class ReviewExecutionEngineTest {
         // renderPrompt 会用返回值做 String.replace，null 会 NPE ⇒ 全部给占位串
         lenient().when(reviewEvidenceAssembler.extractExecutionOutput(any())).thenReturn("（产出）");
         lenient().when(reviewEvidenceAssembler.buildAttachmentList(any())).thenReturn("（清单）");
-        lenient().when(reviewEvidenceAssembler.buildEvidenceContent(any())).thenReturn(
+        // VU-2：实现改调两参入口（带上「能否看图」），桩点须同步——只桩单参时 mock 返回 null
+        lenient().when(reviewEvidenceAssembler.buildEvidenceContent(any(), anyBoolean())).thenReturn(
                 new ReviewEvidenceAssembler.EvidenceContent("（正文）", "（台账）", "（机械预检）"));
         lenient().when(reviewEvidenceAssembler.extractRawOutput(any())).thenReturn("（原始输出）");
         lenient().when(reviewEvidenceAssembler.verificationSignal(anyString())).thenReturn("（证据信号）");
@@ -95,7 +100,10 @@ class ReviewExecutionEngineTest {
     private ReviewExecutionEngine newEngine(ReviewProperties properties) {
         return new ReviewExecutionEngine(platformAgentExecutionService, conversationService,
                 taskTimelineService, new VerdictParser(new ObjectMapper()),
-                reviewEvidenceAssembler, subTaskService, properties, evidenceMaterializer);
+                reviewEvidenceAssembler, subTaskService, properties, evidenceMaterializer,
+                // VU-2：默认 mock 返回 false ⇒ 媒体走「看不到图」降级分支，与既有用例的
+                // 「无媒体附件」前提一致（用例要测看图须显式 stub）
+                mock(ImageInputCapabilityPolicy.class));
     }
 
     private SubTaskView subTask() {
@@ -546,6 +554,44 @@ class ReviewExecutionEngineTest {
         Map<String, Object> payload = captureSingleEvent(
                 TimelineEventCode.SUB_TASK_AUTO_REVIEW_UNPARSEABLE.code());
         assertThat(payload.get("attempts")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("G-037 约束文档引用：非空逐项渲染进审查 Prompt（kind:ref[scope]），空值渲染「（无）」")
+    void shouldRenderConstraintRefsIntoPrompt() {
+        when(evidenceMaterializer.materialize(anyLong(), anyLong())).thenReturn(
+                new ReviewEvidenceMaterializer.MaterializationResult(true, null, List.of(), List.of(), 1, 120));
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+        SubTaskView withRefs = new SubTaskView(
+                SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0, "写接口文档",
+                "整理 REST 接口清单", "接口文档", ACCEPTANCE, null, "不许动 X", Map.of(),
+                List.of(), null, null, null, null, null, null, null, null, null, null,
+                null, null, null,
+                List.of(new ConstraintRefView("DOCUMENT", "code-style", List.of("s5", "s6"))));
+
+        newEngine(new ReviewProperties()).execute(withRefs, reviewer());
+
+        assertThat(capturedPrompt())
+                .contains("约束文档引用：DOCUMENT:code-style[scope: s5,s6]");
+    }
+
+    @Test
+    @DisplayName("G-037 约束文档引用：无引用时渲染「（无）」占位（存量行为一致，零注入差异）")
+    void shouldRenderConstraintRefsPlaceholderWhenAbsent() {
+        when(evidenceMaterializer.materialize(anyLong(), anyLong())).thenReturn(
+                new ReviewEvidenceMaterializer.MaterializationResult(true, null, List.of(), List.of(), 1, 120));
+        when(platformAgentExecutionService.executeSync(anyLong(), any()))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"analysis\": \"逐条对照已完成\"}",
+                        "STOP", "executor", 10));
+
+        newEngine(new ReviewProperties()).execute(subTask(), reviewer());
+
+        assertThat(capturedPrompt())
+                .contains("约束文档引用：（无）");
     }
 
     @Test

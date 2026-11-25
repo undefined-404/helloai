@@ -15,6 +15,8 @@ import com.helloai.core.agent.runtime.loop.AgentLoopResult;
 import com.helloai.core.agent.service.AgentChatClientService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.support.AttachmentMediaAssembler;
+import com.helloai.core.agent.support.ImageInputCapabilityPolicy;
 import com.helloai.core.agent.tool.ToolDefinition;
 import com.helloai.core.agent.tool.ToolExecutor;
 import com.helloai.core.agent.tool.ToolInvocationContext;
@@ -92,7 +94,10 @@ class BusinessSurfaceLoopRunnerTest {
         runner = new BusinessSurfaceLoopRunner(
                 agentChatClientService, agentLlmCredentialResolver, agentMcpServerService,
                 agentSkillSpecService, properties, toolRegistry, toolExecutor, agentLoop,
-                toolCallbackProvider);
+                toolCallbackProvider,
+                // VU-2：媒体能力判定与装载器（本组用例不带 mediaRefs ⇒ 两者均不被触达）
+                mock(ImageInputCapabilityPolicy.class),
+                mock(AttachmentMediaAssembler.class));
     }
 
     // ────────────── 白名单判定 ──────────────

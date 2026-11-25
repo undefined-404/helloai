@@ -1,11 +1,15 @@
 package com.helloai.core.task.projection;
 
+import com.helloai.core.task.entity.ConstraintRef;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
+import com.helloai.core.task.port.ConstraintRefDraft;
+import com.helloai.core.task.port.ConstraintRefView;
 import com.helloai.core.task.port.SubTaskDraft;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.port.UncertaintyView;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -52,7 +56,7 @@ public final class SubTaskProjection {
                 st.dependsOnIdList(), st.getDeadline(), st.getPriority(), st.getIsContract(),
                 st.getRequiredSkills(), st.getModuleId(), st.getScoreFactors(), st.getCompositeScore(),
                 st.getScoreGrade(), st.getTimeoutCount(), st.getCreateTime(), st.getUpdateTime(),
-                st.getDraftCode());
+                st.getDraftCode(), toConstraintRefViews(st.getConstraintRefs()));
     }
 
     /** 写入物料 → 实体（提供方内部映射，消费方零实体依赖）；{@code uncertainties} 逐项投影、null 元素跳过。 */
@@ -71,6 +75,8 @@ public final class SubTaskProjection {
         st.setDraftCode(d.draftCode());
         st.setRequiredSkills(d.requiredSkills());
         st.setConstraints(d.constraints());
+        // G-037：类型化约束引用（Draft → 实体逐字段投影，null 透传——DB 默认空数组兜底）
+        st.setConstraintRefs(toConstraintRefEntities(d.constraintRefs()));
         st.setStatus(d.status());
         st.setContext(d.context());
         st.setUncertainties(d.uncertainties() == null ? null : d.uncertainties().stream()
@@ -90,5 +96,33 @@ public final class SubTaskProjection {
                 })
                 .toList());
         return st;
+    }
+
+    /** G-037：实体 → 视图投影（逐字段透传，null 元素跳过）。 */
+    private static List<ConstraintRefView> toConstraintRefViews(List<ConstraintRef> refs) {
+        if (refs == null || refs.isEmpty()) {
+            return List.of();
+        }
+        List<ConstraintRefView> views = new ArrayList<>(refs.size());
+        for (ConstraintRef r : refs) {
+            if (r != null) {
+                views.add(new ConstraintRefView(r.getKind(), r.getRef(), r.getScope()));
+            }
+        }
+        return views;
+    }
+
+    /** G-037：写入物料 → 实体（逐字段透传，null 元素跳过）。 */
+    private static List<ConstraintRef> toConstraintRefEntities(List<ConstraintRefDraft> refs) {
+        if (refs == null || refs.isEmpty()) {
+            return null;
+        }
+        List<ConstraintRef> entities = new ArrayList<>(refs.size());
+        for (ConstraintRefDraft r : refs) {
+            if (r != null) {
+                entities.add(new ConstraintRef(r.kind(), r.ref(), r.scope()));
+            }
+        }
+        return entities;
     }
 }

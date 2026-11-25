@@ -13,6 +13,8 @@ import com.helloai.core.agent.service.McpReadModelService;
 import com.helloai.core.agent.service.McpToolService.AttachmentItem;
 import com.helloai.core.agent.service.McpToolService.GetDepsSummaryResult;
 import com.helloai.core.agent.service.McpToolService.SubTaskDetail;
+import com.helloai.core.agent.support.AttachmentMediaAssembler;
+import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
 import com.helloai.core.shared.util.UpstreamAttachmentRenderer;
@@ -181,6 +183,16 @@ public class McpReadModelServiceImpl implements McpReadModelService {
                         if (!attachment.contentLoadable()) {
                             continue;
                         }
+                        // `VU-1` 同一判据的第二个消费方：图片/音视频不得进文本通道。
+                        // 此前这里与装配器同款无差别 UTF-8 解码——上游产出图（如 chart.png）
+                        // 会被解成乱码塞进 MCP 工具的 deps content，执行者读到的是垃圾。
+                        // 判据走公共组件，不在此处另写扩展名表（判据 4：同一事实双写必分叉）。
+                        if (AttachmentMediaAssembler.isInlineImage(attachment)) {
+                            continue;
+                        }
+                        if (AttachmentContentPolicy.isMedia(attachment.mimeType(), attachment.fileName())) {
+                            continue;
+                        }
                         byte[] bytes = attachmentPort.loadContent(attachment.id());
                         if (bytes == null || bytes.length == 0) {
                             continue;
@@ -256,6 +268,9 @@ public class McpReadModelServiceImpl implements McpReadModelService {
         detail.setDeliverable(subTask.deliverable());
         detail.setAcceptance(subTask.acceptance());
         detail.setConstraints(subTask.constraints());
+        // G-037：类型化约束文档引用随详情下发（外部 Agent 无进程内工具通道，只能靠此字段看见契约）
+        detail.setConstraintRefs(subTask.constraintRefs() != null
+                ? subTask.constraintRefs() : Collections.emptyList());
         detail.setUncertainties(subTask.uncertainties());
         List<String> mergedSkills = subTaskQueryPort.mergeSkills(subTask.id());
         detail.setRequiredSkills(mergedSkills != null ? mergedSkills : Collections.emptyList());

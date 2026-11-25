@@ -363,10 +363,10 @@ class PlannerAgentPickerTest {
     @Test
     @DisplayName("validateModelUsable：非法标识（缺 provider 或 model）报格式错误")
     void shouldRejectMalformedModelType() {
-        assertThatThrownBy(() -> picker.validateModelUsable("deepseek-v4-flash"))
+        assertThatThrownBy(() -> picker.validateModelUsable("deepseek-flash"))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("provider:model");
-        assertThatThrownBy(() -> picker.validateModelUsable(":deepseek-v4-flash"))
+        assertThatThrownBy(() -> picker.validateModelUsable(":deepseek-flash"))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("provider:model");
         assertThatThrownBy(() -> picker.validateModelUsable("deepseek:"))
@@ -388,10 +388,10 @@ class PlannerAgentPickerTest {
     @Test
     @DisplayName("validateModelUsable：模型在册但供应商不可用（未启用 / 无密钥）时拒绝")
     void shouldRejectUnavailableProvider() {
-        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-flash")).thenReturn(true);
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-flash")).thenReturn(true);
         when(llmProviderCatalogService.isProviderAvailable("deepseek")).thenReturn(false);
 
-        assertThatThrownBy(() -> picker.validateModelUsable("deepseek:deepseek-v4-flash"))
+        assertThatThrownBy(() -> picker.validateModelUsable("deepseek:deepseek-flash"))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("供应商当前不可用");
     }
@@ -399,12 +399,12 @@ class PlannerAgentPickerTest {
     @Test
     @DisplayName("validateModelUsable：模型在册且供应商可用时放行（冒号后含模型名照常解析）")
     void shouldAllowUsableModel() {
-        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-flash")).thenReturn(true);
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-flash")).thenReturn(true);
         when(llmProviderCatalogService.isProviderAvailable("deepseek")).thenReturn(true);
 
-        picker.validateModelUsable(" deepseek:deepseek-v4-flash ");
+        picker.validateModelUsable(" deepseek:deepseek-flash ");
 
-        verify(llmProviderModelQueryService).isModelAvailable("deepseek", "deepseek-v4-flash");
+        verify(llmProviderModelQueryService).isModelAvailable("deepseek", "deepseek-flash");
         verify(llmProviderCatalogService).isProviderAvailable("deepseek");
     }
 }

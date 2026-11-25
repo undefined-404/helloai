@@ -57,7 +57,13 @@ public record SubTaskDraft(
          *
          * <p>非拆解路径（人工创建）为 {@code null}。</p>
          */
-        String draftCode
+        String draftCode,
+
+        /**
+         * 类型化约束引用（`G-037` 任务约束类型化试点）：契约文档引用列表（ref + scope）。
+         * 空列表 = 无契约引用；{@code null} 兼容旧调用方（落库侧原样透传，DB 默认空数组）。
+         */
+        List<ConstraintRefDraft> constraintRefs
 ) {
 
     /**
@@ -72,6 +78,19 @@ public record SubTaskDraft(
                         List<UncertaintyDraft> uncertainties, AcceptanceKind acceptanceKind,
                         Integer draftSeq) {
         this(taskId, title, content, deliverable, acceptance, priority, isContract, requiredSkills,
-                constraints, status, context, uncertainties, acceptanceKind, draftSeq, null);
+                constraints, status, context, uncertainties, acceptanceKind, draftSeq, null, null);
+    }
+
+    /**
+     * 兼容构造：不含 {@code constraintRefs}（`G-037` 之前的调用方与测试沿用；
+     * 委托补 {@code null}，落库侧原样透传，DB 默认空数组）。
+     */
+    public SubTaskDraft(Long taskId, String title, String content, String deliverable, String acceptance,
+                        String priority, Integer isContract, List<String> requiredSkills, String constraints,
+                        SubTaskStatus status, Map<String, Object> context,
+                        List<UncertaintyDraft> uncertainties, AcceptanceKind acceptanceKind,
+                        Integer draftSeq, String draftCode) {
+        this(taskId, title, content, deliverable, acceptance, priority, isContract, requiredSkills,
+                constraints, status, context, uncertainties, acceptanceKind, draftSeq, draftCode, null);
     }
 }

@@ -39,7 +39,7 @@ class AgentSkillPolicyServiceTest {
     @Mock
     private AgentSkillSpecService agentSkillSpecService;
 
-    private static final String MODEL = "deepseek:deepseek-v4-flash";
+    private static final String MODEL = "deepseek:deepseek-flash";
 
     private AgentSkillPolicyService service() {
         return new AgentSkillPolicyService(agentMapper, llmProviderModelQueryService, agentSkillSpecService);

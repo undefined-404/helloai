@@ -2,6 +2,8 @@ package com.helloai.core.planner.support;
 
 import com.helloai.core.planner.entity.PlanDraft;
 import com.helloai.core.planner.port.PlanDraftView;
+import com.helloai.core.task.port.ConstraintRefDraft;
+import com.helloai.core.task.port.ConstraintRefView;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.port.UncertaintyDraft;
 import com.helloai.core.task.port.UncertaintyView;
@@ -30,7 +32,22 @@ public final class PlanDraftViewMapper {
                 d.getTitle(), d.getContent(), d.getDeliverable(), d.getAcceptance(),
                 d.getAcceptanceKind(), d.getPriority(), d.getContract(),
                 d.getRequiredSkills(), d.getConstraints(), d.getUncertainties(),
-                d.getDependsOnCodes(), d.getContext(), d.getUpdateTime());
+                d.getDependsOnCodes(), d.getContext(), d.getUpdateTime(), toConstraintRefDrafts(d.getConstraintRefs()));
+    }
+
+    /** 暂存区实体（{@code task.entity}）→ 写入物料形状（task.port）。 */
+    private static List<ConstraintRefDraft> toConstraintRefDrafts(
+            List<com.helloai.core.task.entity.ConstraintRef> refs) {
+        if (refs == null || refs.isEmpty()) {
+            return List.of();
+        }
+        List<ConstraintRefDraft> drafts = new ArrayList<>(refs.size());
+        for (com.helloai.core.task.entity.ConstraintRef r : refs) {
+            if (r != null) {
+                drafts.add(new ConstraintRefDraft(r.getKind(), r.getRef(), r.getScope()));
+            }
+        }
+        return drafts;
     }
 
     public static List<SubTaskView> toSubTaskViews(List<PlanDraftView> drafts) {
@@ -56,7 +73,20 @@ public final class PlanDraftViewMapper {
                     d.acceptanceKind(), d.constraints(), d.context(), toUncertaintyViews(d.uncertainties()),
                     deps, null, d.priority() == null ? null : d.priority().name(),
                     d.contract(), d.requiredSkills(), null, null, null, null,
-                    0, null, d.updateTime(), d.code()));
+                    0, null, d.updateTime(), d.code(), toConstraintRefViews(d.constraintRefs())));
+        }
+        return views;
+    }
+
+    private static List<ConstraintRefView> toConstraintRefViews(List<ConstraintRefDraft> refs) {
+        if (refs == null || refs.isEmpty()) {
+            return List.of();
+        }
+        List<ConstraintRefView> views = new ArrayList<>(refs.size());
+        for (ConstraintRefDraft r : refs) {
+            if (r != null) {
+                views.add(new ConstraintRefView(r.kind(), r.ref(), r.scope()));
+            }
         }
         return views;
     }

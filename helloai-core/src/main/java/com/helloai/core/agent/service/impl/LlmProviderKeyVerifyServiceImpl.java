@@ -52,7 +52,9 @@ public class LlmProviderKeyVerifyServiceImpl implements LlmProviderKeyVerifyServ
      * （已接入 {@code scripts/ci/ci-gate.sh} 门禁 3）。</p>
      */
     private static final Map<String, String> FALLBACK_MODELS = Map.of(
-            "deepseek", "deepseek-v4-flash",
+            // V155 对齐官方《模型细节》文档：官方现行名为 deepseek-flash；
+            // 'deepseek-v4-flash' 是废弃别名（官方回包已把它解析成 deepseek-flash）
+            "deepseek", "deepseek-flash",
             // moonshot-v1 系列已于 2026-08-31 官方下线（404），兜底模型同步切 kimi-k3
             "moonshot", "kimi-k3",
             // MiniMax-M2.5 / M2.7 全系列即将下线，兜底模型同步切现役 MiniMax-M3（V108 迁移同步）

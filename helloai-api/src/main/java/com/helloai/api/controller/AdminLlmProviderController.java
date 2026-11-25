@@ -434,7 +434,7 @@ public class AdminLlmProviderController {
      *
      * <p>供 Agent 注册/编辑弹窗技能区三段式渲染：{@code capabilitySkills}（模型能力锁定，
      * 不可取消）+ {@code availableOptionalSkills}（可扩展白名单）。modelType 形如
-     * {@code deepseek:deepseek-v4-flash}（URL 中冒号需 {@code encodeURIComponent}）；
+     * {@code deepseek:deepseek-flash}（URL 中冒号需 {@code encodeURIComponent}）；
      * 模型未识别（表中不存在/已删除）时返回降级默认值并标注 {@code degraded=true}，
      * 前端提示「模型未上架，建议使用已上架模型」。</p>
      *

@@ -21,8 +21,11 @@ import java.util.stream.Collectors;
  * <p>按 provider.protocolType 把 ChatClient 创建请求分发给对应的 ProtocolFactory。
  * 替代原 providerChatClientFactoriesProvider.getIfAvailable() 枚举机制。</p>
  *
- * <p>DeepSeek 由于走官方 SDK（DeepSeekChatModel）而非 OpenAI 兼容，保留专用 Factory，
- * 通过 {@code providerCode="deepseek"} 优先匹配。</p>
+ * <p>DeepSeek 亦走 OpenAI 兼容通道（protocol_type=OPENAI_COMPATIBLE），统一由
+ * {@link OpenAiCompatibleProtocolFactory} 处理——2026-11-25「deepseek 图片能力修复（方案 A）」：
+ * 官方 SDK（spring-ai-deepseek:1.1.8）的 {@code DeepSeekChatModel#createRequest} 无 media 分支，
+ * 图片被静默丢弃；OpenAiChatModel 的 {@code mapToMediaContent} 可正常装配。
+ * 专用 {@link DeepSeekProviderChatClientFactory} 已停用（@Deprecated，仅作 D-e 守卫载体与恢复点）。</p>
  *
  * <p>所有 ChatClient 工厂都通过本类对外暴露，调用方无需感知 OpenAI / Anthropic 协议差异。</p>
  */
@@ -32,7 +35,6 @@ import java.util.stream.Collectors;
 public class LlmProviderChatClientFactoryRegistry {
 
     private final LlmProviderQueryService queryService;
-    private final DeepSeekProviderChatClientFactory deepSeekFactory;
     private final OpenAiCompatibleProtocolFactory openAiCompatibleFactory;
     private final AnthropicCompatibleProtocolFactory anthropicCompatibleFactory;
 
@@ -57,7 +59,10 @@ public class LlmProviderChatClientFactoryRegistry {
     /**
      * 按 providerCode 创建 ChatClient。
      *
-     * <p>路由优先级：DeepSeek 专用 Factory &gt; 通用 OpenAI 兼容 Factory &gt; 通用 Anthropic 兼容 Factory。</p>
+     * <p>路由规则：按 protocolType 分发——OPENAI_COMPATIBLE → OpenAI 兼容 Factory，
+     * ANTHROPIC_COMPATIBLE → Anthropic 兼容 Factory。
+     * deepseek 的 protocol_type 本就是 OPENAI_COMPATIBLE，故也落入 OpenAI 兼容 Factory
+     * （2026-11-25 起，替换停用的专用 SDK 工厂，见类注释「方案 A」）。</p>
      *
      * @param providerCode    provider 唯一标识（如 deepseek / moonshot / custom-gpt-4）
      * @param apiKeyPlaintext API Key 明文
@@ -70,11 +75,8 @@ public class LlmProviderChatClientFactoryRegistry {
         LlmProviderProfile provider = queryService.findProfileByCode(providerCode)
                 .orElseThrow(() -> new BizException("Provider 未找到或未启用: " + providerCode));
 
-        // DeepSeek 走官方 SDK（DeepSeekChatModel），优先匹配专用 Factory
-        if ("deepseek".equalsIgnoreCase(provider.providerCode()) && deepSeekFactory.supports(provider.providerCode())) {
-            return deepSeekFactory.createChatClient(apiKeyPlaintext, agent, model);
-        }
-
+        // deepseek 的 protocol_type=OPENAI_COMPATIBLE ⇒ 自然落入 OpenAI 兼容 Factory
+        // （2026-11-25 起：专用 SDK 工厂停用，理由见类注释「方案 A」）
         ProtocolFactory factory = protocolFactoryMap().get(normalizeProtocolType(provider.protocolType()));
         if (factory == null) {
             throw new BizException("不支持的 protocol_type: " + provider.protocolType()
@@ -107,11 +109,8 @@ public class LlmProviderChatClientFactoryRegistry {
         LlmProviderProfile provider = queryService.findProfileByCode(providerCode)
                 .orElseThrow(() -> new BizException("Provider 未找到或未启用: " + providerCode));
 
-        // DeepSeek 走官方 SDK（DeepSeekChatModel），优先匹配专用 Factory
-        if ("deepseek".equalsIgnoreCase(provider.providerCode()) && deepSeekFactory.supports(provider.providerCode())) {
-            return deepSeekFactory.createChatModel(apiKeyPlaintext, agent, model);
-        }
-
+        // deepseek 的 protocol_type=OPENAI_COMPATIBLE ⇒ 自然落入 OpenAI 兼容 Factory
+        // （2026-11-25 起：专用 SDK 工厂停用，理由见类注释「方案 A」）
         ProtocolFactory factory = protocolFactoryMap().get(normalizeProtocolType(provider.protocolType()));
         if (factory == null) {
             throw new BizException("不支持的 protocol_type: " + provider.protocolType()

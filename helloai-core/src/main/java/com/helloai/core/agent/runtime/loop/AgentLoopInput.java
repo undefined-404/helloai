@@ -7,6 +7,7 @@ import com.helloai.core.agent.runtime.cancel.CancellableToolExecutor;
 import com.helloai.core.agent.runtime.cancel.LoopCancellation;
 import com.helloai.core.agent.tool.ToolExecutor;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.content.Media;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.util.List;
@@ -15,8 +16,14 @@ import java.util.List;
  * Agent 循环输入（P0-C）。
  *
  * <p>一次 Agent Turn 循环的完整输入：模型 + 提示词 + 允许调用的工具回调（调用方已按
- * 启用工具名过滤，模型可见其 schema）+ 工具执行回路 + 事件定位与记录器。
+ * 启用工具名过滤，模型可见其 schema）+ 工具执行回路 + 事件定位与记录器 + 多模态媒体。
  * provider 无关——只依赖 spring-ai {@link ChatModel} 契约。</p>
+ *
+ * <p><b>★多模态咽喉（`VU-1`）</b>：{@link #media} 是全平台<b>唯一</b>把图片送进模型的地方——
+ * 与 {@code cancellation} 同理，循环是「消息最终成型」的唯一位置，任何调用方都无法绕过。
+ * 若改为「各调用方自建带图的 {@code Prompt}」，就会重现已登记缺陷模式「规则存在 ≠ 全路径强制」。
+ * <b>媒体为空时循环必须走改造前的原始装配路径</b>（{@code new UserMessage(text)}），
+ * 这是「零媒体零变化」的实现约束，见 {@code ChatModelToolLoop}。</p>
  *
  * <p><b>★可取消性装配点（REF-8.6）</b>：{@code cancellation} 非「不限」时，本记录的
  * <b>紧凑构造器</b>会把 {@code chatModel} / {@code toolExecutor} 包上取消装饰器
@@ -50,6 +57,13 @@ import java.util.List;
  *                             子任务执行链生效，业务面循环（planner_decompose / subtask_review /
  *                             task_final_report / task_final_report_review，产出为 JSON 结构化结果）
  *                             不得追加 VERIFICATION 围栏——场景判定经本字段透传。
+ * @param media                随首条 user 消息发送的多模态媒体（`VU-1`；null/空 = 纯文本，行为与改造前逐字一致）。
+ *                             <b>传 {@link Media} 而非字节 / 附件 ID</b>：媒体读取与 MIME 判定属装配层职责
+ *                             （装配层持有 {@code AttachmentPort}、能按 {@code AttachmentRef.contentLoadable}
+ *                             判定可读性），循环本体只负责「把已有的媒体放进消息」——若在此处接附件端口，
+ *                             循环就要依赖跨域契约，破坏「provider 无关 + 无业务数据访问」的边界。
+ *                             元素为 Spring AI 契约类型而非本平台自制类型：循环的目标就是喂给
+ *                             {@code ChatModel}，中间再套一层只会多一次无意义转换（§2.3 禁止无谓抽象）。
  */
 public record AgentLoopInput(
         ChatModel chatModel,
@@ -67,7 +81,8 @@ public record AgentLoopInput(
         LoopCheckpointListener loopCheckpointListener,
         AgentAccessType accessType,
         LoopCancellation cancellation,
-        String scene) {
+        String scene,
+        List<Media> media) {
 
     /** 默认最大循环轮数（LLM 调用次数硬上限，防死循环）。 */
     public static final int DEFAULT_MAX_ITERATIONS = 5;
@@ -92,6 +107,11 @@ public record AgentLoopInput(
         if (cancellation == null) {
             cancellation = LoopCancellation.none();
         }
+        // `VU-1`：媒体空值归一化为不可变空表——让「无媒体」与「null」在消费侧（ChatModelToolLoop
+        // 的 isEmpty 判定、事件里的 mediaCount）只有一种表意，不必两处各写一次 null 判断。
+        if (media == null) {
+            media = List.of();
+        }
         // REF-8.6：唯一咽喉装配取消装饰器（详见类 javadoc）；不限时零包装（行为与改造前逐字一致）
         if (cancellation.active()) {
             if (chatModel != null) {
@@ -102,6 +122,27 @@ public record AgentLoopInput(
                         toolExecutor, cancellation.token(), cancellation.toolTimeoutMillis());
             }
         }
+    }
+
+    /**
+     * 兼容构造器（旧 16 参签名，`VU-1` 加入 {@link #media} 之前的主签名）：媒体缺省为空 ⇒
+     * 纯文本行为与改造前<b>逐字一致</b>。
+     *
+     * <p><b>为什么必须显式补这一个</b>：record 主构造器一旦加参，旧 16 参签名即消失——
+     * {@code RuntimeTurnExecutor} / {@code BusinessSurfaceLoopRunner} 两个生产调用点，以及
+     * {@code FinalReportFenceHookTest} / {@code ChatModelToolLoopTest} 等 7 处测试辅助方法
+     * 会<b>全部编译失败</b>。这是「加字段后全仓搜该类构造点」（判据 30）的机械后果，
+     * 不是可选的兼容性修饰。</p>
+     */
+    public AgentLoopInput(ChatModel chatModel, String systemPrompt, String userPrompt,
+                          ToolExecutor toolExecutor, List<ToolCallback> enabledToolCallbacks,
+                          Integer maxIterations, String runId, Long taskId, Long subTaskId,
+                          int turn, Long agentId, AgentEventRecorder eventRecorder,
+                          LoopCheckpointListener loopCheckpointListener, AgentAccessType accessType,
+                          LoopCancellation cancellation, String scene) {
+        this(chatModel, systemPrompt, userPrompt, toolExecutor, enabledToolCallbacks, maxIterations,
+                runId, taskId, subTaskId, turn, agentId, eventRecorder, loopCheckpointListener,
+                accessType, cancellation, scene, null);
     }
 
     /**

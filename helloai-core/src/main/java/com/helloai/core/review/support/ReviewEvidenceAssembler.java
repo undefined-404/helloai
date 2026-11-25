@@ -2,6 +2,8 @@ package com.helloai.core.review.support;
 
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.ReviewResult;
+import com.helloai.core.agent.port.MediaRef;
+import com.helloai.core.agent.support.AttachmentMediaAssembler;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
@@ -21,6 +23,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 自动核验证据装配器：把子任务产出证据装配为核验 Prompt 可消费的内容（自 {@code SubTaskReviewServiceImpl} 拆分）。
@@ -55,11 +58,43 @@ public class ReviewEvidenceAssembler {
     /**
      * 证据正文装配结果（`RV-8` / `RV-9` / `RV-10` 的同源产物）。
      *
-     * @param attachmentContent 注入正文（按族配额截断）
+     * <p><b>`VU-2` 增设 {@link #mediaVisibility} 与 {@link #mediaRefs}</b>：核验要能「看图」，
+     * 需要两样东西同时到位——{@code mediaRefs} 是送进模型消息的<b>图片引用</b>（装载在请求
+     * 装配层），{@code mediaVisibility} 是告诉模型的<b>说明文本</b>。两者必须是<b>同一次判定</b>
+     * 的产物（判据 32）：分开算就会出现「说明说已带来图、实际一张没送」或反过来的自相矛盾，
+     * 而那种矛盾在 prompt 里完全看不出来。</p>
+     *
+     * @param attachmentContent 注入正文（按族配额截断；`VU-2` 起<b>不再</b>含媒体说明）
      * @param evidenceLedger    注入台账（与正文同一次分配循环产出）
      * @param mechanicalCheck   表格类机械预检结论（无表格附件时为空串）
+     * @param mediaVisibility   媒体可见性说明（无媒体附件时为空串）
+     * @param mediaRefs         随证据送模型的图片引用（无图时为空表，绝不为 {@code null}）
      */
-    public record EvidenceContent(String attachmentContent, String evidenceLedger, String mechanicalCheck) {
+    public record EvidenceContent(String attachmentContent, String evidenceLedger, String mechanicalCheck,
+                                  String mediaVisibility, List<MediaRef> mediaRefs) {
+
+        public EvidenceContent {
+            attachmentContent = attachmentContent == null ? "" : attachmentContent;
+            evidenceLedger = evidenceLedger == null ? "" : evidenceLedger;
+            mechanicalCheck = mechanicalCheck == null ? "" : mechanicalCheck;
+            mediaVisibility = mediaVisibility == null ? "" : mediaVisibility;
+            mediaRefs = mediaRefs == null ? List.of() : List.copyOf(mediaRefs);
+        }
+
+        /** 兼容构造：`VU-2` 之前的调用点（无媒体语义，行为与改造前一致）。 */
+        public EvidenceContent(String attachmentContent, String evidenceLedger, String mechanicalCheck) {
+            this(attachmentContent, evidenceLedger, mechanicalCheck, "", List.of());
+        }
+    }
+
+    /**
+     * 媒体作用域装配结果：说明文本 + 图片引用，<b>一次判定产出</b>（`VU-2` / 判据 32）。
+     *
+     * @param note 注入「随证据提供的图片」段的说明（空串 = 本提交无媒体附件）
+     * @param refs 送模型的图片引用（空表 = 不送图）
+     */
+    private record MediaScope(String note, List<MediaRef> refs) {
+        static final MediaScope EMPTY = new MediaScope("", List.of());
     }
 
     /** 显式全参构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在 IDE 增量编译里漏抓新增
@@ -196,7 +231,9 @@ public class ReviewEvidenceAssembler {
         }
         return new ReviewEvidenceView(text(executionOutput), text(attachmentList), text(attachmentContent),
                 text(frozen.get("verificationSignal")), text(frozen.get("selfReviewSignal")),
-                text(frozen.get("mechanicalCheck")), text(frozen.get("evidenceLedger")));
+                text(frozen.get("mechanicalCheck")), text(frozen.get("evidenceLedger")),
+                // `VU-2` 之前冻结的历史快照无此键 ⇒ text(null) = ""，复判 prompt 与旧行为一致
+                text(frozen.get("mediaVisibility")));
     }
 
     private Map<String, Object> freezeEvidence(SubTaskView subTask, ReviewEvidenceView evidence) {
@@ -219,6 +256,9 @@ public class ReviewEvidenceAssembler {
         // `RV-10` M1 决策① / `RV-8`：机械段与台账随原判证据一起冻结，复判直接复用
         frozen.put("mechanicalCheck", evidence.mechanicalCheck());
         frozen.put("evidenceLedger", evidence.evidenceLedger());
+        // `VU-2`：媒体说明随证据冻结——复判重放的是「原判看到的措辞」，
+        // 若复判时现算，模型能力或附件一变就会出现「同一份证据、两种说法」
+        frozen.put("mediaVisibility", evidence.mediaVisibility());
         frozen.put("chars", chars);
         return frozen;
     }
@@ -272,18 +312,26 @@ public class ReviewEvidenceAssembler {
      * （与开关引入前行为一致）。</p>
      *
      * <p>文本硬化：仅对文本类附件注入正文，图片/音频/视频等二进制附件绝不按文本读取
-     * （避免二进制乱码进 Prompt 并吞占限额）；提交含媒体附件时前置注入媒体可见性标注
-     * （独立于注入开关），告知核验 LLM 原内容不可见、文字声称从严核验。</p>
+     * （避免二进制乱码进 Prompt 并吞占限额）。</p>
+     *
+     * <p><b>`VU-2` 起媒体与文本分家</b>：媒体可见性说明不再拼进 {@code attachmentContent}
+     * （那一段的语义是「平台直读的<b>文本</b>，超限要截断/续读」），改为随
+     * {@link EvidenceContent#mediaVisibility()} 独立返回；同时按同一次附件读取产出
+     * {@link EvidenceContent#mediaRefs()}（判据 32：作用域与产出一次算完）。</p>
+     *
+     * @param subTask 待核验子任务
+     * @param mediaVisible 本次核验所用模型是否声明可读图片（`VU-2`：决定说明措辞与是否送图）
      */
-    public EvidenceContent buildEvidenceContent(SubTaskView subTask) {
-        String mediaNote = buildMediaVisibilityNote(subTask.id());
-        if (!dispatchProperties.isAttachmentContentEnabled()) {
-            return new EvidenceContent(mediaNote + "（附件内容注入已关闭，仅见清单）",
-                    ReviewEvidenceLedger.render(List.of(), 0), "");
-        }
+    public EvidenceContent buildEvidenceContent(SubTaskView subTask, boolean mediaVisible) {
+        // 附件清单只读一次：媒体说明、媒体引用、文本注入台账三处共用（判据 4 / 判据 32）
         List<AttachmentView> all = attachmentService.listActiveViews(subTask.id());
         if (all == null) {
             all = List.of();
+        }
+        MediaScope media = resolveMediaScope(all, mediaVisible);
+        if (!dispatchProperties.isAttachmentContentEnabled()) {
+            return new EvidenceContent("（附件内容注入已关闭，仅见清单）",
+                    ReviewEvidenceLedger.render(List.of(), 0), "", media.note(), media.refs());
         }
         List<AttachmentView> ordered = priorityOrder(all);
         Map<Long, String> contents = new HashMap<>();
@@ -306,7 +354,8 @@ public class ReviewEvidenceAssembler {
         if (textFiles.isEmpty()) {
             String text = ordered.isEmpty()
                     ? "（无物化附件）" : "（无平台可直读附件，无法核对文件正文）";
-            return new EvidenceContent(mediaNote + text, ledgerForNoContent(ordered), mechanicalCheck);
+            return new EvidenceContent(text, ledgerForNoContent(ordered), mechanicalCheck,
+                    media.note(), media.refs());
         }
 
         Map<Long, Integer> shown = allocate(textFiles, contents);
@@ -380,9 +429,22 @@ public class ReviewEvidenceAssembler {
         if (quotaTruncated) {
             sb.append("（附件内容按证据族配额分配，部分附件仅注入头尾区间）\n");
         }
-        String attachmentContent = (mediaNote + sb).trim();
+        String attachmentContent = sb.toString().trim();
         return new EvidenceContent(attachmentContent,
-                ReviewEvidenceLedger.render(entries, totalShown), mechanicalCheck);
+                ReviewEvidenceLedger.render(entries, totalShown), mechanicalCheck,
+                media.note(), media.refs());
+    }
+
+    /**
+     * 证据装配（**无视觉通道**口径）：等价 {@link #buildEvidenceContent(SubTaskView, boolean)}
+     * 传 {@code mediaVisible=false}。
+     *
+     * <p>保留此入口是「保守默认」：不知道本次用哪个模型时，一律按<b>看不到图</b>处理——
+     * 那正是 `VU-2` 之前的行为，老调用点（含冻结快照复算路径）不改即零变化。
+     * 想启用看图必须显式传能力判定结果，不允许「碰巧为真」。</p>
+     */
+    public EvidenceContent buildEvidenceContent(SubTaskView subTask) {
+        return buildEvidenceContent(subTask, false);
     }
 
     /** 无正文注入时的台账：二进制标 not_textual，文本但不可读标 absent。 */
@@ -614,24 +676,56 @@ public class ReviewEvidenceAssembler {
     }
 
     /**
-     * 媒体可见性标注：提交含图片/音频/视频附件时，显式告知核验 LLM 当前链路无法查看
-     * 原内容、相关文字声称从严核验评分保守。"看不到媒体"与内容注入开关无关，
-     * 故开关关闭时同样注入；无媒体附件返回空串。
+     * 媒体作用域：<b>说明文本 + 图片引用一次算完</b>（`VU-2`）。
+     *
+     * <p><b>为什么是四态而不是两态</b>：把「有媒体附件」与「有能送进消息的图片」当成同一件事，
+     * 会在「提交只有音频/视频」时说出「已带来图、可以直接看」——模型于是声称自己看过一段
+     * 它根本没收到的东西，而这种假通过从 prompt 侧完全看不出来（不变量 I-4 禁假装看过）。</p>
+     *
+     * <ol>
+     *   <li>无媒体附件 ⇒ 空串（「本来就没图」不需要任何说明，加了只是噪声）；</li>
+     *   <li>有媒体但模型不支持图片 ⇒ <b>保留</b>「无法查看、从严核验」原文案：这是无视觉
+     *       能力时唯一正确的行为，属**必须留着的降级路径**，不是可以删掉的历史遗留；</li>
+     *   <li>有媒体、模型支持、但无一张可内联图片 ⇒ 明说「无可随消息提供的图片」；</li>
+     *   <li>有媒体、模型支持、有可内联图片 ⇒ 「已随消息提供 N 张图，直接看，不要用工具读」。</li>
+     * </ol>
+     *
+     * <p><b>「哪些算图片」复用 {@link AttachmentMediaAssembler#isInlineImage} 静态判据</b>，
+     * 不在此另写一份扩展名表：装载器与说明若各判一套，漂移那天就是「说明说送了、实际没送」
+     * （判据 4：同一事实双写必分叉）。</p>
+     *
+     * @param attachments  本次子任务的有效附件（非 null）
+     * @param mediaVisible 本次核验所用模型是否声明可读图片
      */
-    private String buildMediaVisibilityNote(Long subTaskId) {
-        List<AttachmentView> attachments = attachmentService.listActiveViews(subTaskId);
-        if (attachments == null || attachments.isEmpty()) {
-            return "";
+    private MediaScope resolveMediaScope(List<AttachmentView> attachments, boolean mediaVisible) {
+        if (attachments.isEmpty()) {
+            return MediaScope.EMPTY;
         }
-        List<String> mediaNames = attachments.stream()
+        List<AttachmentView> media = attachments.stream()
                 .filter(att -> AttachmentContentPolicy.isMedia(att.mimeType(), att.fileName()))
-                .map(AttachmentView::fileName)
                 .toList();
-        if (mediaNames.isEmpty()) {
-            return "";
+        if (media.isEmpty()) {
+            return MediaScope.EMPTY;
         }
-        return "本提交含 " + mediaNames.size() + " 个媒体附件（" + String.join("、", mediaNames)
-                + "）。当前核验链路无法查看其原始内容；与之相关的文字声称请从严核验、评分保守。\n";
+        String names = media.stream()
+                .map(att -> att.fileName() == null ? "unknown" : att.fileName())
+                .collect(Collectors.joining("、"));
+        String head = "本提交含 " + media.size() + " 个媒体附件（" + names + "）。";
+        if (!mediaVisible) {
+            return new MediaScope(head + "当前核验链路无法查看其原始内容；"
+                    + "与之相关的文字声称请从严核验、评分保守。", List.of());
+        }
+        List<MediaRef> refs = media.stream()
+                .filter(att -> AttachmentMediaAssembler.isInlineImage(att.mimeType(), att.fileName()))
+                .map(att -> MediaRef.ofTaskAttachment(att.id(), att.fileName(), att.mimeType(), att.fileSize()))
+                .toList();
+        if (refs.isEmpty()) {
+            return new MediaScope(head + "其中没有可随消息提供的图片（当前链路只支持图片输入，"
+                    + "音频/视频不随消息发送）；相关声称按「未提供可核证据」从严判定。", List.of());
+        }
+        return new MediaScope(head + "平台已把其中 " + refs.size()
+                + " 张图片作为多模态输入随本条消息一并提供，你可以直接查看图片内容，"
+                + "不需要用任何工具读取。", refs);
     }
 
     /**

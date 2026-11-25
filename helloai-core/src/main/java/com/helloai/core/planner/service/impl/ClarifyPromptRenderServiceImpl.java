@@ -6,6 +6,7 @@ import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
+import com.helloai.core.agent.port.MediaRef;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.assistant.entity.ConversationContextState;
 import com.helloai.core.planner.assistant.service.ConversationContextStateService;
@@ -130,12 +131,12 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
 
     @Override
     public String renderClarifyPrompt(Long conversationId, String webSearchContext) {
-        return renderPrompt(conversationId, webSearchContext, PROMPT_TEMPLATE_PATH);
+        return renderPrompt(conversationId, webSearchContext, PROMPT_TEMPLATE_PATH).prompt();
     }
 
     @Override
     public String renderChatPrompt(Long conversationId, String webSearchContext) {
-        return renderPrompt(conversationId, webSearchContext, CHAT_PROMPT_TEMPLATE_PATH);
+        return renderPrompt(conversationId, webSearchContext, CHAT_PROMPT_TEMPLATE_PATH).prompt();
     }
 
     @Override
@@ -153,12 +154,40 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
     public String renderChatPrompt(Long conversationId, String webSearchContext, boolean includeAttachment,
                                    java.util.List<Integer> attachmentTargets, java.util.List<Long> selectedIds) {
         return renderPrompt(conversationId, webSearchContext, CHAT_PROMPT_TEMPLATE_PATH,
-                includeAttachment, attachmentTargets, selectedIds);
+                includeAttachment, attachmentTargets, selectedIds).prompt();
     }
 
     @Override
     public String renderFinalizePrompt(Long conversationId, String webSearchContext) {
-        return renderPrompt(conversationId, webSearchContext, FINALIZE_TEMPLATE_PATH);
+        return renderPrompt(conversationId, webSearchContext, FINALIZE_TEMPLATE_PATH).prompt();
+    }
+
+    // ── `VU-8`：与 Prompt 一起产出本轮图片引用（作用域同源，不二次查询）─────────────
+
+    @Override
+    public RenderedPrompt renderChatPromptWithMedia(Long conversationId, String webSearchContext,
+                                                    boolean includeAttachment,
+                                                    java.util.List<Integer> attachmentTargets,
+                                                    java.util.List<Long> selectedIds) {
+        return renderPrompt(conversationId, webSearchContext, CHAT_PROMPT_TEMPLATE_PATH,
+                includeAttachment, attachmentTargets, selectedIds);
+    }
+
+    @Override
+    public RenderedPrompt renderClarifyPromptWithMedia(Long conversationId, String webSearchContext,
+                                                       java.util.List<Long> selectedIds) {
+        // `G-044`：selectedIds 必须透传。此前这里走 3 参重载、内部硬编码 null，
+        // 使澄清轮的勾选完全失效（用户点掉一张图，模型照样看到它）。
+        // includeAttachment 恒 true：澄清轮没有「本轮不涉及附件」这个信号，收窄只能靠勾选。
+        return renderPrompt(conversationId, webSearchContext, PROMPT_TEMPLATE_PATH, true, null, selectedIds);
+    }
+
+    @Override
+    public RenderedPrompt renderFinalizePromptWithMedia(Long conversationId, String webSearchContext,
+                                                        java.util.List<Long> selectedIds) {
+        // 终稿轮同口径：出终稿是「基于全部已确认信息」的一次总结，但用户若明确排除了某份附件，
+        // 那份附件的内容就不该出现在终稿依据里。
+        return renderPrompt(conversationId, webSearchContext, FINALIZE_TEMPLATE_PATH, true, null, selectedIds);
     }
 
     /**
@@ -174,8 +203,8 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
      *
      * @param templatePath 按会话模式选模板（CLARIFY=requirement-clarify.md / CHAT=requirement-chat.md）
      */
-    private String renderPrompt(Long conversationId, String webSearchContext, String templatePath) {
-        return renderPrompt(conversationId, webSearchContext, templatePath, true, null);
+    private RenderedPrompt renderPrompt(Long conversationId, String webSearchContext, String templatePath) {
+        return renderPrompt(conversationId, webSearchContext, templatePath, true, null, null);
     }
 
     /**
@@ -183,8 +212,8 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
      *
      * @param includeAttachment false 时只注入附件清单，正文区渲染 {@link #ATTACHMENT_BODY_SKIPPED}
      */
-    private String renderPrompt(Long conversationId, String webSearchContext, String templatePath,
-                                boolean includeAttachment) {
+    private RenderedPrompt renderPrompt(Long conversationId, String webSearchContext, String templatePath,
+                                        boolean includeAttachment) {
         return renderPrompt(conversationId, webSearchContext, templatePath, includeAttachment, null, null);
     }
 
@@ -197,12 +226,26 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
      */
     private String renderPrompt(Long conversationId, String webSearchContext, String templatePath,
                                 boolean includeAttachment, java.util.List<Integer> attachmentTargets) {
-        return renderPrompt(conversationId, webSearchContext, templatePath, includeAttachment, attachmentTargets, null);
+        return renderPrompt(conversationId, webSearchContext, templatePath, includeAttachment,
+                attachmentTargets, null).prompt();
     }
 
-    private String renderPrompt(Long conversationId, String webSearchContext, String templatePath,
-                                boolean includeAttachment, java.util.List<Integer> attachmentTargets,
-                                java.util.List<Long> selectedIds) {
+    /**
+     * 渲染本体：一次查询同时产出 Prompt 与「本轮要送模型的图片引用」（`VU-8`）。
+     *
+     * <p><b>为什么两件事必须在同一次调用里出</b>：媒体引用的作用域与「哪几份附件的正文被注入」
+     * 是同一份判定（{@code resolveScope}：勾选优先 → 模型序号 → 全量）。分两次算会得到两个
+     * 可能不一致的作用域，症状是「清单说只看第 2 份，实际却送了第 1 份的图」——用户无从察觉，
+     * 且这种不一致只在勾选与序号冲突时才显形，测试极难覆盖（判据 4）。</p>
+     *
+     * <p><b>{@code includeAttachment=false} 时不送图</b>：联合决策已判定「本轮不涉及附件」，
+     * 正文刻意不注入却把图送到模型，等于用另一条通道推翻了同一个判定。</p>
+     */
+    private RenderedPrompt renderPrompt(Long conversationId, String webSearchContext,
+                                        String templatePath,
+                                        boolean includeAttachment,
+                                        java.util.List<Integer> attachmentTargets,
+                                        java.util.List<Long> selectedIds) {
         ClassPathResource resource = new ClassPathResource(templatePath);
         if (!resource.exists()) {
             throw new BizException("未找到 Prompt 模板: " + templatePath);
@@ -239,9 +282,10 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
         }
         String contextSection = (webSearchContext == null || webSearchContext.isBlank())
                 ? "（无可用联网资料）" : webSearchContext;
-        ChatAttachmentPromptRenderer.Rendered attachmentRendered =
-                chatAttachmentPromptRenderer.render(conversationId, currentUserInput, selectedIds, attachmentTargets);
-        return template
+        ChatAttachmentPromptRenderer.RenderedWithMedia attachmentRendered =
+                chatAttachmentPromptRenderer.renderWithMedia(conversationId, currentUserInput, selectedIds,
+                        attachmentTargets);
+        String prompt = template
                 .replace("{{CONVERSATION_HISTORY}}", transcript.toString().trim())
                 .replace("{{CURRENT_USER_MESSAGE}}", currentUserInput != null ? currentUserInput : "")
                 .replace("{{WEB_SEARCH_CONTEXT}}", contextSection)
@@ -252,10 +296,14 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
                 .replace("{{LONG_TERM_MEMORY_CONTEXT}}", resolveMemoryContext(conversationId))
                 // 会话附件两层注入（方案 §3.4）：清单恒注入（哪怕正文读不出，也要让模型知道有文件），
                 // 正文按 G-016 预算注入；一次查询同时供两层使用。
-                .replace("{{ATTACHMENT_MANIFEST}}", attachmentRendered.manifest())
-                .replace("{{ATTACHMENT_RETRIEVAL}}", includeAttachment ? attachmentRendered.retrieval() : ATTACHMENT_BODY_SKIPPED)
+                .replace("{{ATTACHMENT_MANIFEST}}", attachmentRendered.rendered().manifest())
+                .replace("{{ATTACHMENT_RETRIEVAL}}",
+                        includeAttachment ? attachmentRendered.rendered().retrieval() : ATTACHMENT_BODY_SKIPPED)
                 .replace("{{ATTACHMENT_CONTEXT}}",
-                        includeAttachment ? attachmentRendered.context() : ATTACHMENT_BODY_SKIPPED);
+                        includeAttachment ? attachmentRendered.rendered().context() : ATTACHMENT_BODY_SKIPPED);
+        // `VU-8`：正文不注入的轮次也不送图——同一个「本轮不涉及附件」判定不能只在文本通道生效
+        List<MediaRef> mediaRefs = includeAttachment ? attachmentRendered.mediaRefs() : List.of();
+        return new ClarifyPromptRenderService.RenderedPrompt(prompt, mediaRefs);
     }
 
     @Override
@@ -315,6 +363,14 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
     public ClarifyReply applyDescriptionSectionGuard(RequirementConversation conversation,
                                                      AgentProfileSnapshot planner, String prompt,
                                                      String scene, ClarifyReply firstReply) {
+        return applyDescriptionSectionGuard(conversation, planner, prompt, scene, firstReply, null);
+    }
+
+    @Override
+    public ClarifyReply applyDescriptionSectionGuard(RequirementConversation conversation,
+                                                     AgentProfileSnapshot planner, String prompt,
+                                                     String scene, ClarifyReply firstReply,
+                                                     List<MediaRef> mediaRefs) {
         if (!isFinalMissingSections(firstReply)) {
             return firstReply;
         }
@@ -324,11 +380,13 @@ public class ClarifyPromptRenderServiceImpl implements ClarifyPromptRenderServic
                         ? firstReply.getDescription().length() : 0);
         ClarifyReply retried;
         try {
+            // `VU-8`：重试的产物会覆盖首轮结果，必须带同一批图——否则「重来一次就不对了」
             AgentTask retryTask = AgentTask.builder()
                     .systemPrompt("")
                     .userPrompt(prompt + DESCRIPTION_SECTION_RETRY_HINT)
                     .context(Map.of("conversationId", conversationId, "scene", scene))
                     .requiredCapabilities(Map.of())
+                    .mediaRefs(mediaRefs == null ? List.of() : mediaRefs)
                     .build();
             AgentResult retryResult = platformAgentExecutionService.executeSync(planner.id(), retryTask);
             if (!retryResult.isSuccess()) {

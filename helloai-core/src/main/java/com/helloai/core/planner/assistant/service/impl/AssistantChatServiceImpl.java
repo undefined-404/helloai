@@ -4,6 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
+import com.helloai.core.agent.port.MediaRef;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.assistant.AssistantPromptBuilder;
 import com.helloai.core.planner.assistant.AssistantSearchQueryPlanner;
@@ -349,11 +350,18 @@ public class AssistantChatServiceImpl implements AssistantChatService {
         RoundSeed seed = prepareRound(conversation, message, userId);
         PromptContext context = loadPromptContext(conversationId, message, userId, input, seed);
 
+        // `G-043`：决策必须早于附件装配——它同时产出「要不要联网」与「本轮作用域是哪几份附件」。
         AssistantSearchPlan searchPlan = resolveSearchPlan(conversation, message, context.hasAttachments());
+        if (!searchPlan.attachmentTargets().isEmpty()) {
+            // 决策拿到作用域后，按 targets 重新装配一次附件段（清单 + 正文 + 媒体引用）。
+            // 不重建的话，上面那次装配是按「未指定」渲染的全量——正好是 G-043 要解决的问题。
+            context = context.withAttachment(resolveAttachmentBundle(
+                    conversationId, message, input.attachmentIds(), searchPlan.attachmentTargets()));
+        }
         String webSearchContext = resolveWebSearchContext(conversation, message, searchPlan);
         String systemPrompt = buildSystemPrompt(context, webSearchContext);
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
-        AgentTask task = buildAgentTask(conversationId, message, systemPrompt);
+        AgentTask task = buildAgentTask(conversationId, message, systemPrompt, context.mediaRefs());
         AgentResult result = platformAgentExecutionService.executeSync(planner.id(), task);
         if (result == null || !result.isSuccess()) {
             String reason = result == null ? "空响应" : result.getErrorMessage();
@@ -400,12 +408,21 @@ public class AssistantChatServiceImpl implements AssistantChatService {
                     RoundSeed seed = roundLocker.runLocked(conversationId,
                             roundLockTtlResolver.effectiveTtlSeconds(),
                             () -> prepareRound(conversation, message, userId));
-                    PromptContext context = loadPromptContext(conversationId, message, userId, input, seed);
+                    PromptContext loaded = loadPromptContext(conversationId, message, userId, input, seed);
+                    // `G-043`：流式与同步同一条顺序——先决策（拿到附件作用域），再按作用域重装附件段。
+                    // 原先这里在 `webSearchEnabled=false` 时直接短路进主回复，连决策都不跑，
+                    // 于是「不联网」顺带把「本轮看哪几份附件」也否决掉了。
+                    // 用 final 局部变量承接：下面还有一层 Flux.defer lambda 要捕它（重新赋值会让 `context` 失效）。
+                    AssistantSearchPlan searchPlan = resolveSearchPlan(conversation, message,
+                            loaded.hasAttachments());
+                    final PromptContext context = searchPlan.attachmentTargets().isEmpty()
+                            ? loaded
+                            : loaded.withAttachment(resolveAttachmentBundle(
+                                    conversationId, message, input.attachmentIds(),
+                                    searchPlan.attachmentTargets()));
                     if (!Boolean.TRUE.equals(conversation.getWebSearchEnabled())) {
                         return runStreamMainReply(conversation, context, null, steps, thinking, regenerate);
                     }
-                    AssistantSearchPlan searchPlan = resolveSearchPlan(conversation, message,
-                            context.hasAttachments());
                     if (searchPlan.skipSearch()) {
                         String skipStep = AssistantSearchQueryPlanner.INTERNAL_DATA
                                 .equals(searchPlan.attachmentIntent())
@@ -440,7 +457,7 @@ public class AssistantChatServiceImpl implements AssistantChatService {
         String webSearchContext = outcome == null ? "" : outcome.toContextText();
         String systemPrompt = buildSystemPrompt(context, webSearchContext);
         AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
-        AgentTask task = buildAgentTask(conversationId, context.message(), systemPrompt);
+        AgentTask task = buildAgentTask(conversationId, context.message(), systemPrompt, context.mediaRefs());
         // 检索完成后补发结果步骤（此时 outcome 已确定），再进主回复流
         Flux<ChatStreamEvent> resultSteps = steps.size() > 1
                 ? Flux.just(ChatStreamEvent.progress(steps.get(steps.size() - 1)))
@@ -532,7 +549,8 @@ public class AssistantChatServiceImpl implements AssistantChatService {
             }
         }
         return new PromptContext(message, profile, memories, recentWork, related, seed,
-                attachment.context(), attachment.present(), skillInstruction, workBrief);
+                attachment.context(), attachment.present(), skillInstruction, workBrief,
+                attachment.mediaRefs());
     }
 
     private static String buildSystemPrompt(PromptContext context, String webSearchContext) {
@@ -542,12 +560,21 @@ public class AssistantChatServiceImpl implements AssistantChatService {
                 context.attachmentContext(), context.skillInstruction());
     }
 
-    private static AgentTask buildAgentTask(Long conversationId, String message, String systemPrompt) {
+    /**
+     * 构造本轮执行任务。
+     *
+     * <p><b>`VU-9`：媒体引用随任务下发</b>。只带引用（{@code MediaRef}）不带字节——
+     * 能力判定与字节读取都在请求装配层（{@code AgentChatClientService}）按<b>实际调用的模型</b>
+     * 进行，理由见 {@code AgentTask#mediaRefs} 的 javadoc（不变量 I-2 / I-3）。</p>
+     */
+    private static AgentTask buildAgentTask(Long conversationId, String message, String systemPrompt,
+                                            List<MediaRef> mediaRefs) {
         return AgentTask.builder()
                 .systemPrompt(systemPrompt)
                 .userPrompt(message)
                 .context(Map.of("conversationId", conversationId, "scene", "assistant_chat"))
                 .requiredCapabilities(Map.of())
+                .mediaRefs(mediaRefs == null ? List.of() : mediaRefs)
                 .build();
     }
 
@@ -600,13 +627,11 @@ public class AssistantChatServiceImpl implements AssistantChatService {
         return outcome == null ? "" : outcome.toContextText();
     }
 
-    /** 本轮检索决策；开关关闭时不调用 LLM，直接返回 disabled（行为与改造前一致）。 */
+    /** 本轮检索决策。{@code webSearchEnabled} 只否决「联网」这一个结论，不再否决附件作用域判定。 */
     private AssistantSearchPlan resolveSearchPlan(RequirementConversation conversation, String message,
                                                   boolean hasAttachments) {
-        if (!Boolean.TRUE.equals(conversation.getWebSearchEnabled())) {
-            return AssistantSearchPlan.disabledPlan();
-        }
-        return searchQueryPlanner.plan(conversation, message, hasAttachments);
+        return searchQueryPlanner.plan(conversation, message, hasAttachments,
+                Boolean.TRUE.equals(conversation.getWebSearchEnabled()));
     }
 
     /** 流式错误事件文本：取根因 message（BizException 友好信息），缺失时回落类名。 */
@@ -635,11 +660,31 @@ public class AssistantChatServiceImpl implements AssistantChatService {
                                  String attachmentContext,
                                  boolean hasAttachments,
                                  String skillInstruction,
-                                 String workBrief) {
+                                 String workBrief,
+                                 List<MediaRef> mediaRefs) {
+
+        /**
+         * `G-043`：换掉附件段，其余字段原样保留。
+         *
+         * <p>为什么需要它：附件作用域由决策产出，而决策需要先知道「有没有附件」——
+         * 这是个先有鸡还是先有蛋的顺序问题。解法是<b>两段式装配</b>：先按「未指定」装一次
+         * 供决策判断有无附件，拿到 {@code attachment_targets} 后只替换附件这一段。
+         * 与其重跑整个 {@code loadPromptContext}（会重复检索记忆/历史/画像），
+         * 不如只换这一段——这也是把附件段单独拆成 {@link AttachmentBundle} 的意义。</p>
+         */
+        PromptContext withAttachment(AttachmentBundle bundle) {
+            return new PromptContext(message, profile, memories, recentWork, related, seed,
+                    bundle.context(), bundle.present(), skillInstruction, workBrief, bundle.mediaRefs());
+        }
     }
 
     /** 附件段产物：注入文本 + 会话是否确有附件（后者决定 answerable 能否跳过联网）。 */
-    private record AttachmentBundle(String context, boolean present) {
+    private record AttachmentBundle(String context, boolean present, List<MediaRef> mediaRefs) {
+
+        /** 无附件（含读取失败）时的空产物。 */
+        static AttachmentBundle empty(boolean present) {
+            return new AttachmentBundle("", present, List.of());
+        }
     }
 
     /**
@@ -652,34 +697,62 @@ public class AssistantChatServiceImpl implements AssistantChatService {
      * 是否真的能跳过联网（渲染失败但附件存在时仍视为有附件）。</p>
      */
     private AttachmentBundle resolveAttachmentBundle(Long conversationId, String message, List<Long> attachmentIds) {
+        return resolveAttachmentBundle(conversationId, message, attachmentIds, null);
+    }
+
+    /**
+     * 会话附件段（`G-043` 起支持模型判定的作用域）。
+     *
+     * @param attachmentIds 前端勾选（{@code null}=未指定 / {@code []}=明确全排除 / 非空=只这些）
+     * @param targets       模型判定的附件序号（1-based）；{@code null}/空 = 不限。
+     *                      <b>优先级低于 {@code attachmentIds}</b>——用户点了就是点了
+     */
+    private AttachmentBundle resolveAttachmentBundle(Long conversationId, String message, List<Long> attachmentIds,
+                                                     List<Integer> targets) {
         boolean present;
         try {
             present = !chatAttachmentService.listByConversation(conversationId).isEmpty();
         } catch (Exception e) {
             log.warn("助理附件清单读取失败（降级为无附件）: conversationId={}, err={}",
                     conversationId, e.getMessage());
-            return new AttachmentBundle("", false);
+            return AttachmentBundle.empty(false);
         }
         if (!present) {
-            return new AttachmentBundle("", false);
+            return AttachmentBundle.empty(false);
         }
         try {
-            ChatAttachmentPromptRenderer.Rendered rendered =
-                    attachmentPromptRenderer.render(conversationId, message, attachmentIds, null);
-            return new AttachmentBundle(rendered.manifest() + "\n" + rendered.context(), true);
+            ChatAttachmentPromptRenderer.RenderedWithMedia rendered =
+                    attachmentPromptRenderer.renderWithMedia(conversationId, message, attachmentIds, targets);
+            return new AttachmentBundle(
+                    rendered.rendered().manifest() + "\n" + rendered.rendered().context(),
+                    true,
+                    rendered.mediaRefs());
         } catch (Exception e) {
             log.warn("助理附件注入失败（降级为不注入附件）: conversationId={}, err={}",
                     conversationId, e.getMessage());
-            return new AttachmentBundle("", true);
+            return AttachmentBundle.empty(true);
         }
     }
 
-    /** 首轮失败清理刚建的会话（逻辑删消息 + 会话），避免留下空/半截会话。 */
+    /**
+     * 首轮失败清理刚建的会话（附件硬删 + 消息逻辑删 + 会话逻辑删），避免留下空/半截会话。
+     *
+     * <p><b>`G-041`：附件必须一并清</b>——这条路径建出来的会话从列表消失后**再无任何入口**
+     * 能触达它的附件行与对象（会话删除接口按 id 走、且要求 {@code ABANDONED}），
+     * 不清就是永久残留。清理顺序与 {@code RequirementClarifyServiceImpl#delete} 一致：
+     * 先附件（失败仍可重试），后会话。</p>
+     *
+     * <p><b>为什么这里不复用 {@code RequirementClarifyServiceImpl#delete}：</b>那条路径有
+     * {@code ABANDONED} 前置校验与 kind 守卫（只放行需求会话），而本方法要清的是刚建出来、
+     * 还可能停在 {@code ACTIVE} 的<b>助理</b>会话——语义不同，硬复用会把校验逻辑搞成两套特例。</p>
+     */
     private void cleanupCreatedConversation(Long conversationId) {
         try {
+            int purgedAttachments = chatAttachmentService.deleteByConversation(conversationId);
             messageService.removeByConversation(conversationId);
             conversationService.removeById(conversationId);
-            log.warn("助理会话首轮失败，已清理: conversationId={}", conversationId);
+            log.warn("助理会话首轮失败，已清理: conversationId={}, attachments={}",
+                    conversationId, purgedAttachments);
         } catch (Exception cleanupError) {
             log.warn("助理会话首轮失败且清理失败，需人工核验: conversationId={}, err={}",
                     conversationId, cleanupError.getMessage());

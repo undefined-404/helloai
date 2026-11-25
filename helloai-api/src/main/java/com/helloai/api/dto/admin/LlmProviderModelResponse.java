@@ -16,7 +16,7 @@ public class LlmProviderModelResponse {
     private Long id;
 
     /**
-     * 模型名称（如 deepseek-v4-flash）
+     * 模型名称（如 deepseek-flash）
      */
     private String modelName;
 

@@ -25,7 +25,10 @@ import org.springframework.web.client.RestClient;
  * 替代原 MoonshotProviderChatClientFactory / DashScopeProviderChatClientFactory，
  * 以及新增的自定义 OpenAI 兼容供应商场景。</p>
  *
- * <p>deepseek 仍走专用 {@link DeepSeekProviderChatClientFactory}（官方 SDK），不在本工厂处理。</p>
+ * <p>deepseek 亦经本工厂处理（2026-11-25 起）：官方 SDK（spring-ai-deepseek:1.1.8）
+ * {@code DeepSeekChatModel#createRequest} 无 media 分支 ⇒ 图片静默丢弃；改走本工厂后
+ * OpenAiChatModel 的 {@code mapToMediaContent} 可正常装配图片（方案 A，见
+ * {@link DeepSeekProviderChatClientFactory} 类注释与迁移 V156）。</p>
  */
 @Component
 @RequiredArgsConstructor

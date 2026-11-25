@@ -181,11 +181,11 @@ public class AgentSkillPolicyService {
     /**
      * 校验同一模型在同一角色下唯一。
      *
-     * <p>规则：deepseek-v4-flash 和 kimi-k3 可同时注册为 Planner；
-     * 但 deepseek-v4-flash 不能注册两个 Planner。</p>
+     * <p>规则：deepseek-flash 和 kimi-k3 可同时注册为 Planner；
+     * 但 deepseek-flash 不能注册两个 Planner。</p>
      *
      * @param providerCode   供应商编码（如 deepseek）
-     * @param modelName      模型名称（如 deepseek-v4-flash）
+     * @param modelName      模型名称（如 deepseek-flash）
      * @param role           Agent 角色（PLANNER/EXECUTOR/REVIEWER）
      * @param excludeAgentId 排除的 Agent ID（编辑场景下排除自身）
      * @throws BizException 当同一模型在同一角色下已存在时抛出

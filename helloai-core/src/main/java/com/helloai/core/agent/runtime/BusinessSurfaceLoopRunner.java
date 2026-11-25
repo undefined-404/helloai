@@ -9,6 +9,7 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.event.AgentEventContextResolver;
+import com.helloai.core.agent.port.MediaRef;
 import com.helloai.core.agent.runtime.cancel.AgentCancelledException;
 import com.helloai.core.agent.runtime.cancel.LoopCancellation;
 import com.helloai.core.agent.runtime.loop.AgentLoop;
@@ -17,6 +18,8 @@ import com.helloai.core.agent.runtime.loop.AgentLoopResult;
 import com.helloai.core.agent.service.AgentChatClientService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.support.AttachmentMediaAssembler;
+import com.helloai.core.agent.support.ImageInputCapabilityPolicy;
 import com.helloai.core.agent.tool.EnabledToolNames;
 import com.helloai.core.agent.tool.InternalToolCallbacks;
 import com.helloai.core.agent.tool.ToolContext;
@@ -27,6 +30,7 @@ import com.helloai.core.agent.tool.ToolRegistry;
 import com.helloai.core.agent.tool.impl.VisibleToolCallbacks;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.content.Media;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -95,6 +99,16 @@ public class BusinessSurfaceLoopRunner {
     private final ToolExecutor toolExecutor;
     private final AgentLoop agentLoop;
     private final ToolCallbackProvider toolCallbackProvider;
+    /**
+     * 「本次请求能不能带图」的唯一判定（`VU-2`）：与对话面 / 执行面同一个策略组件。
+     * <b>judged before loading</b>——不支持的模型连字节都不读（省一次对象存储往返）。
+     */
+    private final ImageInputCapabilityPolicy imageInputCapabilityPolicy;
+    /**
+     * 图片装载器（`VU-2`）：与执行链共用同一份 MIME / 体积 / 数量 / 降级判据。
+     * 本类只负责「判能力 → 交给它装载」，不重写任何一条判据（判据 4）。
+     */
+    private final AttachmentMediaAssembler attachmentMediaAssembler;
 
     /**
      * 内部执行链专用工具（{@code internal_} 前缀）——与执行链同一份可见面（REF-8.1 B）。
@@ -169,6 +183,9 @@ public class BusinessSurfaceLoopRunner {
             List<ToolCallback> visibleCallbacks = VisibleToolCallbacks.select(resolvedTools,
                     InternalToolCallbacks.union(toolCallbackProvider.getToolCallbacks(), internalToolCallbacks));
 
+            // 3.1) 媒体（`VU-2`）：能力闸在装载之前——不支持的模型连字节都不读
+            List<Media> media = resolveMedia(task, agent, scene);
+
             // 4) 循环（内部工具的真实 agentId / subTaskId 带外注入；严格成对解绑防线程复用串味）
             Integer maxIterations = resolveMaxIterations(agent.getAccessType());
             String runId = taskId != null ? AgentEventContextResolver.resolveRunId(taskId) : null;
@@ -188,7 +205,11 @@ public class BusinessSurfaceLoopRunner {
                         null, null, agent.getAccessType(),
                         LoopCancellation.of(executionProperties.getTurnDeadlineSeconds(),
                                 executionProperties.getToolCallTimeoutMillis()),
-                        scene));
+                        scene,
+                        // `VU-2`：核验面（reviewer 看图）的媒体通路。判能力 → 装载：
+                        // 与执行链同一条「先判后读」路径，判据在 ImageInputCapabilityPolicy /
+                        // AttachmentMediaAssembler 两处单源，本类不做第三份判定。
+                        media));
             } finally {
                 ToolInvocationContext.unbind();
             }
@@ -224,6 +245,57 @@ public class BusinessSurfaceLoopRunner {
                 loopResult.finishReason(),
                 EXECUTOR_NAME,
                 loopResult.tokenUsage());
+    }
+
+    /**
+     * 本业务面本轮要送给模型的图片（`VU-2`）：<b>先判能力、再读字节</b>。
+     *
+     * <p><b>为什么能力判定必须在装载之前</b>（与执行面 {@code AgentRuntimeContextAssembler}
+     * 同口径）：不支持的模型若先读了字节再丢弃，白付一次对象存储往返，而它换来的
+     * 收益是零——被丢掉的东西模型永远看不到。反过来（先读后判）还会让「模型不支持」
+     * 这条正常降级在监控上看起来像「读过媒体」，掩盖真实配置问题。</p>
+     *
+     * <p><b>为什么失败一律降级为空表而不是抛</b>：媒体是<b>增强</b>而非必要条件。
+     * 一条图读不出来不该让整次核验失败（那会让子任务停在 REVIEW 等人工），
+     * 也不该落到本类外层的「回落单次链路」——回落链路同样带 mediaRefs 会再读一次，
+     * 徒增往返。故本方法自兜，返回空表即「本轮按纯文本核验」。</p>
+     *
+     * <p><b>与 Prompt 说明的对应关系</b>：本方法判出的布尔结论与核验侧
+     * {@code ReviewEvidenceAssembler#resolveMediaScope} 用的是同一个策略组件与同一个
+     * {@code Agent}（同一次请求里两者必然一致），故「Prompt 说已带来图」与实际送图
+     * 不会分叉。装载数量/体积被截断时 Prompt 仍说「已提供 N 张」，差异由装载器的
+     * INFO 日志承担（截断属既有上限语义，不是矛盾）。</p>
+     *
+     * @param task  AgentTask（媒体引用来源）
+     * @param agent 本次实际调用的 Agent（能力判定依据）
+     * @param scene 业务面标识（仅用于日志定位）
+     * @return 媒体列表（绝不返回 {@code null}；无图 / 不支持 / 装载异常均为空表）
+     */
+    private List<Media> resolveMedia(AgentTask task, Agent agent, String scene) {
+        List<MediaRef> refs = task.getMediaRefs();
+        if (refs == null || refs.isEmpty()) {
+            return List.of();
+        }
+        try {
+            if (!imageInputCapabilityPolicy.supportsImageInput(agent)) {
+                log.info("业务面模型未声明图片输入，本轮媒体降级为纯文本: scene={}, agentId={}, "
+                                + "modelType={}, refs={}",
+                        scene, agent == null ? null : agent.getId(),
+                        agent == null ? null : agent.getModelType(), refs.size());
+                return List.of();
+            }
+            List<Media> media = attachmentMediaAssembler.loadInlineImages(refs);
+            if (!media.isEmpty()) {
+                log.info("业务面媒体装载完成: scene={}, agentId={}, modelType={}, refs={}, sent={}",
+                        scene, agent == null ? null : agent.getId(),
+                        agent == null ? null : agent.getModelType(), refs.size(), media.size());
+            }
+            return media;
+        } catch (RuntimeException e) {
+            log.warn("业务面媒体装载失败，本轮按纯文本核验: scene={}, agentId={}, refs={}, err={}",
+                    scene, agent == null ? null : agent.getId(), refs.size(), e.toString());
+            return List.of();
+        }
     }
 
     /** 读 {@code scene}（{@code AgentTask.context} 的身份键）。 */

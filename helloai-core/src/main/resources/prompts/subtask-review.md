@@ -2,8 +2,9 @@
 <!--
   由 SubTaskReviewService 加载渲染（classpath:prompts/subtask-review.md）。
   占位符：{SUB_TASK_TITLE} / {SUB_TASK_CONTENT} / {DELIVERABLE} /
-         {ACCEPTANCE} / {CONSTRAINTS} / {REQUIRED_SKILLS} / {UNCERTAINTIES} / {EXECUTION_OUTPUT} / {ATTACHMENT_LIST} /
-         {ATTACHMENT_CONTENT} / {MECHANICAL_CHECK} / {EVIDENCE_LEDGER} / {VERIFICATION_SIGNAL} / {SELF_REVIEW_SIGNAL} 由服务端替换。
+         {ACCEPTANCE} / {CONSTRAINTS} / {CONSTRAINT_REFS} / {REQUIRED_SKILLS} / {UNCERTAINTIES} / {EXECUTION_OUTPUT} / {ATTACHMENT_LIST} /
+         {ATTACHMENT_CONTENT} / {MECHANICAL_CHECK} / {EVIDENCE_LEDGER} / {VERIFICATION_SIGNAL} / {SELF_REVIEW_SIGNAL} /
+         {MEDIA_VISIBILITY}（VU-2：随证据提供的图片，四态文案由 ReviewEvidenceAssembler#resolveMediaScope 产出）由服务端替换。
   核验模型为双轨纪律制：轨道 A（验收标准）+ 轨道 B（工程纪律，按交付物类型条件激活）。
   工程纪律维度提炼自 DeepSeek Harness dsh-code-review / dsh-prose-standard / dsh-trim-cot-leakage，
   已按 HelloAI 语义适配（详见 doc/archive/implemented/HelloAI_DeepSeek_Harness_Skills借鉴方案.md）。
@@ -18,6 +19,7 @@
 - 交付物要求：{{DELIVERABLE}}
 - 验收标准：{{ACCEPTANCE}}
 - 执行约束：{{CONSTRAINTS}}
+- 约束文档引用：{{CONSTRAINT_REFS}}
 - 技能要求：{{REQUIRED_SKILLS}}
 - 不确定性申报：{{UNCERTAINTIES}}
 
@@ -30,6 +32,19 @@
 {{ATTACHMENT_LIST}}
 
 > 版本说明（平台保证）：同名交付物仅保留最近一次上传为有效版本（ACTIVE），历史同名版本已由平台自动停用（INACTIVE）且不列入上述清单，**不作为核验对象**；清单中不会出现同名冲突版本，无需据此驳回。
+
+## 随证据提供的图片（多模态）
+
+{{MEDIA_VISIBILITY}}
+
+> **本段与下文「物化附件内容」的区别**：下文是平台直读的**文本**（超限会截断、要用工具续读）；
+> 图片**不走那条文本通道**。本段若说明「已作为多模态输入随本条消息提供」，说明图片已经在你眼前，
+> **直接看图即可**——`internal_read_attachment_range` 读不出图像内容，不要为此浪费工具轮次。
+> 判定口径：图中可见内容即视为已提供证据——`coverage.method` 仍用 `attachment`（图片本身就在附件清单里），
+> `evidenceRef` 写该图片文件名，`note` 说明「据图中实际内容」；声称「已截图 / 界面已渲染 / 图表已生成」
+> 一类交付物，必须与图中实际内容一致，不一致判 `pass=false` 并在 issues 中写出差异。
+> 若本段说明「无法查看其原始内容」，则相关声称一律视为**未提供可核证据**，按第 12 条从严判定，
+> **不得**根据文件名、大小或上下文臆测图中内容。
 
 ## 物化附件内容（平台直读，已按限额截断）
 
@@ -102,7 +117,8 @@
     - 附件带 `[TRUNCATED]` 标注、附件标注"内容不可读/为空"、或仅有文件名而无正文时，其**不可见部分一律视为未提供证据**；
     - **禁止**以提交方在 `output`、可见附件或自检清单中的**自报数值/结论**（如"共 8 章""含 4 张表""167 处标注""覆盖矩阵完整"）充当不可见内容的达标依据——这类断言在你的可见范围内没有证据支撑；
     - 当某条验收标准依赖不可见内容时**不得判 pass=true**；该条 `coverage.status` 必须**按「返工方能否补齐」二分**，禁止一律写 `failed`：
-      - **平台侧缺口 ⇒ `status=not_verifiable`，`missingEvidence` 留空**：所引附件**在**附件清单或 `[EVIDENCE_LEDGER]` 里，但正文被预算截断（`status=truncated` / 带 `[TRUNCATED]`）、不可读（`status=absent` / 标注"内容不可读/为空"）、或属图片·音视频等无正文附件而验收要求其**内容**。这类缺口返工方补不齐，平台据此转人工、不扣执行方的返工预算。
+      - **平台侧缺口 ⇒ `status=not_verifiable`，`missingEvidence` 留空**：所引附件**在**附件清单或 `[EVIDENCE_LEDGER]` 里，但正文被预算截断（`status=truncated` / 带 `[TRUNCATED]`）、不可读（`status=absent` / 标注"内容不可读/为空"）、或属**音视频**等平台不支持随消息提供的附件而验收要求其**内容**。这类缺口返工方补不齐，平台据此转人工、不扣执行方的返工预算。
+        - **图片是例外，按「本次能不能看到」二分**：「随证据提供的图片」段说明图片**已随消息提供**时，图中可见内容属于你的**可见证据**——相关验收点据此正常判定（可 `covered`，`method=attachment`），**不得**再按「平台侧缺口」转 `not_verifiable`；只有该段说明「无法查看其原始内容」时，图片才归入本类平台侧缺口。
       - **交付方缺口 ⇒ `status=failed`，并按第 11 条填 `missingEvidence`**：验收要求提交的文件**不在**附件清单中（压根没交）、或要求提交截图 / 图表 / 运行日志却未提交。这类返工方能补，必须正常驳回，并在 issues 中写明缺什么。
     - 两类都算"不可见"，但处置相反：**把"平台没给全"写成 `failed` 会白烧返工预算；把"该交没交"写成 `not_verifiable` 会让本应返工的驳回被人工兜底接管**。拿不准时以「该文件在不在附件清单 / 台账里」为准——在即平台侧，不在即交付方。
 
@@ -166,5 +182,6 @@ coverage 为数组，**无论通过与否都必须逐条填写**（`RV-3` 机读
 - `method` **只能取 `attachment`、`sandbox` 或 `mechanical`**：`attachment` 表示依据是**物化附件正文**，`evidenceRef` 填附件文件名；`sandbox` 表示依据是**沙箱一手执行结果**，`evidenceRef` 填执行过的命令（如 `python -m pytest -q`）；`mechanical` 表示依据是平台 `[MECHANICAL_CHECK]` 段，`evidenceRef` 填 `id=<附件id>`。你**看不到源码仓库**，不要发明其它方式。
 - **报告里的数字要与机械结论比对时**，在 `evidenceRef` 写 `id=<附件id> claim=<你报告中的整数> basis=<lines|rows|data>`（例如 `id=2119683891861348354 claim=199080 basis=lines`）。`basis` 必填——`lines`/`rows`/`data` 三个口径的差值不同，缺 `basis` 平台无法确定性比对。
 - **`status=covered` 必须配 `attachment` / `sandbox` / `mechanical` 之一**：仅凭「执行产出文本自述」判覆盖不成立（见第 12 条，自报值不是证据）；无法取得一手依据时按 `not_verifiable` 处理。用 `mechanical` 但平台没有机械结论时，该覆盖项不计入覆盖。
+- **字符集 / 数值聚合 / 集合类验收条目必须落证据位置（覆盖声明防伪）**：验收标准涉及**字符集**（编码/乱码/字符构成，如「无乱码」「纯 ASCII」）、**数值聚合**（总数/行数/金额/比例等汇总口径，如「共 8 章」「199080 条」）或**集合类**（列表/枚举/全量成员，如「覆盖 4 个平台」「清单含全部章节」）时，`status=covered` 的 `evidenceRef` 必须写**可复核的一手位置**：沙箱实测命令（如 `python -m pytest -q`、`wc -l x.csv`、`grep -c "TODO" *.java`）或附件/产出内的**精确行号范围**（如 `L120-L135`）；`method=attachment` 时 `note` 必须附该结论对应的行号范围。只写附件文件名、或引用**自报数值**（"共 8 章""199080 条"）当证据的，一律不得判 `covered`——按「证据位置缺失」处理（能补→`failed` 并填 `missingEvidence`；平台侧不可见→`not_verifiable`）。光靠通读全文无法确证这三类结论时，宁可 `not_verifiable` 转人工，不得放行。
 - `pass=true` 时**每条验收标准都必须有 `status=covered` 的覆盖项**；有任一条 `failed` / `not_verifiable` 却判通过，会被平台判为「结论自相矛盾」并转人工。
 

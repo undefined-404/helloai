@@ -81,6 +81,10 @@ public class PlanDraft extends BaseEntity {
 
     private String constraints;
 
+    /** 类型化约束引用列表（`G-037`，V154 JSONB 列；草案暂存，确认转正同步 {@code sub_task}）。 */
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
+    private List<com.helloai.core.task.entity.ConstraintRef> constraintRefs;
+
     /** 缺口申报（与拆解 Prompt 的 JSON 契约同形）。 */
     @TableField(typeHandler = UncertaintyDraftListTypeHandler.class)
     private List<UncertaintyDraft> uncertainties;

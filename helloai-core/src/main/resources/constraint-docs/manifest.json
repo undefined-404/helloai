@@ -1,0 +1,46 @@
+{
+  "docs": [
+    {
+      "ref": "code-style",
+      "path": "doc/HelloAI_CODE_STYLE.md",
+      "sandboxPath": "doc/HelloAI_CODE_STYLE.md",
+      "repoPath": "doc/HelloAI_CODE_STYLE.md",
+      "title": "HelloAI 代码开发规范",
+      "summary": "代码契约：规则优先级 / 总体原则 / 模块边界 / Core 域结构 / 域依赖方向 / 跨域依赖 / Service 与类规模规范（3918 行，151 章节；试点登记核心一级章节）",
+      "sections": [
+        { "id": "s1", "title": "规则优先级", "titlePattern": "^# 1\\. " },
+        { "id": "s2", "title": "总体原则", "titlePattern": "^# 2\\. " },
+        { "id": "s4", "title": "Maven 模块边界", "titlePattern": "^# 4\\. " },
+        { "id": "s5", "title": "Core 业务域结构", "titlePattern": "^# 5\\. " },
+        { "id": "s6", "title": "Core 域依赖方向", "titlePattern": "^# 6\\. " },
+        { "id": "s7", "title": "跨域依赖", "titlePattern": "^# 7\\. " },
+        { "id": "s8", "title": "Service 规范", "titlePattern": "^# 8\\. " },
+        { "id": "s9", "title": "类规模治理", "titlePattern": "^# 9\\. " }
+      ]
+    },
+    {
+      "ref": "unip-code-style",
+      "path": "E:/yhzx/1027/unip-platform/doc/unip-platform_CODE_STYLE.md",
+      "sandboxPath": "doc/unip-platform_CODE_STYLE.md",
+      "repoPath": "doc/unip-platform_CODE_STYLE.md",
+      "title": "unip-platform 代码开发规范",
+      "summary": "统一认证平台判据集合：模块边界 / 业务域结构 / 依赖方向 / 跨域调用 / Service 规模 / Controller / DTO / 异常 / 日志 / 事务 / SQL / 自检清单（330 行，19 章节；试点靶项目，path 为本地绝对路径）",
+      "sections": [
+        { "id": "u1", "title": "规则优先级", "titlePattern": "^# 1\\. " },
+        { "id": "u2", "title": "总体原则", "titlePattern": "^# 2\\. " },
+        { "id": "u4", "title": "模块边界", "titlePattern": "^# 4\\. " },
+        { "id": "u5", "title": "业务域结构", "titlePattern": "^# 5\\. " },
+        { "id": "u6", "title": "依赖方向", "titlePattern": "^# 6\\. " },
+        { "id": "u7", "title": "跨域调用", "titlePattern": "^# 7\\. " },
+        { "id": "u8", "title": "Service 规范", "titlePattern": "^# 8\\. " },
+        { "id": "u9", "title": "Controller 规范", "titlePattern": "^# 9\\. " },
+        { "id": "u10", "title": "DTO / Entity", "titlePattern": "^# 10\\. " },
+        { "id": "u11", "title": "异常", "titlePattern": "^# 11\\. " },
+        { "id": "u12", "title": "日志", "titlePattern": "^# 12\\. " },
+        { "id": "u13", "title": "事务", "titlePattern": "^# 13\\. " },
+        { "id": "u14", "title": "SQL / ORM", "titlePattern": "^# 14\\. " },
+        { "id": "u18", "title": "自检清单", "titlePattern": "^# 18\\. " }
+      ]
+    }
+  ]
+}

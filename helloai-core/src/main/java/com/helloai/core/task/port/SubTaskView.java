@@ -68,7 +68,13 @@ public record SubTaskView(
          * <p>存量草案（`V147` 之前产出、AD-5a 尚未迁移）为 {@code null}，
          * 消费方须自行回落。</p>
          */
-        String draftCode
+        String draftCode,
+
+        /**
+         * 类型化约束引用（`G-037` 任务约束类型化试点）：契约文档引用列表（ref + scope）。
+         * 空列表 = 无契约引用（存量行为一致）；{@code null} 兼容旧调用方。
+         */
+        List<ConstraintRefView> constraintRefs
 ) {
 
     /** 兼容构造：不含 planner 侧扩展字段（review 场景）。 */
@@ -77,7 +83,7 @@ public record SubTaskView(
                        Map<String, Object> context, List<UncertaintyView> uncertainties) {
         this(id, taskId, status, assignedAgentId, reworkCount, title, content, deliverable, acceptance,
                 null, constraints, context, uncertainties,
-                null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -93,7 +99,25 @@ public record SubTaskView(
         this(id, taskId, status, assignedAgentId, reworkCount, title, content, deliverable, acceptance,
                 acceptanceKind, constraints, context, uncertainties, dependsOn, deadline, priority,
                 isContract, requiredSkills, moduleId, scoreFactors, compositeScore, scoreGrade,
-                timeoutCount, createTime, updateTime, null);
+                timeoutCount, createTime, updateTime, null, null);
+    }
+
+    /**
+     * 兼容构造：不含 {@code constraintRefs}（`G-037` 之前携带 {@code draftCode} 的调用方沿用；
+     * 委托补 {@code null}，渲染与映射层按空引用零注入处理）。
+     */
+    public SubTaskView(Long id, Long taskId, SubTaskStatus status, Long assignedAgentId, Integer reworkCount,
+                       String title, String content, String deliverable, String acceptance,
+                       AcceptanceKind acceptanceKind, String constraints, Map<String, Object> context,
+                       List<UncertaintyView> uncertainties, List<Long> dependsOn, OffsetDateTime deadline,
+                       String priority, Integer isContract, List<String> requiredSkills, Long moduleId,
+                       Map<String, Object> scoreFactors, Integer compositeScore, String scoreGrade,
+                       Integer timeoutCount, OffsetDateTime createTime, OffsetDateTime updateTime,
+                       String draftCode) {
+        this(id, taskId, status, assignedAgentId, reworkCount, title, content, deliverable, acceptance,
+                acceptanceKind, constraints, context, uncertainties, dependsOn, deadline, priority,
+                isContract, requiredSkills, moduleId, scoreFactors, compositeScore, scoreGrade,
+                timeoutCount, createTime, updateTime, draftCode, null);
     }
 
     /**

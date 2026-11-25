@@ -1,6 +1,7 @@
 package com.helloai.core.planner.attachment;
 
 import com.helloai.common.constant.ChatAttachmentParseStatus;
+import com.helloai.core.agent.port.MediaRef;
 import com.helloai.core.knowledge.KnowledgeBaseService;
 import com.helloai.core.knowledge.KnowledgeSearchResult;
 import com.helloai.core.planner.entity.ChatAttachment;
@@ -10,6 +11,8 @@ import com.helloai.core.shared.util.AttachmentContentPolicy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -20,6 +23,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -84,15 +88,35 @@ class ChatAttachmentPromptRendererTest {
     }
 
     @Test
-    @DisplayName("SKIPPED（图片）：清单标「需识别（无正文）」，正文层写明无可用正文而不是留空")
-    void shouldMarkSkippedWithoutContent() {
+    @DisplayName("SKIPPED（图片）：清单与正文层都<b>只陈述事实</b>，不写「需识别（无正文）」这种会误导模型的断言")
+    void shouldMarkSkippedImageWithoutContent() {
         ChatAttachment image = attachment("shot.png", ChatAttachmentParseStatus.SKIPPED, null);
         image.setParseError("图片/音视频暂不支持正文提取（P0 阶段），仅登记元信息");
         when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(image));
 
         ChatAttachmentPromptRenderer.Rendered rendered = renderer.render(9L);
 
-        assertThat(rendered.manifest()).contains("需识别（无正文）");
+        // ★VU-9：旧文案「需识别（无正文）」会让模型判定「这张图读不出、当它不存在」，
+        // 与另经图像通道送出的图像消息自相矛盾。现改为中性陈述：只说「图片，另经图像通道送入」。
+        assertThat(rendered.manifest()).contains("图片（另经图像通道送入）");
+        assertThat(rendered.context())
+                .contains("图片无文本正文")
+                .contains("另经图像通道送入")
+                // 不得把 parseError 那句「暂不支持正文提取」带给模型——它对图片是噪声，
+                // 且会诱导模型得出「平台看不了图」的错误结论
+                .doesNotContain("暂不支持正文提取");
+    }
+
+    @Test
+    @DisplayName("SKIPPED（音视频）：仍写明「正文不可提取」——这类文件确实没有可用通道，必须让模型知道")
+    void shouldMarkSkippedMediaWithoutContent() {
+        ChatAttachment video = attachment("demo.mp4", ChatAttachmentParseStatus.SKIPPED, null);
+        video.setParseError("图片/音视频暂不支持正文提取（P0 阶段），仅登记元信息");
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(List.of(video));
+
+        ChatAttachmentPromptRenderer.Rendered rendered = renderer.render(9L);
+
+        assertThat(rendered.manifest()).contains("音视频（正文不可提取）");
         assertThat(rendered.context())
                 .contains("无可用正文")
                 .contains("图片/音视频暂不支持正文提取");
@@ -510,5 +534,201 @@ class ChatAttachmentPromptRendererTest {
 
         assertThat(retrieval.indexOf("第一片")).isLessThan(retrieval.indexOf("第二片"));
         assertThat(retrieval).contains("第三片");
+    }
+
+    // ------------------------------------------------------------------
+    // G-045：null（未指定）与 []（明确一个都不要）必须区分
+    // ------------------------------------------------------------------
+
+    /** 三份可读附件，id 分别 101/102/103，正文各带唯一标记，便于断言「谁的正文被注入了」。 */
+    private List<ChatAttachment> threeReadableAttachments() {
+        ChatAttachment a = attachment("a.md", ChatAttachmentParseStatus.READY, "正文甲 MARK-A");
+        a.setId(101L);
+        ChatAttachment b = attachment("b.md", ChatAttachmentParseStatus.READY, "正文乙 MARK-B");
+        b.setId(102L);
+        ChatAttachment c = attachment("c.md", ChatAttachmentParseStatus.READY, "正文丙 MARK-C");
+        c.setId(103L);
+        return List.of(a, b, c);
+    }
+
+    @Test
+    @DisplayName("G-045 真值表①：selectedIds=null（未指定）⇒ 回落全量，三份正文全注入")
+    void nullSelectionShouldFallBackToAll() {
+        when(chatAttachmentService.listByConversation(1L)).thenReturn(threeReadableAttachments());
+
+        String context = renderer.render(1L, "看看这些文件", null, null).context();
+
+        assertThat(context).contains("MARK-A").contains("MARK-B").contains("MARK-C");
+    }
+
+    @Test
+    @DisplayName("G-045 真值表②：selectedIds=[]（明确全排除）⇒ 一份都不注入，且显式告知用户已排除")
+    void emptySelectionShouldInjectNothing() {
+        when(chatAttachmentService.listByConversation(1L)).thenReturn(threeReadableAttachments());
+
+        String context = renderer.render(1L, "看看这些文件", List.of(), null).context();
+
+        // 关键：绝不能回落成「全量注入」——这正是修复前的反转行为
+        assertThat(context).doesNotContain("MARK-A");
+        assertThat(context).doesNotContain("MARK-B");
+        assertThat(context).doesNotContain("MARK-C");
+        // 必须显式声明，而不是渲染成「本轮未涉及该附件：提问指向的是其他附件」
+        // （空集场景下没有「其他附件」，那句话会误导模型以为清单不完整）
+        assertThat(context).contains("已排除全部").contains("3 份附件");
+    }
+
+    @Test
+    @DisplayName("G-045 真值表③：selectedIds 非空 ⇒ 只注入命中的那一份（显式信号优先于全量）")
+    void explicitSelectionShouldInjectOnlyPicked() {
+        when(chatAttachmentService.listByConversation(1L)).thenReturn(threeReadableAttachments());
+
+        String context = renderer.render(1L, "只看第二份", List.of(102L), null).context();
+
+        assertThat(context).contains("MARK-B");
+        assertThat(context).doesNotContain("MARK-A");
+        assertThat(context).doesNotContain("MARK-C");
+    }
+
+    @Test
+    @DisplayName("G-045 真值表④：空集优先于模型序号（显式信号不被推断信号覆盖）")
+    void emptySelectionShouldWinOverTargets() {
+        when(chatAttachmentService.listByConversation(1L)).thenReturn(threeReadableAttachments());
+
+        // 模型说「第 1 张」，但用户明确全排除 ⇒ 尊重用户
+        String context = renderer.render(1L, "第 1 张讲了什么", List.of(), List.of(1)).context();
+
+        assertThat(context).doesNotContain("MARK-A");
+        assertThat(context).contains("已排除全部");
+    }
+
+    @Test
+    @DisplayName("G-045：空集时送模型的图片引用也为空（文本通道排除，图像通道必须同步排除）")
+    void emptySelectionShouldSendNoMedia() {
+        ChatAttachment img = attachment("spec.png", ChatAttachmentParseStatus.SKIPPED, null);
+        img.setId(201L);
+        img.setMimeType("image/png");
+        ChatAttachment doc = attachment("spec.md", ChatAttachmentParseStatus.READY, "正文 MARK-D");
+        doc.setId(202L);
+        when(chatAttachmentService.listByConversation(1L)).thenReturn(List.of(img, doc));
+
+        var rendered = renderer.renderWithMedia(1L, "看图", List.of(), null);
+
+        // 同一个判定必须同时作用于两条通道（判据 32：作用域与产出一次算完）
+        assertThat(rendered.mediaRefs()).isEmpty();
+        assertThat(rendered.rendered().context()).doesNotContain("MARK-D");
+    }
+
+    // ------------------------------------------------------------------
+    // G-046：注入侧超限时「保新」而非「保旧」
+    // ------------------------------------------------------------------
+
+    /**
+     * 造 n 份附件，文件名带序号以便断言「留下的是哪几份」。
+     *
+     * <p>{@code listByConversation} 的返回是<b>上传正序</b>（ASC），所以第 1 份是最老的；
+     * {@code listLatestByConversation} 返回的是<b>上传倒序</b>（DESC，最新在前）。
+     * 两个桩严格按各自真实语义给数据，测试才验得住「倒序取 N 再正序排」。</p>
+     */
+    private static List<ChatAttachment> attachmentsFrom(int n) {
+        List<ChatAttachment> list = new ArrayList<>();
+        for (int i = 1; i <= n; i++) {
+            ChatAttachment a = attachment("f" + i + ".md", ChatAttachmentParseStatus.READY, "正文 MARK-" + i);
+            a.setId((long) i);
+            list.add(a);
+        }
+        return list;
+    }
+
+    @Test
+    @DisplayName("G-046：25 份超过上限 20 ⇒ 保留<b>最新</b> 20 份（丢最早 5 份），且仍按上传正序编号")
+    void overLimitShouldKeepNewestAndRestoreAscendingOrder() {
+        int total = ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS + 5;
+        List<ChatAttachment> ascending = attachmentsFrom(total);
+        List<ChatAttachment> descending = new ArrayList<>(ascending);
+        Collections.reverse(descending);
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(ascending);
+        when(chatAttachmentService.listLatestByConversation(9L,
+                ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS))
+                .thenReturn(descending.subList(0, ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS));
+
+        ChatAttachmentPromptRenderer.Rendered rendered = renderer.render(9L);
+
+        // ★核心断言：被丢弃的是「最早那 5 份」，不是「最新那 5 份」（原缺陷恰好相反）
+        assertThat(rendered.manifest())
+                .doesNotContain("f1.md").doesNotContain("f5.md")
+                .contains("f6.md").contains("f25.md");
+        assertThat(rendered.context())
+                // 带换行匹配：`MARK-1` 是 `MARK-10`..`MARK-19` 的前缀，裸串匹配会误报
+                .doesNotContain("MARK-1\n").doesNotContain("MARK-5\n")
+                .contains("MARK-6\n").contains("MARK-25\n");
+        // 倒序取回后必须翻回正序：清单序号 附件1 应是最早被保留的那份（f6），而非最新的 f25
+        assertThat(rendered.manifest()).contains("| 附件1 | f6.md |");
+        assertThat(rendered.manifest()).contains("| 附件20 | f25.md |");
+    }
+
+    @Test
+    @DisplayName("G-046：截断必须显式声明「共 M 份、只含最新 N 份」——静默截断不可接受")
+    void overLimitShouldDeclareTruncationInBothLayers() {
+        int total = ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS + 3;
+        List<ChatAttachment> ascending = attachmentsFrom(total);
+        List<ChatAttachment> descending = new ArrayList<>(ascending);
+        Collections.reverse(descending);
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(ascending);
+        when(chatAttachmentService.listLatestByConversation(9L,
+                ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS))
+                .thenReturn(descending.subList(0, ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS));
+
+        ChatAttachmentPromptRenderer.Rendered rendered = renderer.render(9L);
+
+        String expected = "本会话共 " + total + " 份附件，此处只含最新的 "
+                + ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS + " 份";
+        // 清单层与正文层各有一份声明：模型无论读哪一段都知道清单不完整
+        assertThat(rendered.manifest()).contains(expected).contains("更早的 3 份未注入");
+        assertThat(rendered.context()).contains(expected);
+    }
+
+    @Test
+    @DisplayName("G-046：恰好等于上限时不算截断，不声明、不触发窄查询（行为与改造前一致）")
+    void exactlyAtLimitShouldNotDeclareTruncation() {
+        int limit = ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS;
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(attachmentsFrom(limit));
+
+        ChatAttachmentPromptRenderer.Rendered rendered = renderer.render(9L);
+
+        assertThat(rendered.manifest()).doesNotContain("本会话共");
+        assertThat(rendered.context()).doesNotContain("本会话共");
+        // 未超限不该多花一次查询（绝大多数会话走的就是这条路径）
+        verify(chatAttachmentService, never()).listLatestByConversation(anyLong(), anyInt());
+    }
+
+    @Test
+    @DisplayName("G-046：媒体引用也只从「最新 N 份」里挑（保新必须同时作用于图像通道）")
+    void overLimitMediaRefsShouldAlsoComeFromNewest() {
+        int total = ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS + 2;
+        List<ChatAttachment> ascending = new ArrayList<>();
+        for (int i = 1; i <= total; i++) {
+            ChatAttachment a = attachment("p" + i + ".png", ChatAttachmentParseStatus.SKIPPED, null);
+            a.setId((long) i);
+            a.setMimeType("image/png");
+            ascending.add(a);
+        }
+        List<ChatAttachment> descending = new ArrayList<>(ascending);
+        Collections.reverse(descending);
+        when(chatAttachmentService.listByConversation(9L)).thenReturn(ascending);
+        when(chatAttachmentService.listLatestByConversation(9L,
+                ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS))
+                .thenReturn(descending.subList(0, ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS));
+
+        var rendered = renderer.renderWithMedia(9L, "看这几张图", null, null);
+
+        // 全部都是图片，所以 mediaRefs 的数量就是本轮注入份数
+        assertThat(rendered.mediaRefs()).hasSize(ChatAttachmentPromptRenderer.MAX_INJECTED_ATTACHMENTS);
+        // 最老的两张（id 1/2）不该出现——那正是原实现会保留的
+        assertThat(rendered.mediaRefs())
+                .extracting(MediaRef::attachmentId)
+                .doesNotContain(1L, 2L)
+                .contains(3L, (long) total);
+        // ★顺序也是契约：下游按序取前 N 就停，故必须「最新在前」——否则截断落回最旧的
+        assertThat(rendered.mediaRefs().get(0).attachmentId()).isEqualTo((long) total);
     }
 }
