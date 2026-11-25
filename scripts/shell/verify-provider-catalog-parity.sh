@@ -45,7 +45,8 @@ JAVA_FALLBACK="$ROOT/helloai-core/src/main/java/com/helloai/core/agent/service/i
 JAVA_DEEPSEEK="$ROOT/helloai-core/src/main/java/com/helloai/core/agent/chat/provider/DeepSeekProviderChatClientFactory.java"
 
 # ---------- 真值锚点（唯一事实来源 = llm_provider_model.is_default=1）----------
-#   - deepseek : V49:66-73 + V101（'deepseek-chat' 目录已无 → deepseek-v4-flash）
+#   - deepseek : V49:66-73 + V101（'deepseek-chat' → deepseek-v4-flash）
+#                + V155（对齐官方《模型细节》文档：'deepseek-v4-flash' 为废弃别名 → deepseek-flash）
 #   - moonshot : V49:79-90 + V61（moonshot-v1-*/kimi-k2.5 下线 → kimi-k3）
 #   - minimax  : V49:108-116 + V108（M2.5/M2.7 全系列即将下线 → MiniMax-M3）
 #   - dashscope: V49:94-104 + V101（'qwen-plus' 目录已无 → qwen3.7-plus）
@@ -74,7 +75,7 @@ expected_default() {
     return 0
   fi
   case "$1" in
-    deepseek)  printf '%s\n' 'deepseek-v4-flash' ;;
+    deepseek)  printf '%s\n' 'deepseek-flash' ;;
     moonshot)  printf '%s\n' 'kimi-k3' ;;
     minimax)   printf '%s\n' 'MiniMax-M3' ;;
     dashscope) printf '%s\n' 'qwen3.7-plus' ;;

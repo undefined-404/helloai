@@ -225,7 +225,7 @@ run_static_guard "事件码 parity（后端码 ↔ 前端事件字典两处，�
 # 纯文本 + python 正则，零外部依赖，CI 可跑。原为 **zsh 实现**，在无 zsh 的环境（Windows/Git Bash）
 # 会 `emulate: command not found` 后落空且仍 EXIT=0 —— 静默假绿，致「状态词漂移」长期累积
 # （2026-10-11 实测：本表曾漂移 5 处）。已改 **bash 实现**并**接入本门禁**，见 LOG-20261011-010。
-run_static_guard "《差距表》结构守卫（表格完整性 / 无转义竖线 / 处置列首词∈九态 / 矩阵两列无过程信号）" \
+run_static_guard "《差距表》结构守卫（表格完整性 / 矩阵连续性 / 号段行不累加 / 单元格不累加 / 无转义竖线 / 处置列首词∈九态 / 矩阵两列无过程信号）" \
   "$SCRIPT_DIR/../shell/verify-doc-gap-table.sh"
 
 # 供应商注册信息一致性守卫（前端预置 ↔ 迁移种子 is_default=1 ↔ application.yml ↔ Java 兜底常量）：
