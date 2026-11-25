@@ -197,16 +197,23 @@
       <!-- 输入区 -->
       <div class="wb-composer-wrap">
         <div class="wb-composer">
-          <!-- 技能 / 附件 胶囊条（选技能只挂载不发送；附件上传后即时可见） -->
+          <!-- 技能 / 附件 胶囊条（选技能只挂载不发送；附件上传后即时可见）
+               ATT-3：附件胶囊可点击切换「本轮是否参与」，与需求对话页同一份判定 -->
           <div v-if="chips.length" class="wb-chips">
             <span
               v-for="chip in chips"
               :key="chip.key"
               class="wb-chip"
-              :class="chip.kind"
+              :class="[chip.kind, { 'is-excluded': chip.excluded }]"
               :title="chip.title"
+              @click="chip.toggle?.()"
             >
-              <el-icon><component :is="chip.icon" /></el-icon>
+              <!-- 参与态：实心勾；未参与回落文件图标（勾只在选中时出现，语义不反） -->
+              <el-icon v-if="chip.toggle">
+                <CircleCheckFilled v-if="!chip.excluded" />
+                <Document v-else />
+              </el-icon>
+              <el-icon v-else><component :is="chip.icon" /></el-icon>
               <span class="wb-chip-name">{{ chip.name }}</span>
               <span v-if="chip.state" class="wb-chip-state">{{ chip.state }}</span>
               <button
@@ -214,7 +221,7 @@
                 class="wb-chip-x"
                 type="button"
                 title="移除"
-                @click="chip.remove()"
+                @click.stop="chip.remove()"
               >
                 <el-icon><Close /></el-icon>
               </button>
@@ -309,7 +316,7 @@
                 type="file"
                 multiple
                 class="wb-file-input"
-                accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.html,.htm"
+                :accept="ACCEPT_FILE_TYPES"
                 @change="onFileInputChange"
               >
 
@@ -723,9 +730,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowDown, ArrowUp, Bell, ChatDotRound, Check, CircleClose, Clock, Close, Connection, CopyDocument, Cpu,
-  Document, Download, EditPen, Grid, Histogram, Loading, MagicStick, Microphone, MoreFilled, Plus,
-  Refresh, Stamp, Tickets, Tools, User
+  ArrowDown, ArrowUp, Bell, ChatDotRound, Check, CircleCheckFilled, CircleClose, Clock, Close, Connection,
+  CopyDocument, Cpu, Document, Download, EditPen, Grid, Histogram, Loading, MagicStick, Microphone,
+  MoreFilled, Plus, Refresh, Stamp, Tickets, Tools, User
 } from '@element-plus/icons-vue'
 import MarkdownView from '@/components/MarkdownView.vue'
 import WebSearchBar from '@/views/requirement/WebSearchBar.vue'
@@ -861,9 +868,67 @@ let parsePollTimer: number | null = null
 const MAX_FILES_PER_UPLOAD = 5
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 
+/**
+ * 文件选择器的类型过滤（`VU-9` 起补图片）。
+ *
+ * <p>为什么只写扩展名、不写 `image/*`：`image/*` 会一并放进 `tiff` / `heic` / `avif` 等
+ * 部分 provider 不收的格式，而这里的选择器只需覆盖 `llm_provider_model.capabilities`
+ * 实际支持的 `text/image` 子集。后端不认的格式会在上传时按
+ * `ContentKind.UNSUPPORTED` 明确拒收（400 带可读原因），不会静默存成坏附件。</p>
+ *
+ * <p>**与需求对话页的区别**：需求对话页 `RequirementChat.vue` 的 `accept` 本轮**故意不改**。
+ * 那一页的附件同时被两条链消费——澄清/问答走 `VU-9`（本项）可用，但「执行期看图」还依赖
+ * `VU-8`（task 域 `attachment`，与 planner 域 `chat_attachment` 两表无桥）。先放行上传、
+ * 执行阶段却毫无效果，比选不上更糟（计划 §4 步 6 原话）。</p>
+ */
+const ACCEPT_FILE_TYPES = '.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.html,.htm,'
+    + '.png,.jpg,.jpeg,.gif,.webp,.bmp'
+
 /** 只展示用户上传的附件；平台产物进右侧「最近产物」。 */
 const userAttachments = computed(() =>
   attachments.value.filter(a => a.source !== 'platform'))
+
+/**
+ * `G-049` / ATT-3：本轮「不参与」的附件 id 集合（默认空 = 全部参与）。
+ *
+ * <p><b>只收集排除项，不收集选中项</b>：空集合天然表示「用户没动过」，此时请求<b>不带</b>
+ * {@code attachmentIds}（= {@code null}，未指定），让后端按模型判定收窄。若改成收集选中项，
+ * 「全选」与「没动过」会塌成同一个非空集合，{@code null} 这一态就永远发不出去，
+ * 模型判定通道被前端静默关掉。</p>
+ *
+ * <p><b>与需求对话页同一份语义</b>（{@code RequirementChat.vue} 的 {@code excludedAttachmentIds}）：
+ * 交互不必一模一样（需求对话偏「挑选」，工作台偏「上传即用」），但<b>判定必须同一份</b>——
+ * 三态 {@code null} / {@code []} / 非空 的含义由后端 {@code ChatAttachmentPromptRenderer#resolveScope}
+ * 唯一定义，前端只负责把用户意图如实表达成这三态之一。</p>
+ */
+const excludedAttachmentIds = ref<Set<string>>(new Set())
+
+function isAttachmentExcluded(item: ChatAttachmentItem): boolean {
+  return excludedAttachmentIds.value.has(String(item.id))
+}
+
+/** 点击胶囊切换「本轮是否参与」：传新 Set 而非 mutate，Vue 才能追踪到变化。 */
+function toggleAttachmentParticipation(item: ChatAttachmentItem): void {
+  const key = String(item.id)
+  const next = new Set(excludedAttachmentIds.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  excludedAttachmentIds.value = next
+}
+
+/**
+ * `G-049`：附件相关状态的整体重置——<b>切会话 / 新建会话只调这一处</b>。
+ *
+ * <p>三份状态（清单 / 临时批次 token / 排除集合）属于同一个语义「当前这一轮的附件上下文」。
+ * 分散各清一半必然漏：原实现只清前两个，{@code excludedAttachmentIds} 从不清，切会话后
+ * 上一会话的排除项还留着。单看是脏数据，但「空集」在 {@code G-045} 之后是
+ * <b>「明确一个都不要」的有效意图</b>，残留集合会把新会话的附件误判成排除态。</p>
+ */
+function resetAttachmentState() {
+  clientToken.value = null
+  attachments.value = []
+  excludedAttachmentIds.value = new Set()
+}
 
 function ensureClientToken(): string {
   if (clientToken.value) return clientToken.value
@@ -960,13 +1025,39 @@ async function refreshAttachments() {
   }
 }
 
-/** 本轮参与的附件 id（空 = 无附件）。 */
+/**
+ * 本轮参与的附件 id：<b>三态</b>，与需求对话页同一份口径。
+ *
+ * <ul>
+ *   <li>无排除项 ⇒ {@code null} = <b>未指定</b>，后端按模型判定（{@code attachment_targets}）
+ *       收窄，再回落全量；</li>
+ *   <li>有排除项且全被排除 ⇒ {@code []} = <b>用户明确一个都不要</b>，后端零注入、不回落；</li>
+ *   <li>有排除项但有剩余 ⇒ 剩余 id 列表 = 用户显式指定，优先于模型判定。</li>
+ * </ul>
+ *
+ * <p><b>原实现 {@code ids.length ? ids : null} 是两态</b>：全排除时下发的是 {@code []}，
+ * 但只要用户排除了一部分，下发的是「剩余列表」——恰好都对；问题在于「全排除」这一态
+ * 当时被下游当成了「未指定」而回落全量（{@code G-045}）。现在下游按 {@code != null} 判分支，
+ * 本函数才能如实表达第三种意图。</p>
+ */
 function effectiveAttachmentIds(): string[] | null {
-  const ids = userAttachments.value.map(a => String(a.id))
-  return ids.length ? ids : null
+  if (!excludedAttachmentIds.value.size) return null
+  return userAttachments.value
+    .filter(a => !excludedAttachmentIds.value.has(String(a.id)))
+    .map(a => String(a.id))
 }
 
-/** 附件胶囊的状态文案（SKIPPED 必须显式「未识别」，不能画成加载中）。 */
+/**
+ * 附件胶囊的状态文案（SKIPPED 必须显式，不能画成加载中）。
+ *
+ * <p><b>`VU-9` 起图片的 SKIPPED 不再是「未识别」</b>：图片本来就没有文本正文
+ * （`ChatAttachmentParseWorker` 对 `ContentKind.MEDIA` 一律 `markSkipped`，那是设计如此，
+ * 不是失败）。对图片说「未识别」会让用户以为平台看不了图，而实际上图像内容
+ * 已另经图像通道送进模型——这也是计划判据③「清单文案须三态」的前端口径。</p>
+ *
+ * <p>音视频仍是「未识别」：它们确实没有可用通道（provider 的
+ * `capabilities.input` 只含 `text/image`），必须如实告知。</p>
+ */
 function attachmentStateText(item: ChatAttachmentItem): string {
   switch (item.parseStatus) {
     case 'READY':
@@ -977,11 +1068,32 @@ function attachmentStateText(item: ChatAttachmentItem): string {
     case 'FAILED':
       return '解析失败'
     case 'SKIPPED':
-      return '未识别'
+      return isImageAttachment(item) ? '图片' : '未识别'
     default:
       return ''
   }
 }
+
+/**
+ * 是否图片附件：`mimeType` 前缀优先，缺失 / octet-stream 时按扩展名兜底。
+ *
+ * <p>与后端 `ChatAttachmentPromptRenderer#isImageAttachment` 同一判据、同一扩展名集
+ * （`AttachmentContentPolicy` 媒体族里的图片子集），只做前端展示用——
+ * <b>不参与「能不能送图」的判定</b>（那条判定唯一属于 `AgentChatClientService`，
+ * 不变量 I-2：能力位必须按本次实际调用的模型在请求装配层解析，前端判会复刻
+ * OpenCode `#60736`）。</p>
+ */
+function isImageAttachment(item: ChatAttachmentItem): boolean {
+  const mime = (item.mimeType ?? '').toLowerCase()
+  if (mime && mime !== 'application/octet-stream') return mime.startsWith('image/')
+  const name = item.fileName ?? ''
+  const dot = name.lastIndexOf('.')
+  if (dot < 0 || dot === name.length - 1) return false
+  return IMAGE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase())
+}
+
+/** 图片扩展名集（仅前端展示判定用；与后端 `IMAGE_EXTENSIONS` 同步）。 */
+const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'])
 
 /** 输入框上方的胶囊（技能 + 附件）。 */
 const chips = computed(() => {
@@ -993,6 +1105,10 @@ const chips = computed(() => {
     state: string
     title: string
     remove?: () => void
+    /** ATT-3：附件是否「本轮不参与」；技能胶囊恒 undefined（技能没有参与概念）。 */
+    excluded?: boolean
+    /** 点击胶囊切换参与态；只有附件胶囊有。 */
+    toggle?: () => void
   }> = []
   if (activeSkill.value) {
     list.push({
@@ -1006,14 +1122,18 @@ const chips = computed(() => {
     })
   }
   for (const a of userAttachments.value) {
+    const excluded = isAttachmentExcluded(a)
     list.push({
       key: `att-${String(a.id)}`,
       kind: 'is-file',
       icon: Document,
       name: a.fileName,
       state: attachmentStateText(a),
-      title: `${a.fileName}${a.parseError ? ' · ' + a.parseError : ''}`,
-      remove: () => { void removeAttachment(a.id) }
+      title: `${a.fileName}${a.parseError ? ' · ' + a.parseError : ''}`
+        + ` · ${excluded ? '本轮不参与（点击恢复）' : '本轮参与（点击取消）'}`,
+      remove: () => { void removeAttachment(a.id) },
+      excluded,
+      toggle: () => toggleAttachmentParticipation(a)
     })
   }
   if (uploading.value) {
@@ -1224,7 +1344,7 @@ const modelLabel = computed(() => {
 /**
  * chip 悬停说明。未钉模型时 chip 显示助理身份的默认模型（`assistant_profile.model`），
  * 而**实际执行模型由派中的 Planner Agent 决定**——两者当前取值一致（默认 Planner 即绑
- * deepseek-v4-flash），故提示语只讲「默认」，不承诺「本轮一定用它」。
+ * deepseek-flash），故提示语只讲「默认」，不承诺「本轮一定用它」。
  */
 const modelChipTitle = computed(() => currentModelType.value
   ? `本轮模型：${currentModelType.value}（点击切换）`
@@ -1315,7 +1435,10 @@ async function selectConversation(id: LongId) {
     // 不清会把 A 会话选的模型带到 B 会话，出现「chip 显示 X、实际用 Y 回答」。
     selectedModelType.value = null
     activeSkill.value = null
-    clientToken.value = null
+    // `G-049`：切会话即重置附件上下文（清单 / 临时批次 / 排除集合三份一起），
+    // 否则上一会话「不参与」的附件会把新会话的附件误判成排除态。
+    // 清单清空不冲突：下面 refreshAttachments 会按新会话重拉。
+    resetAttachmentState()
     await scrollToBottom()
     void loadContextUsage()
     void refreshAttachments()
@@ -1335,8 +1458,8 @@ function startNew() {
   writePref(LAST_CONVERSATION_KEY, null)
   selectedModelType.value = preferredModelType.value
   activeSkill.value = null
-  attachments.value = []
-  clientToken.value = null
+  // `G-049`：新会话从零开始，附件清单 / 临时批次 / 排除集合一并清空
+  resetAttachmentState()
 }
 
 async function loadContextUsage() {
@@ -2557,6 +2680,26 @@ html.dark .wb-page {
   border-color: var(--wb-tint-border);
   background: var(--wb-tint);
   color: var(--wb-primary-text);
+}
+/* ATT-3：附件胶囊可点选切换「本轮是否参与」（与需求对话页同一份判定、不同视觉语言）。
+   未参与只做「降级」——灰字 + 去掉底色，不用删除线/虚线：那会被读成「文件已删除」。 */
+.wb-chip.is-file {
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.wb-chip.is-file:hover {
+  border-color: var(--wb-primary);
+}
+.wb-chip.is-file.is-excluded {
+  background: transparent;
+}
+.wb-chip.is-file.is-excluded .wb-chip-name {
+  color: var(--wb-ink-faint);
+  font-weight: 400;
+}
+.wb-chip.is-file.is-excluded .el-icon {
+  color: var(--wb-ink-faint);
 }
 .wb-chip-name {
   overflow: hidden;

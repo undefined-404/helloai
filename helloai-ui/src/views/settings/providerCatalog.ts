@@ -59,8 +59,9 @@ export const PROVIDER_CATALOG: CatalogProvider[] = [
     tagline: '深度求索 · 高性价比通用大模型',
     protocolType: 'OPENAI_COMPATIBLE',
     baseUrl: 'https://api.deepseek.com',
-    // 目录默认位（llm_provider_model.is_default=1，V101 订正）：旧值 'deepseek-chat' 已不在目录内
-    defaultModel: 'deepseek-v4-flash',
+    // 目录默认位（llm_provider_model.is_default=1）：V155 对齐官方《模型细节》文档，
+    // 官方现行名只有 deepseek-flash / deepseek-v4-pro；'deepseek-v4-flash' 为废弃别名（V109:17 留痕）
+    defaultModel: 'deepseek-flash',
     catalogId: 'deepseek',
     apiKeyUrl: 'https://platform.deepseek.com/api_keys'
   },

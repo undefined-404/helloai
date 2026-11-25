@@ -68,7 +68,7 @@ export const agentApi = {
   },
 
   // V52：查询指定 modelType 的技能选项（能力锁定 + 可扩展白名单），供注册/编辑弹窗三段式渲染
-  // 冒号已由 paths.enc 统一 encodeURIComponent（路径参数，如 deepseek%3Adeepseek-v4-flash）
+  // 冒号已由 paths.enc 统一 encodeURIComponent（路径参数，如 deepseek%3Adeepseek-flash）
   skillOptions(modelType: string) {
     return request.get<any, SkillOptions>(paths.agents.skillOptions(modelType))
   },

@@ -1046,7 +1046,7 @@
                         type="file"
                         multiple
                         class="attachment-input"
-                        accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.html,.htm"
+                        accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.html,.htm,.png,.jpg,.jpeg,.gif,.webp,.bmp"
                         @change="onFileInputChange"
                       >
                       <!-- V34 会话级联网搜索开关：ima copilot 样式（默认开启；仅新会话可改；老会话只读取会话原值） -->
@@ -1865,6 +1865,25 @@ function isAttachmentExcluded(item: ChatAttachmentItem): boolean {
   return excludedAttachmentIds.value.has(String(item.id))
 }
 
+/**
+ * `G-049`：附件相关状态的整体重置——<b>切会话 / 新建会话只调这一处</b>。
+ *
+ * <p><b>为什么必须收敛成一个函数</b>：这三份状态（清单 / 临时批次 token / 排除集合）
+ * 属于<b>同一个语义</b>「当前这一轮的附件上下文」。分散在各处各清一半，一定会漏：
+ * 原实现只清前两个，`excludedAttachmentIds` 从不清，于是从会话 A 切到 B 时 A 的排除项
+ * 还留着。单看是「无害脏数据」（id 不跨会话匹配），但自从「空集」升格为
+ * 「用户明确一个都不要」的有效意图（`G-045`）之后，残留集合就可能把 B 会话的附件
+ * 误判成排除态——语义变更把无害脏数据变成了真实缺陷。</p>
+ *
+ * <p><b>不重置的时机同理</b>：建会认领（`clientToken` 被后端认领）时排除选择必须保留，
+ * 那些 id 认领后仍然指向同一批附件，是用户刚做出的有效意图。所以只在「换会话主体」时清。</p>
+ */
+function resetAttachmentState() {
+  clientToken.value = null
+  attachments.value = []
+  excludedAttachmentIds.value = new Set()
+}
+
 function toggleAttachmentParticipation(item: ChatAttachmentItem): void {
   const key = String(item.id)
   const next = new Set(excludedAttachmentIds.value)
@@ -2030,7 +2049,12 @@ async function refreshAttachments() {
   }
 }
 
-/** 胶囊状态文案（SKIPPED 必须显式「未识别」，不能画成加载中）。 */
+/**
+ * 胶囊状态文案（SKIPPED 必须显式可见，不能画成加载中）。
+ *
+ * <p>`VU-8`：SKIPPED 按是否图片分叉——图片的 SKIPPED 是「无文本正文、另经图像通道送入」，
+ * 不是「未识别」。都写「未识别」会让用户以为平台看不了图（工作台同一文案，两处口径必须一致）。</p>
+ */
 function attachmentStateText(item: ChatAttachmentItem): string {
   switch (item.parseStatus) {
     case 'READY':
@@ -2041,10 +2065,20 @@ function attachmentStateText(item: ChatAttachmentItem): string {
     case 'FAILED':
       return '解析失败'
     case 'SKIPPED':
-      return '未识别'
+      return isImageAttachment(item) ? '图片' : '未识别'
     default:
       return ''
   }
+}
+
+/** 是否图片附件：MIME 前缀优先，缺失 / octet-stream 时按扩展名兜底（与后端同一判据口径）。 */
+function isImageAttachment(item: ChatAttachmentItem): boolean {
+  const mime = (item.mimeType ?? '').toLowerCase()
+  if (mime && mime !== 'application/octet-stream') {
+    return mime.startsWith('image/')
+  }
+  const name = (item.fileName ?? '').toLowerCase()
+  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'].some((ext) => name.endsWith(ext))
 }
 
 function attachmentChipClass(item: ChatAttachmentItem): string {
@@ -2704,9 +2738,9 @@ async function selectConversation(id: LongId) {
   const sid = String(id)
   activeId.value = sid
   contextUsage.value = null
-  // 跨会话切换：临时批次只属于「尚未建会」的那一轮，换会话即作废
-  clientToken.value = null
-  attachments.value = []
+  // 跨会话切换：临时批次只属于「尚未建会」的那一轮，换会话即作废；
+  // `G-049`：排除集合同批清空——上一会话的排除态对新会话没有语义，留着就是脏数据
+  resetAttachmentState()
   // 上一轮的技能进度属于上一个会话：立即停表并清占位（A3：新会话若有活跃执行，下面再恢复）
   stopSkillPolling()
   skillRunId.value = null
@@ -2732,9 +2766,8 @@ function startNew() {
   activeId.value = null
   detail.value = null
   input.value = ''
-  // 新会话从零开始：清掉上一轮的临时批次与胶囊（避免把旧文件带进新需求）
-  clientToken.value = null
-  attachments.value = []
+  // 新会话从零开始：清掉上一轮的临时批次、胶囊与排除态（避免把旧文件的「不参与」带进新需求）
+  resetAttachmentState()
 }
 
 // ── 输入优化（PromptEnhancer）：独立辅助链路，不进会话/任务链路 ──
