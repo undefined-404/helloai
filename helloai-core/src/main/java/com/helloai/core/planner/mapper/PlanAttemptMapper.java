@@ -35,13 +35,20 @@ public interface PlanAttemptMapper extends BaseMapper<PlanAttempt> {
      * 若先转 {@code PENDING} 再抢，中间多一个可见状态，两个派发器实例会看到同一条
      * {@code PENDING} 并都去抢（虽然 CAS 会挡住一个，但白跑一轮）。</p>
      *
-     * <p>返回 1 = 抢到；返回 0 = 已被别的节点抢走（或被判失败），调用方应放弃。</p>
+     * <p><b>必须带 {@code attempt_no}</b>（`G-053`）：派发器扫描到候选行与真正执行 claim
+     * 之间隔着一次模板调用，其间 {@code reclaimHanging} 可能已把号加一。旧的
+     * {@code WHERE id + status} 会让「扫描时拿到旧号的那一次派发」抢走新代的行，
+     * 于是新旧两代用同一个号继续跑。带号后旧代必落空。</p>
+     *
+     * <p>返回 1 = 抢到；返回 0 = 已被别的节点抢走 / 代次已失效，调用方应放弃。</p>
      */
     @Update("UPDATE task_plan_attempt "
             + "SET status = 'RUNNING', owner_node = #{ownerNode}, lease_until = #{leaseUntil}, "
             + "    update_time = #{leaseUntil} "
-            + "WHERE id = #{id} AND status IN ('PENDING', 'FAILED_RETRYABLE') AND deleted = 0")
+            + "WHERE id = #{id} AND attempt_no = #{attemptNo} "
+            + "  AND status IN ('PENDING', 'FAILED_RETRYABLE') AND deleted = 0")
     int casClaim(@Param("id") Long id,
+                 @Param("attemptNo") Integer attemptNo,
                  @Param("ownerNode") String ownerNode,
                  @Param("leaseUntil") OffsetDateTime leaseUntil);
 
@@ -177,6 +184,25 @@ public interface PlanAttemptMapper extends BaseMapper<PlanAttempt> {
     @Select("SELECT * FROM task_plan_attempt WHERE batch_key = #{batchKey} AND deleted = 0 "
             + "ORDER BY attempt_no DESC LIMIT 1")
     PlanAttempt findLatestByBatchKey(@Param("batchKey") String batchKey);
+
+    /**
+     * **写段授权**：在当前事务里锁住本尝试行并读回真实代次（`G-053` L2）。
+     *
+     * <p>为什么必须是行锁而不是普通 SELECT：{@code persistPlan} 事务的第一条语句与它之间
+     * 隔着「草案整批插入」。只做一次普通读取，读完到插完这段时间里 {@code reclaimHanging}
+     * 完全可以把 {@code attempt_no} 加一 —— 于是授权判定通过、写入却属于已失效的代次。
+     * {@code FOR UPDATE} 让 reclaim 的 {@code UPDATE} 阻塞到本事务提交，从而把
+     * 「判定」与「写入」锁成同一个原子区间。</p>
+     *
+     * <p>不用 {@code status = 'RUNNING'} 过滤：过滤掉就变成「读不到 ⇒ 判定通过与否」的
+     * 存在性判断，读不到时无法区分「行被删了」与「状态不对」。取回整行由调用方逐条判，
+     * 判据集中在一处。</p>
+     *
+     * <p><b>必须在事务内调用</b>：无事务时 {@code FOR UPDATE} 只锁到语句结束，
+     * 退化为普通读取（PostgreSQL 不报错，静默失效——这类失效最危险）。</p>
+     */
+    @Select("SELECT * FROM task_plan_attempt WHERE id = #{id} AND deleted = 0 FOR UPDATE")
+    PlanAttempt lockByIdForUpdate(@Param("id") Long id);
 
     /** 按任务 + 动作取最近一次尝试（诊断 / 幂等命中判定用）。 */
     @Select("SELECT * FROM task_plan_attempt "

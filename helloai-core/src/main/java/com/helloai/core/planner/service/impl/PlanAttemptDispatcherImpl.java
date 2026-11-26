@@ -126,14 +126,17 @@ public class PlanAttemptDispatcherImpl implements PlanAttemptDispatcher {
         }
 
         OffsetDateTime leaseUntil = OffsetDateTime.now().plusMinutes(attemptLeaseMinutes);
-        // CAS 抢占：抢不到说明另一个实例已经接了，本次跳过（这正是「重复派发只执行一次」）。
-        if (!planAttemptService.claim(attempt.getId(), PlanNodeId.current(), leaseUntil)) {
+        // CAS 抢占（带代次，`G-053`）：抢不到说明另一个实例已经接了、或扫描到真正 claim 之间
+        // reclaimHanging 已把 attempt_no 加一（本次派发已过时），两种情况都必须放弃。
+        if (!planAttemptService.claim(attempt.getId(), attempt.getAttemptNo(),
+                PlanNodeId.current(), leaseUntil)) {
             return Outcome.SKIPPED;
         }
 
         log.info("派发器重新触发拆解: attemptId={}, taskId={}, attemptNo={}",
                 attempt.getId(), taskId, attempt.getAttemptNo());
-        plannerDecomposeAsyncService.executeDecompose(taskId);
+        // 身份随调用传入：异步段不得再读当前值，否则与「重投后号已加一」这件事赛跑（`G-053`）。
+        plannerDecomposeAsyncService.executeDecompose(taskId, attempt.getBatchKey(), attempt.getAttemptNo());
         return Outcome.REDISPATCHED;
     }
 }

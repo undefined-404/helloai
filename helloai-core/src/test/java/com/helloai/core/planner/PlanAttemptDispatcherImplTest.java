@@ -81,7 +81,7 @@ class PlanAttemptDispatcherImplTest {
 
         assertThat(report.abandoned()).isEqualTo(1);
         assertThat(report.redispatched()).isZero();
-        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong());
+        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong(), anyString(), anyInt());
     }
 
     @Test
@@ -96,7 +96,7 @@ class PlanAttemptDispatcherImplTest {
         DispatchReport report = dispatcher.dispatchOnce(50);
 
         assertThat(report.abandoned()).isEqualTo(1);
-        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong());
+        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong(), anyString(), anyInt());
     }
 
     @Test
@@ -106,12 +106,12 @@ class PlanAttemptDispatcherImplTest {
         when(planAttemptMapper.listPending(50)).thenReturn(List.of(a));
         when(planAttemptMapper.listRetryable(any(), anyInt())).thenReturn(List.of());
         when(taskService.getView(TASK_ID)).thenReturn(task(TaskStatus.PLANNING));
-        when(planAttemptService.claim(eq(1L), anyString(), any())).thenReturn(false);
+        when(planAttemptService.claim(eq(1L), anyInt(), anyString(), any())).thenReturn(false);
 
         DispatchReport report = dispatcher.dispatchOnce(50);
 
         assertThat(report.redispatched()).isZero();
-        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong());
+        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong(), anyString(), anyInt());
     }
 
     @Test
@@ -121,12 +121,12 @@ class PlanAttemptDispatcherImplTest {
         when(planAttemptMapper.listPending(50)).thenReturn(List.of(a));
         when(planAttemptMapper.listRetryable(any(), anyInt())).thenReturn(List.of());
         when(taskService.getView(TASK_ID)).thenReturn(task(TaskStatus.PLANNING));
-        when(planAttemptService.claim(eq(1L), anyString(), any())).thenReturn(true);
+        when(planAttemptService.claim(eq(1L), anyInt(), anyString(), any())).thenReturn(true);
 
         DispatchReport report = dispatcher.dispatchOnce(50);
 
         assertThat(report.redispatched()).isEqualTo(1);
-        verify(plannerDecomposeAsyncService).executeDecompose(TASK_ID);
+        verify(plannerDecomposeAsyncService).executeDecompose(eq(TASK_ID), anyString(), anyInt());
     }
 
     @Test
@@ -143,7 +143,7 @@ class PlanAttemptDispatcherImplTest {
         assertThat(report.abandoned()).isZero();
         // 连任务状态都不该查——说明在动作类型处就短路了。
         verify(taskService, never()).getView(anyLong());
-        verify(plannerDecomposeAsyncService, never()).executeDecompose(isNull());
+        verify(plannerDecomposeAsyncService, never()).executeDecompose(isNull(), anyString(), anyInt());
     }
 
     private PlanAttempt pendingDecompose(Long id, int attemptNo) {

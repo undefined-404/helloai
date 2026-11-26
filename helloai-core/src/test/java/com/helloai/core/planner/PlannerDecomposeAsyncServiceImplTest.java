@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.PlanAttemptAction;
 import com.helloai.common.constant.PlanAttemptStatus;
 import com.helloai.common.constant.SubTaskContextKeys;
 import com.helloai.common.constant.SubTaskStatus;
@@ -71,6 +72,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -82,6 +84,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.nullable;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -197,10 +200,17 @@ class PlannerDecomposeAsyncServiceImplTest {
             return row;
         });
 
-        // TD-16b：栅栏是旁挂设施，默认「没有 attempt 记录」⇒ 所有栅栏操作静默跳过，
-        // 既有用例断言的主流程行为不受影响。需要验证栅栏语义的用例自己 stub。
+        // `G-053`：入口改为「严格代次校验」——无 attempt 记录即放弃（fail-close），
+        // 所以默认必须给一行**本代**记录。生产上 `beginDecompose` 与异步提交同事务，行必然存在；
+        // 状态取 PENDING（提交那一刻的真实状态），并由 claim 成功推进到 RUNNING。
         lenient().when(planAttemptService.findLatestByBatchKey(anyString()))
-                .thenReturn(java.util.Optional.empty());
+                .thenReturn(java.util.Optional.of(generation("attempt-test", 1)));
+        lenient().when(planAttemptService.claim(anyLong(), anyInt(), anyString(), any()))
+                .thenReturn(true);
+        // `G-053` L2：写段授权默认「锁到的就是本代 RUNNING 行」= 正常路径。
+        // 需要构造「被栅栏拒绝」的用例自己改这个桩。
+        lenient().when(planAttemptService.lockForWrite(anyLong()))
+                .thenAnswer(inv -> generation("attempt-test", 1));
 
         // V146：异步段只读入口写好的 attemptId，读不到就直接跳过（不擅自补 UUID）
         lenient().when(taskService.currentDecomposeAttempt(anyLong())).thenReturn("attempt-test");
@@ -363,7 +373,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         TaskView task = taskView(TaskStatus.PENDING, null);
         when(taskService.getView(TASK_ID)).thenReturn(task);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(plannerAgentPicker, never()).pickForTask(anyLong());
         verify(platformAgentExecutionService, never())
@@ -375,9 +385,150 @@ class PlannerDecomposeAsyncServiceImplTest {
     void shouldSkipWhenTaskNotFound() {
         when(taskService.getView(TASK_ID)).thenReturn(null);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(plannerAgentPicker, never()).pickForTask(anyLong());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  `G-053` P2 复现：派发器重触发后，旧代不得再跑一轮
+    // ══════════════════════════════════════════════════════════════
+
+    /** 一次拆解尝试的代次快照 —— `G-053`：身份是 `(batch_key, attempt_no)`，不是 batch_key 单值。 */
+    private static PlanAttempt generation(String attemptId, int attemptNo) {
+        PlanAttempt a = new PlanAttempt();
+        a.setId(1L);
+        a.setTaskId(TASK_ID);
+        a.setBatchKey(attemptId);
+        a.setAction(PlanAttemptAction.DECOMPOSE);
+        a.setStatus(PlanAttemptStatus.RUNNING);
+        a.setAttemptNo(attemptNo);
+        a.setLeaseUntil(OffsetDateTime.now().plusMinutes(7));
+        return a;
+    }
+
+    /**
+     * `G-053` 的 P2 时序复现（派发器重触发，而非用户重拆）。
+     *
+     * <p>P2 的特征是 {@code task.decompose_attempt_id} **不变**：{@code reclaimHanging} 只把
+     * {@code task_plan_attempt} 的 {@code attempt_no} 加一，派发器再重调本方法。</p>
+     *
+     * <p><b>改前</b>：入口不带代次，进函数才现读当前值 ⇒ 旧代与新代都以「当前最新号」执行，
+     * 同一 task 的 LLM 被调两次、草案批次被写两次（真实环境靠唯一索引兜内容，代价是白烧一次
+     * 模型调用，且失败分支的「按 batch_key 全量作废」会删掉另一代的完整批次）。</p>
+     *
+     * <p><b>改后</b>：第二次调用代表「旧代苏醒、手里只有第 1 代的号」，入口比对当前号 2 不等
+     * ⇒ 直接放弃 ⇒ 全程只跑一次。判定口径是「同一 taskId 的 LLM 调用与草案落库次数」，
+     * 因为它与「跑了几代」严格等价，且不依赖任何内部状态。</p>
+     */
+    @Test
+    @DisplayName("G-053 L2：落库时行已被删（锁不到）⇒ 不写草案、不推进、不回退、不记失败")
+    void shouldDropSilentlyWhenLockFindsNoRow() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"设计表结构","content":"建表","deliverable":"DDL 建表脚本",
+                          "acceptance":"评审通过且无语法错误","priority":"high"}]
+                        """, "stop", "llm", 100));
+        staged(draftFull(11L, "HIGH", Map.of("plannerAgentId", 9L)));
+        // 授权时锁不到行（被删 / id 非法）
+        when(planAttemptService.lockForWrite(anyLong())).thenReturn(null);
+
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
+
+        // 一个写动作都不能发生：草案不落、状态不推、不退回 PENDING、不作废批次
+        verify(planDraftRoundService, never()).writeDrafts(anyLong(), anyString(), any(), any());
+        verify(planDraftRoundService, never()).discardBatch(anyString());
+        verify(taskService, never()).casStatusForAttempt(anyLong(),
+                eq(TaskStatus.PLANNING), eq(TaskStatus.AWAITING_PLAN_CONFIRM), anyString());
+        verify(taskService, never()).casStatusForAttempt(anyLong(),
+                eq(TaskStatus.PLANNING), eq(TaskStatus.PENDING), anyString());
+        // 正常迟到丢弃不是失败：不得记 task_plan_failed
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"), any(), any(), anyMap());
+    }
+
+    @Test
+    @DisplayName("G-053 L2：锁到的行代次已 +1（期间被 reclaim）⇒ 静默丢弃，不污染新代")
+    void shouldDropSilentlyWhenLockedAttemptNoAdvanced() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"设计表结构","content":"建表","deliverable":"DDL 建表脚本",
+                          "acceptance":"评审通过且无语法错误","priority":"high"}]
+                        """, "stop", "llm", 100));
+        staged(draftFull(11L, "HIGH", Map.of("plannerAgentId", 9L)));
+        // 入口读到的当前代是 1（本代），但落库那一刻库里已是 2 —— reclaimHanging 加过号
+        // authorizeWrite 每个事务只调一次 ⇒ 直接返回「已加号的那一代」
+        when(planAttemptService.lockForWrite(anyLong()))
+                .thenReturn(generation("attempt-test", 2));
+
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
+
+        verify(planDraftRoundService, never()).writeDrafts(anyLong(), anyString(), any(), any());
+        // 关键：不得把新代正在跑的 PLANNING 打回 PENDING
+        verify(taskService, never()).casStatusForAttempt(anyLong(),
+                eq(TaskStatus.PLANNING), eq(TaskStatus.PENDING), anyString());
+        // 关键：不得按 batch_key 全删（会删掉新代已落的完整批次）
+        verify(planDraftRoundService, never()).discardBatch(anyString());
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"), any(), any(), anyMap());
+    }
+
+    @Test
+    @DisplayName("G-053 L2：锁到的行状态已非 RUNNING ⇒ 同样静默丢弃")
+    void shouldDropSilentlyWhenLockedStatusNotRunning() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"设计表结构","content":"建表","deliverable":"DDL 建表脚本",
+                          "acceptance":"评审通过且无语法错误","priority":"high"}]
+                        """, "stop", "llm", 100));
+        staged(draftFull(11L, "HIGH", Map.of("plannerAgentId", 9L)));
+        PlanAttempt failed = generation("attempt-test", 1);
+        failed.setStatus(PlanAttemptStatus.FAILED_RETRYABLE);
+        when(planAttemptService.lockForWrite(anyLong()))
+                .thenReturn(failed);
+
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
+
+        verify(planDraftRoundService, never()).writeDrafts(anyLong(), anyString(), any(), any());
+        verify(taskService, never()).casStatusForAttempt(anyLong(),
+                eq(TaskStatus.PLANNING), eq(TaskStatus.PENDING), anyString());
+    }
+
+    @Test
+    @DisplayName("G-053 P2：重投后迟到的旧代不得再跑一轮拆解（LLM 只调 1 次）")
+    void shouldRejectStaleGenerationAfterRedispatch() {
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"设计表结构","content":"建表","deliverable":"DDL 建表脚本",
+                          "acceptance":"评审通过且无语法错误","priority":"high"}]
+                        """, "stop", "llm", 100));
+        staged(draftFull(11L, "HIGH", Map.of("plannerAgentId", 9L)));
+        lenient().when(planAttemptService.succeed(anyLong(), anyInt(),
+                nullable(Integer.class), anyString())).thenReturn(true);
+
+        // 当前有效代：A 抢到时为 1；A 超租约被判悬挂 → reclaimHanging 加一 → B 抢到时为 2。
+        when(planAttemptService.findLatestByBatchKey("attempt-test"))
+                .thenReturn(java.util.Optional.of(generation("attempt-test", 1)),
+                        java.util.Optional.of(generation("attempt-test", 2)));
+
+        // ① 第 1 代执行
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
+        // ② 被判悬挂、派发器重派后，旧代苏醒（改后：携带第 1 代的号，入口即被拒）
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
+
+        verify(platformAgentExecutionService, times(1))
+                .executeSync(anyLong(), any(AgentTask.class));
+        verify(planDraftRoundService, times(1))
+                .writeDrafts(eq(TASK_ID), eq("attempt-test"),
+                        nullable(OffsetDateTime.class), anyList());
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -398,7 +549,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draftWithPriority(11L, "HIGH"));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         List<SubTaskDraft> saved = savedDrafts();
         assertThat(saved).hasSize(1);
@@ -424,7 +575,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         staged(draftFull(11L, "HIGH", Map.of("plannerAgentId", 9L)),
                 draftFull(12L, "MEDIUM", Map.of("plannerAgentId", 9L)));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         List<SubTaskDraft> drafts = savedDrafts();
         assertThat(drafts).hasSize(2);
@@ -462,7 +613,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         // 该任务已用过根段 0001~0005（上一轮 reject 后 DISCARDED + 软删）
         when(planDraftMapper.findMaxRootSeq(TASK_ID)).thenReturn(5);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         List<SubTaskDraft> drafts = savedDrafts();
         // 第二轮必须从 0006 起：从 0001 重起会与上一轮残留行同号 ⇒ 撞 uk_plan_draft_code
@@ -484,7 +635,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> endCaptor = ArgumentCaptor.forClass(Map.class);
@@ -516,7 +667,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
         verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
@@ -539,7 +690,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
         verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
@@ -565,7 +716,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
         verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
@@ -593,7 +744,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
         verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
@@ -628,7 +779,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -661,7 +812,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
         verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
@@ -692,7 +843,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
         verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
@@ -714,7 +865,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
         verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
@@ -742,7 +893,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -777,7 +928,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L), draft(12L), draft(13L), draft(14L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -803,7 +954,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         ]
                         """, "stop", "llm", 100));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(planDraftRoundService, never()).writeDrafts(anyLong(), anyString(), any(), any());
         verify(taskService).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
@@ -831,7 +982,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         // 落库后重读：第 2 条 acceptance 仍是空白（模型就这么输出的）
         staged(draft(11L), draftBroken(12L, "   "));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 不报废整批：草案照常写入暂存区（待确认草案不在执行表，不参与 claim/派发），任务留在 PLANNING
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
@@ -866,7 +1017,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         SubTaskView b = draftFullTD9(12L, "乙", "内容乙", "交付物乙完整清单", "运行 pytest 输出 5 passed", List.of(11L));
         staged(a, b);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 草案落库、任务不回退：环是「计划需要修」而不是「这一批拿不到」
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
@@ -895,7 +1046,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L), draft(12L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 门禁结论不再写进 SubTaskDraft.context：它挂在暂存区行的 context 上
         assertThat(savedDrafts()).allSatisfy(
@@ -920,7 +1071,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L), draft(12L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(taskTimelineService, never()).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_draft_field_missing"),
@@ -935,7 +1086,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.success("抱歉，我无法完成拆解。", "stop", "llm", 10));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(planDraftRoundService, never()).writeDrafts(anyLong(), anyString(), any(), any());
         // 失败回退走 CAS（lambdaUpdate）
@@ -953,7 +1104,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class))).thenReturn(
                 AgentResult.failure("provider timeout", "error", "llm"));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(planDraftRoundService, never()).writeDrafts(anyLong(), anyString(), any(), any());
         verify(taskService).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
@@ -970,7 +1121,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 "无可用的平台内 Planner Agent（需要 role=PLANNER 且 accessType=API_KEY_LLM）；"
                         + "请先在 Agent 管理中注册，或改用外部 Planner Agent 手工创建子任务"));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(taskService).casStatusForAttempt(TASK_ID, TaskStatus.PLANNING, TaskStatus.PENDING, "attempt-test");
         verify(taskTimelineService).recordEvent(
@@ -999,7 +1150,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L), draft(12L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 越界边不落暂存区（edits 为空时 applyDependencies 收到空 map 并直接返回）
         verify(planDraftService).applyDependencies(eq(TASK_ID), argThat(Map::isEmpty));
@@ -1026,7 +1177,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L), draft(12L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 序号 1 → 第 1 条的 code，回写第 2 条草案
         verify(planDraftService).applyDependencies(TASK_ID,
@@ -1078,7 +1229,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         String prompt = captureUserPrompt();
         assertThat(prompt)
@@ -1107,7 +1258,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         assertThat(captureUserPrompt())
                 .contains("（本任务未经过澄清链路，无结构化需求包——按任务描述拆解）")
@@ -1133,7 +1284,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -1161,7 +1312,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -1198,7 +1349,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -1229,7 +1380,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L), draft(12L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -1269,7 +1420,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L), draft(12L), draft(13L), draft(14L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -1306,7 +1457,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L), draft(12L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -1345,7 +1496,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -1380,7 +1531,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -1406,7 +1557,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
         @SuppressWarnings("unchecked")
@@ -1433,7 +1584,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
         verify(taskTimelineService, never()).recordEvent(
@@ -1460,7 +1611,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_uncertainty_missing"),
@@ -1481,7 +1632,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(taskTimelineService, never()).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_uncertainty_missing"),
@@ -1499,7 +1650,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(taskTimelineService, never()).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_uncertainty_missing"),
@@ -1530,7 +1681,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 告警而非阻断：草案仍落库
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
@@ -1561,7 +1712,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(taskTimelineService, never()).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_skill_unmatched"),
@@ -1586,7 +1737,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         // 落库后重读：第 1 条文本无命令/断言（Warn），第 2 条合规
         staged(draftWithKind(11L, "评审通过且无语法错误", null, List.of()), draft(12L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 不阻断：草案仍落库
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
@@ -1615,7 +1766,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         // 「是否显式声明」靠 context 里的原文，不能靠落库枚举（parse 会把未声明回落成 AUTOMATED）
         staged(draftWithKind(11L, "质量良好且表达清晰通顺", "AUTOMATED", List.of()));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
         assertThat(String.valueOf(findingsContext(11L).get(SubTaskContextKeys.GATE_FINDINGS)))
@@ -1634,7 +1785,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draftWithKind(11L, "不少于 5 章完整内容", "STRUCTURAL", List.of()));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
         // 合规 ⇒ 写的是清零 payload（同一入口同时承担「清上一轮结论」）
@@ -1657,7 +1808,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draftBroken(11L, "通过即可"));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
         assertThat(String.valueOf(findingsContext(11L).get(SubTaskContextKeys.GATE_FINDINGS)))
@@ -1676,7 +1827,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
         verify(taskTimelineService, never()).recordEvent(
@@ -1694,7 +1845,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
     }
@@ -1775,7 +1926,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(planDraftRoundService).writeDrafts(anyLong(), anyString(), any(), any());
         // 成功路径必须清掉历史阻断记录，否则确认侧会把上一轮的 findings 当成「当前未解」
@@ -1808,7 +1959,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(taskService.getView(TASK_ID)).thenReturn(planningTask());
         when(taskService.currentDecomposeAttempt(TASK_ID)).thenReturn(null);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
         verify(planDraftRoundService, never()).writeDrafts(anyLong(), anyString(), any(), any());
@@ -1827,7 +1978,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 .thenThrow(new DuplicateKeyException("uk_plan_draft_code"));
         when(planDraftMapper.countByBatchKeyIncludeDeleted("attempt-test")).thenReturn(3L);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 关键：绝不能走 rollbackToPending——那会把上一次已成功的拆解打成
         // 「草案在库 + task=PENDING」的死结（confirm 与重拆双向拒绝）
@@ -1851,7 +2002,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         // 本批一行都没落 ⇒ 冲突**不是**「本批已落过」
         when(planDraftMapper.countByBatchKeyIncludeDeleted("attempt-test")).thenReturn(0L);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 必须回退：修正前这里走「不改状态」，任务永久停在 PLANNING，
         // 等租约超时才被巡检捡回，且用户完全看不到错误（2026-11-08 23:13 真机复现）
@@ -1878,7 +2029,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 .thenThrow(new DuplicateKeyException("uk_plan_draft_code"));
         when(planDraftMapper.countByBatchKeyIncludeDeleted("attempt-test")).thenReturn(3L);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 残缺批次绝不能当已消费：那会让用户看到 3 条当全部，一确认就把残缺批转正
         verify(taskService).casStatusForAttempt(
@@ -1902,7 +2053,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 .thenThrow(new DuplicateKeyException("uk_plan_draft_code"));
         when(planDraftMapper.countByBatchKeyIncludeDeleted("attempt-test")).thenReturn(3L);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 升级当天所有在途任务都是这种形态：判不到位就全判残缺会一次性砖化一批任务
         verify(taskService).casStatusForAttempt(
@@ -1923,7 +2074,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 .thenThrow(new DuplicateKeyException("uk_plan_draft_code"));
         when(planDraftMapper.countByBatchKeyIncludeDeleted("attempt-test")).thenReturn(0L);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 暂存区是唯一事实源：0 行 = 本批确实没落过，不能当已消费
         verify(taskService).casStatusForAttempt(
@@ -1944,7 +2095,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                 .thenReturn(true);
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 1 条 LLM 产出 ⇒ 期望 1 条。写在暂存区落库之前是硬要求：
         // 写在后面，崩溃窗口里 expected_count 恒为 null，残缺批次永远识别不出来。
@@ -1981,7 +2132,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(taskService.casStatusForAttempt(eq(TASK_ID),
                 eq(TaskStatus.PENDING), eq(TaskStatus.AWAITING_PLAN_CONFIRM), anyString())).thenReturn(true);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 纠正回待确认：用户等了十几分钟，AI 成果不该因为一次误杀白扔
         verify(taskService).casStatusForAttempt(TASK_ID, TaskStatus.PENDING, TaskStatus.AWAITING_PLAN_CONFIRM, "attempt-test");
@@ -2002,7 +2153,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(taskService.casStatusForAttempt(eq(TASK_ID),
                 eq(TaskStatus.PLANNING), eq(TaskStatus.AWAITING_PLAN_CONFIRM), anyString())).thenReturn(false);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 用户已取消：草案不该留在库里（整个落库事务回滚），且必须留失败审计
         verify(taskTimelineService).recordEvent(
@@ -2025,7 +2176,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(taskService.casStatusForAttempt(eq(TASK_ID),
                 eq(TaskStatus.PLANNING), eq(TaskStatus.AWAITING_PLAN_CONFIRM), anyString())).thenReturn(false);
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         // 必须留失败审计（草案随事务回滚，没有 task_plan_generated）
         verify(taskTimelineService).recordEvent(
@@ -2060,7 +2211,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L), draft(12L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);
@@ -2088,7 +2239,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         """, "stop", "llm", 100));
         staged(draft(11L));
 
-        asyncService.executeDecompose(TASK_ID);
+        asyncService.executeDecompose(TASK_ID, "attempt-test", 1);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SubTaskDraft>> captor = ArgumentCaptor.forClass(List.class);

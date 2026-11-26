@@ -189,7 +189,9 @@ class PlannerAnalysisServiceTest {
         // TD-16b：进入拆解改走 PlanAttemptService#beginDecompose —— 它内部完成
         // 「CAS 推进 PLANNING + 登记 task_plan_attempt」两笔同事务写，并返回 attemptId。
         // 测试里不再 stub taskService.beginDecompose：调用方已不直接调它。
-        lenient().when(planAttemptService.beginDecompose(anyLong(), anyInt())).thenReturn("attempt-test");
+        lenient().when(planAttemptService.beginDecompose(anyLong(), anyInt()))
+                .thenReturn(new com.helloai.core.planner.service.PlanAttemptService.DecomposeTicket(
+                        "attempt-test", 1L, 1));
         lenient().when(taskService.updateStatus(anyLong(), any(TaskStatus.class)))
                 .thenReturn(org.mockito.Mockito.mock(com.helloai.core.task.entity.Task.class));
         // `AD-5a-5`：确认只走暂存区物化；默认回放最近一次 stagedFrom 的草案（需要失败的用例自行 doThrow 覆盖）
@@ -294,7 +296,7 @@ class PlannerAnalysisServiceTest {
                 eq(TASK_ID), isNull(), eq("task_plan_async_submitted"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
         // LLM 拆解转交异步服务（跨类调用激活 @Async 代理）
-        verify(plannerDecomposeAsyncService).executeDecompose(TASK_ID);
+        verify(plannerDecomposeAsyncService).executeDecompose(eq(TASK_ID), eq("attempt-test"), eq(1));
     }
 
     @Test
@@ -302,7 +304,7 @@ class PlannerAnalysisServiceTest {
     void shouldRollbackWhenExecutorRejects() {
         when(taskService.getView(TASK_ID)).thenReturn(pendingTask());
         doThrow(new TaskRejectedException("队列已满"))
-                .when(plannerDecomposeAsyncService).executeDecompose(TASK_ID);
+                .when(plannerDecomposeAsyncService).executeDecompose(eq(TASK_ID), eq("attempt-test"), eq(1));
 
         assertThatThrownBy(() -> plannerAnalysisService.decompose(TASK_ID))
                 .isInstanceOf(BizException.class)
@@ -328,7 +330,7 @@ class PlannerAnalysisServiceTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("只有 PENDING");
         verify(planAttemptService, never()).beginDecompose(anyLong(), anyInt());
-        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong());
+        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong(), anyString(), anyInt());
     }
 
     @Test
@@ -359,7 +361,7 @@ class PlannerAnalysisServiceTest {
         // 物理删除发生在提交异步前，同步守卫正常返回空列表
         verify(subTaskService).physicalDeleteNeverExecutedCancelled(TASK_ID);
         assertThat(drafts).isEmpty();
-        verify(plannerDecomposeAsyncService).executeDecompose(TASK_ID);
+        verify(plannerDecomposeAsyncService).executeDecompose(eq(TASK_ID), eq("attempt-test"), eq(1));
     }
 
     @Test
@@ -393,7 +395,7 @@ class PlannerAnalysisServiceTest {
 
         assertThat(drafts).isEmpty();
         verify(subTaskService, never()).physicalDeleteNeverExecutedCancelled(anyLong());
-        verify(plannerDecomposeAsyncService).executeDecompose(TASK_ID);
+        verify(plannerDecomposeAsyncService).executeDecompose(eq(TASK_ID), eq("attempt-test"), eq(1));
     }
 
     @Test
@@ -405,7 +407,7 @@ class PlannerAnalysisServiceTest {
         assertThatThrownBy(() -> plannerAnalysisService.decompose(TASK_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("其他请求拆解中");
-        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong());
+        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong(), anyString(), anyInt());
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -766,7 +768,7 @@ class PlannerAnalysisServiceTest {
 
         assertThat(result.id()).isEqualTo(71L);
         verify(taskDerivationService, never()).createPlanDerivation(anyLong(), anyString(), any());
-        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong());
+        verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong(), anyString(), anyInt());
     }
 
     @Test

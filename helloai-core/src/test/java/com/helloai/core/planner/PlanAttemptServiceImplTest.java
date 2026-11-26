@@ -4,6 +4,7 @@ import com.helloai.common.constant.PlanAttemptAction;
 import com.helloai.common.constant.PlanAttemptStatus;
 import com.helloai.core.planner.entity.PlanAttempt;
 import com.helloai.core.planner.mapper.PlanAttemptMapper;
+import com.helloai.core.planner.service.PlanAttemptService;
 import com.helloai.core.planner.service.impl.PlanAttemptServiceImpl;
 import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
@@ -76,9 +77,12 @@ class PlanAttemptServiceImplTest {
         when(taskService.beginDecompose(TASK_ID, 10)).thenReturn("attempt-key-1");
         when(planAttemptMapper.findLatestByBatchKey("attempt-key-1")).thenReturn(null);
 
-        String attemptId = service.beginDecompose(TASK_ID, 10);
+        PlanAttemptService.DecomposeTicket ticket = service.beginDecompose(TASK_ID, 10);
 
-        assertThat(attemptId).isEqualTo("attempt-key-1");
+        assertThat(ticket).isNotNull();
+        assertThat(ticket.attemptId()).isEqualTo("attempt-key-1");
+        // `G-053`：代次必须随凭据一起交出去——异步段拿它当身份，而不是进函数再读当前值
+        assertThat(ticket.attemptNo()).isEqualTo(1);
         ArgumentCaptor<PlanAttempt> captor = ArgumentCaptor.forClass(PlanAttempt.class);
         verify(planAttemptMapper).insert(captor.capture());
         PlanAttempt inserted = captor.getValue();
@@ -95,9 +99,9 @@ class PlanAttemptServiceImplTest {
     void shouldNotRegisterAttemptWhenTaskCasLoses() {
         when(taskService.beginDecompose(TASK_ID, 10)).thenReturn(null);
 
-        String attemptId = service.beginDecompose(TASK_ID, 10);
+        PlanAttemptService.DecomposeTicket ticket = service.beginDecompose(TASK_ID, 10);
 
-        assertThat(attemptId).isNull();
+        assertThat(ticket).isNull();
         // 这是 T1 原子性的另一半：没有「有人干活但状态没改」，也没有「状态没改却登记了活」。
         verify(planAttemptMapper, never()).insert(any(PlanAttempt.class));
     }
@@ -180,6 +184,40 @@ class PlanAttemptServiceImplTest {
 
         assertThat(got.getId()).isEqualTo(9L);
         verify(planAttemptMapper, never()).insert(any(PlanAttempt.class));
+    }
+
+    @Test
+    @DisplayName("G-053 L1：claim 把代次原样透传给 CAS（漏传就等于回到「不带号」的老做法）")
+    void shouldPassAttemptNoThroughToClaimCas() {
+        when(planAttemptMapper.casClaim(eq(11L), eq(2), anyString(), any())).thenReturn(1);
+
+        boolean won = service.claim(11L, 2, "node-a", FIXED_NOW);
+
+        assertThat(won).isTrue();
+        // 关键断言：第二个实参必须是 2 —— 若实现漏传或写死，跨代抢就会成功
+        verify(planAttemptMapper).casClaim(eq(11L), eq(2), eq("node-a"), eq(FIXED_NOW));
+    }
+
+    @Test
+    @DisplayName("G-053 L1：claim CAS 0 行（代次已失效 / 被抢）⇒ 返回 false，调用方必须放弃")
+    void shouldReturnFalseWhenClaimCasMisses() {
+        when(planAttemptMapper.casClaim(anyLong(), anyInt(), anyString(), any())).thenReturn(0);
+
+        assertThat(service.claim(11L, 1, "node-a", FIXED_NOW)).isFalse();
+    }
+
+    @Test
+    @DisplayName("G-053 L2：lockForWrite 只发查询不加事务（锁必须由调用方事务持有）")
+    void shouldDelegateLockForWriteWithoutOwnTransaction() {
+        PlanAttempt locked = attempt(11L, "k1");
+        when(planAttemptMapper.lockByIdForUpdate(11L)).thenReturn(locked);
+
+        PlanAttempt got = service.lockForWrite(11L);
+
+        assertThat(got).isSameAs(locked);
+        verify(planAttemptMapper).lockByIdForUpdate(11L);
+        // 不得顺手做任何写：授权只读，改写由业务路径自己负责
+        verify(planAttemptMapper, never()).casClaim(anyLong(), anyInt(), anyString(), any());
     }
 
     @Test

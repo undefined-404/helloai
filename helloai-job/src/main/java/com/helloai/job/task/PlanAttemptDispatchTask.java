@@ -17,10 +17,10 @@ import org.springframework.stereotype.Component;
  * 进程在 T1 提交后崩、线程池拒绝、执行段跑一半失联。</p>
  *
  * <p><b>与 {@link PlanningTimeoutTask} 必须在同一周期跑、但租约必须更短</b>：
- * 两者都是 30s。<code>helloai.planner.attempt-lease-minutes</code> 必须**小于**
- * <code>planning-timeout-minutes</code>——否则任务级巡检先动手把 {@code task} 回退
+ * 两者都是 30s。<code>helloai.planner.attempt-lease-minutes</code>（默认 7）必须**小于**
+ * <code>planning-timeout-minutes</code>（默认 10）——否则任务级巡检先动手把 {@code task} 回退
  * {@code PENDING}，派发器就永远轮不到自愈，这条兜底形同虚设。
- * 配置项默认值即按此约束给定（15 &lt; 30），改动任一值都要重新检查这个大小关系。</p>
+ * 配置项默认值即按此约束给定（7 &lt; 10），改动任一值都要重新检查这个大小关系。</p>
  *
  * <p>ShedLock 实例级互斥，与 {@code PlanningTimeoutTask} / {@code AssignedSubTaskTimeoutTask} 同构。</p>
  */

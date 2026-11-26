@@ -24,12 +24,20 @@ public interface PlannerDecomposeAsyncService {
      * 异步执行拆解：选 Planner → 渲染 Prompt → 调 LLM → 解析校验 → 批量落库草案
      * → 依赖序号回写真实 id → 记录 {@code task_plan_generated}。
      *
-     * <p>幂等防御：仅当任务仍处 PLANNING 时才执行，否则直接跳过（覆盖超时回收后
-     * 慢线程迟到、重复提交等边界）。任何失败都会回退 PENDING 并记录 timeline。</p>
+     * <p><b>身份必须由提交点给出</b>（`G-053`）：{@code attemptId} 与 {@code attemptNo}
+     * 是「本次执行属于哪一代」的唯一凭据。异步段<b>不得</b>再读
+     * {@code currentDecomposeAttempt} / {@code findLatestByBatchKey} 的当前值代替它们——
+     * 派发器重触发时 {@code task.decompose_attempt_id} 不变、只把 {@code attempt_no} 加一，
+     * 现读会让旧代读到新代次，两代都以合法身份跑完。</p>
      *
-     * @param taskId 任务 ID（用前已由同步守卫推进至 PLANNING）
+     * <p>幂等防御：任务不在 PLANNING、task 上登记的 attemptId 与传入不符、库中当前代次
+     * 与传入不符、或抢占失败，一律直接放弃（fail-close）。任何失败都会回退 PENDING 并记录 timeline。</p>
+     *
+     * @param taskId    任务 ID（用前已由同步守卫推进至 PLANNING）
+     * @param attemptId {@code task.decompose_attempt_id}（= 幂等键 {@code batch_key}）
+     * @param attemptNo 本代次，提交点从 {@code PlanAttemptService.DecomposeTicket} 取
      */
-    void executeDecompose(Long taskId);
+    void executeDecompose(Long taskId, String attemptId, int attemptNo);
 
 
     /**

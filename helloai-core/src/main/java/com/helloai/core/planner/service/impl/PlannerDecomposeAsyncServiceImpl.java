@@ -50,6 +50,7 @@ import com.helloai.core.planner.support.ContractSlotNormalizer;
 import com.helloai.core.planner.support.PlanDraftFindingsStore;
 import com.helloai.core.planner.support.PlanDraftViewMapper;
 import com.helloai.core.planner.support.PlanGateRunner;
+import com.helloai.core.planner.support.StalePlanAttemptException;
 import com.helloai.core.task.port.ConstraintRefDraft;
 import com.helloai.core.task.port.SubTaskDraft;
 import com.helloai.core.task.port.SubTaskView;
@@ -210,33 +211,56 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     /**
      * 异步执行拆解（运行于 plannerDecomposeExecutor）。
      *
-     * <p>入口幂等防御：仅当任务仍处 PLANNING 才执行——若已被 PlanningTimeoutTask 超时回收
-     * 或用户已确认/拒绝，慢线程迟到时直接跳过，避免覆盖并发结果。</p>
+     * <p>身份来自**提交点**（`G-053`）：{@code attemptId} 与 {@code attemptNo} 由调用方
+     * 从 `PlanAttemptService.DecomposeTicket` 取来一并传入。进函数现读「当前值」是本项要修的
+     * 那个缺陷——派发器重投后 {@code task.decompose_attempt_id} 不变、只有
+     * {@code task_plan_attempt.attempt_no} 加一，现读会让旧代拿到新代次。</p>
+     *
+     * <p>两道准入：①task 上登记的 attemptId 必须是本次身份（挡 P1 用户重拆）；
+     * ②库中当前代次必须是提交点钉死的代次（挡 P2 派发器重投）。任一不符或抢占落空
+     * 一律放弃（fail-close），由租约巡检兜底把任务回退 PENDING。</p>
      */
     @Async("plannerDecomposeExecutor")
     @Override
-    public void executeDecompose(Long taskId) {
+    public void executeDecompose(Long taskId, String attemptId, int attemptNo) {
         TaskView task = taskService.getView(taskId);
         if (task == null || task.status() != TaskStatus.PLANNING) {
             log.info("拆解异步执行跳过（任务不存在或已离开 PLANNING）: taskId={}, status={}",
                     taskId, task != null ? task.status() : null);
             return;
         }
-        // attemptId 由拆解入口（beginDecompose）生成并落库，异步段只读不造。
-        // 在这里现生成 UUID 等于「每次执行都是一件新事」，草案唯一索引永远不冲突，幂等失效。
-        String attemptId = taskService.currentDecomposeAttempt(taskId);
         if (attemptId == null || attemptId.isBlank()) {
-            // 入口必然写入 attemptId，走到这里说明是升级前的在途拆解或数据异常。
+            // 提交点必然写入 attemptId。走到这里说明是升级前的在途拆解或数据异常；
             // 不擅自补 UUID（会让幂等键失效），交给租约巡检回收后由用户重拆。
-            log.warn("拆解跳过：PLANNING 任务缺少 attemptId，交由租约巡检回收: taskId={}", taskId);
+            log.warn("拆解跳过：提交点未给出 attemptId（升级前在途或数据异常），交由租约巡检回收: taskId={}",
+                    taskId);
             return;
         }
-        // `TD-16b`：抢占本次尝试（Outbox 的执行侧）。旁挂设施，任何异常都不影响主流程。
-        PlanAttempt attempt = claimAttemptQuietly(taskId, attemptId);
+        // 准入①（P1）：task 上登记的 attemptId 必须就是本次身份。用户重拆会换新 UUID ⇒ 必然不等。
+        // 注意这一道挡不住 P2：派发器重投不改 task.decompose_attempt_id。
+        if (!attemptId.equals(taskService.currentDecomposeAttempt(taskId))) {
+            logStaleAttempt(taskId, attemptId, attemptNo, null, "entry-attempt-id");
+            return;
+        }
+        // 准入②（P2）：库中当前代次必须就是提交点钉死的代次。派发器重投会加一 ⇒ 旧代必然不等。
+        PlanAttempt attempt = claimGenerationStrictly(taskId, attemptId, attemptNo);
+        if (attempt == null) {
+            return;
+        }
 
         try {
             doDecompose(task, attemptId, attempt);
             markAttemptSucceededQuietly(attempt, "decompose completed");
+        } catch (StalePlanAttemptException e) {
+            // `G-053` L2：落库事务内的代次校验没过。**处置与失败完全不同**：
+            // 不 rollbackToPending（会打回新代正在跑的 PLANNING）、不作废本批（按 batch_key
+            // 全删会删掉新代的草案）、不记 task_plan_failed（正常迟到丢弃不是失败，记进去会
+            // 长期污染失败率观测）、不标 attempt 失败（那一行已属于新代）。
+            // 草案写入已随事务回滚，库里没有本代的半批行，因此这里什么都不需要清理。
+            logStaleAttempt(taskId, attemptId, e.myAttemptNo(), e.currentAttemptNo(),
+                    "persist-" + e.stage());
+            log.info("拆解写段被拒 ⇒ 静默丢弃本代结果（事务已回滚，无需清理）: taskId={}, attemptId={}",
+                    taskId, attemptId);
         } catch (DuplicateKeyException e) {
             // 唯一索引兜底命中 = 这批草案已经落过（响应丢失后重投 / 补偿重跑 / 多节点并发）。
             // 这是**幂等语义的正常分支，不是失败**：绝不能走 rollbackToPending，否则会把
@@ -275,44 +299,82 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         }
     }
 
-    // ── `TD-16b` 尝试栅栏的旁挂操作（全部静默失败，不干扰主流程）──────────────
+    // ── `TD-16b` / `G-053` 尝试栅栏（准入与收尾）──────────────────────────────
 
     /** 单条 attempt 的自动重试上限：到顶转终态，否则稳定坏掉的 provider 会被无限重试白烧额度。 */
     private static final int MAX_ATTEMPT_NO = 3;
 
     /**
-     * 抢占本次尝试。返回 {@code null} 表示「没有可用的 attempt 记录」——
-     * 升级前的在途拆解就是这种形态，此时跳过栅栏、由既有租约巡检兜底。
+     * 按「提交点钉死的代次」抢占（`G-053`），抢不到就放弃（fail-close）。
      *
-     * <p>**不补造记录**：补造会让「当前有效尝试」与真实执行脱节（补出来的行没人 claim，
-     * 派发器会以为有一份活没人干，重复触发）。</p>
+     * <p>与旧 `claimAttemptQuietly` 的三点差异：①按 batchKey 定位到行后**比对号**，
+     * 不等即放弃（旧版从不比对，读到哪代算哪代）；②`claim` 带号，跨代抢必然落空；
+     * ③抢不到一律放弃（旧版「仍继续，靠收尾栅栏拦截」——而收尾用的就是现读的新号，
+     * 那个假设在 P2 下不成立）。</p>
+     *
+     * <p><b>fail-close 的代价与兜底</b>：栅栏设施异常（如库瞬时不可用）会丢掉这一次执行，
+     * 任务停在 PLANNING，由 `PlanningTimeoutTask` 在 `planning-timeout-minutes` 内回退
+     * PENDING，用户可重拆。反过来 fail-open 就回到「无法证明代次却照跑」——那正是本项要修的。</p>
+     *
+     * @return 非 null = 本次执行持有有效代次，可继续；{@code null} = 已放弃
      */
-    private PlanAttempt claimAttemptQuietly(Long taskId, String attemptId) {
+    private PlanAttempt claimGenerationStrictly(Long taskId, String attemptId, int attemptNo) {
         try {
             PlanAttempt a = planAttemptService.findLatestByBatchKey(attemptId).orElse(null);
             if (a == null) {
-                log.debug("拆解尝试记录不存在（升级前在途或旁挂失败），跳过栅栏: taskId={}, attemptId={}",
+                // 库中没有本批记录 ⇒ 无法证明「我是哪一代」⇒ 放弃。
+                // 现实中只出现在升级前的在途拆解（旧版本不写 task_plan_attempt）。
+                log.warn("拆解跳过：无 attempt 记录，无法证明代次（fail-close）: taskId={}, attemptId={}",
                         taskId, attemptId);
                 return null;
             }
-            if (a.getStatus() == PlanAttemptStatus.PENDING) {
-                boolean claimed = planAttemptService.claim(a.getId(), PlanNodeId.current(),
-                        OffsetDateTime.now().plusMinutes(attemptLeaseMinutes));
-                if (!claimed) {
-                    // 已被派发器或另一节点抢走：本次执行仍然继续（草案落库有唯一索引兜底），
-                    // 但收尾时会因 attempt_no 不匹配而 CAS 落空 —— 正是设计要的效果。
-                    log.warn("拆解尝试已被他处抢占，本次仍继续但收尾将被栅栏拦截: taskId={}, attemptId={}",
-                            taskId, attemptId);
-                    return a;
+            Integer currentNo = a.getAttemptNo();
+            if (currentNo == null || currentNo != attemptNo) {
+                logStaleAttempt(taskId, attemptId, attemptNo, currentNo, "attempt-no");
+                return null;
+            }
+            if (a.getStatus() == PlanAttemptStatus.PENDING
+                    || a.getStatus() == PlanAttemptStatus.FAILED_RETRYABLE) {
+                if (!planAttemptService.claim(a.getId(), attemptNo, PlanNodeId.current(),
+                        OffsetDateTime.now().plusMinutes(attemptLeaseMinutes))) {
+                    log.warn("拆解尝试抢占落空（已被他处抢走或代次失效），放弃本次执行: "
+                            + "taskId={}, attemptId={}, attemptNo={}", taskId, attemptId, attemptNo);
+                    return null;
                 }
                 a.setStatus(PlanAttemptStatus.RUNNING);
+                return a;
             }
-            return a;
+            if (a.getStatus() == PlanAttemptStatus.RUNNING) {
+                // 同代已在跑：本代执行被重复提交（快路径与派发器各提交一次）。
+                // `G-053` 已知残留：同代重复执行不构成「旧代覆盖新代」，后果是重复调模型 +
+                // 撞唯一索引（幂等收敛）；不加执行级 token 是因为 owner_node 只是节点 ID，
+                // 同一节点内的两个线程无法区分（见计划 §6）。
+                log.warn("拆解尝试处于 RUNNING（同代重复执行），继续但仅收尾栅栏兜底: "
+                        + "taskId={}, attemptId={}, attemptNo={}", taskId, attemptId, attemptNo);
+                return a;
+            }
+            log.warn("拆解尝试状态不可执行（{}），放弃: taskId={}, attemptId={}, attemptNo={}",
+                    a.getStatus(), taskId, attemptId, attemptNo);
+            return null;
         } catch (Exception e) {
-            log.warn("拆解尝试抢占异常（不影响主流程）: taskId={}, attemptId={}, err={}",
-                    taskId, attemptId, e.getMessage());
+            log.warn("拆解代次校验异常，放弃本次执行（fail-close，交由租约巡检回收）: "
+                    + "taskId={}, attemptId={}, attemptNo={}, err={}",
+                    taskId, attemptId, attemptNo, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 旧代被丢弃的观测：**只记日志，不写时间线**。
+     *
+     * <p>它不是用户可见事件——用户在时间线里看到「旧代被丢弃」只会困惑；写进去等于给
+     * 内部调度噪声造一个没有读取方的展示位（判据 2）。排障靠日志里的三元组
+     * `(attemptId, 我的号, 当前号, 阶段)` 定位。</p>
+     */
+    private void logStaleAttempt(Long taskId, String attemptId, Integer myAttemptNo,
+                                 Integer currentAttemptNo, String stage) {
+        log.warn("拆解旧代被丢弃: taskId={}, attemptId={}, myAttemptNo={}, currentAttemptNo={}, stage={}",
+                taskId, attemptId, myAttemptNo, currentAttemptNo, stage);
     }
 
     private void markAttemptSucceededQuietly(PlanAttempt attempt, String note) {
@@ -789,6 +851,9 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                                        List<SubTaskDraft> drafts, PlannerAgentRef planner,
                                        OffsetDateTime taskCreateTime, PlanAttempt attempt,
                                        TaskArchetype archetype) {
+        // `G-053` L2：事务内**第一条语句**先拿写权。必须在任何写入之前——授权晚于写入，
+        // 就等于「先写再问允不允许」，回滚只是把问题变成空白事务。
+        authorizeWrite(attemptId, attempt);
         // `TD-16e-2`：期望条数必须在**任何草案行写入之前**落库，且与草案同一事务
         // （回滚时一起消失，不会留下「记了 7 条、一条没落」的错判依据）。
         recordExpectedCountQuietly(attempt, drafts.size());
@@ -808,8 +873,57 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         DraftGateChecker.Result gate = planGateRunner.merge(
                 planGateRunner.evaluate(views, archetype), depAnomalies);
         planDraftFindingsStore.persist(taskId, staged, gate);
+        // 行锁自 {@link #authorizeWrite} 起一直持有到本事务提交 ⇒ 期间 reclaim 无法改号，
+        // 所以这里的状态推进不必再带代次：P1（换 attemptId）由 casStatusForAttempt 挡住，
+        // P2（同 attemptId 加号）已被行锁排除。
         advanceAfterDecompose(taskId, attemptId);
         return new PersistOutcome(views, gate, demotedCodes);
+    }
+
+    /**
+     * 写段授权（`G-053` L2）：**唯一**允许写这一批草案的条件。
+     *
+     * <p>为什么授权点在这里而不是入口：入口的代次校验只挡「开始跑」（一个瞬时判定），
+     * 而从入口到落库之间隔着十几分钟的 LLM 调用。这期间 {@code reclaimHanging} 完全可以
+     * 把本代判死、{@code attempt_no} 加一、派发器起新代——旧代此时仍在内存里活着，
+     * 带着一份「当时合法」的身份。**只有落库那一刻的判定才算数**，而且必须与写入同事务。</p>
+     *
+     * <p>三道判据，任一不符即抛 {@link StalePlanAttemptException}（由上层 catch 静默丢弃）：</p>
+     * <ol>
+     *   <li><b>行存在</b>——锁不到行说明被删或 id 非法，无从证明身份；</li>
+     *   <li><b>状态仍是 RUNNING</b>——被 reclaim 转成 FAILED_RETRYABLE 就说明本代已判死；</li>
+     *   <li><b>代次仍是提交点钉死的那个</b>——reclaim 加过号就必然不等。</li>
+     * </ol>
+     *
+     * <p><b>为什么用行锁而不是再查一次</b>：普通读取之后仍有时间窗，{@code FOR UPDATE}
+     * 把 reclaim 的 {@code UPDATE} 阻塞到本事务提交，判定与写入才真正落在同一个原子区间。
+     * 见 {@link PlanAttemptService#lockForWrite}。</p>
+     *
+     * <p><b>attempt 可能为 null</b>（升级前的在途拆解、栅栏设施异常）：此时无法证明身份 ⇒
+     * 同样放弃。但只在**确实没有行**的前提下放弃，`attempt == null` 时应当去库里按
+     * id 锁一次——而 id 也在 attempt 上，所以这里直接放弃并留 WARN，
+     * 由租约巡检回收后用户重拆（一次性窗口，见计划 §6）。</p>
+     */
+    private void authorizeWrite(String attemptId, PlanAttempt attempt) {
+        if (attempt == null || attempt.getId() == null || attempt.getAttemptNo() == null) {
+            throw new StalePlanAttemptException(attemptId, -1, null, "lock");
+        }
+        PlanAttempt locked = planAttemptService.lockForWrite(attempt.getId());
+        if (locked == null) {
+            throw new StalePlanAttemptException(attemptId, attempt.getAttemptNo(), null, "lock");
+        }
+        if (locked.getAttemptNo() == null || !locked.getAttemptNo().equals(attempt.getAttemptNo())) {
+            throw new StalePlanAttemptException(attemptId, attempt.getAttemptNo(),
+                    locked.getAttemptNo(), "attempt-no");
+        }
+        if (locked.getStatus() != PlanAttemptStatus.RUNNING) {
+            // 同代但状态不是 RUNNING：多见于「同代重复执行时先到者已收尾」。
+            // 此时本批草案可能已由先到者落过 ⇒ 不写，交给幂等路径处理（撞唯一索引会被
+            // DuplicateKeyException 分支接住并收敛）。这里抛「代次失效」在语义上略宽，
+            // 但处置完全正确：不写、不推进、不作废、不回退。
+            throw new StalePlanAttemptException(attemptId, attempt.getAttemptNo(),
+                    locked.getAttemptNo(), "status");
+        }
     }
 
     /**

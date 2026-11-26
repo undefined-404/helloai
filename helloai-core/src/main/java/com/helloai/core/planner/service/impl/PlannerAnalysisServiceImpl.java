@@ -186,12 +186,18 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         // 它在**同一事务**里再登记 `task_plan_attempt`（Outbox 意图）。这样「状态变更」与
         // 「命令落库」原子——进程崩在随后立刻发生的 @Async 之前，库里仍有 PENDING 尝试，
         // 由 `PlanAttemptDispatchTask` 兜底接手。「不丢」的保证从「靠进程活着」变成「靠库里有记录」。
-        String attemptId = planAttemptService.beginDecompose(taskId,
+        //
+        // `G-053`：返回值从 attemptId 升级为「凭据（attemptId + 行 id + 代次）」。代次必须在
+        // **这一刻**钉死并一路传给异步段：派发器重触发只把 attempt_no 加一，异步段若现读
+        // 当前值，旧代就会拿到新代次并以合法身份跑完。
+        PlanAttemptService.DecomposeTicket ticket = planAttemptService.beginDecompose(taskId,
                 plannerDecomposeProperties.getPlanningTimeoutMinutes());
-        if (attemptId == null) {
+        if (ticket == null) {
             throw new BizException(400, "任务正在被其他请求拆解中，请稍后查看草案: taskId=" + taskId);
         }
-        log.info("拆解已进入 PLANNING: taskId={}, attemptId={}", taskId, attemptId);
+        String attemptId = ticket.attemptId();
+        log.info("拆解已进入 PLANNING: taskId={}, attemptId={}, attemptNo={}",
+                taskId, attemptId, ticket.attemptNo());
 
         // 记录异步提交 timeline：HTTP 线程到此即返回，LLM 拆解转由异步段推进
         taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_ASYNC_SUBMITTED.code(),
@@ -200,7 +206,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         // 跨类调用注入的异步服务，确保 @Async 代理生效（禁止同类自调用）；
         // 专用线程池队列满时按 AbortPolicy 拒绝，回退 PENDING 并提示稍后重试
         try {
-            plannerDecomposeAsyncService.executeDecompose(taskId);
+            plannerDecomposeAsyncService.executeDecompose(taskId, attemptId, ticket.attemptNo());
         } catch (TaskRejectedException e) {
             // 带 attemptId 回退：只比状态时，若本轮租约已被巡检回收、用户已重新拆解，
             // 这里的回退会把新一轮的 PLANNING 推回 PENDING。

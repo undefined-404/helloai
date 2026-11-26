@@ -28,6 +28,23 @@ import java.util.Optional;
 public interface PlanAttemptService {
 
     /**
+     * 首拆提交凭据（`G-053`）：异步段的身份必须由**提交点**给出，不能进函数再读「当前值」。
+     *
+     * <p><b>为什么带 {@code attemptNo}</b>：派发器重触发时 {@code task.decompose_attempt_id}
+     * 不变，只把 {@code task_plan_attempt.attempt_no} 加一。旧代苏醒后若去读「当前值」，
+     * 读到的是新代次，于是两代都以合法身份跑完——身份必须在提交那一刻钉死。</p>
+     *
+     * <p><b>为什么带 {@code rowId}</b>：`(batch_key, attempt_no)` 才唯一，单靠 batchKey
+     * 定位不到「我这一代」是哪一行；后续写段校验要直接锁那一行。</p>
+     *
+     * @param attemptId {@code task.decompose_attempt_id}（= 幂等键 {@code batch_key}）
+     * @param rowId     {@code task_plan_attempt.id}
+     * @param attemptNo 本代次（同 batchKey 的第几次尝试，1-based）
+     */
+    record DecomposeTicket(String attemptId, Long rowId, int attemptNo) {
+    }
+
+    /**
      * **T1：把「我要拆」的意图与任务状态变更写进同一个短事务**（`TD-16b` 的核心）。
      *
      * <p>事务内含两步：{@code taskService.beginDecompose}（CAS {@code PENDING → PLANNING}
@@ -40,10 +57,9 @@ public interface PlanAttemptService {
      * 把边界收在「只含两次写」的方法上，既保证原子又不动异步时序。</p>
      *
      * @param leaseMinutes 任务级租约时长（与 {@code planning-timeout-minutes} 同源）
-     * @return attemptId（= 幂等键 {@code batch_key}）；{@code null} = CAS 落空，
-     *         说明任务已被别的请求推进，调用方应提示「正在拆解中」
+     * @return 提交凭据；{@code null} = CAS 落空，说明任务已被别的请求推进，调用方应提示「正在拆解中」
      */
-    String beginDecompose(Long taskId, int leaseMinutes);
+    DecomposeTicket beginDecompose(Long taskId, int leaseMinutes);
 
     /**
      * 登记一次操作意图（幂等）。
@@ -55,11 +71,33 @@ public interface PlanAttemptService {
      */
     PlanAttempt begin(Long taskId, String batchKey, PlanAttemptAction action, OffsetDateTime leaseUntil);
 
-    /** 抢占：{@code PENDING → RUNNING}。返回 false = 已被别人抢走。 */
-    boolean claim(Long id, String ownerNode, OffsetDateTime leaseUntil);
+    /**
+     * 抢占：{@code PENDING/FAILED_RETRYABLE → RUNNING}，**带代次**。
+     *
+     * <p>{@code attemptNo} 不可省：派发器扫描时读到的号与真正 claim 时的号可能已被
+     * {@code reclaimHanging} 加一，不带号的 CAS 会让旧代抢走新代的行（`G-053` P2）。</p>
+     *
+     * @return false = 尚未抢到或本次尝试已失效（代次不匹配 / 已被别人抢走），调用方必须放弃执行
+     */
+    boolean claim(Long id, Integer attemptNo, String ownerNode, OffsetDateTime leaseUntil);
 
     /** 续租。返回 false = 本次尝试已失效（不该继续跑）。 */
     boolean renew(Long id, Integer attemptNo, OffsetDateTime leaseUntil);
+
+    /**
+     * **写段授权**（`G-053` L2）：在<b>调用方的事务内</b>锁住本尝试行，并把真实代次读回来。
+     *
+     * <p>它与 {@link #findLatestByBatchKey} 的区别是「锁」与「时机」：
+     * 前者是事务外的快照读取，读完到落库之间可以被 {@code reclaimHanging} 改号；
+     * 本方法用 {@code FOR UPDATE} 把 {@code reclaimHanging} 的 {@code UPDATE} 阻塞到
+     * 本事务提交，从而让「判定代次」与「写入草案」落在同一个原子区间。</p>
+     *
+     * <p><b>必须在事务内调用</b>：无事务时 {@code FOR UPDATE} 退化为普通读取，
+     * PostgreSQL 不报错而是静默不加锁——这类失效没有声音，只能在调用点做纪律约束。</p>
+     *
+     * @return 被锁住的行；{@code null} = 行不存在（已删除 / id 非法），调用方须放弃写入
+     */
+    PlanAttempt lockForWrite(Long id);
 
     /**
      * 记录本批应落草案条数（`TD-16e-2`）：完整性判据的事实源。

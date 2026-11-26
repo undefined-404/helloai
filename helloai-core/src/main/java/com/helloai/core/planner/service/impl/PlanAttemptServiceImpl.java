@@ -50,7 +50,7 @@ public class PlanAttemptServiceImpl implements PlanAttemptService {
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public String beginDecompose(Long taskId, int leaseMinutes) {
+    public DecomposeTicket beginDecompose(Long taskId, int leaseMinutes) {
         String attemptId = taskService.beginDecompose(taskId, leaseMinutes);
         if (attemptId == null) {
             // CAS 落空：任务已被别的请求推进到 PLANNING（或已不在 PENDING）。
@@ -59,9 +59,13 @@ public class PlanAttemptServiceImpl implements PlanAttemptService {
         }
         // 与 task.decompose_lease_until 同一时长、同一 now 基准（毫秒级差异可忽略）：
         // 两处判定各看各的表，但时长必须一致，否则「任务级先扫到」会抢走 attempt 的自愈机会。
-        begin(taskId, attemptId, PlanAttemptAction.DECOMPOSE,
+        //
+        // `G-053`：`begin(...)` 的返回值必须用上——它可能就是「撞键复用的已有行」
+        // （batchKey 已登记过），此时 attemptNo 可能是 2/3 而不是 1。把号钉在这里，
+        // 异步段才有不可伪造的「我这一代」。
+        PlanAttempt attempt = begin(taskId, attemptId, PlanAttemptAction.DECOMPOSE,
                 now().plusMinutes(Math.max(1, leaseMinutes)));
-        return attemptId;
+        return new DecomposeTicket(attemptId, attempt.getId(), attempt.getAttemptNo());
     }
 
     @Override
@@ -93,13 +97,26 @@ public class PlanAttemptServiceImpl implements PlanAttemptService {
     }
 
     @Override
-    public boolean claim(Long id, String ownerNode, OffsetDateTime leaseUntil) {
-        return planAttemptMapper.casClaim(id, ownerNode, leaseUntil) > 0;
+    public boolean claim(Long id, Integer attemptNo, String ownerNode, OffsetDateTime leaseUntil) {
+        return planAttemptMapper.casClaim(id, attemptNo, ownerNode, leaseUntil) > 0;
     }
 
     @Override
     public boolean renew(Long id, Integer attemptNo, OffsetDateTime leaseUntil) {
         return planAttemptMapper.casRenew(id, attemptNo, leaseUntil) > 0;
+    }
+
+    /**
+     * 写段授权（`G-053` L2）。
+     *
+     * <p><b>刻意不加 {@code @Transactional}</b>：加在这里会新开一个短事务，
+     * {@code FOR UPDATE} 的锁在方法返回时就被释放，授权窗口退化成「只在方法内有效」——
+     * 恰好把要解决的问题原样保留（拿到锁那一刻校验通过，真正写草案时已失效）。
+     * 锁必须由**调用方的事务**持有，因此本方法只负责发语句。</p>
+     */
+    @Override
+    public PlanAttempt lockForWrite(Long id) {
+        return planAttemptMapper.lockByIdForUpdate(id);
     }
 
     @Override
