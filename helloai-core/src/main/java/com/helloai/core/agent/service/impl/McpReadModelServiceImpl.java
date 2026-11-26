@@ -148,6 +148,12 @@ public class McpReadModelServiceImpl implements McpReadModelService {
                     item.setLoaded(false);
                     item.setContentChars(0);
                 }
+                // G-034 剩余项①：deps 里必须给出上游附件的 id 与 loadable——
+                // 否则消费方只能对着上面截断过的 content 文本做猜测：猜不到就 find / 白跑，
+                // 或者凭空重建一份上游文档（真机症状已复现两次）；给了 id 才能
+                // internal_read_attachment_range 定向续读、internal_stage_attachment_to_sandbox 实测。
+                // 复用子任务级同一装配（映射口径单源，判据 4），异常内部降级空列表不阻断摘要。
+                item.setAttachments(buildAttachmentItems(dep.id()));
                 items.add(item);
             }
             result.setDeps(items);

@@ -422,6 +422,8 @@ public class McpMcpServer {
             - 单条内容超过 64000 字符会被截断并打标 truncated=true
             - 收集异常时降级返回 degraded=true（deps 为空），不阻断后续执行
             - 内容本体可能与执行时注入 Prompt 的依赖段同源（buildDependencySection），先看 summary 再看 content
+            - content 是截断过的文本；要拿原件读 `deps[].attachments`（attachmentId / fileName / loadable / status），
+              其 id 可用于定向续读或注入沙箱，避免在沙箱里 find / 猜测上游文件名
             【相关工具】pullTasks、claimSubTask
             """)
     public McpToolService.GetDepsSummaryResult getDepsSummary(

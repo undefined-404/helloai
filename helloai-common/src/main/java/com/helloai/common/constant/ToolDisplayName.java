@@ -27,7 +27,7 @@ public enum ToolDisplayName {
     INTERNAL_READ_ATTACHMENT("internal_read_attachment", "读附件正文", "读取子任务或其前置产物的附件文本内容"),
     INTERNAL_ATTACHMENT_DIGEST("internal_attachment_digest", "附件摘要", "读取附件总字符数、sha256 与头尾片段"),
     INTERNAL_READ_ATTACHMENT_RANGE("internal_read_attachment_range", "按段读附件", "按字符偏移读取附件正文区间，用于大文件续读"),
-    INTERNAL_STAGE_ATTACHMENT_TO_SANDBOX("internal_stage_attachment_to_sandbox", "附件注入沙箱", "把附件字节注入当前沙箱供实测执行，返回路径与 sha256"),
+    INTERNAL_STAGE_ATTACHMENT_TO_SANDBOX("internal_stage_attachment_to_sandbox", "附件注入沙箱", "把本任务内的附件字节注入当前沙箱供实测执行，返回路径与 sha256"),
     INTERNAL_LIST_SKILLS("internal_list_skills", "列技能目录", "列出平台全部可用技能（名称与简介）"),
     INTERNAL_LOAD_SKILL("internal_load_skill", "加载技能", "按名称读取某技能的完整规范正文"),
     INTERNAL_REPORT_BLOCKED("internal_report_blocked", "上报阻塞", "确认无能力完成时上报阻塞，转人工介入"),

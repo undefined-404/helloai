@@ -84,4 +84,25 @@ public interface AttachmentMapper extends BaseMapper<Attachment> {
             "<foreach collection='keys' item='k' open='(' separator=',' close=')'>#{k}</foreach>",
             "</script>"})
     List<String> selectActiveObjectKeysIn(@Param("keys") Collection<String> keys);
+
+    /**
+     * 任务级有效附件（`G-034` 剩余项①）：某任务下<b>全部子任务</b>的 ACTIVE 附件行。
+     *
+     * <p><b>为什么写显式 JOIN 而不是 {@code sub_task_id IN (子查询)}</b>：后者在 PG 上同样正确，
+     * 但显式 JOIN 能顺带保证「子任务未逻辑删除」这一条（子任务被删而附件行残留时，
+     * 那些附件对任务级视野不应可见），且执行计划稳定。两条过滤条件（{@code s.deleted=0} /
+     * {@code a.deleted=0}）必须同时存在：只写其中一条会把已删子任务的旧行漏进来。</p>
+     *
+     * <p><b>排序口径与 {@code selectActiveByTaskOwner} 一致</b>（create_time 倒序），
+     * 让「最近产出在前」对调用方是同一预期。</p>
+     *
+     * @param taskId 主任务 ID
+     * @return 该任务下全部 ACTIVE 附件行（按创建时间倒序）
+     */
+    @Select("SELECT a.* FROM attachment a "
+            + "JOIN sub_task s ON s.id = a.sub_task_id "
+            + "WHERE s.task_id = #{taskId} AND s.deleted = 0 "
+            + "AND a.deleted = 0 AND a.status = 'ACTIVE' "
+            + "ORDER BY a.create_time DESC")
+    List<Attachment> selectActiveByTask(@Param("taskId") Long taskId);
 }

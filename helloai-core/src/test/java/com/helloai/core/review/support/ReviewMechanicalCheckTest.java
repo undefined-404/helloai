@@ -173,6 +173,30 @@ class ReviewMechanicalCheckTest {
     }
 
     @Test
+    @DisplayName("G-034 大批量：族行（聚合结论）必须比单文件明细先落地——35 附件批实测回归")
+    void familyLineSurvivesTruncationInLargeBatch() {
+        // 复现真机形态：25 片 + 主件 + 若干非表格件。片各 1 行数据，但片数足够把 1,200 字符吃满。
+        List<ReviewMechanicalCheck.Source> sources = new ArrayList<>();
+        long id = 1000L;
+        for (int i = 1; i <= 25; i++) {
+            sources.add(csv(id++, String.format("detail.part-%02d.csv", i), csvRows(2, 5)));
+        }
+        sources.add(csv(id, "detail.csv", csvRows(50, 5)));
+        for (int i = 1; i <= 15; i++) {
+            sources.add(csv(id + i, String.format("filler%02d.csv", i), csvRows(3, 5)));
+        }
+
+        String text = ReviewMechanicalCheck.build(sources);
+
+        assertThat(text.length()).isLessThanOrEqualTo(ReviewMechanicalCheck.MAX_OUTPUT_CHARS);
+        // 核心判据：族行必须在（否则「25 片齐全 / 合计一致」这条聚合事实整条丢失）
+        assertThat(text).contains("family name=detail.csv parts=25 present=25 missing=-");
+        // 且族行排在 file 明细之前（换序前是被明细挤掉的）
+        assertThat(text.indexOf("family name=detail.csv"))
+                .isLessThan(text.indexOf("name=detail.part-01.csv"));
+    }
+
+    @Test
     @DisplayName("isTabular：扩展名或 MIME 命中即表格；txt 不误判")
     void tabularByExtensionOrMime() {
         assertThat(ReviewMechanicalCheck.isTabular("a.csv", null)).isTrue();

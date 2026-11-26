@@ -26,7 +26,20 @@ import com.helloai.common.constant.AttachmentStatus;
  * @param fileSize        字节数（可空）
  * @param status          附件状态枚举（{@code common} 域常量，无 task 耦合）
  * @param contentLoadable 平台是否可直接读取正文（由提供方判定后透传）
+ * @param subTaskId       附件所属子任务 ID（`G-034` 追加：任务级列举后必须能回答「这份产出自哪个子任务」）
  */
 public record AttachmentRef(Long id, String fileName, String fileType, String mimeType,
-                            Long fileSize, AttachmentStatus status, boolean contentLoadable) {
+                            Long fileSize, AttachmentStatus status, boolean contentLoadable,
+                            Long subTaskId) {
+
+    /**
+     * 兼容构造：`G-034` 之前的调用方（子任务级列举，归属已知、无需回指）。
+     *
+     * <p>保留它而不是改所有构造点：{@code subTaskId} 只对<b>任务级</b>列举有信息量，
+     * 子任务级消费方拿到它是自己刚传进去的那个值，没有新增语义。测试与老调用点不必跟着改。</p>
+     */
+    public AttachmentRef(Long id, String fileName, String fileType, String mimeType,
+                         Long fileSize, AttachmentStatus status, boolean contentLoadable) {
+        this(id, fileName, fileType, mimeType, fileSize, status, contentLoadable, null);
+    }
 }

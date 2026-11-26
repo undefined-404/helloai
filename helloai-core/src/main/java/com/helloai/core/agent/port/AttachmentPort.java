@@ -56,6 +56,22 @@ public interface AttachmentPort {
     List<AttachmentRef> listActive(Long subTaskId);
 
     /**
+     * 按<b>主任务</b>读取全部有效（ACTIVE）附件快照（`G-034` 剩余项①：任务级列举）。
+     *
+     * <p><b>为什么需要它</b>：{@link #listActive(Long)} 只看本子任务的产出，而
+     * 「把上游/同任务其它子任务的产物注入沙箱交叉验证」（`G-029`）与「审核时看见同任务证据」
+     * 都需要跨子任务视野。缺这条通道时，消费方只能靠截断文本猜上游产出了什么。</p>
+     *
+     * <p><b>越权边界与产品现有口径同源</b>：可见性判据 {@code AttachmentVisibilityPolicy} 的
+     * {@code TASK} 分支本就是「根任务 Task-Team 成员可读该任务下任意附件」，故本方法的返回集合
+     * <b>等于</b>团队成员的合法读取面、不多一格；不跨任务。</p>
+     *
+     * @param taskId 主任务 ID（{@code null} ⇒ 空列表，绝不降级为全库）
+     * @return 该任务下全部 ACTIVE 附件快照（按创建时间倒序，绝不返回 {@code null}）
+     */
+    List<AttachmentRef> listActiveByTask(Long taskId);
+
+    /**
      * 读取附件内容字节（仅供 {@code contentLoadable=true} 的平台可读产物，W7 新增）。
      *
      * <p>语义与 {@code AttachmentService#loadContent(Long)} 一致：附件不存在 / 地址不可读 /

@@ -824,14 +824,31 @@ class InternalLlmExecutorToolsTest {
 
     // ── RV-14 internal_stage_attachment_to_sandbox ─────────────────────────
 
+    /**
+     * 绑定 (11,22) 的子任务快照：taskId=33。
+     *
+     * <p>`G-034` 起 stage-in 的产物件白名单是<b>任务级</b>的，而
+     * {@link com.helloai.core.agent.tool.ToolInvocationContext#bind(Long, Long)}（两参重载）
+     * 不带 taskId ⇒ 走 {@code subTaskQueryPort.findById} 回退。故所有 stage 用例都要么
+     * stub 本方法、要么用带 taskId 的重载绑定。</p>
+     */
+    private com.helloai.core.agent.port.SubTaskSnapshot taskScopeSnapshot() {
+        return com.helloai.core.agent.port.SubTaskSnapshot.builder()
+                .id(22L)
+                .status(com.helloai.common.constant.SubTaskStatus.IN_PROGRESS)
+                .taskId(33L)
+                .build();
+    }
+
     @Test
     @DisplayName("RV-14 stage-in：注入成功返回路径/size/sha256（与 digest 同源算法），写入绑定子任务的沙箱")
     @SuppressWarnings("unchecked")
     void stageAttachmentShouldWriteToSandbox() {
         byte[] bytes = "abc".getBytes(StandardCharsets.UTF_8);
-        when(attachmentPort.listActive(22L)).thenReturn(List.of(
+        when(subTaskQueryPort.findById(22L)).thenReturn(taskScopeSnapshot());
+        when(attachmentPort.listActiveByTask(33L)).thenReturn(List.of(
                 new com.helloai.core.agent.port.AttachmentRef(50L, "data.csv", "csv", "text/csv",
-                        (long) bytes.length, com.helloai.common.constant.AttachmentStatus.ACTIVE, true)));
+                        (long) bytes.length, com.helloai.common.constant.AttachmentStatus.ACTIVE, true, 22L)));
         when(attachmentPort.loadContent(50L)).thenReturn(bytes);
         when(sandboxExecutionService.writeArtifact(eq(22L), eq("/tmp/staged/50-data.csv"), eq(bytes)))
                 .thenReturn(true);
@@ -846,15 +863,42 @@ class InternalLlmExecutorToolsTest {
                 .isEqualTo("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         assertThat(result.get("fileName")).isEqualTo("data.csv");
         assertThat(result.get("note").toString()).contains("internal_run_in_sandbox");
+        // 自己的产物不回 sourceSubTaskId：回了只会让模型以为清单里多了一行
+        assertThat(result.containsKey("sourceSubTaskId")).isFalse();
         verify(sandboxExecutionService).writeArtifact(22L, "/tmp/staged/50-data.csv", bytes);
     }
 
     @Test
-    @DisplayName("RV-14 stage-in：越权 id（非当前子任务有效附件）⇒ 拒绝，不读内容不写沙箱")
+    @DisplayName("G-034 stage-in(artifact)：注入上游同任务产物成功，回带 sourceSubTaskId 标明归属")
+    @SuppressWarnings("unchecked")
+    void stageAttachmentShouldInjectUpstreamArtifactOfSameTask() {
+        byte[] bytes = "upstream".getBytes(StandardCharsets.UTF_8);
+        when(subTaskQueryPort.findById(22L)).thenReturn(taskScopeSnapshot());
+        // 附件 60 属于同任务的另一个子任务 44 —— 这正是「拿上游产物交叉验证」要走的路径
+        when(attachmentPort.listActiveByTask(33L)).thenReturn(List.of(
+                new com.helloai.core.agent.port.AttachmentRef(60L, "sales_2024.csv", "csv", "text/csv",
+                        (long) bytes.length, com.helloai.common.constant.AttachmentStatus.ACTIVE, true, 44L)));
+        when(attachmentPort.loadContent(60L)).thenReturn(bytes);
+        when(sandboxExecutionService.writeArtifact(eq(22L), eq("/tmp/staged/60-sales_2024.csv"), eq(bytes)))
+                .thenReturn(true);
+
+        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(11L, 22L, 60L, null);
+
+        assertThat(result.get("staged")).isEqualTo(true);
+        assertThat(result.get("path")).isEqualTo("/tmp/staged/60-sales_2024.csv");
+        assertThat(result.get("origin")).isEqualTo("artifact");
+        assertThat(result.get("sourceSubTaskId")).isEqualTo(44L);
+        // 白名单按任务查，不再按子任务查
+        verify(attachmentPort, never()).listActive(any());
+    }
+
+    @Test
+    @DisplayName("RV-14 stage-in：越权 id（不在本任务有效附件内）⇒ 拒绝，不读内容不写沙箱")
     void stageAttachmentShouldRejectForeignId() {
-        when(attachmentPort.listActive(22L)).thenReturn(List.of(
+        when(subTaskQueryPort.findById(22L)).thenReturn(taskScopeSnapshot());
+        when(attachmentPort.listActiveByTask(33L)).thenReturn(List.of(
                 new com.helloai.core.agent.port.AttachmentRef(51L, "a.md", "md", "text/markdown",
-                        3L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true)));
+                        3L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true, 22L)));
 
         assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 999L, null))
                 .isInstanceOf(BizException.class)
@@ -864,11 +908,68 @@ class InternalLlmExecutorToolsTest {
     }
 
     @Test
+    @DisplayName("G-034 stage-in：跨任务 id ⇒ 拒绝（任务级白名单只管本任务，不跨任务）")
+    void stageAttachmentShouldRejectCrossTaskId() {
+        when(subTaskQueryPort.findById(22L)).thenReturn(taskScopeSnapshot());
+        // 本任务 33 内只有 51；61 属于别的任务，故查不到 ⇒ 必须拒绝
+        when(attachmentPort.listActiveByTask(33L)).thenReturn(List.of(
+                new com.helloai.core.agent.port.AttachmentRef(51L, "a.md", "md", "text/markdown",
+                        3L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true, 22L)));
+
+        assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 61L, null))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("不再属于本任务的有效产物")
+                // 真机（19:35:32）暴露：驳回会把旧轮产物整体置 INACTIVE，模型只看到「不属于本任务」
+                // 会误判成 id 抄错而反复试错。报错必须点出「驳回失效」这条最常见原因。
+                .hasMessageContaining("驳回后旧轮产物已整体失效")
+                .hasMessageContaining("deps[].attachments");
+        verify(attachmentPort, never()).loadContent(any());
+        verify(sandboxExecutionService, never()).writeArtifact(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("G-034 stage-in：归属任务无法确定 ⇒ 拒绝（绝不退化成空条件放行）")
+    void stageAttachmentShouldRejectWhenTaskScopeUnknown() {
+        // 未绑定 taskId 且快照查不到 ⇒ resolveTaskIdForAttachmentScope 抛错，不得当成「全库可注入」
+        when(subTaskQueryPort.findById(22L)).thenReturn(null);
+
+        assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 50L, null))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("无法确定当前子任务的所属任务");
+        verify(attachmentPort, never()).listActiveByTask(any());
+        verify(sandboxExecutionService, never()).writeArtifact(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("G-034 stage-in：执行链已绑定 taskId 时直接用它，不再二次查库")
+    @SuppressWarnings("unchecked")
+    void stageAttachmentShouldPreferBoundTaskId() {
+        try {
+            ToolInvocationContext.bind(11L, 33L, 22L, 0);   // SL-8：执行链本就绑定 taskId
+            byte[] bytes = "x".getBytes(StandardCharsets.UTF_8);
+            when(attachmentPort.listActiveByTask(33L)).thenReturn(List.of(
+                    new com.helloai.core.agent.port.AttachmentRef(62L, "b.txt", "txt", "text/plain",
+                            1L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true, 22L)));
+            when(attachmentPort.loadContent(62L)).thenReturn(bytes);
+            when(sandboxExecutionService.writeArtifact(any(), any(), any())).thenReturn(true);
+
+            Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(
+                    11L, 22L, 62L, null);
+
+            assertThat(result.get("staged")).isEqualTo(true);
+            verify(subTaskQueryPort, never()).findById(any());
+        } finally {
+            ToolInvocationContext.bind(11L, 22L);
+        }
+    }
+
+    @Test
     @DisplayName("RV-14 stage-in：平台不可直读附件 ⇒ 拒绝（contentLoadable=false）")
     void stageAttachmentShouldRejectUnloadable() {
-        when(attachmentPort.listActive(22L)).thenReturn(List.of(
+        when(subTaskQueryPort.findById(22L)).thenReturn(taskScopeSnapshot());
+        when(attachmentPort.listActiveByTask(33L)).thenReturn(List.of(
                 new com.helloai.core.agent.port.AttachmentRef(52L, "ext.csv", "csv", "text/csv",
-                        10L, com.helloai.common.constant.AttachmentStatus.ACTIVE, false)));
+                        10L, com.helloai.common.constant.AttachmentStatus.ACTIVE, false, 22L)));
 
         assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 52L, null))
                 .isInstanceOf(BizException.class)
@@ -881,9 +982,10 @@ class InternalLlmExecutorToolsTest {
     @SuppressWarnings("unchecked")
     void stageAttachmentShouldDegradeOnWriteFailure() {
         byte[] bytes = "x".getBytes(StandardCharsets.UTF_8);
-        when(attachmentPort.listActive(22L)).thenReturn(List.of(
+        when(subTaskQueryPort.findById(22L)).thenReturn(taskScopeSnapshot());
+        when(attachmentPort.listActiveByTask(33L)).thenReturn(List.of(
                 new com.helloai.core.agent.port.AttachmentRef(53L, "s.sh", "sh", "text/x-sh",
-                        1L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true)));
+                        1L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true, 22L)));
         when(attachmentPort.loadContent(53L)).thenReturn(bytes);
         when(sandboxExecutionService.writeArtifact(any(), any(), any())).thenReturn(false);
 
@@ -899,9 +1001,10 @@ class InternalLlmExecutorToolsTest {
     @SuppressWarnings("unchecked")
     void stageAttachmentShouldSanitizeFileName() {
         byte[] bytes = "x".getBytes(StandardCharsets.UTF_8);
-        when(attachmentPort.listActive(22L)).thenReturn(List.of(
+        when(subTaskQueryPort.findById(22L)).thenReturn(taskScopeSnapshot());
+        when(attachmentPort.listActiveByTask(33L)).thenReturn(List.of(
                 new com.helloai.core.agent.port.AttachmentRef(54L, "../../etc/passwd", "txt", "text/plain",
-                        1L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true)));
+                        1L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true, 22L)));
         when(attachmentPort.loadContent(54L)).thenReturn(bytes);
         when(sandboxExecutionService.writeArtifact(any(), any(), any())).thenReturn(true);
 

@@ -407,6 +407,51 @@ class McpToolServiceTest {
         // P-1 修复：附件正文带来源标题行（fileName 为空时回退 attachment-{id}）
         assertThat(item.getContent()).isEqualTo("【文件：attachment-21】\n物化产出内容");
         assertThat(item.getTruncated()).isNull();
+        // G-034 剩余项①：deps 必须下发附件 id（否则消费方只能对着截断文本猜，
+        // 猜不到就 find / 白跑或凭空重建上游文档）
+        assertThat(item.getAttachments()).hasSize(1);
+        McpToolService.AttachmentItem ai = item.getAttachments().get(0);
+        assertThat(ai.getAttachmentId()).isEqualTo(21L);
+        // fileName 原样透传（该附件本身没登记文件名 ⇒ null）；可寻址名见 content 的 【文件：attachment-21】
+        assertThat(ai.getFileName()).isNull();
+        assertThat(ai.getLoadable()).isTrue();
+        assertThat(ai.getStatus()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    @DisplayName("getDepsSummary：前置无附件时 deps[].attachments 为空列表（绝不为 null）")
+    void shouldExposeEmptyAttachmentListWhenDepHasNoArtifact() {
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(taskWithDeps(SUB_TASK_ID, List.of(11L)));
+        when(subTaskQueryPort.listByIds(List.of(11L))).thenReturn(List.of(
+                SubTaskSnapshot.builder().id(11L).title("空产出").status(SubTaskStatus.DONE).build()));
+        when(attachmentPort.listActive(11L)).thenReturn(List.of());
+
+        McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
+
+        // 「空列表 = 尚未产出附件」是消费方可判读的事实，null 会让它无法区分「没查」和「没有」
+        assertThat(result.getDeps().get(0).getAttachments()).isNotNull().isEmpty();
+    }
+
+    @Test
+    @DisplayName("getDepsSummary：前置有附件时 deps[].attachments 给出 id/fileName/loadable（G-034 剩余项①）")
+    void shouldExposeDepAttachmentIdsSoConsumerCanReadOrStageThem() {
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(taskWithDeps(SUB_TASK_ID, List.of(11L)));
+        when(subTaskQueryPort.listByIds(List.of(11L))).thenReturn(List.of(
+                SubTaskSnapshot.builder().id(11L).title("有产出").status(SubTaskStatus.DONE).build()));
+        when(attachmentPort.listActive(11L)).thenReturn(List.of(
+                new AttachmentRef(77L, "schema.sql", "sql", "text/plain", 105L,
+                        AttachmentStatus.ACTIVE, true, 11L)));
+
+        McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
+
+        List<McpToolService.AttachmentItem> items = result.getDeps().get(0).getAttachments();
+        // 不给 id 则消费方既不能 internal_read_attachment_range 续读、也不能 stage 进沙箱实测，
+        // 只能对着被截断的 content 猜（真机症状：find / 白跑，或凭空重建上游文档）
+        assertThat(items).hasSize(1);
+        assertThat(items.get(0).getAttachmentId()).isEqualTo(77L);
+        assertThat(items.get(0).getFileName()).isEqualTo("schema.sql");
+        assertThat(items.get(0).getLoadable()).isTrue();
+        assertThat(items.get(0).getStatus()).isEqualTo("ACTIVE");
     }
 
     @Test

@@ -202,8 +202,12 @@ public class InternalLlmExecutorTools {
             【何时使用】执行前需要确认前置依赖是否就绪、各前置产出了什么时调用。
             【Gotchas】
             - ready=false 且 degraded=false 表示前置尚未产出，content 为空是预期而非异常
+            - content 是「截断过的文本」：被截掉的部分与二进制附件在文本通道里看不见，
+              要拿原件请读 `deps[].attachments`（含 attachmentId / fileName / loadable）
+            - `deps[].attachments` 的 attachmentId 可直接喂给 internal_read_attachment_range 定点续读，
+              或 internal_stage_attachment_to_sandbox（默认 origin=artifact）注入沙箱实测
             - 与外部 get_deps_summary 同源，进程内直连
-            【相关工具】internal_get_sub_task_detail
+            【相关工具】internal_get_sub_task_detail / internal_read_attachment / internal_stage_attachment_to_sandbox
             """)
     public Object internalGetDepsSummary(
             @ToolParam(description = "执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
@@ -441,8 +445,11 @@ public class InternalLlmExecutorTools {
      * <p><b>为什么 lazy stage-in</b>：附件事实源在对象存储，沙箱易失且任务终态即销毁——执行时的沙箱审核时已不存在，
      * 注入只能在「需要实测的那个 turn 内」现场完成，不应让沙箱陪任务跨天存活（双事实源 + 生命周期无解）。</p>
      *
-     * <p><b>归属硬校验</b>：仅注入<b>当前子任务的有效附件</b>（{@link AttachmentPort#listActive} 命中），越权 id 拒绝——
-     * 比 read 类软约束更严，因写入将变成可执行内容；上游产物附件本期不支持。返回 {@code sha256} 与
+     * <p><b>归属硬校验</b>：仅注入<b>本任务内</b>子任务的有效附件（{@link AttachmentPort#listActiveByTask} 命中），
+     * 越权 id 拒绝——比 read 类软约束更严，因写入将变成可执行内容。作用域从「本子任务」放宽到「本任务」
+     * （`G-034` 剩余项①）与产品既有可见性口径同源：{@code AttachmentVisibilityPolicy} 的 {@code TASK}
+     * 分支本就是「根任务 Task-Team 成员可读该任务下任意附件」；注入白名单比读取面更窄会让
+     * 「把上游产物注入来交叉验证」永远走不通。跨任务仍 fail-close。返回 {@code sha256} 与
      * {@code internal_attachment_digest} 同源（UTF-8 字节 SHA-256）可对账，证明内容是 MinIO 原件、注入环节未掉包。</p>
      *
      * <p><b>`G-051`：输入件与产物件在沙箱通道上同权</b>。此前本工具只认 {@code attachment}
@@ -478,13 +485,18 @@ public class InternalLlmExecutorTools {
             - 注入目标是你**自己**的沙箱容器，随后你的 run_in_sandbox 命令即可看到该文件
             - 返回的 sha256 与 internal_attachment_digest 一致，证明内容就是平台原件、未被掉包
             【附件来源（origin）】
-            - `artifact`（默认）：本子任务自己产出的附件，清单见 internal_get_sub_task_detail 的 `attachments`
+            - `artifact`（默认）：**本任务内**产出的附件（本子任务自己的，或上游/同任务其它子任务的产出）。
+              本子任务清单见 internal_get_sub_task_detail 的 `attachments`；
+              上游产出见 internal_get_deps_summary 的 `deps[].attachments`（含 attachmentId 与 loadable）
             - `input`：用户在本任务关联会话里上传、且**拆解时已把本子任务划进作用域**的输入附件，
               清单见 internal_get_sub_task_detail 的 `inputAttachments`（含图片 / 文档 / 数据文件）
             - 两张表主键各自独立，**必须显式指定来源**，不要拿一个 id 反复试
             【Gotchas】
-            - 越权 id 一律拒绝：产物件只认当前子任务；输入件只认本子任务声明的清单
+            - 越权 id 一律拒绝：产物件只认**本任务**（不跨任务）；输入件只认本子任务声明的清单
               （未声明 ⇒ 一件都不给，不会回落成「整个会话」）
+            - **驳回后上一轮产物会整体失效**（ACTIVE→INACTIVE）：返工轮次请用本轮新登记的 id，
+              不要沿用上一轮报告里引用的 id，否则会得到「不再属于本任务的有效产物」
+            - 注入上游产物时返回值会带 `sourceSubTaskId`，据此确认「这份证据出自哪个子任务」
             - 输入件落盘路径带 `input-` 前缀（`/tmp/staged/input-<id>-<文件名>`），与产物件不会互相覆盖
             - 同名附件重复注入是覆盖语义，天然可重入；沙箱随任务终态销毁，注入不跨任务残留
             - 产物超过沙箱写入失败时返回 staged=false 与原因，请改用 internal_read_attachment_range 分段核对
@@ -493,13 +505,14 @@ public class InternalLlmExecutorTools {
     public Object internalStageAttachmentToSandbox(
             @ToolParam(description = "执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
             @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId,
-            @ToolParam(description = "附件主键（按 origin 解释归属：artifact=子任务产物 / input=会话输入）", required = true) Long attachmentId,
-            @ToolParam(description = "附件来源：artifact=本子任务产物（默认）；input=本子任务作用域内的会话输入附件", required = false) String origin) {
+            @ToolParam(description = "附件主键（按 origin 解释归属：artifact=任务产出 / input=会话输入）", required = true) Long attachmentId,
+            @ToolParam(description = "附件来源：artifact=本任务内任一子任务的产物（默认）；input=本子任务作用域内的会话输入附件", required = false) String origin) {
         ToolInvocationContext.Ids ids = requireInternalChain();
         StageSource source = StageSource.parse(origin);
         String fileName;
         byte[] bytes;
         String path;
+        Long sourceSubTaskId = null;
         if (source == StageSource.INPUT) {
             // 输入件：先作用域白名单（越权即拒）→ 再读字节 → 落盘路径带 input- 前缀
             MediaRef ref = resolveInputScopedRef(ids.subTaskId(), attachmentId);
@@ -514,19 +527,33 @@ public class InternalLlmExecutorTools {
             }
             path = StagedPathUtil.pathOfInput(attachmentId, fileName);
         } else {
-            // 归属硬校验：仅当前子任务的有效产物附件（read 类工具是软约束；写入将变成可执行内容，必须更严）
-            AttachmentRef ref = attachmentPort.listActive(ids.subTaskId()).stream()
+            // 归属硬校验：本**任务**内任一子任务的有效产物附件（`G-034` 剩余项①）。
+            // 判据从「本子任务」放宽到「本任务」，理由是产品口径本就如此：
+            // AttachmentVisibilityPolicy 的 TASK 分支 = 根任务 Task-Team 成员可读该任务下任意附件；
+            // 若注入白名单比读取面更窄，「注入上游产物来交叉验证」这条最需要证据的路径永远走不通
+            // （真机症状：reviewer/执行者只能 find 白跑，或凭截断文本凭空重建上游文档）。
+            // 仍严格 fail-close：只白名单本任务，绝不跨任务。
+            Long ownerTaskId = resolveTaskIdForAttachmentScope(ids);
+            AttachmentRef ref = attachmentPort.listActiveByTask(ownerTaskId).stream()
                     .filter(a -> a.id().equals(attachmentId))
                     .findFirst()
                     .orElseThrow(() -> new BizException(
-                            "附件不属于当前子任务或已失效，拒绝注入: attachmentId=" + attachmentId
-                                    + "（若目标是用户上传的会话输入件，请传 origin=input）"));
+                            "附件不再属于本任务的有效产物，拒绝注入: attachmentId=" + attachmentId
+                                    + "。常见原因是该子任务被驳回后旧轮产物已整体失效"
+                                    + "（invalidateBySubTask 把 ACTIVE 全部置 INACTIVE），"
+                                    + "此时应看本轮新登记的产物，而不是复用上一轮的数字；"
+                                    + "也可能是 id 抄错或跨任务越权"
+                                    + "（有效清单见 internal_get_sub_task_detail 的 attachments / "
+                                    + "internal_get_deps_summary 的 deps[].attachments；"
+                                    + "若目标是用户上传的会话输入件，请传 origin=input）"));
             if (!ref.contentLoadable()) {
                 throw new BizException("附件平台不可直读（非受控存储地址），无法注入: attachmentId=" + attachmentId);
             }
             fileName = ref.fileName();
             bytes = attachmentPort.loadContent(attachmentId);
             path = StagedPathUtil.pathOf(attachmentId, fileName);
+            // 回带来源子任务：模型据此判断「这是上游的产出、不是我的」，也便于核对 deps 清单
+            sourceSubTaskId = ref.subTaskId();
         }
         boolean ok = sandboxExecutionService.writeArtifact(ids.subTaskId(), path, bytes);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -536,10 +563,34 @@ public class InternalLlmExecutorTools {
         out.put("sha256", StagedPathUtil.sha256Hex(bytes));
         out.put("fileName", fileName);
         out.put("origin", source.wireName);
+        if (sourceSubTaskId != null && !sourceSubTaskId.equals(ids.subTaskId())) {
+            // 只在「不是你自己的产物」时给这个字段：它是跨子任务证据的标识，
+            // 对自己的文件回一个等于 subTaskId 的值只会让模型误以为清单里多了一行。
+            out.put("sourceSubTaskId", sourceSubTaskId);
+        }
         out.put("note", ok
                 ? "已注入你的沙箱，可用 internal_run_in_sandbox 按绝对路径执行/校验；sha256 可与 internal_attachment_digest 对账"
                 : "沙箱写入失败（沙箱未启用或句柄不可用）；可改用 internal_read_attachment_range 分段核对附件内容");
         return out;
+    }
+
+    /**
+     * 解析「产物附件归属作用域」用的 taskId（`G-034` 剩余项①）。
+     *
+     * <p>优先用 {@link ToolInvocationContext.Ids#taskId()}（`SL-8` 起执行链本就绑定）；
+     * 未绑定时回退查一次子任务快照。二者都没有 ⇒ 抛错：<b>不允许</b>在未知归属时放行，
+     * 那会把白名单退化成空条件（判据 9：约束必须 fail-close）。</p>
+     */
+    private Long resolveTaskIdForAttachmentScope(ToolInvocationContext.Ids ids) {
+        if (ids.taskId() != null) {
+            return ids.taskId();
+        }
+        SubTaskSnapshot snapshot = subTaskQueryPort.findById(ids.subTaskId());
+        if (snapshot == null || snapshot.taskId() == null) {
+            throw new BizException("无法确定当前子任务的所属任务，拒绝按任务级白名单注入附件: subTaskId="
+                    + ids.subTaskId());
+        }
+        return snapshot.taskId();
     }
 
     /**

@@ -19,7 +19,13 @@ import java.util.regex.Pattern;
  */
 public final class ReviewMechanicalCheck {
 
-    /** 机械段上限（超出按 MISMATCH > UNAVAILABLE > file > family 截断并标 omitted）。 */
+    /**
+     * 机械段上限（超出按 MISMATCH 族行 &gt; UNAVAILABLE 行 &gt; 其余族行 &gt; 其余 file 行
+     * 截断并标 {@code omitted}）。
+     *
+     * <p>优先级顺序见 {@code assemble}：聚合结论（族行）必须比单文件明细先落地，
+     * 否则大批量（35 附件）下会只剩几条分片明细、看不到「合计是否一致」。</p>
+     */
     public static final int MAX_OUTPUT_CHARS = 1_200;
 
     /** 单文件参与机械统计的字符上限（约 50 MB 的 UTF-8 文本量级）。 */
@@ -325,7 +331,16 @@ public final class ReviewMechanicalCheck {
         return sb.toString();
     }
 
-    /** 按优先级截断：MISMATCH 族行 > UNAVAILABLE 行 > 其余 file 行 > 其余族行；超出标 omitted。 */
+    /**
+     * 按优先级截断：MISMATCH 族行 &gt; UNAVAILABLE 行 &gt; 其余族行 &gt; 其余 file 行；超出标 omitted。
+     *
+     * <p><b>为什么「其余族行」必须排在「其余 file 行」之前</b>（`G-034` 35 附件批回放实测，
+     * 2026-11-26）：原顺序把 MATCH 族行放在最末，25 片明细各占约 130 字符把 1,200 字符吃满后
+     * <b>族行一条都没进来</b>（实测 {@code omitted=20}、{@code family} 行 0 条）。而族行才是
+     * 本批唯一回答「25 片是否齐全、合计是否等于主件」的结论——丢掉它等于把聚合事实换成
+     * 7 条单文件明细，reviewer 再拼不出「合起来对不对」。
+     * 换序后同样预算内先落聚合结论，被省略的只是可逐条另取的单文件明细。</p>
+     */
     private static String assemble(List<String> fileLines, List<String> familyLines) {
         List<String> ordered = new ArrayList<>();
         for (String line : familyLines) {
@@ -343,13 +358,14 @@ public final class ReviewMechanicalCheck {
                 ordered.add(line);
             }
         }
-        for (String line : fileLines) {
-            if (!line.contains(STATUS_UNAVAILABLE)) {
+        // 其余族行（MATCH / 仅有 sum_data 无主件）：聚合结论优先于明细
+        for (String line : familyLines) {
+            if (!line.contains(STATUS_MISMATCH) && !line.contains(STATUS_UNAVAILABLE)) {
                 ordered.add(line);
             }
         }
-        for (String line : familyLines) {
-            if (!line.contains(STATUS_MISMATCH) && !line.contains(STATUS_UNAVAILABLE)) {
+        for (String line : fileLines) {
+            if (!line.contains(STATUS_UNAVAILABLE)) {
                 ordered.add(line);
             }
         }

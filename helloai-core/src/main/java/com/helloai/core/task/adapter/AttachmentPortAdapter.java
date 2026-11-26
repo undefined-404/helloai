@@ -39,7 +39,22 @@ public class AttachmentPortAdapter implements AttachmentPort {
 
     @Override
     public List<AttachmentRef> listActive(Long subTaskId) {
-        List<Attachment> attachments = attachmentService.listActive(subTaskId);
+        return toRefs(attachmentService.listActive(subTaskId));
+    }
+
+    @Override
+    public byte[] loadContent(Long attachmentId) {
+        return attachmentService.loadContent(attachmentId);
+    }
+
+    @Override
+    public List<AttachmentRef> listActiveByTask(Long taskId) {
+        List<Attachment> attachments = attachmentService.listActiveByTask(taskId);
+        return toRefs(attachments);
+    }
+
+    /** 实体列表 → 快照列表（两条列举入口共用，避免映射口径双写）。 */
+    private List<AttachmentRef> toRefs(List<Attachment> attachments) {
         if (attachments == null || attachments.isEmpty()) {
             return List.of();
         }
@@ -53,15 +68,10 @@ public class AttachmentPortAdapter implements AttachmentPort {
         return refs;
     }
 
-    @Override
-    public byte[] loadContent(Long attachmentId) {
-        return attachmentService.loadContent(attachmentId);
-    }
-
     /** 实体 → 快照：字段原样投影；{@code contentLoadable} 由本域判定后透传。 */
     private AttachmentRef toRef(Attachment attachment) {
         return new AttachmentRef(attachment.getId(), attachment.getFileName(), attachment.getFileType(),
                 attachment.getMimeType(), attachment.getFileSize(), attachment.getStatus(),
-                attachmentService.isContentLoadable(attachment));
+                attachmentService.isContentLoadable(attachment), attachment.getSubTaskId());
     }
 }

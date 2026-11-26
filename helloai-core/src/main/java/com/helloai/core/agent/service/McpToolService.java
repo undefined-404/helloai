@@ -569,6 +569,19 @@ public interface McpToolService {
             private Boolean loaded;
             /** 实际下发的内容字符数（未读到为 0）。 */
             private Integer contentChars;
+            /**
+             * 该前置子任务的<b>有效产出附件清单</b>（`G-034` 剩余项①，2026-11-26 追加）。
+             *
+             * <p><b>为什么必须在 deps 里给 id</b>：{@code content} 是<b>截断文本</b>
+             * （{@link UpstreamAttachmentRenderer} 逐附件配额），被截掉的部分与二进制附件
+             * 在文本通道里根本无法表达。此前下游只能看到「有个文件叫 X、被截了」，
+             * 却拿不到 {@code attachmentId}，于是既不能 {@code internal_read_attachment_range}
+             * 定向续读，也不能 stage 进沙箱实测——真机症状是 {@code find /} 白跑或凭空重建上游文档。</p>
+             *
+             * <p>空列表 = 该前置尚未产出附件（与 {@code loaded=false} 常同时出现），
+             * 绝不为 {@code null}（{@code null} 在 JSON 里像「字段不存在」，会让模型继续乱试）。</p>
+             */
+            private List<AttachmentItem> attachments;
         }
     }
 }
