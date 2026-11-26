@@ -32,10 +32,16 @@ public class HelloAIApplication {
 
     public static void main(String[] args) {
         // === §3.1 配套：禁用 CGLIB 类缓存 ===
-        // 配置中心化在 application.yml 的 `cglib.cache-classes` 段（默认 false）；
-        // 通过命令行 -Dcglib.cache.classes=true 可临时切回 true 验证是否还坏。
-        // 背景：spring-ai 1.x + spring-boot 3.4 + McpAuthFilterConfig CGLIB 增强
-        // 在异常退出后偶发导致下次启动失败（cglib cache item Unable to load）。
+        // 该开关是 JVM 系统属性（非 Spring 配置项），**只能**从这里或命令行给：
+        //   - IDEA Run Configuration VM options：-Dcglib.cache.classes=true
+        //   - 命令行：java -Dcglib.cache.classes=true -jar helloai-start.jar
+        //   - Docker ENV：JAVA_TOOL_OPTIONS=-Dcglib.cache.classes=true
+        // 写在 application.yml 里不生效（Spring 不把配置项反射成系统属性），
+        // 2026-11-26 已删除原 yml 中的说明块，以免被当成"配置项存在"。
+        // false（默认）：每次启动重新生成代理类，多花 ~2s，但异常退出（kill -9 / OOM / 断电）
+        //   后不会残留损坏的 cglib 缓存。true：启动更快，但偶发 "Unable to load cache item"，
+        //   需先清 %TEMP%\cglib* 才能启动。
+        // 背景：spring-ai 1.x + spring-boot 3.4 + McpAuthFilterConfig CGLIB 增强。
         // 详细参见项目 memory "Spring Boot CGLIB 缓存污染诊断与修复"。
         String cglibCache = System.getProperty("cglib.cache.classes");
         if (cglibCache == null) {

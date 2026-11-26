@@ -81,4 +81,65 @@ class AgentAccessTypeSwitchTest {
         assertThat(agent.getOnlineStatus()).isEqualTo(AgentOnlineStatus.IDLE);
         assertThat(agent.getCapabilities()).isNull();
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  `G-040` 注册推导与反向校验
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("G-040 注册：显式给了 accessType 就用给的，不被 modelType 覆盖")
+    void deriveForRegistration_shouldRespectExplicitType() {
+        assertThat(AgentAccessTypeSwitch.deriveForRegistration(
+                AgentAccessType.API_KEY_LLM, null))
+                .isEqualTo(AgentAccessType.API_KEY_LLM);
+        // 显式 CLI + 无模型（合法），推导不得把它改成 API_KEY_LLM
+        assertThat(AgentAccessTypeSwitch.deriveForRegistration(
+                AgentAccessType.CLI_CLIENT, null))
+                .isEqualTo(AgentAccessType.CLI_CLIENT);
+    }
+
+    @Test
+    @DisplayName("G-040 注册：accessType 留空 + 有 modelType ⇒ API_KEY_LLM（不得沿用 register 的 CLI 默认值）")
+    void deriveForRegistration_shouldInferLlmWhenModelPresent() {
+        assertThat(AgentAccessTypeSwitch.deriveForRegistration(null, "deepseek:deepseek-flash"))
+                .isEqualTo(AgentAccessType.API_KEY_LLM);
+    }
+
+    @Test
+    @DisplayName("G-040 注册：accessType 留空 + 无 modelType ⇒ CLI_CLIENT")
+    void deriveForRegistration_shouldInferCliWhenNoModel() {
+        assertThat(AgentAccessTypeSwitch.deriveForRegistration(null, null))
+                .isEqualTo(AgentAccessType.CLI_CLIENT);
+        assertThat(AgentAccessTypeSwitch.deriveForRegistration(null, "   "))
+                .isEqualTo(AgentAccessType.CLI_CLIENT);
+    }
+
+    @Test
+    @DisplayName("G-040 反向校验：CLI_CLIENT 带 modelType ⇒ 400 拒收（非法组合，建得出但跑不起来）")
+    void validateCombination_shouldRejectCliWithModel() {
+        assertThatThrownBy(() -> AgentAccessTypeSwitch.validateCombination(
+                AgentAccessType.CLI_CLIENT, "deepseek:deepseek-flash"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("CLI_CLIENT")
+                .hasMessageContaining("modelType");
+    }
+
+    @Test
+    @DisplayName("G-040 反向校验：CLI 无模型 / LLM 有模型 ⇒ 放行")
+    void validateCombination_shouldAllowLegitPairs() {
+        AgentAccessTypeSwitch.validateCombination(AgentAccessType.CLI_CLIENT, null);
+        AgentAccessTypeSwitch.validateCombination(AgentAccessType.CLI_CLIENT, "  ");
+        AgentAccessTypeSwitch.validateCombination(AgentAccessType.API_KEY_LLM, "deepseek:deepseek-flash");
+    }
+
+    @Test
+    @DisplayName("G-040 全链：留空 + 有模型 ⇒ 推导为 LLM 且反向校验放行（这才是建 LLM 执行器的正常路径）")
+    void deriveThenValidate_shouldPassForLlmRegistration() {
+        AgentAccessType resolved = AgentAccessTypeSwitch.deriveForRegistration(
+                null, "deepseek:deepseek-flash");
+
+        assertThat(resolved).isEqualTo(AgentAccessType.API_KEY_LLM);
+        // 不抛即通过
+        AgentAccessTypeSwitch.validateCombination(resolved, "deepseek:deepseek-flash");
+    }
 }

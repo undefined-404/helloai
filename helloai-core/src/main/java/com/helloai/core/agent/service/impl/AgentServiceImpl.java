@@ -357,25 +357,49 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     /**
-     * 注册 Agent 并附加可选扩展字段（modelType/modelConfig/skills）。
+     * 注册 Agent 并附加可选扩展字段（accessType/modelType/modelConfig/skills）。
      *
      * <p>按 §6.3 分层红线从 AdminAgentController 收口；作为事务代理入口，
      * 内部 {@link #register} 的事务注解在自调用场景不生效，由本方法统一托管。</p>
+     *
+     * <p><b>`G-040`：类型必须在本方法内定，不能让它沿用 {@code register} 的默认值。</b>
+     * {@code register} 落的是 {@code CLI_CLIENT}，本方法又要写 {@code modelType} ⇒
+     * 「外部 CLI 客户端绑着平台托管模型」的非法组合，建得出来但永远跑不起来
+     * （{@code usesCredentialVault()} false ⇒ 不取 key；{@code requiresRuntimeLiveness()} true
+     * ⇒ 要求心跳在线）。故先 {@link AgentAccessTypeSwitch#deriveForRegistration} 定类型、
+     * 再 {@link AgentAccessTypeSwitch#validateCombination} 反向校验，两步都在 {@code register}
+     * 之前——校验失败时库里不留痕迹。</p>
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Agent registerWithExtras(String name, AgentRole role, String description,
+                                    AgentAccessType accessType,
                                     String modelType, Map<String, Object> modelConfig,
                                     List<String> skills) {
         // 创建 Agent 前校验 modelType 格式、模型可用性、角色唯一性
         skillPolicyService.validateModelType(modelType, role, null);
+        // `G-040`：类型先定后校验，二者都前置于 register（失败不留脏行）
+        AgentAccessType resolvedAccessType = AgentAccessTypeSwitch.deriveForRegistration(accessType, modelType);
+        AgentAccessTypeSwitch.validateCombination(resolvedAccessType, modelType);
         Agent agent = register(name, role, description);
+        // 类型在 register 之后立刻覆盖：register 内部的默认值只服务「无扩展字段」的裸注册路径
+        agent.setAccessType(resolvedAccessType);
+        // 能力声明按最终类型补齐（switch 的 mergeDefaults 语义：补缺不覆盖既有显式值）。
+        // 注意此时 agent.capabilities 是 register 按 CLI_CLIENT 填的默认值，必须整体换成
+        // 按最终类型推导的那份，否则 API_KEY_LLM 会带着 CLI 的默认能力集落库。
+        agent.setCapabilities(resolvedAccessType.defaultCapabilities());
+        if (resolvedAccessType == AgentAccessType.CLI_CLIENT) {
+            // 与 AgentAccessTypeSwitch.apply 的「切到 CLI 先判离线」同口径：该类型靠心跳驱动在线态
+            agent.setOnlineStatus(AgentOnlineStatus.OFFLINE);
+        }
         agent.setModelType(modelType);
         if (modelConfig != null) agent.setModelConfig(modelConfig);
         // 技能按模型能力校验 + 推导落库（thinking 锁定、白名单过滤、自定义豁免）
         skillPolicyService.validateAgentSkills(agent.getModelType(), skills);
         agent.setSkills(skillPolicyService.deriveSkillsForRegistration(agent, skills));
         updateById(agent);
+        log.info("Agent 注册（含扩展字段）成功: id={}, role={}, accessType={}（请求 {} ⇒ 推导 {}）, modelType={}",
+                agent.getId(), role, resolvedAccessType, accessType, resolvedAccessType, modelType);
         return agent;
     }
 

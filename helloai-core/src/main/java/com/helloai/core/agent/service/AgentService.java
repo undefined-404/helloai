@@ -130,14 +130,23 @@ public interface AgentService extends IService<Agent> {
     void updateAgent(Long agentId, String name, String modelType, String remark);
 
     /**
-     * 注册 Agent 并附加可选扩展字段（modelType/modelConfig/skills）。
+     * 注册 Agent 并附加可选扩展字段（accessType/modelType/modelConfig/skills）。
      *
      * <p>按 §6.3 分层红线从 AdminAgentController 收口；作为事务代理入口，
      * 内部 {@link #register} 的事务注解在自调用场景不生效，由本方法统一托管。<br>
      * skills 按能力驱动落库（API_KEY_LLM + 已识别模型时 thinking 锁定、
      * 白名单过滤、自定义豁免），未传显式技能时同样推导（能力锁定不缺席）。</p>
+     *
+     * <p><b>`G-040`：{@code accessType} 显式入参，禁止沉默默认。</b>{@code register} 的默认值
+     * 是 {@code CLI_CLIENT}（见 {@code AgentServiceImpl#register}），而本方法会写入
+     * {@code modelType} —— 两条合起来就是「{@code CLI_CLIENT} 带 modelType」这个非法组合，
+     * 建出来的 Agent 既不走托管凭证、也不会被调度器按 LLM 执行器选中。
+     * 故本方法必须自己决定类型：传 {@code null} 时按「有 modelType ⇒ API_KEY_LLM，
+     * 否则 CLI_CLIENT」推导（推导逻辑在 {@code AgentAccessTypeSwitch.deriveForRegistration}），
+     * 而不是沿用 {@code register} 的默认值。</p>
      */
     Agent registerWithExtras(String name, AgentRole role, String description,
+                             AgentAccessType accessType,
                              String modelType, Map<String, Object> modelConfig,
                              List<String> skills);
 

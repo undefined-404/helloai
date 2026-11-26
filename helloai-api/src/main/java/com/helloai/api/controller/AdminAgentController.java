@@ -172,8 +172,20 @@ public class AdminAgentController {
     @PostMapping
     public R<AgentRegistrationResponse> create(@RequestBody AgentCreateRequest req) {
         AgentRole role = AgentRole.valueOf(req.getRole().toUpperCase());
+        // `G-040`：接入类型由前端显式选、也可留空由服务端推导（有 modelType ⇒ API_KEY_LLM）。
+        // 不能不过问就让 `register` 填 CLI_CLIENT —— 那会建出「CLI 客户端 + 平台托管模型」
+        // 的非法组合，Agent 建得出来但永远跑不起来。
+        AgentAccessType accessType = null;
+        if (req.getAccessType() != null && !req.getAccessType().isBlank()) {
+            try {
+                accessType = AgentAccessType.valueOf(req.getAccessType().trim().toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new BizException(400, "未知接入类型: " + req.getAccessType()
+                        + "，可选值 CLI_CLIENT / API_KEY_LLM / WEB_BROWSER");
+            }
+        }
         Agent agent = agentService.registerWithExtras(req.getName(), role, req.getRemark(),
-                req.getModelType(), req.getModelConfig(), req.getSkills());
+                accessType, req.getModelType(), req.getModelConfig(), req.getSkills());
 
         AgentRegistrationResponse response = new AgentRegistrationResponse();
         response.setId(agent.getId());
