@@ -72,6 +72,13 @@
 | 11 | 空值 bind mount 行为 [实测] | **静默降级不报错**——`- ${V}:${V}` 在 `V` 为空/未定义时，`docker compose config` RC=0，展开为 `type: volume` + `target: ':'`（匿名卷挂非法路径）。⇒ **`volumes:` 不得无条件写入主 compose**，须用独立的 override 文件按需 `-f` 加载（不启用时零影响，启用时正确合并为 `type: bind`）。归 `GT-10` |
 | 12 | 双向写同名 ref [实测] | **静默覆盖提交**——`local.git` 与远端各自在 `helloai/t42` 上提交后，平台向远端 push：普通 push 被拒（non-fast-forward），`--force` 成功但**退出码仍为 0**，被覆盖的提交退出 ref 后变为不可达（`cat-file -e` 在远端返回 RC=128，对象根本不存在）。⇒ 本地↔远端**只做单向发布**，每个 ref 只有一个写者。归 `GT-12` |
 
+| 13 | Windows 宿主 mode/EOL [实测·GT-0①] | **`core.fileMode=false` 足够，但 `autocrlf` 必须显式关**——`fileMode=false` 下执行位不参与比对（`git ls-files -s` 全 `100644`，容器内 `stat` 全 `777`，二者都不影响判断，mode 不是噪声源）；**但 `autocrlf=true` 会让 JGit 误报**：同一仓库我改 `text_lf.txt` 后，原生只报 1 个文件，JGit 额外把**未改动的 `text_crlf.txt`** 报成 MODIFY（原因为 JGit 不做 `autocrlf` 归一化，拿工作区 CRLF 字节直接与 HEAD 的 CRLF blob 比 ⇒ 反而稳定；一改 `autocrlf=false` 后换成反向误报）。⇒ **`clone` 必须显式 `core.autocrlf=false`**，且平台 JGit 与原生 git **必须在同一 `autocrlf` 取值下对账**（GT-0 验收集的证据） |
+| 14 | 半写文件一致性 [实测·GT-0②] | **读到「某一时刻的前缀快照」，不出残行，但无法区分「正在写」与「已写完」**——容器每 8ms 追加一行到 3.6KB 文件，宿主 JGit 连读 3 次分别看到 81 / 187 / 200 行，**每次末行都完整**（`LINE-0081-ENDMARK` 之类整行收尾，无截断半行），且读不到 `EOF` 信号。⇒ 审计 diff 必须绑定「子任务已终态」再算，**不能靠 diff 结果自行推断「写完了」**；写中途调用只会拿到一份看起来合法但偏短的快照 |
+| 15 | 单任务 clone 体积/耗时 [实测·GT-0③] | **浅克隆只省 `.git` 历史，省不了工作区**——本仓 1112 提交：全量 **118MB / 8.9s**（`.git` 42MB）；`--depth 1` **101MB / 6.5s**（`.git` 24MB）；`--single-branch --depth 1` **101MB / 7.5s**。⇒ `--depth 1` 把 `.git` 砍掉 43%，但工作区（`doc/` 33MB + `helloai-ui/` 7MB 等）一份不少，**总收益仅 14%**。浅克隆的真实价值在「首次 clone 变快」而非「省空间」，且换来 `merge-base` 的额外限制（见 GT-2） |
+| 16 | 白名单空列语义 [实测·GT-0④] | **fail-close，且报错可诊断**——OpenSandbox `release-1.1.0`：白名单外路径建沙箱返回 `VOLUME::HOST_PATH_NOT_ALLOWED`，message 直接列出 `Allowed prefixes: ['E:/yhzx/1027/unip-review-workspace']`；白名单内路径挂载成功，`docker inspect` 显示 `RW=false`，容器内可正常列目录。⇒ **不是「空列=放行一切」也不是「静默忽略卷」**，而是逐条前缀校验；GT-2 前置 B 只需把仓库根加进 `[storage].allowed_host_paths` 并重启 `opensandbox-server` |
+| 17 | JGit 并发 merge [实测·GT-0⑤] | **一线程成功、另一线程抛 `JGitInternalException`，无 `index.lock` 残留**——两个线程同时 `MergeCommand` 同一 feature→main：T1 `status=Merged`，T2 `JGitInternalException: FileNotFoundException: .git/MERGE_MSG（拒绝访问）`，事后 `.git/index.lock` 不存在、仓库状态正常。**根因是 Windows 文件句柄独占（`MERGE_MSG` 写冲突），不是 git 锁语义**。⇒ 平台侧**必须自己串行化 merge**（同一 `batch_key` 一把进程内锁），不能指望 JGit 抛「锁被占」这种可重试异常；且该异常**跨平台形态不一致**，不能作为判据 |
+| 18 | JGit push 非快进 [实测·GT-0⑥] | **不抛异常，只给结构化的 `REJECTED_NONFASTFORWARD`——这是 GT-12 最大的坑**——本地与远端各自在 main 上前进（真分叉，`merge-base` 确认）：原生 `git push` 打印 `! [rejected] ... (non-fast-forward)` 且 **`RC=0`**；JGit `RefSpec.setForceUpdate(false)` 下 `PushCommand.call()` **正常返回、不抛异常**，只有逐个检查 `RemoteRefUpdate.getStatus()` 才能看到 `REJECTED_NONFASTFORWARD`（`msg` 为空、`expectedOld`/`new` 都有值），远端 ref 未被改动。反证：`setForce(true)` 后 status=OK、远端被覆盖、被覆盖提交变为不可达。⇒ **GT-12 的「永不 force」不能靠 catch 异常实现**，必须显式遍历 `getRemoteUpdates()` 判 `status == OK`，否则**静默失败**（以为推上去了实际没动） |
+
 ---
 
 # 3. 任务表（GT-0 ~ GT-12）
@@ -80,7 +87,13 @@
 
 ### GT-0 JGit 最小闭环实测
 
-> **状态**：待开始 ｜ **剩余动作**：clone 白名单仓库 → 挂进沙箱 → 平台 JGit diff 与原生 `git diff` 对账；Windows 宿主 mode/EOL / 半写文件一致性 / clone 体积耗时 / 白名单空列语义 / JGit 合并并发锁 / **JGit 推非快进与 `setForceUpdate(false)`** 六项待实测项出结论
+> **状态**：已完成（2026-11-26）｜ **剩余动作**：—
+>
+> **六项结论已回填 §2 第 13~18 行**。核心验收判据成立：**平台 JGit diff 与原生 `git diff` 逐文件逐字节一致**（`script.sh` 内容修改 / `src/A.java` 删除 / `text_lf.txt` 文本修改 三类，`diff -u` 零差异）；JGit 额外覆盖未跟踪文件（`FileTreeIterator` 语义，对审计是加分不是偏差）。
+>
+> **实测环境**：`JGit 7.8.1.202611041320-r` + `node:20-bookworm-slim` + OpenSandbox `release-1.1.0` + Windows 宿主 + `git 2.55.0.windows.3`。测试仓 `.tmp/gt0/`（bare origin + 种子提交 + 三种 clone）。
+>
+> **三条会影响后续设计的硬结论**：①`clone` 必须显式 `core.autocrlf=false`（否则 JGit diff 误报未改文件）；②merge 必须平台侧串行化（JGit 的并发失败形态是 Windows 文件句柄冲突，不可作为可重试判据）；③push 必须判 `RemoteRefUpdate.getStatus()`（非快进不抛异常，只看异常会静默失败）。
 
 - **做什么**：钉死可行性再接线（同沙箱集成时的做法）。六项实测（research §7.8）：①Windows 宿主 clone 后挂进 Linux 容器的 mode/EOL 表现（`core.fileMode=false` 是否足够）；②平台 JGit 读「容器正在写的挂载目录」的一致性（`FileTreeIterator` 快照 vs 半写文件）；③单任务多 agent 独立 clone 的体积/耗时（决定浅克隆/单分支）；④本仓钉住的 OpenSandbox 1.1.0 与 latest 在「空 `allowed_host_paths`」上的行为差异；⑤JGit `MergeCommand` 在同一分支两处 checkout 下的失败形态与并发合并锁行为；⑥**JGit `PushCommand` 在非快进下的异常类型 + `RefSpec.setForceUpdate(false)` 实际行为**（`GT-12` 的「永不 force」依赖它，须确认 JGit 侧是否与原生 git 一样拒绝而非静默覆盖）。
 - **验收判据**：平台 JGit 算出的 diff 与原生 `git diff` 逐行一致；六项实测各出结论并回填本计划 §2。
