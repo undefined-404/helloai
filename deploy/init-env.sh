@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # HelloAI - one-shot .env bootstrap for server deployment
-# Generates the 7 variables required by deploy/app/docker-compose.yml
+# Generates the 8 variables required by deploy/app/docker-compose.yml
 # into a .env file in the current directory (idempotent / safe to re-run).
 #
 # Generated values:
@@ -12,6 +12,17 @@
 #   HELLOAI_CREDENTIAL_AES_KEY_BASE64=<random base64 32B>
 #   HELLOAI_AGENT_REGISTRATION_TOKEN=<random hex 32B>   (2026-10-19)
 #   OPEN_SANDBOX_API_KEY=<random hex 32B>               (2026-10-19)
+#   REDIS_PASSWORD=<random hex 16B>                     (2026-11-26)
+#
+# NOTE - REDIS_PASSWORD (2026-11-26): Redis is no longer open. The compose file
+#   runs `redis-server --requirepass $REDIS_PASSWORD` and marks the variable `:?`,
+#   so a missing value aborts `docker compose up` at parse time. This script
+#   generates it, and it is SAFE to regenerate on a fresh .env (nothing is stored
+#   under it that depends on the old secret) -- but it must stay stable across
+#   restarts of the same stack, because the app and the redis healthcheck both
+#   read it. Deleting the line and re-running rotates the password; the app picks
+#   it up on the next `up -d`, no data migration needed (Redis holds no
+#   authoritative state here).
 #
 # IMPORTANT - AES key is NOT regenerated on re-run (it must match the ciphertext
 #   already in the database). If .env already has HELLOAI_CREDENTIAL_AES_KEY_BASE64,
@@ -84,6 +95,10 @@ BIZ_USER="${HELLOAI_RABBIT_USER:-helloai}"
 # regenerating them on a fresh .env is always safe (unlike the AES key).
 AGENT_TOKEN="${HELLOAI_AGENT_REGISTRATION_TOKEN:-$(gen_hex)}"
 SANDBOX_KEY="${OPEN_SANDBOX_API_KEY:-$(gen_hex)}"
+# 2026-11-26: Redis requirepass is now mandatory (`:?` in compose). Same hex
+# alphabet as the others -- no ':' / '$' / space, which compose would mangle
+# when expanding the value into the redis `command:` array.
+REDIS_PW="${REDIS_PASSWORD:-$(gen_hex)}"
 
 # --- Output -------------------------------------------------------------------
 if [ "$PRINT_ONLY" -eq 1 ]; then
@@ -95,6 +110,7 @@ if [ "$PRINT_ONLY" -eq 1 ]; then
   echo "HELLOAI_CREDENTIAL_AES_KEY_BASE64=${AES_KEY}"
   echo "HELLOAI_AGENT_REGISTRATION_TOKEN=${AGENT_TOKEN}"
   echo "OPEN_SANDBOX_API_KEY=${SANDBOX_KEY}"
+  echo "REDIS_PASSWORD=${REDIS_PW}"
   echo
   echo "# NOTE: values already present in ${ENV_FILE} were kept (idempotent)."
   exit 0
@@ -122,6 +138,7 @@ append_if_missing HELLOAI_RABBIT_PASSWORD "$BIZ_PW"
 append_if_missing HELLOAI_CREDENTIAL_AES_KEY_BASE64 "$AES_KEY"
 append_if_missing HELLOAI_AGENT_REGISTRATION_TOKEN "$AGENT_TOKEN"
 append_if_missing OPEN_SANDBOX_API_KEY "$SANDBOX_KEY"
+append_if_missing REDIS_PASSWORD "$REDIS_PW"
 
 echo
 echo "DONE. ${ENV_FILE} now contains:"

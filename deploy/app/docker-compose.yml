@@ -15,8 +15,12 @@
 #   1. Added app service running jar directly with eclipse-temurin:17-jre
 #   2. App connects to middleware via compose internal network (service names),
 #      overridden by SPRING_* / RABBITMQ_* env vars, no jar repackaging needed
-#   3. Middleware ports bound to all interfaces (incl. public IP) for remote IDE debugging;
-#      MUST whitelist 15432/26379/25672/25673 in Alibaba Cloud security group to your IP
+#   3. (2026-11-26 incident) Middleware ports are published on all interfaces again for
+#      remote IDE debugging, but Redis now REQUIRES a password (REDIS_PASSWORD, fail-fast)
+#      and has MODULE/DEBUG disabled. The other datastores are still on their default
+#      credentials, so 15432 / 25672 / 25673 / 29000 / 29001 MUST be restricted in the
+#      cloud security group to the team's egress IPs. Leaving them open to 0.0.0.0/0 is
+#      an unmitigated exposure -- the 2026-11-26 compromise entered through that shape.
 #   4. Added web service (nginx): serves frontend dist + proxies /api, /mcp to app,
 #      only port 80 exposed publicly; 6565 bound to 127.0.0.1 for local troubleshooting
 #   5. Added rabbitmq-init one-shot service: creates vhost /helloai + business user,
@@ -56,6 +60,7 @@
 # Required .env variables (in the deploy dir; .env is gitignored):
 #   RABBITMQ_ADMIN_USER              # non-guest admin, created manually (see above)
 #   RABBITMQ_ADMIN_PASSWORD
+#   REDIS_PASSWORD               # REQUIRED (`:?`); Redis requirepass, shared by app + exporter
 #   HELLOAI_RABBIT_USER          # optional, defaults to helloai
 #   HELLOAI_RABBIT_PASSWORD      # REQUIRED (`:?`); rabbitmq-init and the app share it
 #   HELLOAI_CREDENTIAL_AES_KEY_BASE64  # REQUIRED (`:?`); must match existing ciphertext
@@ -77,6 +82,8 @@ services:
     container_name: helloai-postgres
     restart: unless-stopped
     ports:
+      # Public again (2026-11-26 rollback). Security group MUST allowlist the team's
+      # egress IPs for this port; the DB still uses its default password.
       - "15432:5432"
     environment:
       POSTGRES_DB: helloai
@@ -92,16 +99,46 @@ services:
       retries: 5
 
   # --- Redis 7.2.5 ---
+  # 2026-11-26: this service was compromised through the previously published
+  #   0.0.0.0:26379 mapping (no auth). Three independent controls now apply:
+  #   1) the host port is loopback-only (remote access via SSH tunnel);
+  #   2) requirepass is mandatory and fail-fast (REDIS_PASSWORD in .env);
+  #   3) MODULE / DEBUG are renamed away -- both are remote-code-execution enablers
+  #      and nothing in this stack uses them. CONFIG stays enabled because
+  #      redis_exporter and manual ops rely on it.
   redis:
     image: redis:7.2.5-alpine
     container_name: helloai-redis
     restart: unless-stopped
+    environment:
+      # Do not use `:-`: an empty value counts as "set" to Spring/compose and would
+      # silently start an unauthenticated or unreachable Redis (same shape as the
+      # incident). `:?` aborts `docker compose up` instead.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?.env in the deploy dir must define REDIS_PASSWORD (shared by redis requirepass, the app and redis_exporter)}
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?.env in the deploy dir must define REDIS_PASSWORD}
+      - --protected-mode
+      - "yes"
+      - --rename-command
+      - MODULE
+      - ""
+      - --rename-command
+      - DEBUG
+      - ""
     ports:
+      # Public again (2026-11-26 rollback) for remote IDE access. Unlike before, the
+      # server now demands a password on every connection (see command below), so an
+      # unauthenticated client cannot do anything. Keep the security-group allowlist.
       - "26379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # Must authenticate now; the old `redis-cli ping` would fail forever and,
+      # with app depends_on service_healthy, would keep the app from ever starting.
+      # `$$` escapes compose interpolation so the container shell expands it.
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -112,6 +149,7 @@ services:
     container_name: helloai-rabbitmq
     restart: unless-stopped
     ports:
+      # Public again (2026-11-26 rollback); security group MUST allowlist the team IPs.
       - "25672:5672"    # AMQP
       - "25673:15672"   # Management UI
     environment:
@@ -204,6 +242,8 @@ services:
     container_name: helloai-minio
     restart: unless-stopped
     ports:
+      # Public again (2026-11-26 rollback); root credentials are still default --
+      # restrict both ports to the team's egress IPs in the security group.
       - "29000:9000"   # S3 API
       - "29001:9001"   # Console
     environment:
@@ -353,8 +393,17 @@ services:
       # SPRING_* env vars below override application-dev.yml fields,
       # ensuring compose internal network (service-name:container-port) without repackaging
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/helloai?currentSchema=public&reWriteBatchedInserts=true
+      # 2026-11-26: the database password used to be whatever application-dev.yml
+      # defaulted to, and 15432 was published to the internet. This env var keeps the
+      # current value as the default (no behaviour change) but makes rotation a
+      # one-line .env change: set DATASOURCE_PASSWORD and run
+      #   ALTER USER postgres PASSWORD '<new>'   in the same maintenance window.
+      SPRING_DATASOURCE_PASSWORD: ${DATASOURCE_PASSWORD:-postgres}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
+      # 2026-11-26: Redis requires auth now. Single-sourced from .env so the app, the
+      # redis service and redis_exporter cannot drift apart.
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?.env in the deploy dir must define REDIS_PASSWORD}
       # RabbitMQ is consolidated onto ONE mechanism: the RABBITMQ_* placeholders
       # consumed by application-dev.yml. SPRING_RABBITMQ_* is no longer mixed in
       # (it has no username/virtual-host counterpart, which would leave user/vhost
