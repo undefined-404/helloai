@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.*;
 import com.helloai.common.base.BaseEntity;
 import com.helloai.common.constant.AcceptanceKind;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.util.SubTaskRound;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -58,7 +59,25 @@ public class SubTask extends BaseEntity {
     private Integer compositeScore;
     private String scoreGrade;
     private OffsetDateTime deadline;
+
+    /**
+     * 返工预算已用次数（<b>会被清零</b>，见 {@code reworkFresh} / {@code redispatchDeadLetter}）。
+     *
+     * <p><b>不得直接当「第几轮」用</b>（`G-054`）：清零是预算语义，清零后它回到 0，
+     * 而轮次必须单调递增。轮次一律走 {@link #currentRound()}。</p>
+     */
     private Integer reworkCount;
+
+    /**
+     * 已被重置消耗掉的轮次基数（`G-054` / `V158`）。
+     *
+     * <p>当前轮 = {@code round_base + rework_count + 1}。两条清零路径（人工驳回 / 死信重派）
+     * 在把 {@code rework_count} 置 0 的同时把它抬到「清零前的当前轮」，于是清零当刻轮次
+     * 恰好前进一位而不是倒退。两条计数器各守一义：本列管历史轮次，{@code rework_count}
+     * 管返工预算（判据 4：同一字段不能兼两义）。</p>
+     */
+    private Integer roundBase;
+
     private OffsetDateTime completeTime;
 
     @Version
@@ -215,6 +234,20 @@ public class SubTask extends BaseEntity {
      */
     @TableField(typeHandler = UncertaintyListTypeHandler.class)
     private List<Uncertainty> uncertainties;
+
+    /**
+     * 当前轮次（{@code round_base + rework_count + 1}，首轮为 1）。
+     *
+     * <p>口径唯一来源是 {@link com.helloai.common.util.SubTaskRound#currentOf(Integer, Integer)}：
+     * 迭代视图的 {@code round_num}、附件轮次快照（{@code attachment.round}）都走同一换算，
+     * 禁各自裸写（判据 4）。不落库——它是派生值，落库就会与两个计数器分叉。</p>
+     *
+     * <p><b>两个计数器都要传</b>：只传 {@code rework_count} 会在人工驳回 / 死信重派后
+     * 让轮次倒退回 1（`G-054` 的成因）。</p>
+     */
+    public int currentRound() {
+        return SubTaskRound.currentOf(roundBase, reworkCount);
+    }
 
     /**
      * 依赖 id 归一化读取：把 Jackson 反序列化出的 Integer/Long/String 统一转为 Long。

@@ -509,6 +509,8 @@ export interface Attachment {
   storageUrl: string
   previewUrl: string | null
   status: AttachmentStatus
+  /** 轮次快照（V157）：登记时点所属轮次，首轮 1；旧轮归档靠它区分，与 status 无关 */
+  round?: number
   createTime: string
   // 回填字段：主任务 ID/标题、子任务标题（附件管理层级浏览展示用）
   taskId?: LongId | null

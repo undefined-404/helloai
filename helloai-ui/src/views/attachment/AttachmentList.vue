@@ -98,6 +98,16 @@
             >
               {{ it.attachment.status }}
             </el-tag>
+            <!-- 轮次快照（V157）：status=INACTIVE 不等于「垃圾」，旧轮产物仍需可审计 -->
+            <el-tag
+              v-if="it.attachment.round"
+              size="small"
+              type="warning"
+              effect="plain"
+              class="tag"
+            >
+              第 {{ it.attachment.round }} 轮
+            </el-tag>
             <span class="meta">{{ it.attachment.fileType }}</span>
             <span class="meta">{{ formatSize(it.attachment.fileSize) }}</span>
             <span class="meta time">{{ fmtTime(it.attachment.createTime) }}</span>

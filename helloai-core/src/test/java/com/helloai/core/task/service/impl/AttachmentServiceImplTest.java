@@ -444,6 +444,38 @@ class AttachmentServiceImplTest {
         verify(mapper).selectAllIncludingDeleted();
     }
 
+    @Test
+    @DisplayName("G-034 listActiveByTask：按任务查（跨子任务），并回填标题")
+    void listActiveByTask_shouldDelegateToMapperAndFillTitles() {
+        AttachmentMapper mapper = mock(AttachmentMapper.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "baseMapper", mapper);
+        // 同一任务下两个子任务的产物：任务级列举必须都能看到
+        Attachment fromA = attachment(1L, 100L, "上游.md");
+        Attachment fromB = attachment(2L, 200L, "本子任务.md");
+        when(mapper.selectActiveByTask(10L)).thenReturn(List.of(fromA, fromB));
+        when(subTaskService.listByIds(any()))
+                .thenReturn(List.of(subTask(100L, 10L, "上游子任务"), subTask(200L, 10L, "本子任务")));
+        when(taskService.listByIds(any())).thenReturn(List.of());
+
+        List<Attachment> result = service.listActiveByTask(10L);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getSubTaskTitle()).isEqualTo("上游子任务");
+        assertThat(result.get(1).getSubTaskTitle()).isEqualTo("本子任务");
+        verify(mapper).selectActiveByTask(10L);
+    }
+
+    @Test
+    @DisplayName("G-034 listActiveByTask：taskId=null ⇒ 空列表（绝不退化成全库 ACTIVE）")
+    void listActiveByTask_shouldFailCloseOnNullTaskId() {
+        AttachmentMapper mapper = mock(AttachmentMapper.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "baseMapper", mapper);
+
+        // 空条件放行等于「任何任务都能注入别人任务里的文件」，故必须 fail-close 到空
+        assertThat(service.listActiveByTask(null)).isEmpty();
+        verify(mapper, never()).selectActiveByTask(any());
+    }
+
     // ══════════════════════════════════════════════════════════════
     //  assertDeletable / deleteAttachment（P2 删除通道，2026-10-07）
     //  ══════════════════════════════════════════════════════════════
@@ -526,5 +558,67 @@ class AttachmentServiceImplTest {
         verify(service, never()).removeById(any(Long.class));
         verify(attachmentObjectPurgeSupport, never()).purgeAfterCommit(any());
         verify(taskTimelineService, never()).recordEvent(any(), any(), any(), any(), any(), any());
+    }
+
+    // ── G-054：附件轮次必须与「可重置的预算计数器」解耦 ──────────────────────
+
+    @Test
+    @DisplayName("G-054：人工驳回清零 reworkCount 后，新产物落到下一轮而非第 1 轮")
+    void register_afterReworkReset_shouldUseNextRoundNotFirst() {
+        SubTask st = subTask(100L, 10L, "子任务A");
+        st.setAssignedAgentId(7L);
+        // 模拟「已返工 3 次后人工驳回」：roundBase=0、reworkCount=3 时当前轮是第 4 轮，
+        // 驳回把它抬成 roundBase=4、reworkCount=0 ⇒ 当前轮进到第 5 轮。
+        st.setRoundBase(4);
+        st.setReworkCount(0);
+        when(subTaskService.getById(100L)).thenReturn(st);
+        when(updateChain.update()).thenReturn(true);
+
+        Attachment registered = service.register(7L, 100L, "重做.md", "text/markdown", 1024L,
+                "minio://helloai-artifacts/t/100/x-重做.md");
+
+        // 旧实现（round = reworkCount + 1）这里会是 1，与第 1 轮产物撞号
+        assertThat(registered.getRound()).isEqualTo(5);
+        assertThat(registered.getRound()).isNotEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("G-054：同一次执行产出的多个文件属于同一轮（不按登记次数递增）")
+    void register_multipleFilesInSameRound_shouldShareRound() {
+        SubTask st = subTask(100L, 10L, "子任务A");
+        st.setAssignedAgentId(7L);
+        st.setRoundBase(0);
+        st.setReworkCount(1); // 当前第 2 轮
+        when(subTaskService.getById(100L)).thenReturn(st);
+        when(updateChain.update()).thenReturn(false);
+
+        Attachment first = service.register(7L, 100L, "stage_a_receipt.json", "application/json", 10L,
+                "minio://helloai-artifacts/t/100/x-receipt.json");
+        Attachment second = service.register(7L, 100L, "stage_a_report.md", "text/markdown", 20L,
+                "minio://helloai-artifacts/t/100/x-report.md");
+
+        // 两次登记、同一次执行 ⇒ 必须同轮（max(round)+1 会给出 2 和 3，是错的）
+        assertThat(first.getRound()).isEqualTo(2);
+        assertThat(second.getRound()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("currentRound：子任务不存在时按首轮，不抛异常（核验不该因删任务 500）")
+    void currentRound_missingSubTask_shouldFallbackToFirst() {
+        when(subTaskService.getById(999L)).thenReturn(null);
+
+        assertThat(service.currentRound(999L)).isEqualTo(1);
+        assertThat(service.currentRound(null)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("currentRound：与 SubTask 派生同源（roundBase + reworkCount + 1）")
+    void currentRound_shouldDelegateToEntityDerivation() {
+        SubTask st = subTask(100L, 10L, "子任务A");
+        st.setRoundBase(7);
+        st.setReworkCount(2);
+        when(subTaskService.getById(100L)).thenReturn(st);
+
+        assertThat(service.currentRound(100L)).isEqualTo(st.currentRound()).isEqualTo(10);
     }
 }

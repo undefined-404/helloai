@@ -6,6 +6,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.common.constant.AttachmentVisibility;
 import com.helloai.common.constant.TimelineEventCode;
+import com.helloai.common.util.SubTaskRound;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.system.storage.StoredArtifact;
 import com.helloai.core.task.entity.Attachment;
@@ -103,7 +104,8 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
         }
 
         Attachment attachment = persistAttachment(subTaskId, agentId, fileName, mimeType, fileSize,
-                detectBucketName(storageUrl), detectObjectKey(storageUrl, subTaskId, fileName), storageUrl);
+                detectBucketName(storageUrl), detectObjectKey(storageUrl, subTaskId, fileName), storageUrl,
+                subTask.currentRound());
         log.info("附件注册: id={}, subTaskId={}, fileName={}", attachment.getId(), subTaskId, fileName);
         return attachment;
     }
@@ -127,16 +129,22 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
                 subTask.getTaskId(), subTaskId, fileName, content);
         String resolvedMime = mimeType == null || mimeType.isBlank() ? "text/markdown" : mimeType;
         Attachment attachment = persistAttachment(subTaskId, null, fileName, resolvedMime, stored.fileSize(),
-                stored.bucketName(), stored.objectKey(), stored.storageUrl());
+                stored.bucketName(), stored.objectKey(), stored.storageUrl(), subTask.currentRound());
         log.info("平台附件写入: id={}, subTaskId={}, fileName={}, owner={}",
                 attachment.getId(), subTaskId, fileName, ownerName);
         return attachment;
     }
 
-    /** 同名去活 + 落库（Agent 通道与平台通道共用；归属校验留在各自入口）。 */
+    /**
+     * 同名去活 + 落库（Agent 通道与平台通道共用；归属校验留在各自入口）。
+     *
+     * @param round 登记时点轮次快照（{@link SubTask#currentRound()}）——两个通道都必须传，
+     *              不接受「由本方法自己查一遍子任务」的写法：入口已持有 SubTask，
+     *              再查一次只会多一次 IO 且给「两处各算一遍轮次」留下分叉口（判据 4）
+     */
     private Attachment persistAttachment(Long subTaskId, Long uploaderAgentId, String fileName,
                                          String mimeType, Long fileSize, String bucketName,
-                                         String objectKey, String storageUrl) {
+                                         String objectKey, String storageUrl, int round) {
         // 同子任务同名 ACTIVE 旧版批量去活（含历史多版本），新注册版本成为唯一有效版
         boolean superseded = lambdaUpdate()
                 .eq(Attachment::getSubTaskId, subTaskId)
@@ -158,6 +166,8 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
         attachment.setObjectKey(objectKey);
         attachment.setStorageUrl(storageUrl);
         attachment.setStatus(AttachmentStatus.ACTIVE);
+        // 轮次快照（V157）：与 status 分家——status 管「能否读到」，round 管「属于第几轮」
+        attachment.setRound(round);
         // Task-Team 可见性（V99/V100）：上传者身份 + 默认可见范围。
         // Agent 通道 = 强校验过的 agentId；平台通道 = null（非 Agent 上传，PERSONAL 语义下仅平台可见）。
         attachment.setUploaderAgentId(uploaderAgentId);
@@ -288,6 +298,18 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
                 .eq(Attachment::getStatus, AttachmentStatus.ACTIVE)
                 .orderByDesc(Attachment::getCreateTime)
                 .list();
+        fillBrowseTitles(result);
+        return result;
+    }
+
+    @Override
+    public List<Attachment> listActiveByTask(Long taskId) {
+        if (taskId == null) {
+            // 绝不把 null 降级成「全库 ACTIVE」：调用方（沙箱注入归属判定）用它做白名单，
+            // 空条件放行等于任何任务都能注入别人任务里的文件（判据 9：这里必须 fail-close）。
+            return List.of();
+        }
+        List<Attachment> result = baseMapper.selectActiveByTask(taskId);
         fillBrowseTitles(result);
         return result;
     }
@@ -655,9 +677,26 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
         return listActive(subTaskId).stream().map(this::toView).toList();
     }
 
+    /**
+     * 该子任务当前轮次（`G-054`）：与 {@code attachment.round} 的登记口径同源，
+     * 都走 {@link SubTask#currentRound()}。
+     *
+     * <p>不抛异常（子任务不存在按首轮）：调用方是核验 Prompt 装配，
+     * 一个已删子任务不该让整个核验 500；返回首轮只会让「早于当前轮」的提示句保持沉默，
+     * 不会产生错误告警（判据 9：这里选择 fail-quiet 而非 fail-loud）。</p>
+     */
+    @Override
+    public int currentRound(Long subTaskId) {
+        if (subTaskId == null) {
+            return SubTaskRound.FIRST;
+        }
+        SubTask subTask = subTaskService.getById(subTaskId);
+        return subTask == null ? SubTaskRound.FIRST : subTask.currentRound();
+    }
+
     /** 实体 → 只读快照；{@code contentLoadable} 由提供方判定（W11），消费方零判定。 */
     private AttachmentView toView(Attachment att) {
         return new AttachmentView(att.getId(), att.getFileName(), att.getFileType(), att.getMimeType(),
-                att.getFileSize(), isContentLoadable(att));
+                att.getFileSize(), isContentLoadable(att), att.getRound());
     }
 }

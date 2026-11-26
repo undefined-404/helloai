@@ -8,6 +8,7 @@ import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.RetryPolicy;
+import com.helloai.common.util.SubTaskRound;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskMemberJoinSource;
 import com.helloai.common.constant.TimelineEventCode;
@@ -585,6 +586,11 @@ public class SubTaskStateMachineServiceImpl implements SubTaskStateMachineServic
         // 变更前执行者快照——人工驳回改派时需告知旧执行者任务已转移
         Long oldAgentId = subTask.getAssignedAgentId();
         subTask.setStatus(SubTaskStatus.REWORK);
+        // `G-054`：清零 rework_count 是**预算语义**（与下方 resetAttemptTotal 对称），必须保留；
+        // 但轮次不能随之倒退，所以先把「清零前的当前轮」抬进 round_base——
+        // 清零当刻 currentRound() 恰好前进一位，而非退回 1。
+        // 两句必须成对出现（判据 13）：只改一个会让 round_base/rework_count 的换算当场脱节。
+        subTask.setRoundBase(SubTaskRound.baseAfterReset(subTask.getRoundBase(), subTask.getReworkCount()));
         subTask.setReworkCount(0);
         // 语义闭环（LOG-20260904-007）：人工驳回 = 用户拍板开启新一轮，
         // 与死信重派（redispatchDeadLetter）对称重置共享预算 attempt_total ——

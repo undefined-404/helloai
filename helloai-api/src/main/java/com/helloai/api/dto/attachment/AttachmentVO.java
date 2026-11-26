@@ -41,6 +41,13 @@ public class AttachmentVO {
     private String storageUrl;
     private String previewUrl;
     private AttachmentStatus status;
+    /**
+     * 轮次快照（`V157`）：登记时点所属轮次，首轮 1。
+     *
+     * <p>与 {@code status} 是两个维度：{@code status=INACTIVE} 的旧轮产物依然有值可读，
+     * 附件管理页据此区分「本轮」「旧轮归档」，核验侧据此提示「这份不是本轮登记的」。</p>
+     */
+    private Integer round;
     private OffsetDateTime createTime;
 
     /** 回填字段（不落库）：主任务 ID 与标题、子任务标题，供附件管理按层级浏览展示。 */
@@ -61,6 +68,8 @@ public class AttachmentVO {
         vo.setStorageUrl(a.getStorageUrl());
         vo.setPreviewUrl(a.getPreviewUrl());
         vo.setStatus(a.getStatus());
+        // 轮次快照（V157）：附件管理页按轮次区分「本轮产物 / 旧轮归档」的唯一依据
+        vo.setRound(a.getRound());
         vo.setCreateTime(a.getCreateTime());
         vo.setTaskId(a.getTaskId());
         vo.setTaskTitle(a.getTaskTitle());

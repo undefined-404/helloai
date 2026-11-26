@@ -289,10 +289,16 @@ public class ReviewEvidenceAssembler {
             String readable = att.contentLoadable()
                     ? "平台可直读" : "外部存储（平台不可直读）";
             String type = att.fileType() != null ? att.fileType() : "other";
+            // 轮次快照（V157）：清单独列「第 N 轮」，让「本轮 / 旧轮归档」一眼可分
+            String roundTag = att.round() != null ? ", 第 " + att.round() + " 轮" : "";
             sb.append("- ").append(att.fileName())
                     .append("（").append(type).append(", ").append(size).append(", ")
-                    .append(readable).append("）\n");
+                    .append(readable).append(roundTag).append("）\n");
         }
+        // 提示句跟在清单正文之后；清单不是机器格式，追加零解析风险。
+        // G-054：当前轮由提供方给（round_base + rework_count + 1），不在本域重演换算，
+        // 否则 rework_count 被清零的路径上这里会和附件登记口径分叉。
+        sb.append(staleRoundNote(attachments, attachmentService.currentRound(subTask.id())));
         return sb.toString().trim();
     }
 
@@ -433,6 +439,43 @@ public class ReviewEvidenceAssembler {
         return new EvidenceContent(attachmentContent,
                 ReviewEvidenceLedger.render(entries, totalShown), mechanicalCheck,
                 media.note(), media.refs());
+    }
+
+    /**
+     * 「非本轮登记」提示（`V157` / `VU-3` 第 4 条）。
+     *
+     * <p><b>为什么只出现在可读清单（{@code {{ATTACHMENT_LIST}}}）而不进台账</b>：
+     * 台账 {@link ReviewEvidenceLedger} 是<b>机器格式</b>（{@code entry id=… status=…} 正则解析，
+     * 且被 `RV-6` 冻结进 {@code review_record}，历史快照还要能解析）。清单是人/模型读的散文段，
+     * 加一句提示零风险；写进台账则等于改历史快照的解析输入。</p>
+     *
+     * <p>只在「登记轮次 &lt; 当前轮」时出现；{@code round} 为 {@code null}（历史数据/兼容构造）
+     * 一律不提示——不按 0 猜。</p>
+     */
+    private static String staleRoundNote(List<AttachmentView> attachments, int currentRound) {
+        List<String> stale = new ArrayList<>();
+        for (AttachmentView att : attachments) {
+            Integer round = att.round();
+            if (round == null || round >= currentRound) {
+                continue;
+            }
+            String name = att.fileName() != null ? att.fileName() : String.valueOf(att.id());
+            stale.add(name + "（第 " + round + " 轮登记，id=" + att.id() + "）");
+        }
+        if (stale.isEmpty()) {
+            return "";
+        }
+        int limit = Math.min(stale.size(), 10);
+        StringBuilder note = new StringBuilder("\n\n[轮次提示] 当前为第 ").append(currentRound)
+                .append(" 轮。下列附件不是本轮登记的，其内容可能反映上一轮的旧状态，")
+                .append("不能作为「本轮已改好」的证据：");
+        for (int i = 0; i < limit; i++) {
+            note.append(i == 0 ? " " : "；").append(stale.get(i));
+        }
+        if (stale.size() > limit) {
+            note.append("；…另 ").append(stale.size() - limit).append(" 个");
+        }
+        return note.toString();
     }
 
     /**

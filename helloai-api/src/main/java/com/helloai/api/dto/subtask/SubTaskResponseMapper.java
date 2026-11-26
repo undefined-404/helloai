@@ -64,6 +64,10 @@ public final class SubTaskResponseMapper {
             "owner", "leaseUntil",
             "externalFallbackCount", "reassignAttemptCount", "attemptTotal", "lastAttemptTime",
             "timeoutCount", "isContract",
+            // G-054：轮次基数与 reworkCount 同属并发/预算内部状态，前端只该看「第几轮」
+            // （`task_iteration.round_num` 已由服务端算好）。暴露原始计数器会诱导前端自行相加，
+            // 两处换算必然分叉。
+            "roundBase",
             "draftCode");
 
     /**

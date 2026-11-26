@@ -8,6 +8,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.ManualInterventionReasons;
 import com.helloai.common.constant.RetryPolicy;
+import com.helloai.common.util.SubTaskRound;
 import com.helloai.common.constant.SubTaskContextKeys;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TimelineEventCode;
@@ -408,6 +409,9 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         // 一致地重置核验返工计数并清除人工介入标记；否则新执行者提交后仍命中
         // skip_max_rework 跳过自动核验再次入死信（实测：c3gs-r4 重派 inner 新 agent 后
         // reworkCount=3 仍被跳核验，DEAD_LETTER 死循环）。
+        // `G-054`：清零前先把当前轮抬进 round_base，使轮次在重派后仍单调递增而非退回 1
+        // （与 reworkFresh 成对，判据 13：只清一个会让两个计数器的换算当场脱节）。
+        subTask.setRoundBase(SubTaskRound.baseAfterReset(subTask.getRoundBase(), subTask.getReworkCount()));
         subTask.setReworkCount(0);
         Map<String, Object> ctx = new HashMap<>(subTask.getContext() != null
                 ? subTask.getContext() : Map.of());

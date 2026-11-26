@@ -47,7 +47,7 @@
             id, task_id, module_id, title, deliverable, acceptance, priority, status,
             acceptance_kind,
             assigned_agent_id, content, context, score_factors,
-            composite_score, score_grade, deadline, rework_count, complete_time,
+            composite_score, score_grade, deadline, rework_count, round_base, complete_time,
             version, timeout_count, external_fallback_count, reassign_attempt_count,
             depends_on, owner, lease_until, is_contract,
             required_skills, constraints, uncertainties,
@@ -61,7 +61,7 @@
             #{context,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
             #{scoreFactors,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
             #{compositeScore}, #{scoreGrade}, #{deadline},
-            COALESCE(#{reworkCount}, 0), #{completeTime},
+            COALESCE(#{reworkCount}, 0), COALESCE(#{roundBase}, 0), #{completeTime},
             COALESCE(#{version}, 0), COALESCE(#{timeoutCount}, 0),
             COALESCE(#{externalFallbackCount}, 0), COALESCE(#{reassignAttemptCount}, 0),
             COALESCE(#{dependsOn,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb, '[]'::jsonb),
@@ -106,6 +106,12 @@
             score_grade = #{et.scoreGrade},
             deadline = #{et.deadline},
             rework_count = #{et.reworkCount},
+            <!-- G-054：round_base 为空时**保留库内原值**，不能 COALESCE 成 0——
+                 否则任何「未加载该列就 updateById」的路径（新建实体、投影回写）都会把
+                 累计轮次基数清零，轮次当场倒退，正是本缺陷要消灭的症状。
+                 写成 COALESCE(#{et.roundBase}, round_base) 后，未赋值即不动；
+                 陈旧实体由下方 version 乐观锁拦下，不会静默覆盖。 -->
+            round_base = COALESCE(#{et.roundBase,jdbcType=INTEGER}, round_base),
             depends_on = #{et.dependsOn,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
             owner = #{et.owner},
             lease_until = #{et.leaseUntil},

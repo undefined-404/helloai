@@ -3,6 +3,7 @@ package com.helloai.core.task.service.impl;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskIterationConst;
+import com.helloai.common.util.SubTaskRound;
 import com.helloai.core.agent.output.ExecutionRecordProtocol;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
@@ -70,7 +71,9 @@ public class TaskIterationServiceImpl extends ServiceImpl<TaskIterationMapper, T
             iter.setTaskCode("#" + String.format("%02d", idx));
             iter.setTaskName(st.getTitle());
             iter.setTaskType(TaskIterationConst.TYPE_DEVELOPMENT);
-            iter.setRoundNum((st.getReworkCount() != null ? st.getReworkCount() : 0) + 1);
+            // 轮次口径单源：与 SubTask#currentRound()、附件轮次快照同一换算（禁再裸写 reworkCount+1）
+            // G-054：必须带上 round_base，否则人工驳回/死信重派后这里会和附件轮次分叉
+            iter.setRoundNum(SubTaskRound.currentOf(st.getRoundBase(), st.getReworkCount()));
             iter.setCurrentRequirement(st.getContent());
 
             // depends_on：保持与 sub_task.depends_on 一致（子任务 ID 数组）

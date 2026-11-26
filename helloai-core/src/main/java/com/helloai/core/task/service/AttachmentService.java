@@ -145,6 +145,27 @@ public interface AttachmentService extends IService<Attachment> {
     List<Attachment> listActive(Long subTaskId);
 
     /**
+     * 按<b>任务</b>列出有效（ACTIVE）附件（`G-034` 剩余项①：任务级附件列举）。
+     *
+     * <p><b>为什么需要它</b>：{@link #listActive(Long)} 以子任务为粒度，而「跨子任务核验」
+     * （`G-029`）与「把上游产物注入自己的沙箱交叉验证」都要求<b>看见同任务其它子任务的产出</b>。
+     * 没有这个入口，reviewer / 执行者只能靠 {@code internal_get_deps_summary} 的截断文本
+     * 去猜上游产出了什么，猜不到就只能 {@code find /} 白跑或凭空重建。</p>
+     *
+     * <p><b>口径</b>：与 {@link #listActive(Long)} 完全同源（同名多版本只留 ACTIVE、
+     * 按创建时间倒序、{@code @TableLogic} 自动过滤逻辑删除），唯一差别是过滤条件从
+     * {@code sub_task_id} 换成 {@code sub_task.task_id}。<b>不</b>跨任务（那是越权面）。</p>
+     *
+     * <p><b>为什么不做成「按子任务集合列举」</b>：调用方（沙箱注入归属判定、deps 附件清单）
+     * 拿到的是「本任务有哪些产出」，用任务 ID 表达最直接；按集合表达会让每个调用方
+     * 自己先查一遍子任务列表，等于把一段固定查询复制到多处（判据 4）。</p>
+     *
+     * @param taskId 主任务 ID（{@code null} ⇒ 返回空列表，绝不降级成「全库」）
+     * @return 该任务下全部子任务的有效附件（按创建时间倒序，绝不返回 null）
+     */
+    List<Attachment> listActiveByTask(Long taskId);
+
+    /**
      * 驳回打回时将该子任务全部有效（ACTIVE）附件批量置为 INACTIVE。
      *
      * <p>打回失效语义：自动核验驳回 / 人工驳回打回子任务后，
@@ -231,4 +252,18 @@ public interface AttachmentService extends IService<Attachment> {
 
     /** 启用态附件的只读快照（顺序与 {@link #listActive} 一致；{@code contentLoadable} 由提供方派生，W11）。 */
     List<AttachmentView> listActiveViews(Long subTaskId);
+
+    /**
+     * 该子任务<b>当前轮次</b>（与 {@code attachment.round} 同一口径、同一事实源）。
+     *
+     * <p><b>为什么由 task 域提供而不是让 review 自己算</b>（`G-054` / §7.2 端口反转）：
+     * 轮次 = {@code round_base + rework_count + 1}，两个计数器都在 {@code sub_task} 上，
+     * {@code SubTaskView} 只带了 {@code reworkCount}。若 review 自己凑，
+     * 就必须给快照加 {@code roundBase} 字段（37 处构造点）并重演一遍换算——
+     * 这正是「同一事实两个推导点」的老病（判据 4）。提供方算、消费方直接用。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @return 当前轮次，恒 ≥ 1；子任务不存在按首轮（不抛）
+     */
+    int currentRound(Long subTaskId);
 }
