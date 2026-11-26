@@ -376,6 +376,68 @@ class ConversationMediaRefPortAdapterTest {
         assertThat(adapter.listScopedImages(7L, 11L, null).refs()).isEmpty();
     }
 
+    // ---------- `G-051` 输入附件作用域（进沙箱通道） ----------
+
+    @Test
+    @DisplayName("G-051：声明命中 ⇒ 返回全部类型（图片 + 文档 + 数据文件），保持上传正序")
+    void shouldListScopedInputAttachmentsOfAnyType() {
+        when(taskService.getView(7L)).thenReturn(taskView(Map.of(TaskContextKeys.CONVERSATION_ID, 42L)));
+        when(chatAttachmentService.listByConversation(42L)).thenReturn(List.of(
+                attachment(1L, "notes.txt", "text/plain"),
+                attachment(2L, "vu-red-64.png", "image/png"),
+                attachment(3L, "rows.csv", "text/csv")));
+
+        List<MediaRef> refs = adapter.listScopedInputAttachments(7L, 11L, contextWithRefs(1L, 3L));
+
+        // 与视觉通道相反：这里不过滤类型（沙箱要执行的是任意文件）
+        assertThat(refs).extracting(MediaRef::attachmentId).containsExactly(1L, 3L);
+        assertThat(refs).extracting(MediaRef::fileName).containsExactly("notes.txt", "rows.csv");
+        assertThat(refs).allSatisfy(ref ->
+                assertThat(ref.source()).isEqualTo(MediaRef.Source.CHAT_ATTACHMENT));
+        // 只存引用不读字节（I-3）
+        verify(chatAttachmentService, never()).download(1L);
+    }
+
+    @Test
+    @DisplayName("G-051：未声明作用域 ⇒ 空表且**一次库都不查**（fail-close，绝不回落会话全量）")
+    void shouldReturnEmptyWithoutQueryWhenScopeNotDeclared() {
+        when(taskService.getView(7L)).thenReturn(taskView(Map.of(TaskContextKeys.CONVERSATION_ID, 42L)));
+
+        assertThat(adapter.listScopedInputAttachments(7L, 11L, null)).isEmpty();
+        assertThat(adapter.listScopedInputAttachments(7L, 11L, Map.of())).isEmpty();
+        assertThat(adapter.listScopedInputAttachments(7L, 11L, contextWithRefs())).isEmpty();
+        // ★断言「未声明」不等于「回落全量」：会话里明明有文件，也不能被注入
+        verify(chatAttachmentService, never()).listByConversation(42L);
+    }
+
+    @Test
+    @DisplayName("G-051：声明全部失效（附件已删）⇒ 空表，不回落全量")
+    void shouldReturnEmptyWhenDeclaredScopeAllStale() {
+        when(taskService.getView(7L)).thenReturn(taskView(Map.of(TaskContextKeys.CONVERSATION_ID, 42L)));
+        when(chatAttachmentService.listByConversation(42L)).thenReturn(List.of(
+                attachment(1L, "alive.txt", "text/plain")));
+
+        assertThat(adapter.listScopedInputAttachments(7L, 11L, contextWithRefs(999L))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("G-051：任务未关联会话 ⇒ 空表（历史任务常态，不抛异常）")
+    void shouldReturnEmptyWhenTaskHasNoConversation() {
+        when(taskService.getView(7L)).thenReturn(taskView(Map.of()));
+
+        assertThat(adapter.listScopedInputAttachments(7L, 11L, contextWithRefs(1L))).isEmpty();
+        verifyNoInteractions(chatAttachmentService);
+    }
+
+    @Test
+    @DisplayName("G-051：查询抛异常 ⇒ 降级为空表（对注入侧等价于拒绝，不误放行）")
+    void shouldDegradeToEmptyOnQueryFailure() {
+        when(taskService.getView(7L)).thenReturn(taskView(Map.of(TaskContextKeys.CONVERSATION_ID, 42L)));
+        when(chatAttachmentService.listByConversation(42L)).thenThrow(new IllegalStateException("db down"));
+
+        assertThat(adapter.listScopedInputAttachments(7L, 11L, contextWithRefs(1L))).isEmpty();
+    }
+
     // ---------- 辅助 ----------
 
     private static Map<String, Object> contextWithRefs(Long... ids) {

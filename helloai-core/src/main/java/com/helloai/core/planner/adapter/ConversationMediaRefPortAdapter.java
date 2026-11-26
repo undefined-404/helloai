@@ -122,6 +122,72 @@ public class ConversationMediaRefPortAdapter implements ConversationMediaRefPort
         }
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>`G-051` 的实现要点</b>：与 {@link #listScopedImages} 共用同一份作用域解析
+     * （{@link #resolveConversationId} + {@link #declaredMediaRefIds}），但<b>不回落、不过滤类型、
+     * 不翻转顺序</b>——三条差异的理由见端口 javadoc。这里只补一处实现侧的取舍：</p>
+     *
+     * <p><b>为什么本方法自己再查一次会话附件、不复用 {@code listScopedImages} 的结果</b>：两者
+     * 调用时机不同（装配 Prompt 时 vs 模型调注入工具时），中间可能隔了几十个工具轮次，用户此刻
+     * 新传的附件理应可被注入（注入不是「按渲染期冻结的清单」，它是一次现场动作）。<b>但作用域名
+     * 单仍然按当时落库的 {@code mediaRefIds}</b>——新附件不在声明里就注入不了，这正是作用域的本意。</p>
+     */
+    @Override
+    public List<MediaRef> listScopedInputAttachments(Long taskId, Long subTaskId,
+                                                    Map<String, Object> subTaskContext) {
+        if (taskId == null) {
+            return List.of();
+        }
+        try {
+            Long conversationId = resolveConversationId(taskId);
+            if (conversationId == null) {
+                log.debug("任务未关联会话，无可注入的输入附件: taskId={}, subTaskId={}", taskId, subTaskId);
+                return List.of();
+            }
+            // ★顺序很重要：先判声明、再查库。未声明时一次库都不查——本方法在模型每次调用注入
+            // 工具时都会走一遍，无声明任务（绝大多数）不该为它付一次全表查询。
+            List<Long> declaredIds = declaredMediaRefIds(subTaskContext);
+            if (declaredIds.isEmpty()) {
+                log.debug("子任务未声明输入附件作用域，注入通道按空处理（不回落）: taskId={}, subTaskId={}",
+                        taskId, subTaskId);
+                return List.of();
+            }
+            List<ChatAttachment> attachments = chatAttachmentService.listByConversation(conversationId);
+            if (attachments == null || attachments.isEmpty()) {
+                return List.of();
+            }
+            List<ChatAttachment> scoped = filterByIds(attachments, declaredIds);
+            if (scoped.isEmpty()) {
+                // 声明了但一条都对不上：附件已被删 / 声明是历史脏数据。注入侧必须能说清「为什么拒绝」，
+                // 否则模型只会看到「不属于当前子任务」这种无法自救的文案。
+                log.warn("子任务声明的输入附件全部不可用: taskId={}, subTaskId={}, declared={}, "
+                                + "conversationAttachments={}",
+                        taskId, subTaskId, declaredIds.size(), attachments.size());
+                return List.of();
+            }
+            log.info("执行面按子任务作用域取输入附件: taskId={}, subTaskId={}, declared={}, hit={}",
+                    taskId, subTaskId, declaredIds.size(), scoped.size());
+            return toRefsInUploadOrder(scoped);
+        } catch (RuntimeException e) {
+            // 与视觉通道同款：查询失败按「无输入附件」处理（对注入侧等价于拒绝），绝不打断执行链
+            log.warn("会话输入附件作用域查询失败，按无输入附件处理: taskId={}, subTaskId={}, err={}",
+                    taskId, subTaskId, e.toString());
+            return List.of();
+        }
+    }
+
+    /** 转引用并<b>保持上传正序</b>（沙箱注入无「截断保新」语义，顺序即用户看到的序号）。 */
+    private static List<MediaRef> toRefsInUploadOrder(List<ChatAttachment> attachments) {
+        List<MediaRef> refs = new ArrayList<>(attachments.size());
+        for (ChatAttachment attachment : attachments) {
+            refs.add(MediaRef.ofChatAttachment(attachment.getId(), attachment.getFileName(),
+                    attachment.getMimeType(), attachment.getFileSize()));
+        }
+        return List.copyOf(refs);
+    }
+
     /** 只保留图片（文档走文本通道、音视频进消息会被 provider 400）。 */
     private static List<ChatAttachment> imagesOf(List<ChatAttachment> attachments) {
         List<ChatAttachment> images = new ArrayList<>();
@@ -137,20 +203,23 @@ public class ConversationMediaRefPortAdapter implements ConversationMediaRefPort
     }
 
     /**
-     * 按声明取子集，<b>保持图片自身的上传顺序</b>（`G-042`）。
+     * 按声明取子集，<b>保持候选清单自身的上传顺序</b>（`G-042` / `G-051` 共用）。
      *
-     * <p><b>为什么按 {@code images} 的顺序遍历、而不是按声明顺序遍历</b>：本方法的输出随后要被
+     * <p><b>为什么按 {@code candidates} 的顺序遍历、而不是按声明顺序遍历</b>：视觉通道的输出随后要被
      * {@link #toRefsNewestFirst} 整体翻转成「最新在前」（`G-046` 截断保新的前提）。若这里按
      * <b>声明</b>顺序输出，翻转之后就变成「声明倒序」——一个既不是上传顺序、也不是任何有意义
      * 语义的次序，而 `G-046` 要求的「最新优先」也随之失效（超限时被丢掉的可能是最新的那张）。
      * 声明的作用是<b>选哪些</b>，不是<b>排序</b>；顺序由上传时间唯一决定。</p>
+     *
+     * <p>`G-051`（注入通道）复用它时顺序直接被沿用（上传正序、不翻转），故本方法对顺序只做
+     * 「不动」这一件事，翻转责任留给各自的调用链——一条链的排序口径不该写进筛选函数。</p>
      */
-    private static List<ChatAttachment> filterByIds(List<ChatAttachment> images, List<Long> declaredIds) {
+    private static List<ChatAttachment> filterByIds(List<ChatAttachment> candidates, List<Long> declaredIds) {
         Set<Long> wanted = new HashSet<>(declaredIds);
         List<ChatAttachment> scoped = new ArrayList<>();
-        for (ChatAttachment image : images) {
-            if (wanted.contains(image.getId())) {
-                scoped.add(image);
+        for (ChatAttachment candidate : candidates) {
+            if (wanted.contains(candidate.getId())) {
+                scoped.add(candidate);
             }
         }
         return scoped;

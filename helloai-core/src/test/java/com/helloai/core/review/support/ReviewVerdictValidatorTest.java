@@ -120,7 +120,20 @@ class ReviewVerdictValidatorTest {
                         ReviewVerdictValidator.REJECT_WITHOUT_DEFECT,
                         ReviewVerdictValidator.ACCEPTANCE_REF_NOT_GROUNDED),
                 c("㉔ Block + Warn 同时命中", verdict(false, 5, null, "[defect] 无输出", null), ACCEPTANCE, false,
-                        ReviewVerdictValidator.REJECT_WITH_FULL_SCORE, ReviewVerdictValidator.ANALYSIS_MISSING)
+                        ReviewVerdictValidator.REJECT_WITH_FULL_SCORE, ReviewVerdictValidator.ANALYSIS_MISSING),
+
+                // ===== `G-052` 归一档：格式差异计入归属但单列观测 =====
+                c("㉕ acceptanceRef 仅剥反引号才命中 ⇒ 记格式观测，不记不实",
+                        verdict(false, 2, "逐条核对", "[defect] 缺证据",
+                                "[{\"acceptanceRef\":\"主色 #RRGGBB 大写六位\"}]"),
+                        "③ 主色 `#RRGGBB` 大写六位", false, ReviewVerdictValidator.REF_FORMAT_LOOSE),
+                c("㉖ acceptanceRef 与原文只差中间一段加粗标记 ⇒ 记格式观测",
+                        verdict(false, 2, "逐条核对", "[defect] 缺证据",
+                                "[{\"acceptanceRef\":\"退出码必须为 0 且标准输出非空\"}]"),
+                        "④ 退出码**必须为 0 且标准输出非空**", false, ReviewVerdictValidator.REF_FORMAT_LOOSE),
+                c("㉗ 空壳短引用（归一后仅剩圈号）不放行",
+                        verdict(false, 2, "逐条核对", "[defect] 缺证据", "[{\"acceptanceRef\":\"**①**\"}]"),
+                        ACCEPTANCE, false, ReviewVerdictValidator.ACCEPTANCE_REF_NOT_GROUNDED)
         );
     }
 
@@ -138,6 +151,31 @@ class ReviewVerdictValidatorTest {
     @DisplayName("verdict 为 null ⇒ 空清单（不可解析由调用方另行处置）")
     void nullVerdictShouldYieldNothing() {
         assertThat(ReviewVerdictValidator.validate(null, ACCEPTANCE, true)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("`G-052` 归属判据：容纳排版差异，不容纳内容改写")
+    void groundingShouldTolerateFormattingButNotRewriting() {
+        String source = "① 主色 `#RRGGBB` 大写六位；② 退出码必须为 0";
+
+        // 字面命中：两级判据同时成立
+        assertThat(ReviewVerdictValidator.isGroundedIn(source, "主色 `#RRGGBB` 大写六位")).isTrue();
+        assertThat(ReviewVerdictValidator.isGroundedExactly(source, "主色 `#RRGGBB` 大写六位")).isTrue();
+
+        // 只丢了反引号：仍归属，但不再是字面命中（这条差异就是 `G-052` 真机事故）
+        assertThat(ReviewVerdictValidator.isGroundedIn(source, "主色 #RRGGBB 大写六位")).isTrue();
+        assertThat(ReviewVerdictValidator.isGroundedExactly(source, "主色 #RRGGBB 大写六位")).isFalse();
+
+        // 改了内容：两级判据都不成立（归一只削排版，不削文字）
+        assertThat(ReviewVerdictValidator.isGroundedIn(source, "主色 #RRGGBB 小写六位")).isFalse();
+
+        // 空壳短引用：不许靠归一放行（"①" 单独出现本身是原文子串，故用只在归一后才成立的 "**①**" 反证）
+        assertThat(ReviewVerdictValidator.isGroundedIn(source, "**①**")).isFalse();
+        assertThat(ReviewVerdictValidator.isGroundedIn(source, "①")).isTrue();
+
+        // 空白折叠：换行 + 连续空格等价于单空格（同样只是格式差异）
+        assertThat(ReviewVerdictValidator.isGroundedIn("退出码   必须为\n0", "退出码 必须为 0")).isTrue();
+        assertThat(ReviewVerdictValidator.isGroundedExactly("退出码   必须为\n0", "退出码 必须为 0")).isFalse();
     }
 
     @Test

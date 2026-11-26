@@ -65,6 +65,42 @@ public interface ConversationMediaRefPort {
     ScopedMediaRefs listScopedImages(Long taskId, Long subTaskId, Map<String, Object> subTaskContext);
 
     /**
+     * 列出本子任务<b>作用域内的会话输入附件</b>（`G-051`）——供执行通道注入沙箱，<b>不限 MIME</b>。
+     *
+     * <p><b>为什么和 {@link #listScopedImages} 分成两个方法（而不是加个「只图片」开关）</b>：
+     * 两者是<b>两个消费目的</b>，口径在三处刻意不同，合并只会让每处都要带开关参数：</p>
+     *
+     * <table border="1">
+     *   <caption>两条通道的口径差异</caption>
+     *   <tr><th></th><th>{@code listScopedImages}（送模型）</th><th>本方法（进沙箱）</th></tr>
+     *   <tr><td>类型</td><td>只图片</td><td>全部（图片 / 文档 / 数据文件）</td></tr>
+     *   <tr><td>未声明时</td><td><b>回落会话全量</b>并带原因</td><td><b>返回空表</b>，绝不回落</td></tr>
+     *   <tr><td>顺序</td><td>最新在前（{@code G-046} 截断保新）</td><td>上传正序（无截断语义）</td></tr>
+     * </table>
+     *
+     * <p><b>★为什么这里必须 fail-close（未声明就一张不给）</b>：本方法的产出会被写成沙箱内的
+     * <b>可执行文件</b>。若照视觉通道的「无声明即全量」口径，任何子任务都能把用户在该会话上传的
+     * 任意文件拉进自己的沙箱——那既是作用域失效（`G-042` 白费），也是越权面放大。视觉通道之所以
+     * 能回落，是因为「多送一张图」的最坏后果是模型分心；这里的最坏后果是拿到不该拿的字节。</p>
+     *
+     * <p><b>为什么复用本端口而不是另起一个</b>：作用域解析有两段 planner 私有知识——
+     * {@code task.context.conversationId} 与 {@code sub_task.context} 里的附件声明。这两段
+     * 已经是本端口的职责；再建一个实现会把同一段解析复制两份（判据 4：同一事实双写必分叉，
+     * 某天键改名就会一边失效一边还能用）。本方法只是把「声明 → 引用」的<b>同一份解析</b>
+     * 用在另一个消费目的上。</p>
+     *
+     * <p><b>绝不抛异常</b>：与 {@link #listScopedImages} 同款容错——会话不存在、任务未关联会话、
+     * 查询失败一律按「无输入附件」处理，由消费方按「缺省即拒绝注入」继续（本方法的空表语义
+     * 天然就是拒绝，不需要消费方再判一次）。</p>
+     *
+     * @param taskId         主任务 ID（可空；空 ⇒ 空表）
+     * @param subTaskId      子任务 ID（可空；仅用于观测与日志归属）
+     * @param subTaskContext 子任务上下文快照（可空；<b>原样透传、消费方不做解析</b>）
+     * @return 作用域内的会话附件引用（上传正序；绝不为 {@code null}，未声明/解析不到即空表）
+     */
+    List<MediaRef> listScopedInputAttachments(Long taskId, Long subTaskId, Map<String, Object> subTaskContext);
+
+    /**
      * 作用域取图结果（`G-042`）：引用清单 + 「是不是真的按作用域取的」+ 回落原因。
      *
      * <p><b>为什么把三者放一个返回值里</b>：它们由<b>同一个判定</b>产生。若拆成

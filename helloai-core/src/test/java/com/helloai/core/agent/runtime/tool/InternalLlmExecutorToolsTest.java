@@ -64,11 +64,19 @@ class InternalLlmExecutorToolsTest {
     /** G-037：约束文档目录（internal_list_constraint_docs / internal_load_constraint_doc 白名单事实源）。 */
     private final com.helloai.core.shared.constraint.ConstraintDocCatalog constraintDocCatalog =
             mock(com.helloai.core.shared.constraint.ConstraintDocCatalog.class);
+    /** G-051：输入附件注入所需的三件依赖（子任务快照 / 作用域解析 / 会话字节）。 */
+    private final com.helloai.core.agent.port.SubTaskQueryPort subTaskQueryPort =
+            mock(com.helloai.core.agent.port.SubTaskQueryPort.class);
+    private final com.helloai.core.agent.port.ConversationMediaRefPort conversationMediaRefPort =
+            mock(com.helloai.core.agent.port.ConversationMediaRefPort.class);
+    private final com.helloai.core.agent.port.ChatAttachmentMediaPort chatAttachmentMediaPort =
+            mock(com.helloai.core.agent.port.ChatAttachmentMediaPort.class);
     private final InternalLlmExecutorTools tools =
             new InternalLlmExecutorTools(mcpToolService, attachmentPort, agentSkillSpecService,
                     subTaskCommandPort, sandboxExecutionService, skillExecutionSupport,
                     skillArtifactExportService, conversationService, sandboxCallLedger,
-                    toolRegistryProvider, constraintDocCatalog);
+                    toolRegistryProvider, constraintDocCatalog,
+                    subTaskQueryPort, conversationMediaRefPort, chatAttachmentMediaPort);
 
     /** REF-8.1 A1 强制闸门：本类工具仅可由内部执行链调用，单测需先绑定执行链上下文。 */
     @BeforeEach
@@ -109,28 +117,28 @@ class InternalLlmExecutorToolsTest {
     void shouldUseBoundIdsNotCallerSupplied() {
         McpToolService.SubTaskDetail detail = new McpToolService.SubTaskDetail();
         // 绑定值为 (11,22)；调用方冒充 (999,888) 也必须落到绑定值
-        when(mcpToolService.getSubTaskDetail(11L, 22L)).thenReturn(detail);
+        when(mcpToolService.getSubTaskDetailForInternal(11L, 22L)).thenReturn(detail);
 
         Object result = tools.internalGetSubTaskDetail(999L, 888L);
 
         assertThat(result).isSameAs(detail);
-        verify(mcpToolService).getSubTaskDetail(11L, 22L);
+        verify(mcpToolService).getSubTaskDetailForInternal(11L, 22L);
     }
 
     @Test
-    @DisplayName("internal_get_sub_task_detail：委托 McpToolService.getSubTaskDetail（进程内直连）")
+    @DisplayName("internal_get_sub_task_detail：委托 McpToolService.getSubTaskDetailForInternal（进程内直连，含输入附件清单）")
     void shouldDelegateGetSubTaskDetail() {
         McpToolService.SubTaskDetail detail = new McpToolService.SubTaskDetail();
         detail.setSubTaskId(22L);
         detail.setTaskId(1L);
         detail.setTitle("t");
         // 依赖注入事例可空：这里只验证委托透传
-        when(mcpToolService.getSubTaskDetail(11L, 22L)).thenReturn(detail);
+        when(mcpToolService.getSubTaskDetailForInternal(11L, 22L)).thenReturn(detail);
 
         Object result = tools.internalGetSubTaskDetail(11L, 22L);
 
         assertThat(result).isSameAs(detail);
-        verify(mcpToolService).getSubTaskDetail(11L, 22L);
+        verify(mcpToolService).getSubTaskDetailForInternal(11L, 22L);
     }
 
     @Test
@@ -474,7 +482,7 @@ class InternalLlmExecutorToolsTest {
     @Test
     @DisplayName("REF-8.1.1 原因过短（敷衍）→ 拒绝")
     void shouldRejectTooShortReason() {
-        when(mcpToolService.getSubTaskDetail(11L, 22L)).thenReturn(new McpToolService.SubTaskDetail());
+        when(mcpToolService.getSubTaskDetailForInternal(11L, 22L)).thenReturn(new McpToolService.SubTaskDetail());
         tools.internalGetSubTaskDetail(11L, 22L);   // 满足知情闸门
 
         assertThatThrownBy(() -> tools.internalReportBlocked(11L, "做不了"))
@@ -485,7 +493,7 @@ class InternalLlmExecutorToolsTest {
     @Test
     @DisplayName("REF-8.1.1 知情后报阻塞 → 子任务转 BLOCKED + 标记人工介入（不再进评审）")
     void shouldBlockSubTaskAfterReadingDetail() {
-        when(mcpToolService.getSubTaskDetail(11L, 22L)).thenReturn(new McpToolService.SubTaskDetail());
+        when(mcpToolService.getSubTaskDetailForInternal(11L, 22L)).thenReturn(new McpToolService.SubTaskDetail());
         tools.internalGetSubTaskDetail(11L, 22L);
 
         Object result = tools.internalReportBlocked(11L, "缺少用户导出的原始数据文件，平台可读附件内无该文件，无法核对字段");
@@ -512,7 +520,7 @@ class InternalLlmExecutorToolsTest {
     @Test
     @DisplayName("REF-8.1.1 闸门随执行链：解绑后调用记录清零（不跨链串味）")
     void shouldClearCalledMarkersOnUnbind() {
-        when(mcpToolService.getSubTaskDetail(11L, 22L)).thenReturn(new McpToolService.SubTaskDetail());
+        when(mcpToolService.getSubTaskDetailForInternal(11L, 22L)).thenReturn(new McpToolService.SubTaskDetail());
         tools.internalGetSubTaskDetail(11L, 22L);
         assertThat(ToolInvocationContext.hasCalled("internal_get_sub_task_detail")).isTrue();
 
@@ -828,7 +836,7 @@ class InternalLlmExecutorToolsTest {
         when(sandboxExecutionService.writeArtifact(eq(22L), eq("/tmp/staged/50-data.csv"), eq(bytes)))
                 .thenReturn(true);
 
-        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(11L, 22L, 50L);
+        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(11L, 22L, 50L, null);
 
         assertThat(result.get("staged")).isEqualTo(true);
         assertThat(result.get("path")).isEqualTo("/tmp/staged/50-data.csv");
@@ -848,7 +856,7 @@ class InternalLlmExecutorToolsTest {
                 new com.helloai.core.agent.port.AttachmentRef(51L, "a.md", "md", "text/markdown",
                         3L, com.helloai.common.constant.AttachmentStatus.ACTIVE, true)));
 
-        assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 999L))
+        assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 999L, null))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("拒绝注入");
         verify(attachmentPort, never()).loadContent(any());
@@ -862,7 +870,7 @@ class InternalLlmExecutorToolsTest {
                 new com.helloai.core.agent.port.AttachmentRef(52L, "ext.csv", "csv", "text/csv",
                         10L, com.helloai.common.constant.AttachmentStatus.ACTIVE, false)));
 
-        assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 52L))
+        assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 52L, null))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不可直读");
         verify(sandboxExecutionService, never()).writeArtifact(any(), any(), any());
@@ -879,7 +887,7 @@ class InternalLlmExecutorToolsTest {
         when(attachmentPort.loadContent(53L)).thenReturn(bytes);
         when(sandboxExecutionService.writeArtifact(any(), any(), any())).thenReturn(false);
 
-        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(11L, 22L, 53L);
+        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(11L, 22L, 53L, null);
 
         assertThat(result.get("staged")).isEqualTo(false);
         assertThat(result.get("path")).isNull();
@@ -897,12 +905,109 @@ class InternalLlmExecutorToolsTest {
         when(attachmentPort.loadContent(54L)).thenReturn(bytes);
         when(sandboxExecutionService.writeArtifact(any(), any(), any())).thenReturn(true);
 
-        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(11L, 22L, 54L);
+        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(11L, 22L, 54L, null);
 
         String path = (String) result.get("path");
         assertThat(path).startsWith("/tmp/staged/54-");
         assertThat(path).doesNotContain("..");
         assertThat(path).doesNotContain("/etc/");
         assertThat(path).isEqualTo("/tmp/staged/54-passwd");
+    }
+
+    // ── G-051 internal_stage_attachment_to_sandbox(origin=input) ────────────
+
+    /** 造一个绑定 (11,22) 的子任务快照：taskId=33，context 原样传给端口。 */
+    private com.helloai.core.agent.port.SubTaskSnapshot inputScopeSnapshot() {
+        return new com.helloai.core.agent.port.SubTaskSnapshot(
+                22L, com.helloai.common.constant.SubTaskStatus.IN_PROGRESS, 33L, 11L,
+                java.util.Map.<String, Object>of("mediaRefIds", java.util.List.of(70L)), "取主色", "c", "d", "a",
+                "cn", "HIGH", 0, null, 0, 0, 1, java.util.List.of(), java.util.List.of());
+    }
+
+    @Test
+    @DisplayName("G-051 stage-in(origin=input)：作用域内输入件注入成功，路径带 input- 前缀（不与产物件撞号）")
+    @SuppressWarnings("unchecked")
+    void stageInputAttachmentShouldInjectScopedInput() {
+        byte[] bytes = "png-bytes".getBytes(StandardCharsets.UTF_8);
+        when(subTaskQueryPort.findById(22L)).thenReturn(inputScopeSnapshot());
+        when(conversationMediaRefPort.listScopedInputAttachments(eq(33L), eq(22L), any()))
+                .thenReturn(List.of(com.helloai.core.agent.port.MediaRef.ofChatAttachment(
+                        70L, "vu-red-64.png", "image/png", (long) bytes.length)));
+        when(chatAttachmentMediaPort.loadChatAttachmentContent(70L)).thenReturn(bytes);
+        when(sandboxExecutionService.writeArtifact(eq(22L), eq("/tmp/staged/input-70-vu-red-64.png"), eq(bytes)))
+                .thenReturn(true);
+
+        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(
+                11L, 22L, 70L, "input");
+
+        assertThat(result.get("staged")).isEqualTo(true);
+        assertThat(result.get("path")).isEqualTo("/tmp/staged/input-70-vu-red-64.png");
+        assertThat(result.get("origin")).isEqualTo("input");
+        assertThat(result.get("fileName")).isEqualTo("vu-red-64.png");
+        // 产物表通道完全没被触碰：两表主键空间独立，混用即静默注入错文件
+        verify(attachmentPort, never()).listActive(any());
+        verify(attachmentPort, never()).loadContent(any());
+    }
+
+    @Test
+    @DisplayName("G-051 stage-in(origin=input)：作用域外 id ⇒ 拒绝，不读字节不写沙箱")
+    void stageInputAttachmentShouldRejectOutOfScope() {
+        when(subTaskQueryPort.findById(22L)).thenReturn(inputScopeSnapshot());
+        // 作用域里只有 70；传 71 必须被拒（不回落成「整个会话」）
+        when(conversationMediaRefPort.listScopedInputAttachments(eq(33L), eq(22L), any()))
+                .thenReturn(List.of(com.helloai.core.agent.port.MediaRef.ofChatAttachment(
+                        70L, "vu-red-64.png", "image/png", 10L)));
+
+        assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 71L, "input"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("输入附件作用域")
+                .hasMessageContaining("inputAttachments");
+        verify(chatAttachmentMediaPort, never()).loadChatAttachmentContent(any());
+        verify(sandboxExecutionService, never()).writeArtifact(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("G-051 stage-in(origin=input)：未声明作用域（空清单）⇒ 拒绝，不读字节")
+    void stageInputAttachmentShouldRejectWhenScopeEmpty() {
+        when(subTaskQueryPort.findById(22L)).thenReturn(inputScopeSnapshot());
+        when(conversationMediaRefPort.listScopedInputAttachments(eq(33L), eq(22L), any()))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 70L, "input"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("拒绝注入");
+        verify(chatAttachmentMediaPort, never()).loadChatAttachmentContent(any());
+        verify(sandboxExecutionService, never()).writeArtifact(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("G-051 stage-in：origin 取值非法 ⇒ 明确报错（不静默按 artifact 处理）")
+    void stageAttachmentShouldRejectUnknownOrigin() {
+        assertThatThrownBy(() -> tools.internalStageAttachmentToSandbox(11L, 22L, 70L, "inputs"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("origin 取值非法")
+                .hasMessageContaining("artifact")
+                .hasMessageContaining("input");
+        verify(attachmentPort, never()).listActive(any());
+        verify(sandboxExecutionService, never()).writeArtifact(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("G-051 stage-in：origin 大小写/空白容错（\" INPUT \" 等价 input）")
+    @SuppressWarnings("unchecked")
+    void stageInputAttachmentShouldNormalizeOrigin() {
+        byte[] bytes = "x".getBytes(StandardCharsets.UTF_8);
+        when(subTaskQueryPort.findById(22L)).thenReturn(inputScopeSnapshot());
+        when(conversationMediaRefPort.listScopedInputAttachments(eq(33L), eq(22L), any()))
+                .thenReturn(List.of(com.helloai.core.agent.port.MediaRef.ofChatAttachment(
+                        70L, "a.csv", "text/csv", 1L)));
+        when(chatAttachmentMediaPort.loadChatAttachmentContent(70L)).thenReturn(bytes);
+        when(sandboxExecutionService.writeArtifact(any(), any(), any())).thenReturn(true);
+
+        Map<String, Object> result = (Map<String, Object>) tools.internalStageAttachmentToSandbox(
+                11L, 22L, 70L, " INPUT ");
+
+        assertThat(result.get("origin")).isEqualTo("input");
+        assertThat(result.get("path")).isEqualTo("/tmp/staged/input-70-a.csv");
     }
 }

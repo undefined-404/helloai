@@ -424,6 +424,21 @@ public class McpToolServiceImpl implements McpToolService {
         return readModelService.getSubTaskDetail(agentId, subTaskId);
     }
 
+    /**
+     * 内部执行链专用详情（`G-051`）：与 {@link #getSubTaskDetail} 同一组横切守卫、同一段授权，
+     * 差异只在读出侧多带一份 {@code inputAttachments} 清单。
+     *
+     * <p>守卫仍走门面（而非让内部工具直连读模型）：两个入口必须共享同一份「Agent 是否可执行该工具」
+     * 判定，否则同一张详情在两个入口会出现「一个拦、一个放」的分叉（判据 4）。</p>
+     */
+    @Override
+    public SubTaskDetail getSubTaskDetailForInternal(Long agentId, Long subTaskId) {
+        assertAgentActive(agentId);
+        assertToolEnabled(agentId, "getSubTaskDetail");
+        refreshDutyLease(agentId);
+        return readModelService.getSubTaskDetailForInternal(agentId, subTaskId);
+    }
+
     // ================================================================
     // helpers（横切守卫：唯一装配点，职责类不持有）
     // ================================================================

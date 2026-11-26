@@ -2,6 +2,7 @@ package com.helloai.core.agent.service.impl;
 
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.port.AttachmentPort;
+import com.helloai.core.agent.port.ConversationMediaRefPort;
 import com.helloai.core.agent.port.AttachmentRef;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
@@ -56,7 +57,9 @@ class McpReadModelServiceImplMediaTest {
         taskRunningSpecPort = mock(TaskRunningSpecPort.class);
         attachmentPort = mock(AttachmentPort.class);
         AgentExecutionRecordService recordService = mock(AgentExecutionRecordService.class);
-        service = new McpReadModelServiceImpl(subTaskQueryPort, taskRunningSpecPort, attachmentPort, recordService);
+        ConversationMediaRefPort inputAttachmentScope = mock(ConversationMediaRefPort.class);
+        service = new McpReadModelServiceImpl(subTaskQueryPort, taskRunningSpecPort, attachmentPort,
+                recordService, inputAttachmentScope);
 
         SubTaskSnapshot current = snapshot(SUB_TASK_ID, "当前任务", SubTaskStatus.IN_PROGRESS, List.of(DEP_ID));
         SubTaskSnapshot dep = snapshot(DEP_ID, "前置任务", SubTaskStatus.DONE, List.of());

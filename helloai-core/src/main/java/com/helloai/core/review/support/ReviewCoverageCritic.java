@@ -122,16 +122,25 @@ public final class ReviewCoverageCritic {
      *
      * <p>{@code covered} + 非白名单 {@code method} 在 {@link CoverageItem#covers()} 里已不计入覆盖，
      * 这里再单列一条 WARN，是为了让「模型想用产出文本自述蒙过覆盖核对」在时间线上可读。</p>
+     *
+     * <p>`G-052`：归属判据分「字面」与「归一后」两档——后者计为已归属，但单列
+     * {@link ReviewVerdictValidator#REF_FORMAT_LOOSE} 观测，避免「每轮都丢反引号」这种系统性
+     * 抄写差异被永久静默（一旦提示词或模型换代，这条 WARN 的消失与否就是判据是否还有必要的证据）。</p>
      */
     private static List<Finding> contractFindings(List<CoverageItem> coverage, String acceptance,
                                                   String mechanicalCheck) {
         List<Finding> findings = new ArrayList<>();
         List<String> ungrounded = new ArrayList<>();
+        List<String> looseOnly = new ArrayList<>();
         List<String> selfReported = new ArrayList<>();
         List<String> mechanicalUnavailable = new ArrayList<>();
         for (CoverageItem item : coverage) {
-            if (item.hasRef() && !ReviewVerdictValidator.isGroundedIn(acceptance, item.criterionRef())) {
-                ungrounded.add(item.criterionRef());
+            if (item.hasRef()) {
+                if (!ReviewVerdictValidator.isGroundedIn(acceptance, item.criterionRef())) {
+                    ungrounded.add(item.criterionRef());
+                } else if (!ReviewVerdictValidator.isGroundedExactly(acceptance, item.criterionRef())) {
+                    looseOnly.add(item.criterionRef());
+                }
             }
             if (item.claimsCovered() && !item.hasAdmissibleMethod()) {
                 selfReported.add(item.criterionRef().isEmpty() ? "(无 criterionRef)" : item.criterionRef());
@@ -145,6 +154,11 @@ public final class ReviewCoverageCritic {
         if (!ungrounded.isEmpty()) {
             findings.add(new Finding(Severity.WARN, COVERAGE_REF_NOT_GROUNDED,
                     listDetail(ungrounded.size(), ungrounded, " 条 criterionRef 不是验收标准原文子串: ")));
+        }
+        if (!looseOnly.isEmpty()) {
+            findings.add(new Finding(Severity.WARN, ReviewVerdictValidator.REF_FORMAT_LOOSE,
+                    listDetail(looseOnly.size(), looseOnly,
+                            " 条 criterionRef 仅在剥除排版标记后才命中原文（已按已归属计入覆盖）: ")));
         }
         if (!selfReported.isEmpty()) {
             findings.add(new Finding(Severity.WARN, COVERAGE_SELF_REPORTED,

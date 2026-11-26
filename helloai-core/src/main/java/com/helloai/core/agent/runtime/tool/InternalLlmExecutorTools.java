@@ -5,7 +5,12 @@ import com.helloai.common.constant.ManualInterventionReasons;
 import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.AttachmentRef;
+import com.helloai.core.agent.port.ChatAttachmentMediaPort;
+import com.helloai.core.agent.port.ConversationMediaRefPort;
+import com.helloai.core.agent.port.MediaRef;
 import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.runtime.sandbox.ExecuteResponse;
 import com.helloai.core.agent.runtime.sandbox.SandboxArtifact;
@@ -100,6 +105,20 @@ public class InternalLlmExecutorTools {
      * {@code internal_load_constraint_doc} 的白名单事实源（manifest + docRoot 解析，fail-open）。
      */
     private final com.helloai.core.shared.constraint.ConstraintDocCatalog constraintDocCatalog;
+    /**
+     * 子任务只读查询端口（`G-051`）：注入会话输入附件时需要 {@code taskId} 与 {@code sub_task.context}，
+     * 二者都在快照里。走端口而非直接注入 {@code SubTaskService}，维持 {@code agent} 域不反向依赖 {@code task}。
+     */
+    private final SubTaskQueryPort subTaskQueryPort;
+    /**
+     * 会话附件作用域端口（`G-051`）：回答「本子任务作用域内有哪些会话输入附件」。
+     *
+     * <p>作用域键（{@code sub_task.context} 里的声明、{@code task.context.conversationId}）的解析留在
+     * planner 域实现里，本域只拿到引用清单——同一事实不建第二事实源（判据 4）。</p>
+     */
+    private final ConversationMediaRefPort conversationMediaRefPort;
+    /** 会话附件字节端口（`G-051`）：与视觉通道共用同一实现，注入侧不再自造一套对象存储读取。 */
+    private final ChatAttachmentMediaPort chatAttachmentMediaPort;
 
     /** 自报阻塞前置：必须先读过子任务详情（知情拒绝闸门，见 {@code internal_report_blocked}）。 */
     private static final String TOOL_GET_SUB_TASK_DETAIL = "internal_get_sub_task_detail";
@@ -151,12 +170,16 @@ public class InternalLlmExecutorTools {
      */
     @Tool(name = "internal_get_sub_task_detail", description = """
             【何时使用】内部执行者开工 / 执行中需要查看当前子任务的完整内容时调用：拿执行内容、交付物要求、
-            验收标准、执行约束、不确定性申报，以及前置产出附件清单。
+            验收标准、执行约束、不确定性申报，以及产物附件 / 输入附件两份清单。
             【Gotchas】
             - 必须是平台已派单给本执行者的子任务（状态 ASSIGNED / IN_PROGRESS）
-            - 返回值不含附件字节，仅有附件标识；如需读附件正文用 internal_read_attachment
+            - 返回值不含附件字节，仅有附件标识；产物件读正文用 internal_read_attachment，
+              要在沙箱里执行附件用 internal_stage_attachment_to_sandbox
+            - **`attachments` 与 `inputAttachments` 是两回事**：前者是本子任务自己产出的东西（origin=artifact），
+              后者是用户在本任务关联会话里上传、且拆解时把本子任务划进作用域的输入件（origin=input）。
+              输入件通常不在 attachments 里，别因为 attachments 为空就断定拿不到输入文件
             - 与外部 get_sub_task_detail 同源，进程内直连，无需 MCP 会话
-            【相关工具】internal_get_deps_summary / internal_read_attachment / internal_get_agent_status
+            【相关工具】internal_get_deps_summary / internal_read_attachment / internal_stage_attachment_to_sandbox
             """)
     public Object internalGetSubTaskDetail(
             @ToolParam(description = "内部执行链鉴定的执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
@@ -164,7 +187,8 @@ public class InternalLlmExecutorTools {
         ToolInvocationContext.Ids ids = requireInternalChain();
         // REF-8.1.1：登记「本链读过任务详情」——internal_report_blocked 的知情拒绝闸门据此判定
         ToolInvocationContext.markCalled(TOOL_GET_SUB_TASK_DETAIL);
-        return mcpToolService.getSubTaskDetail(ids.agentId(), ids.subTaskId());
+        // `G-051`：内部链额外下发输入附件清单（外部 MCP 通道拿不到该表字节，故不下发以免误导）
+        return mcpToolService.getSubTaskDetailForInternal(ids.agentId(), ids.subTaskId());
     }
 
     /**
@@ -421,10 +445,29 @@ public class InternalLlmExecutorTools {
      * 比 read 类软约束更严，因写入将变成可执行内容；上游产物附件本期不支持。返回 {@code sha256} 与
      * {@code internal_attachment_digest} 同源（UTF-8 字节 SHA-256）可对账，证明内容是 MinIO 原件、注入环节未掉包。</p>
      *
+     * <p><b>`G-051`：输入件与产物件在沙箱通道上同权</b>。此前本工具只认 {@code attachment}
+     * （子任务产物表），而用户在需求对话里上传的输入件在 {@code chat_attachment}（planner 域），
+     * 于是「视觉通道能看到像素、沙箱通道拿不到字节」——拆解一旦把「用脚本取图的主色」写成子任务步骤，
+     * 该子任务<b>必然</b>走不通（真机表现：模型试了 5 个 id 全被拒，最终 {@code BLOCKED}）。
+     * 现在由 {@code origin} 显式选择来源：</p>
+     *
+     * <ul>
+     *   <li>{@code artifact}（默认）：本子任务的有效产物附件（原行为不变）；</li>
+     *   <li>{@code input}：本子任务<b>声明的作用域</b>内的会话输入附件——白名单取自
+     *       {@code sub_task.context} 的附件声明（与 `G-042` 视觉通道同一份声明），
+     *       <b>未声明即一律拒绝、绝不回落会话全量</b>（写进沙箱的字节会变成可执行内容，
+     *       白名单缺失时放行等于任何子任务都能注入用户上传的任意文件）。</li>
+     * </ul>
+     *
+     * <p><b>★为什么用显式 {@code origin} 而不是「两张表都试一遍」</b>：两表主键空间独立，
+     * 同一个数字在两边都可能存在且指向不同文件（{@link MediaRef.Source} 已把这条写死）。
+     * 试探式加载会静默注入错文件，而这里注入的东西随后会被<b>执行</b>。</p>
+     *
      * @param agentId      执行者 Agent ID（平台自动注入）
      * @param subTaskId    目标子任务 ID（平台自动注入）
-     * @param attachmentId 附件主键（必须是当前子任务的有效附件）
-     * @return {staged, path, size, sha256, fileName, note}
+     * @param attachmentId 附件主键（按 {@code origin} 解释归属哪张表）
+     * @param origin       附件来源：{@code artifact}（默认）/ {@code input}
+     * @return {staged, path, size, sha256, fileName, origin, note}
      */
     @Tool(name = "internal_stage_attachment_to_sandbox", description = """
             【何时使用】需要在沙箱里**执行**某个附件时调用：先注入，再用 internal_run_in_sandbox 跑它
@@ -434,39 +477,129 @@ public class InternalLlmExecutorTools {
               必须经本工具注入后才能按路径引用
             - 注入目标是你**自己**的沙箱容器，随后你的 run_in_sandbox 命令即可看到该文件
             - 返回的 sha256 与 internal_attachment_digest 一致，证明内容就是平台原件、未被掉包
+            【附件来源（origin）】
+            - `artifact`（默认）：本子任务自己产出的附件，清单见 internal_get_sub_task_detail 的 `attachments`
+            - `input`：用户在本任务关联会话里上传、且**拆解时已把本子任务划进作用域**的输入附件，
+              清单见 internal_get_sub_task_detail 的 `inputAttachments`（含图片 / 文档 / 数据文件）
+            - 两张表主键各自独立，**必须显式指定来源**，不要拿一个 id 反复试
             【Gotchas】
-            - 仅支持当前子任务的有效附件（越权 id 拒绝）；上游产物请按其所属子任务另行处理
+            - 越权 id 一律拒绝：产物件只认当前子任务；输入件只认本子任务声明的清单
+              （未声明 ⇒ 一件都不给，不会回落成「整个会话」）
+            - 输入件落盘路径带 `input-` 前缀（`/tmp/staged/input-<id>-<文件名>`），与产物件不会互相覆盖
             - 同名附件重复注入是覆盖语义，天然可重入；沙箱随任务终态销毁，注入不跨任务残留
             - 产物超过沙箱写入失败时返回 staged=false 与原因，请改用 internal_read_attachment_range 分段核对
-            【相关工具】internal_run_in_sandbox / internal_attachment_digest / internal_read_attachment_range
+            【相关工具】internal_get_sub_task_detail / internal_run_in_sandbox / internal_attachment_digest
             """)
     public Object internalStageAttachmentToSandbox(
             @ToolParam(description = "执行者 Agent ID（平台自动注入，无需填写）", required = false) Long agentId,
             @ToolParam(description = "目标子任务 ID（平台自动注入，无需填写）", required = false) Long subTaskId,
-            @ToolParam(description = "附件主键（必须是当前子任务的有效附件）", required = true) Long attachmentId) {
+            @ToolParam(description = "附件主键（按 origin 解释归属：artifact=子任务产物 / input=会话输入）", required = true) Long attachmentId,
+            @ToolParam(description = "附件来源：artifact=本子任务产物（默认）；input=本子任务作用域内的会话输入附件", required = false) String origin) {
         ToolInvocationContext.Ids ids = requireInternalChain();
-        // 归属硬校验：仅当前子任务的有效附件（read 类工具是软约束；写入将变成可执行内容，必须更严）
-        AttachmentRef ref = attachmentPort.listActive(ids.subTaskId()).stream()
-                .filter(a -> a.id().equals(attachmentId))
-                .findFirst()
-                .orElseThrow(() -> new BizException(
-                        "附件不属于当前子任务或已失效，拒绝注入: attachmentId=" + attachmentId));
-        if (!ref.contentLoadable()) {
-            throw new BizException("附件平台不可直读（非受控存储地址），无法注入: attachmentId=" + attachmentId);
+        StageSource source = StageSource.parse(origin);
+        String fileName;
+        byte[] bytes;
+        String path;
+        if (source == StageSource.INPUT) {
+            // 输入件：先作用域白名单（越权即拒）→ 再读字节 → 落盘路径带 input- 前缀
+            MediaRef ref = resolveInputScopedRef(ids.subTaskId(), attachmentId);
+            fileName = ref.fileName();
+            try {
+                bytes = chatAttachmentMediaPort.loadChatAttachmentContent(attachmentId);
+            } catch (RuntimeException e) {
+                // 端口契约本就会抛 BizException；补上「哪张表、哪一条」，否则模型只看到「附件不存在」，
+                // 不知道该换来源还是该报告阻塞
+                throw new BizException("会话输入附件读取失败（可能已删除或存储不可用）: attachmentId="
+                        + attachmentId + "，原因: " + e.getMessage());
+            }
+            path = StagedPathUtil.pathOfInput(attachmentId, fileName);
+        } else {
+            // 归属硬校验：仅当前子任务的有效产物附件（read 类工具是软约束；写入将变成可执行内容，必须更严）
+            AttachmentRef ref = attachmentPort.listActive(ids.subTaskId()).stream()
+                    .filter(a -> a.id().equals(attachmentId))
+                    .findFirst()
+                    .orElseThrow(() -> new BizException(
+                            "附件不属于当前子任务或已失效，拒绝注入: attachmentId=" + attachmentId
+                                    + "（若目标是用户上传的会话输入件，请传 origin=input）"));
+            if (!ref.contentLoadable()) {
+                throw new BizException("附件平台不可直读（非受控存储地址），无法注入: attachmentId=" + attachmentId);
+            }
+            fileName = ref.fileName();
+            bytes = attachmentPort.loadContent(attachmentId);
+            path = StagedPathUtil.pathOf(attachmentId, fileName);
         }
-        byte[] bytes = attachmentPort.loadContent(attachmentId);
-        String path = StagedPathUtil.pathOf(attachmentId, ref.fileName());
         boolean ok = sandboxExecutionService.writeArtifact(ids.subTaskId(), path, bytes);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("staged", ok);
         out.put("path", ok ? path : null);
         out.put("size", bytes.length);
         out.put("sha256", StagedPathUtil.sha256Hex(bytes));
-        out.put("fileName", ref.fileName());
+        out.put("fileName", fileName);
+        out.put("origin", source.wireName);
         out.put("note", ok
                 ? "已注入你的沙箱，可用 internal_run_in_sandbox 按绝对路径执行/校验；sha256 可与 internal_attachment_digest 对账"
                 : "沙箱写入失败（沙箱未启用或句柄不可用）；可改用 internal_read_attachment_range 分段核对附件内容");
         return out;
+    }
+
+    /**
+     * 按本子任务声明的输入附件作用域解析引用，越权即拒（`G-051`）。
+     *
+     * <p><b>为什么在工具里查一次 {@code sub_task} 快照</b>：作用域解析需要 {@code taskId} 与
+     * {@code sub_task.context}，二者都在快照里，而 {@code ToolInvocationContext} 只绑定了
+     * {@code agentId/subTaskId}。一次主键读的成本，远小于「让 agent 域自己解析 planner 的键名」的
+     * 架构代价（那会多出一处对 {@code conversationId} / 附件声明键的依赖）。</p>
+     *
+     * <p><b>拒绝文案要能自救</b>：模型看到「不在作用域内」时需要知道下一步（换来源 / 报告阻塞），
+     * 故文案里带上「清单在哪、产物该用哪个 origin」，而不是只给一句「拒绝」。</p>
+     */
+    private MediaRef resolveInputScopedRef(Long subTaskId, Long attachmentId) {
+        SubTaskSnapshot subTask = subTaskQueryPort.findById(subTaskId);
+        if (subTask == null) {
+            throw new BizException("子任务不存在，无法判定输入附件作用域: subTaskId=" + subTaskId);
+        }
+        return conversationMediaRefPort
+                .listScopedInputAttachments(subTask.taskId(), subTaskId, subTask.context())
+                .stream()
+                .filter(ref -> ref.attachmentId() != null && ref.attachmentId().equals(attachmentId))
+                .findFirst()
+                .orElseThrow(() -> new BizException(
+                        "附件不在本子任务的输入附件作用域内，拒绝注入: attachmentId=" + attachmentId
+                                + "（作用域清单见 internal_get_sub_task_detail 的 inputAttachments；"
+                                + "若目标是子任务产物请用 origin=artifact）"));
+    }
+
+    /**
+     * 注入来源（`G-051`）：显式声明，不做「两张表都试」。
+     *
+     * <p>未知取值<b>直接报错</b>而不是静默按 {@code artifact} 处理：拼错 {@code input}
+     * （如 {@code inputs}）若回落成 {@code artifact}，模型看到的是「附件不属于当前子任务」，
+     * 会去换 id 而不是改参数——把一次参数错误变成一串无效工具轮次（判据 10：显式声明按原始字符串判，不靠兜底）。</p>
+     */
+    private enum StageSource {
+        /** 本子任务产出的附件（task 域 {@code attachment}）。 */
+        ARTIFACT("artifact"),
+        /** 本子任务作用域内的会话输入附件（planner 域 {@code chat_attachment}）。 */
+        INPUT("input");
+
+        private final String wireName;
+
+        StageSource(String wireName) {
+            this.wireName = wireName;
+        }
+
+        static StageSource parse(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return ARTIFACT;
+            }
+            String normalized = raw.trim().toLowerCase(java.util.Locale.ROOT);
+            for (StageSource value : values()) {
+                if (value.wireName.equals(normalized)) {
+                    return value;
+                }
+            }
+            throw new BizException("origin 取值非法: " + raw + "（只允许 artifact / input）");
+        }
     }
 
     /** 注入文件名消毒与 SHA-256 已抽公共：{@link com.helloai.core.agent.runtime.sandbox.StagedPathUtil}（`RV-15` 起全仓唯一事实源）。 */

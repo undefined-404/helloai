@@ -186,6 +186,19 @@ public interface McpToolService {
      */
     SubTaskDetail getSubTaskDetail(Long agentId, Long subTaskId);
 
+    /**
+     * 查询子任务详情，<b>并额外下发本子任务作用域内的会话输入附件清单</b>（`G-051`）。
+     *
+     * <p><b>为什么单独一个方法、不用布尔开关</b>：这是一条<b>通道专属</b>的能力——只有进程内
+     * 执行链能拿到 {@code chat_attachment} 的字节（{@code internal_stage_attachment_to_sandbox}
+     * 的 {@code origin=input}）；外部 MCP Agent 走 {@code GET /api/attachments/downloadById/{id}}，
+     * 那条路只服务 {@code attachment}（task 域）。若两者共用一个带开关的方法，开关迟早会被后来者
+     * 按「默认 false 保险」一路传下去，等于这条清单永不下发；方法名本身把「给谁用」写死更难误用。</p>
+     *
+     * <p>授权口径与 {@link #getSubTaskDetail} 完全一致（同一段判定，不复制）。</p>
+     */
+    SubTaskDetail getSubTaskDetailForInternal(Long agentId, Long subTaskId);
+
     // ================================================================
     // result DTOs (used by Controller to serialize)
     // ================================================================
@@ -357,6 +370,20 @@ public interface McpToolService {
         /** 本子任务当前有效（ACTIVE）的产出附件清单；空列表=尚未上传（P1-4-b 可发现性）。 */
         private List<AttachmentItem> attachments;
         /**
+         * 本子任务<b>作用域内</b>的会话输入附件清单（`G-051`，仅
+         * {@link #getSubTaskDetailForInternal} 下发）；空列表 = 未声明作用域或声明已失效。
+         *
+         * <p><b>★与 {@link #attachments} 不是同一个集合，禁止合并</b>：{@code attachments} 的语义是
+         * 「本子任务<b>产出</b>的东西」，六处消费（交付物闸、上游产出装载、契约回流、核验证据集、
+         * MCP 读模型、「我的产物」）都以此为前提；把用户上传的输入件混进去，交付物闸会对所有
+         * 带图子任务恒判「有产物」。故这里另起字段、并在 {@link InputAttachmentItem} 上标注来源。</p>
+         *
+         * <p>元素来自 {@code sub_task.context} 的附件声明（与 `G-042` 视觉通道同一份），
+         * 即「拆解期 Planner 认定这个子任务要用到哪几份输入」。未声明时为空 —— 注入侧据此
+         * <b>fail-close</b>（一件都不给），不回落成整个会话。</p>
+         */
+        private List<InputAttachmentItem> inputAttachments;
+        /**
          * 贡献者 Agent ID 清单（P1-7 产出归属可见性）：执行记录 ∪ 当前执行者，去重保序（当前执行者优先）。
          *
          * <p>供「独立验证」类任务在认领前自评利益冲突（平台暂不强制校验冲突，仅提供可见性；
@@ -383,6 +410,27 @@ public interface McpToolService {
         private String status;
         /** 平台是否可直接读取正文（true 时可用 downloadById 取字节流）。 */
         private Boolean loadable;
+    }
+
+    /**
+     * 子任务输入附件（{@link SubTaskDetail#getInputAttachments()} 元素，`G-051`）。
+     *
+     * <p><b>为什么不复用 {@link AttachmentItem}</b>：字段集不同。{@code status}（ACTIVE/INACTIVE
+     * 版本语义）与 {@code loadable}（平台可控存储地址判定）都是 {@code attachment} 表的列语义，
+     * 会话附件没有这两个概念；硬套会向下游输出「status=null / loadable=null」的假字段，
+     * 模型只能猜（判据 2：无读取方的列是反模式，反向同理——无事实来源的字段不该出现在契约里）。</p>
+     *
+     * <p><b>{@code attachmentId} 的解释域</b>：本 DTO 的 id 恒属 {@code chat_attachment}，
+     * 只能配合 {@code internal_stage_attachment_to_sandbox(origin="input")} 使用。
+     * 两表主键空间独立、同值不同文件，故调用方<b>不得</b>把这里的 id 拿去当产物件（origin=artifact）用。</p>
+     */
+    @Data
+    class InputAttachmentItem {
+        /** 会话附件主键（属 {@code chat_attachment}，非子任务产物）。 */
+        private Long attachmentId;
+        private String fileName;
+        private String mimeType;
+        private Long fileSize;
     }
 
     @Data

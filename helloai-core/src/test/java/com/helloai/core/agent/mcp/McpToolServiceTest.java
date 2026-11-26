@@ -15,6 +15,7 @@ import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.entity.AgentInbox;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.port.AttachmentPort;
+import com.helloai.core.agent.port.ConversationMediaRefPort;
 import com.helloai.core.agent.port.AttachmentRef;
 import com.helloai.core.agent.port.SubTaskClaimConstraint;
 import com.helloai.core.agent.port.SubTaskCommandPort;
@@ -99,6 +100,8 @@ class McpToolServiceTest {
     @Mock private SubTaskCommandPort subTaskCommandPort;
     @Mock private HeartbeatService heartbeatService;
     @Mock private AttachmentPort attachmentPort;
+    /** G-051：读模型新增的输入附件作用域端口（本测试不涉及输入件，仅满足构造）。 */
+    @Mock private ConversationMediaRefPort conversationMediaRefPort;
     @Mock private AgentExecutionRecordService agentExecutionRecordService;
     @Mock private ExecutionResultHandler executionResultHandler;
     @Mock private AgentEventRecorder agentEventRecorder;
@@ -128,7 +131,8 @@ class McpToolServiceTest {
         // RM9-a（2026-10-16）：门面 + 三职责类。手工装配包内 @Service 图，保持「被测对象
         // 仍可经接口调用」的既有口径（所有断言都走 McpToolService 接口）。
         McpReadModelService readModelService = new McpReadModelServiceImpl(
-                subTaskQueryPort, taskRunningSpecPort, attachmentPort, agentExecutionRecordService);
+                subTaskQueryPort, taskRunningSpecPort, attachmentPort, agentExecutionRecordService,
+                conversationMediaRefPort);
         McpAgentReportService agentReportService = new McpAgentReportServiceImpl(
                 agentService, heartbeatService, agentDutyLeaseService, attachmentPort,
                 executionResultHandler, activityLogService, submissionActivityRecorder,

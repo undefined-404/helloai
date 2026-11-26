@@ -341,4 +341,36 @@ class ReviewCoverageCriticTest {
                 passed(coverage), ACCEPTANCE, List.of(), elevenUnavailable)))
                 .contains(ReviewCoverageCritic.ACCEPTANCE_NOT_COVERED);
     }
+
+    @Test
+    @DisplayName("`G-052` criterionRef 只丢了反引号：仍算覆盖（不 BLOCK），但单列一条格式观测")
+    void backtickStrippedCriterionRefStillCovers() {
+        String quotedAcceptance = "① 主色 `#RRGGBB` 大写六位；② 退出码 `0` 且标准输出含 64x64";
+        String coverageJson = "["
+                + "{\"criterionRef\":\"主色 #RRGGBB 大写六位\",\"status\":\"covered\",\"method\":\"sandbox\"},"
+                + "{\"criterionRef\":\"退出码 0 且标准输出含 64x64\",\"status\":\"covered\",\"method\":\"sandbox\"}]";
+
+        List<Finding> findings = ReviewCoverageCritic.critique(
+                passed(coverageJson), quotedAcceptance, List.of());
+
+        // 真机事故形态：改前这里出 acceptance_not_covered(BLOCK) ⇒ INCONCLUSIVE 转人工
+        assertThat(codes(findings)).doesNotContain(ReviewCoverageCritic.ACCEPTANCE_NOT_COVERED);
+        assertThat(findings).filteredOn(f -> f.severity() == Severity.BLOCK).isEmpty();
+        assertThat(codes(findings)).containsExactly(ReviewVerdictValidator.REF_FORMAT_LOOSE);
+        assertThat(findings.get(0).detail()).contains("2 条");
+    }
+
+    @Test
+    @DisplayName("`G-052` 归一不放宽「空壳引用」：criterionRef 只剩圈号仍判未覆盖")
+    void skeletonCriterionRefIsStillNotCoverage() {
+        // 用「只在归一后才成立」的 **①** 反证：字面圈号本身是原文子串，不构成反例
+        String coverageJson = "[{\"criterionRef\":\"**①**\",\"status\":\"covered\",\"method\":\"sandbox\"}]";
+
+        List<Finding> findings = ReviewCoverageCritic.critique(passed(coverageJson), ACCEPTANCE, List.of());
+
+        assertThat(codes(findings)).contains(
+                ReviewCoverageCritic.ACCEPTANCE_NOT_COVERED,
+                ReviewCoverageCritic.COVERAGE_REF_NOT_GROUNDED);
+        assertThat(findings.get(0).severity()).isEqualTo(Severity.BLOCK);
+    }
 }

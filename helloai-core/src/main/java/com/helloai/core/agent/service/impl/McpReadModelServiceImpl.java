@@ -5,6 +5,8 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.AttachmentRef;
+import com.helloai.core.agent.port.ConversationMediaRefPort;
+import com.helloai.core.agent.port.MediaRef;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskRunningSpecPort;
@@ -12,6 +14,7 @@ import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.McpReadModelService;
 import com.helloai.core.agent.service.McpToolService.AttachmentItem;
 import com.helloai.core.agent.service.McpToolService.GetDepsSummaryResult;
+import com.helloai.core.agent.service.McpToolService.InputAttachmentItem;
 import com.helloai.core.agent.service.McpToolService.SubTaskDetail;
 import com.helloai.core.agent.support.AttachmentMediaAssembler;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
@@ -49,6 +52,14 @@ public class McpReadModelServiceImpl implements McpReadModelService {
     private final TaskRunningSpecPort taskRunningSpecPort;
     private final AttachmentPort attachmentPort;
     private final AgentExecutionRecordService agentExecutionRecordService;
+    /**
+     * 会话输入附件作用域端口（`G-051`）：内部执行链下发 {@code inputAttachments} 的数据源。
+     *
+     * <p>作用域解析（{@code task.context.conversationId} + {@code sub_task.context} 的附件声明）
+     * 整体留在 planner 域实现里——本类只拿引用，不认识任何一个键名。字段追加在末尾，
+     * 避免位置化构造（测试 / 手写 new）错位。</p>
+     */
+    private final ConversationMediaRefPort conversationMediaRefPort;
 
     /**
      * 获取指定子任务的直接前置产出摘要（结构化）。
@@ -230,6 +241,29 @@ public class McpReadModelServiceImpl implements McpReadModelService {
      */
     @Override
     public SubTaskDetail getSubTaskDetail(Long agentId, Long subTaskId) {
+        return buildSubTaskDetail(loadAuthorized(agentId, subTaskId));
+    }
+
+    /**
+     * 内部执行链专用详情：多下发「本子任务作用域内的会话输入附件」清单（`G-051`）。
+     *
+     * <p><b>为什么外部通道不下发</b>：外部 Agent 取字节走 {@code GET /api/attachments/downloadById/{id}}，
+     * 那条路读的是 {@code attachment}（task 域产物表）。把 {@code chat_attachment} 的 id 给它，
+     * 它只会拿到「附件不存在」，等于用一份看得见拿不到的清单把它引向死路。</p>
+     */
+    @Override
+    public SubTaskDetail getSubTaskDetailForInternal(Long agentId, Long subTaskId) {
+        return buildSubTaskDetail(loadAuthorized(agentId, subTaskId), true);
+    }
+
+    /**
+     * 授权校验 + 取快照（两条详情入口共用，避免授权口径漂移）。
+     *
+     * <p>授权（最小必要）：仅「已分配给本 Agent」或「未分配且 PENDING（可认领）」的子任务可查——
+     * 前者覆盖认领后开工 / 返工 / 重连，后者覆盖认领前评估；已转给他人、已回收或已终结的子任务
+     * 对非归属者不可见。</p>
+     */
+    private SubTaskSnapshot loadAuthorized(Long agentId, Long subTaskId) {
         SubTaskSnapshot subTask = subTaskQueryPort.findById(subTaskId);
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
@@ -242,7 +276,7 @@ public class McpReadModelServiceImpl implements McpReadModelService {
                     + ", assignedAgentId=" + subTask.assignedAgentId()
                     + ", status=" + subTask.status());
         }
-        return buildSubTaskDetail(subTask);
+        return subTask;
     }
 
     /**
@@ -258,6 +292,17 @@ public class McpReadModelServiceImpl implements McpReadModelService {
      */
     @Override
     public SubTaskDetail buildSubTaskDetail(SubTaskSnapshot subTask) {
+        return buildSubTaskDetail(subTask, false);
+    }
+
+    /**
+     * 子任务快照 → 详情 DTO（可选是否附带输入附件清单，`G-051`）。
+     *
+     * <p>{@code inputAttachments} 恒被显式赋值：空列表而非 null。JSON 里 {@code null} 与 {@code []}
+     * 对模型的含义不同——后者是「我查过了，作用域内没有输入件」，前者像「这个字段不存在」，
+     * 后者会让模型以为可以继续试。</p>
+     */
+    private SubTaskDetail buildSubTaskDetail(SubTaskSnapshot subTask, boolean withInputAttachments) {
         SubTaskDetail detail = new SubTaskDetail();
         detail.setSubTaskId(subTask.id());
         detail.setTaskId(subTask.taskId());
@@ -281,6 +326,8 @@ public class McpReadModelServiceImpl implements McpReadModelService {
         detail.setDeadline(subTask.deadline() != null ? subTask.deadline().toString() : null);
         detail.setReworkCount(subTask.reworkCount());
         detail.setAttachments(buildAttachmentItems(subTask.id()));
+        detail.setInputAttachments(withInputAttachments
+                ? buildInputAttachmentItems(subTask) : Collections.emptyList());
         detail.setContributors(buildContributors(subTask));
         return detail;
     }
@@ -342,6 +389,44 @@ public class McpReadModelServiceImpl implements McpReadModelService {
             return items;
         } catch (Exception e) {
             log.warn("组装子任务附件清单失败（降级为空列表）: subTaskId={}, err={}", subTaskId, e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * 组装本子任务作用域内的会话输入附件清单（`G-051`）。
+     *
+     * <p><b>为什么不能顺手并进 {@code attachments}</b>：那张清单的语义是「本子任务<b>产出</b>的东西」，
+     * 六个消费方（交付物闸、上游产出装载、契约回流、核验证据集、MCP 读模型、「我的产物」）都以此为前提。
+     * 把用户上传的输入件混进去，最直接的后果是交付物闸对所有带图子任务恒判「有产物」，闸门形同废弃。</p>
+     *
+     * <p>读取失败降级为空列表（与 {@link #buildAttachmentItems} 同口径）：清单是「可发现性」增强，
+     * 不该因为它把详情下发整条打断。空列表的语义是「作用域内没有可注入的输入件」，
+     * 注入侧据此 fail-close，行为与「查询失败」一致（都是拒绝注入），不会误放行。</p>
+     */
+    private List<InputAttachmentItem> buildInputAttachmentItems(SubTaskSnapshot subTask) {
+        try {
+            List<MediaRef> refs = conversationMediaRefPort.listScopedInputAttachments(
+                    subTask.taskId(), subTask.id(), subTask.context());
+            if (refs == null || refs.isEmpty()) {
+                return Collections.emptyList();
+            }
+            List<InputAttachmentItem> items = new ArrayList<>(refs.size());
+            for (MediaRef ref : refs) {
+                if (ref == null || ref.attachmentId() == null) {
+                    continue;
+                }
+                InputAttachmentItem item = new InputAttachmentItem();
+                item.setAttachmentId(ref.attachmentId());
+                item.setFileName(ref.fileName());
+                item.setMimeType(ref.mimeType());
+                item.setFileSize(ref.fileSize());
+                items.add(item);
+            }
+            return items;
+        } catch (Exception e) {
+            log.warn("组装子任务输入附件清单失败（降级为空列表）: subTaskId={}, err={}",
+                    subTask.id(), e.getMessage());
             return Collections.emptyList();
         }
     }

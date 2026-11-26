@@ -45,6 +45,16 @@ public final class ReviewVerdictValidator {
     /** 判定来自宽松兜底解析（严格 JSON 失败，字段可能不完整）。 */
     public static final String LOOSE_PARSE = "loose_parse";
 
+    /**
+     * 引用只在「剥除排版标记 / 折叠空白」后才命中原文（`G-052`）：<b>计入已归属</b>，只作观测。
+     *
+     * <p>与 {@link #ACCEPTANCE_REF_NOT_GROUNDED} 的区别是「编造」与「抄写格式不同」：
+     * 前者是内容对不上，后者内容逐字一致、只是把 `` `code` `` 写成 code、`**粗**` 写成 粗。
+     * 若不区分，一次纯格式差异就会经「该条不计覆盖」→ `acceptance_not_covered`(BLOCK)
+     * → `INCONCLUSIVE` 把「通过」升级成人工介入（真机实例见 `G-052`）。</p>
+     */
+    public static final String REF_FORMAT_LOOSE = "grounding_format_loose";
+
     /** {@code pass=false} 但 {@code issues} 无任一条含 {@code [defect]}（驳回理由未按契约结构化）。 */
     public static final String REJECT_WITHOUT_DEFECT = "reject_without_defect";
 
@@ -53,6 +63,14 @@ public final class ReviewVerdictValidator {
 
     /** 驳回与满分互斥的判定门槛（只拦满分：3~4 分驳回可能是合理保守判定）。 */
     private static final int FULL_SCORE = 5;
+
+    /**
+     * 允许「归一后才命中」的引用最小长度（字符，`G-052`）。
+     *
+     * <p>取值理由：中文验收条款的实质片段普遍 ≥8 字，而「① / （a） / 是」这类骨架片段的
+     * 归一后长度都 <8 —— 门槛设在 8 之上，让判据只在「抄写格式差异」处松、不在「空壳引用」处松。</p>
+     */
+    private static final int MIN_LOOSE_REF_CHARS = 8;
 
     /** 驳回时必须出现在 {@code issues} 里的缺陷标签（提示词契约）。 */
     private static final String DEFECT_TAG = "[defect]";
@@ -102,10 +120,7 @@ public final class ReviewVerdictValidator {
                             : truncate("驳回但 issues 未含 " + DEFECT_TAG + " 条目: "
                                     + verdict.getIssues().trim())));
         }
-        Finding grounding = checkAcceptanceRefs(verdict, acceptance);
-        if (grounding != null) {
-            findings.add(grounding);
-        }
+        findings.addAll(checkAcceptanceRefs(verdict, acceptance));
         return findings;
     }
 
@@ -114,35 +129,56 @@ public final class ReviewVerdictValidator {
      *
      * <p>验收标准为空时<b>跳过</b>（没有可归属的原文，判「引用不实」会冤枉判定）；
      * 归一化复用 {@link VerdictParser#normalizeMissingEvidence}，与缺失证据清单同一口径。</p>
+     *
+     * <p>产出两类结论，<b>互斥</b>（`G-052`）：真不归属 → {@link #ACCEPTANCE_REF_NOT_GROUNDED}（WARN，
+     * 疑似编造）；仅归一后才归属 → {@link #REF_FORMAT_LOOSE}（WARN，内容对、格式丢）。分开是因为
+     * 前者要看，后者只需知道「这份模型有系统性抄写习惯」。</p>
      */
-    private static Finding checkAcceptanceRefs(ReviewVerdict verdict, String acceptance) {
+    private static List<Finding> checkAcceptanceRefs(ReviewVerdict verdict, String acceptance) {
         if (isBlank(acceptance)) {
-            return null;
+            return List.of();
         }
         List<Map<String, String>> entries = VerdictParser.normalizeMissingEvidence(verdict.getMissingEvidence());
         List<String> ungrounded = new ArrayList<>();
+        List<String> looseOnly = new ArrayList<>();
         for (Map<String, String> entry : entries) {
             String ref = entry.get("acceptanceRef");
-            if (ref == null || isGroundedIn(acceptance, ref)) {
+            if (ref == null) {
                 continue;
             }
-            ungrounded.add(ref);
+            if (!isGroundedIn(acceptance, ref)) {
+                ungrounded.add(ref);
+            } else if (!isGroundedExactly(acceptance, ref)) {
+                looseOnly.add(ref);
+            }
         }
-        if (ungrounded.isEmpty()) {
-            return null;
+        List<Finding> found = new ArrayList<>(2);
+        if (!ungrounded.isEmpty()) {
+            found.add(new Finding(Severity.WARN, ACCEPTANCE_REF_NOT_GROUNDED,
+                    summarizeRefs("acceptanceRef 不是验收标准原文子串", ungrounded)));
         }
-        StringBuilder detail = new StringBuilder()
-                .append(ungrounded.size()).append(" 条 acceptanceRef 不是验收标准原文子串: ");
-        for (int i = 0; i < ungrounded.size() && i < MAX_REFS_IN_DETAIL; i++) {
+        if (!looseOnly.isEmpty()) {
+            found.add(new Finding(Severity.WARN, REF_FORMAT_LOOSE,
+                    summarizeRefs("acceptanceRef 仅在剥除排版标记后才命中原文（已按已归属计入）", looseOnly)));
+        }
+        return found;
+    }
+
+    /** 引用清单的可读摘要（条数 + 前若干条，长文本截断）：两处 WARN 共用一份排版。 */
+    private static String summarizeRefs(String label, List<String> refs) {
+        StringBuilder detail = new StringBuilder().append(refs.size()).append(" 条 ")
+                .append(label).append(": ");
+        int limit = Math.min(refs.size(), MAX_REFS_IN_DETAIL);
+        for (int i = 0; i < limit; i++) {
             if (i > 0) {
                 detail.append("；");
             }
-            detail.append(truncate(ungrounded.get(i)));
+            detail.append(truncate(refs.get(i)));
         }
-        if (ungrounded.size() > MAX_REFS_IN_DETAIL) {
+        if (refs.size() > MAX_REFS_IN_DETAIL) {
             detail.append("…");
         }
-        return new Finding(Severity.WARN, ACCEPTANCE_REF_NOT_GROUNDED, truncate(detail.toString()));
+        return detail.toString();
     }
 
     /**
@@ -151,6 +187,12 @@ public final class ReviewVerdictValidator {
      * <p>模型被要求引用「验收标准原文子串」，因此合法引用必然满足 {@code 原文.contains(引用)}。
      * 原文为空时一律视为<b>已归属</b>（没有可归属的原文，判「引用不实」会冤枉判定）。</p>
      *
+     * <p><b>`G-052` 起两级判据</b>：先字面命中（零容忍路径不变）；字面不中再按
+     * {@link #normalizeForGrounding} 双侧归一比一次——只削「行内代码反引号 / 加粗星号 / 连续空白」，
+     * <b>不删任何字母、数字、中文与标点</b>，因此「改了内容」的引用归一再比仍不中；且归一命中要求引用
+     * 归一后长度 ≥ {@link #MIN_LOOSE_REF_CHARS}，避免「`。` / `①`」这类空壳引用靠归一蒙过。
+     * 归一命中不算编造，但由调用方用 {@link #REF_FORMAT_LOOSE} 记一条观测（系统性抄写差异不得静默）。</p>
+     *
      * @param source 验收标准原文（整段或单个拆分项）
      * @param ref    模型填写的引用子串
      */
@@ -158,7 +200,60 @@ public final class ReviewVerdictValidator {
         if (isBlank(source) || isBlank(ref)) {
             return true;
         }
+        if (source.contains(ref)) {
+            return true;
+        }
+        String normalizedRef = normalizeForGrounding(ref);
+        if (normalizedRef.length() < MIN_LOOSE_REF_CHARS) {
+            // 短引用只认字面命中：归一后剩两三个字符时几乎能与任何原文撞上，放行等于取消判据
+            return false;
+        }
+        return normalizeForGrounding(source).contains(normalizedRef);
+    }
+
+    /**
+     * 字面命中判据（`G-052`）：与 {@link #isGroundedIn} 的差别只在「不做归一」。
+     *
+     * <p>调用方用它区分「逐字引用」与「归一后才成立」——后者要记 {@link #REF_FORMAT_LOOSE}。
+     * 两处必须共用 {@link #normalizeForGrounding}，否则「什么算格式差异」会有两个口径。</p>
+     */
+    public static boolean isGroundedExactly(String source, String ref) {
+        if (isBlank(source) || isBlank(ref)) {
+            return true;
+        }
         return source.contains(ref);
+    }
+
+    /**
+     * 归属比对前的归一（`G-052`）：削掉<b>排版标记</b>、折叠连续空白。
+     *
+     * <p>刻意只处理这两类：反引号（`` ` ``）与加粗星号（`*`）在 Markdown 里改变的是呈现而非文字，
+     * 模型抄写时最容易丢；空白折叠吸收「换行 / 全角空格 / 多余空格」三种抄写噪声。
+     * <b>不</b>处理下划线（`_` 在标识符里有语义）、<b>不</b>做全半角转换、<b>不</b>删标点——
+     * 这些一旦归一，「把 A 条款写成 B 条款」也可能撞上，等于用精度换错放。</p>
+     */
+    static String normalizeForGrounding(String text) {
+        if (text == null) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(text.length());
+        boolean pendingSpace = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '`' || c == '*') {
+                continue;
+            }
+            if (c == '\u00A0' || Character.isWhitespace(c)) {
+                pendingSpace = out.length() > 0;
+                continue;
+            }
+            if (pendingSpace) {
+                out.append(' ');
+                pendingSpace = false;
+            }
+            out.append(c);
+        }
+        return out.toString();
     }
 
     private static boolean containsDefectTag(String issues) {

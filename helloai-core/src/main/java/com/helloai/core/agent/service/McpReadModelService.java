@@ -19,6 +19,13 @@ public interface McpReadModelService {
     /** 查询子任务详情。 */
     SubTaskDetail getSubTaskDetail(Long agentId, Long subTaskId);
 
+    /**
+     * 查询子任务详情，并附上本子任务作用域内的会话输入附件清单（`G-051`，内部执行链专用）。
+     *
+     * <p>与 {@link #getSubTaskDetail} 共用同一段授权判定；差异只有「多查一份输入附件清单」。</p>
+     */
+    SubTaskDetail getSubTaskDetailForInternal(Long agentId, Long subTaskId);
+
     /** 组装子任务详情（认领成功路径复用的只读投影）。 */
     SubTaskDetail buildSubTaskDetail(SubTaskSnapshot subTask);
 }
