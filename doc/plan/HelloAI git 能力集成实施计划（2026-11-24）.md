@@ -1,7 +1,7 @@
 # HelloAI git 能力集成实施计划（2026-11-24）
 
 > **状态：Active**（立项完成，实施批次待排——按「JGit 嵌入 → 渐进式提交 + reviewer 沙箱验证 → 拉分支集成测试 → 分支谱系与 attempt 接力 → 单向发布与工作区前进」五小步推进）
-> 最后更新：2026-11-24（**本轮新增 `GT-12` 单向发布与工作区前进**：混合协作（内部 LLM + 外部 agent 交替）下内部产出须发布到远端外部 agent 才拉得到；`GT-7` 创建时机由 lazy ensure 改为 **confirmPlan 后异步建**（lazy ensure 降为兜底）；`GT-8` 补写者切分（本地 bare 仓只作缓存与合并执行点、发布方向单向）；实测双向「同步」同名 ref 会静默覆盖提交（`research` §7.9）。**前序**：本轮早先新增 `GT-11` 分支谱系与 attempt 接力（多 agent 接力场景的尝试分支建法 + 起点策略 + 派发载荷四项）；`GT-7` 定扁平命名（ref D/F 冲突实测）、`GT-8` 定合并方向与禁 squash、`GT-3` 补 `SubTask-Id` trailer、`GT-5` 补 git 四字段拦截；`research` §7.6 为结论来源。**更早**：按 research §7 续研订正回写——新增 `GT-0` 可行性实测；`GT-2` 补两个前置；`GT-3` 收窄为平台侧工具；`GT-8` worktree → 独立 clone。当日另修复 `deploy/quickstart` 缺 `[storage]`+`SANDBOX_VOLUME_*` 的部署侧覆盖缺口，见 `LOG-20261124` 补充批次 3。**再次修订**：原 `GT-3` 的「硬前置 C 容器可见性」抽出为独立并行轨 `GT-10`——它与 JGit 无耦合、且影响面仅容器部署形态，不应作为 `GT-3` 子项阻塞主链；同时回填空值 bind mount 静默降级实测，明确 `volumes:` 须走独立 override 文件）
+> 最后更新：2026-11-26（晚）（**行号漂移订正**）——本轮第二件事：`G-054` 改代码后本节三处 `path:line` 全部漂移（`invalidateAttachmentsOnRework` 由 `:594` 附近 → `:711`；`reworkFresh` 的 `resetAttemptTotal` 由 `:590` → `:598`；`redispatchDeadLetter` 的由 `:405` → `:406`），已改为「方法名 + 精确行」双标注，避免下次改代码后只剩一个不存在的行号。**这正是判据 5 的同类问题**：移动/改名后必须全仓复核引用点，`path:line` 只在当次提交内可靠。**前序** ｜ 2026-11-26（**`GT-0` 六项结论回灌下游四个任务**——这是本轮唯一实质动作：`GT-0` 出结论后，`GT-1`~`GT-3` / `GT-6` / `GT-8` / `GT-12` 的正文**一条都没吸收**，等于「实测做了、设计没改」。逐条回灌：`GT-1` 补 clone 必须显式 `core.autocrlf=false`（`fileMode=false` 够但 autocrlf 会真的误报未改文件）；`GT-2` 把「clone 深度待定」结案为「工作区 `--depth 1`、合并点必须全量」（总收益仅 14%，价值在首次 clone 快慢不在省空间）并补白名单外路径的实测错误码；`GT-6` 补「审计时机必须绑定终态，不能靠 diff 自证完整」（半写文件读到的是合法但偏短的前缀快照）；`GT-8` 补「merge 必须平台侧自行串行化」（并发失败形态是 Windows 文件句柄冲突，跨平台不一致，不可当可重试判据）；`GT-12` 补最关键的「发布成功必须显式判 `RemoteRefUpdate.getStatus()`——非快进不抛异常，只 catch 会静默失败」并给反例验收要求。**前序** ｜ 2026-11-24（**本轮新增 `GT-12` 单向发布与工作区前进**：混合协作（内部 LLM + 外部 agent 交替）下内部产出须发布到远端外部 agent 才拉得到；`GT-7` 创建时机由 lazy ensure 改为 **confirmPlan 后异步建**（lazy ensure 降为兜底）；`GT-8` 补写者切分（本地 bare 仓只作缓存与合并执行点、发布方向单向）；实测双向「同步」同名 ref 会静默覆盖提交（`research` §7.9）。**前序**：本轮早先新增 `GT-11` 分支谱系与 attempt 接力（多 agent 接力场景的尝试分支建法 + 起点策略 + 派发载荷四项）；`GT-7` 定扁平命名（ref D/F 冲突实测）、`GT-8` 定合并方向与禁 squash、`GT-3` 补 `SubTask-Id` trailer、`GT-5` 补 git 四字段拦截；`research` §7.6 为结论来源。**更早**：按 research §7 续研订正回写——新增 `GT-0` 可行性实测；`GT-2` 补两个前置；`GT-3` 收窄为平台侧工具；`GT-8` worktree → 独立 clone。当日另修复 `deploy/quickstart` 缺 `[storage]`+`SANDBOX_VOLUME_*` 的部署侧覆盖缺口，见 `LOG-20261124` 补充批次 3。**再次修订**：原 `GT-3` 的「硬前置 C 容器可见性」抽出为独立并行轨 `GT-10`——它与 JGit 无耦合、且影响面仅容器部署形态，不应作为 `GT-3` 子项阻塞主链；同时回填空值 bind mount 静默降级实测，明确 `volumes:` 须走独立 override 文件）
 
 ---
 
@@ -102,24 +102,29 @@
 
 ### GT-1 JGit 依赖与仓库白名单
 
-> **状态**：待开始 ｜ **剩余动作**：根 POM 加 `<jgit.version>` + `dependencyManagement`（`helloai-core` 显式依赖）；仓库白名单配置（`sys_config` / 配置文件，防任意仓库拉取）；新增架构守卫「`org.eclipse.jgit` 只许出现在 `runtime.git` 包」
+> **状态**：待开始 ｜ **剩余动作**：根 POM 加 `<jgit.version>` + `dependencyManagement`（`helloai-core` 显式依赖）；仓库白名单配置（`sys_config` / 配置文件，防任意仓库拉取）；新增架构守卫「`org.eclipse.jgit` 只许出现在 `runtime.git` 包」；**clone 配置显式写死 `core.fileMode=false` + `core.autocrlf=false`**（`GT-0` ① 硬结论）
 
 - **做什么**：根 POM 加 `<jgit.version>` 属性 + `dependencyManagement` 条目（对齐 `opensandbox.version` 做法），`helloai-core/pom.xml` 直接依赖；仓库白名单配置（`sys_config` 或配置文件，防任意仓库拉取）。
-- **版本**：`org.eclipse.jgit:org.eclipse.jgit:7.8.1.202611041320-r`（`JavaSE-17` 与根 POM `java.version=17` 匹配，无升级 JDK 压力）；HTTPS 远端无需 `jgit.ssh.apache`（目标仓库是 Gitee HTTPS）。
+- **★`clone` 必须显式 `core.autocrlf=false`（`GT-0` ① 实测，2026-11-26）**：`core.fileMode=false` 本身足够（执行位不参与比对，`ls-files -s` 全 `100644`、容器内 `stat` 全 `777` 都不影响判定，mode 不是噪声源），**但 `autocrlf` 会真的让 JGit 误报**——同一仓库只改 `text_lf.txt`，原生 git 报 1 个文件，JGit 额外把**未改动**的 `text_crlf.txt` 报成 MODIFY。故 clone 时两个开关都要显式设，不能依赖宿主 git 的全局配置（服务器上根本没有 `~/.gitconfig`）。
+- **★JGit 与原生 git 的 `autocrlf` 取值必须一致才能对账**：这条是对账纪律而非代码要求——`GT-3` 的验收判据「JGit diff 与原生 git diff 一致」只在两侧同一 `autocrlf` 下成立。改一侧不改另一侧，会得到「平台说改了 2 个文件、原生说 1 个」这种最难解释的形态。
+- **版本**：`org.eclipse.jgit:org.eclipse.jgit:7.8.1.202611041320-r`（`JavaSE-17` 与根 POM `java.version=17` 匹配，无升级 JDK 压力；`GT-0` 的实测就是这个版本，见 §2 第 13~18 行的实测环境）。HTTPS 远端无需 `jgit.ssh.apache`（目标仓库是 Gitee HTTPS）。
 - **架构守卫**：`check-arch-freeze.sh` 只统计跨域 import、**不拦第三方包** ⇒ 须新增「`org.eclipse.jgit` 只许出现在 `com.helloai.core.agent.runtime.git`」规则，挂 ci-gate 门禁 3。
-- **验收判据**：白名单外仓库 clone 请求被拒；JGit 版本锁定并过架构守卫（git 包外出现 `org.eclipse.jgit` 即红）。
+- **验收判据**：白名单外仓库 clone 请求被拒；JGit 版本锁定并过架构守卫（git 包外出现 `org.eclipse.jgit` 即红）；**clone 出的仓库 `core.autocrlf=false` / `core.fileMode=false` 且 `git config --get` 可核**。
 
 ### GT-2 平台代 clone + 卷内就位
 
-> **状态**：待开始 ｜ **剩余动作**：**前置 A** 按 `WorkspaceRef` 解析宿主目录（现只有一份全局 `volume.host-path`）；**前置 B** 新仓库根进 `[storage].allowed_host_paths` 白名单（现只有 `E:/yhzx/1027/unip-review-workspace`）+ `--force-recreate`；再实施 clone → 挂载 `/workspace/repo`（不是 `/workspace`）
+> **状态**：待开始 ｜ **剩余动作**：**前置 A** 按 `WorkspaceRef` 解析宿主目录（现只有一份全局 `volume.host-path`）；**前置 B** 新仓库根进 `[storage].allowed_host_paths` 白名单（现只有 `E:/yhzx/1027/unip-review-workspace`）+ `--force-recreate`；再实施 clone → 挂载 `/workspace/repo`（不是 `/workspace`）；**clone 深度已定：`--depth 1` 全量 118MB/8.9s → 101MB/6.5s，总收益仅 14%（`GT-0` ③）**
 
 - **做什么**：任务声明 `repo`（地址 + 分支/commit 锁定）→ 平台 JGit 克隆到任务工作区 → 经沙箱卷挂载进 **`/workspace/repo`**（只读基线，防止篡改）。
-- **★clone 深度待 `GT-0` 定（2026-11-24 晚实测，先记约束不预设结论）**：`--depth 1` 能让 agent 工作区变轻（浅克隆后提交、`git diff <baseSha> HEAD`、push 回全量 bare 均实测可用），但**浅克隆下 `merge-base` 返回 RC=1、merge 报 `refusing to merge unrelated histories`**；`--unshallow` 后 RC=0，`--depth=100` 亦 RC=0。⇒ **合并（`GT-8`）必须落在全量或足够深的裸仓上，浅克隆只可作 agent 工作区**。本步骤的「任务工作区」属哪一类，由 `GT-0` 第 ③ 项（单任务多 agent 独立 clone 的体积/耗时）出结论后校准——**在结论出来前不把「浅克隆」写死为默认**。
+- **★clone 深度已定（`GT-0` ③ 实测，2026-11-26——原「待定」结案）**：本仓 1112 提交的实测数据是**全量 118MB / 8.9s**（`.git` 42MB）、**`--depth 1` 101MB / 6.5s**（`.git` 24MB）、**`--single-branch --depth 1` 101MB / 7.5s**。⇒ `--depth 1` 把 `.git` 砍掉 43%，但工作区（`doc/` 33MB + `helloai-ui/` 7MB 等）一份不少，**总收益只有 14%**；`--single-branch` 反而因多一次 ref 协商慢了 1s。
+  - **结论**：**agent 工作区用 `--depth 1`**（首次 clone 快 2.4s，且浅克隆下提交、`git diff <baseSha> HEAD`、push 回全量 bare 均实测可用）；**合并点（`GT-8` 的本地 bare 仓）必须全量**——浅克隆下 `merge-base` 返回 RC=1、merge 报 `refusing to merge unrelated histories`，`--unshallow` 或 `--depth=100` 才恢复。
+  - **不要指望浅克隆省磁盘**：它的价值是「首次 clone 变快」，不是「省空间」。按「省空间」设计会在 `GT-8` 合并时被 `merge-base` 打回。
 - **硬前置 A（隔离）**：`application.yml:199-200` 只有一份全局 `volume.host-path`，`SandboxFactory.applyWorkspaceVolume()` 直接读全局配置 ⇒ **今天所有任务开卷就是同一个目录**。须新增 `workspace-root`，目录取 `{root}/{kind}-{ownerId}`，`SandboxFactory.create()` 改接收解析后的 hostPath（槽键已带 kind/ownerId/spec/access，改动集中在 factory 签名与调用点）。
 - **硬前置 B（白名单）**：本机 `opensandbox-config.toml`（不入库，模板 `opensandbox-config.example.toml`）的 `[storage] allowed_host_paths` 现只有 `E:/yhzx/1027/unip-review-workspace`（G-037 试点工作区）；该字段是 **path prefixes** allowlist ⇒ 登记 root 一次即覆盖 `{root}/{taskId}/...` 子目录，不必逐任务登记；改后需 `--force-recreate`。**版本陷阱**：钉住的 release-1.1.0 实测「空列表=全拒」（server breaking change #750/#751），不要照 latest 文档把白名单清空。
+- **★白名单外路径的报错形态已实测（`GT-0` ④）**：`VOLUME::HOST_PATH_NOT_ALLOWED`，且 message 会直接列出当前 `Allowed prefixes: [...]` ⇒ 这既是 fail-close（不是「空列=放行一切」也不是「静默忽略卷」，而是逐条前缀校验），也意味着**配置错了能自己看出来**，不需要额外诊断日志。验收时按这个错误码断言，别按「挂载失败」泛泛判。
 - **挂载点修正**：**必须 `/workspace/repo` 而非 `/workspace`**——`DeliverableReader` 在 `/workspace` 下按 depth=2 挑最新 `.md`，仓库挂进根目录会让 `README.md`/`CLAUDE.md` 被误当交付物；同时给 `DeliverableReader` 加「跳过 repo 子树」。
 - **本批次建议顺带做 `GT-10`**：`GT-2` 改的正是卷挂载链路（`SandboxFactory` 签名 / `application.yml` 的 `workspace-root` / 宿主目录解析），而 `GT-10` 的 app 容器 bind mount 依赖同一个 `SANDBOX_VOLUME_HOST_PATH` 变量——两件事同批实施可一次到位，避免 `GT-10` 单独改一遍后又被 `GT-2` 的链路改动作废。
-- **验收判据**：clone 成功后沙箱内 `git status` / `git diff` 可查；工作区与远端基线条目一致；commit 锁定在基线 sha；**两个不同任务/agent 的卷目录互不覆盖**；交付物回读不捞到仓库内 `.md`。
+- **验收判据**：clone 成功后沙箱内 `git status` / `git diff` 可查；工作区与远端基线条目一致；commit 锁定在基线 sha；**两个不同任务/agent 的卷目录互不覆盖**；交付物回读不捞到仓库内 `.md`；**白名单外路径返回 `HOST_PATH_NOT_ALLOWED` 而非静默降级**。
 
 ### GT-3 执行器 git 审计工具 + 约束 `repoPath` 生效
 
@@ -151,10 +156,14 @@
 
 ### GT-6 reviewer 沙箱基于提交代码验证
 
-> **状态**：待开始 ｜ **剩余动作**：reviewer 在沙箱内基于提交代码 + 同一规范验证（编译 / 规范条款命中 / 测试），报告引用 commit diff
+> **状态**：待开始 ｜ **剩余动作**：reviewer 在沙箱内基于提交代码 + 同一规范验证（编译 / 规范条款命中 / 测试），报告引用 commit diff；**diff 审计必须绑定「子任务已终态」——`GT-0` ② 证明工作区半写时读到的是一份合法但偏短的前缀快照，无法自证「写完了」**
 
 - **做什么**：reviewer 在沙箱内基于提交的代码 + 同一规范做验证（编译 / 规范条款命中 / 测试）；审查报告引用 commit diff 而非整包回传。
-- **验收判据**：reviewer 验证基于真实提交代码；判据矩阵引用 commit sha / diff 行号；行为对齐 ClaudeShip CodeReview 对抗式校验语义。
+- **★审计时机必须绑定终态，不能靠 diff 结果自证完整（`GT-0` ② 实测，2026-11-26）**：容器每 8ms 向 3.6KB 文件追加一行，宿主 JGit 连读三次分别看到 81 / 187 / 200 行——**每次末行都完整**（无截断半行），且读不到 `EOF` 信号。⇒
+  - **不能**用「diff 看起来完整 / 文件末尾正常」来推断「执行方写完了」——写中途拿到的是一份**看起来完全合法、只是偏短**的快照，任何基于它的结论（尤其「这条验收点没做」）都可能是在评审一个尚未完成的中间状态。
+  - **正解**：diff 审计只在子任务进入终态（`DONE` / `INCONCLUSIVE` / 死信）之后计算，与 `GT-12` 的「子任务边界发布」同一时机。
+  - **反过来也不成立**：终态 ≠ 文件完整（执行方可能提前提交后继续写）。真正可靠的锚点是「执行方的提交动作」本身，`GT-4` 的增量提交通道正是为此——**diff 以 commit 为界，不以工作区当前状态为界**。
+- **验收判据**：reviewer 验证基于真实提交代码；判据矩阵引用 commit sha / diff 行号；**执行中途调用审计不产出「缺交付」类结论**（只产出「尚未完成」）；行为对齐 ClaudeShip CodeReview 对抗式校验语义。
 
 ## 第 3 步：拉分支集成测试（GT-7 ~ GT-9，承接 G-027⑤⑥）
 
@@ -171,9 +180,13 @@
 
 ### GT-8 独立 clone 隔离 + 合并队列
 
-> **状态**：待开始 ｜ **剩余动作**：平台建本地 bare 仓为源，每 agent `JGit.clone` 一份独立工作区（**替代 worktree**）；合并队列每合并一支重跑验收机；touchedPaths 交集判串行
+> **状态**：待开始 ｜ **剩余动作**：平台建本地 bare 仓为源，每 agent `JGit.clone` 一份独立工作区（**替代 worktree**）；合并队列每合并一支重跑验收机；touchedPaths 交集判串行；**merge 必须平台侧自行串行化（同一 `batch_key` 一把进程内锁）——`GT-0` ⑤ 证明并发失败形态是 Windows 文件句柄冲突、不可当可重试判据**
 
 - **做什么**：每 agent 一份隔离工作区；合并队列每合并一支重跑验收机（命令退出码权威）；多 agent 按 touchedPaths 交集判串行。
+- **★并发 merge 必须自己串行化，不能靠 JGit 抛「锁被占」（`GT-0` ⑤ 实测，2026-11-26）**：两线程同时 `MergeCommand` 同一 feature→main，T1 成功 `status=Merged`，T2 抛 `JGitInternalException: FileNotFoundException: .git/MERGE_MSG（拒绝访问）`，事后 `.git/index.lock` **不存在**、仓库状态正常。⇒
+  - **根因是 Windows 文件句柄独占**（`MERGE_MSG` 写冲突），**不是 git 的锁语义**——所以不能期待「重试就好了」。
+  - **该异常跨平台形态不一致**（Linux 上大概率不是 `FileNotFoundException` 而可能是别的），⇒ **绝不能用它作为「可重试」判据**：按它做重试分类，会在服务器（Linux）上直接失效。
+  - **正解**：合并入口按 `batch_key` 加**进程内锁**，把「读状态 → merge → 写结果」串成一段。这与 `G-053` 的教训同向（判据 26 反向：能在入口串行化的事，不要指望下游设施替你做）。
 - **★订正（research §7.2 jar 级实测）**：**JGit 7.8.1 不支持 linked worktree**——jar 内无 `WorktreeAdd/List/RemoveCommand`，无 `worktrees/` 目录串，`commondir` 不参与仓库打开路径解析。原「JGit worktree 隔离」不可实现。
 - **替代形态（A 独立 clone，已定）**：平台建一个本地 bare 仓为源，每 agent `JGit.clone` 一份完整工作区。隔离最彻底、天然规避「同一分支不能两处 checkout」；代价是磁盘 O(repo×agent)，任务内 2~5 agent 量级完全够。**不选** B（JGit+宿主 CLI，引入 git binary 部署前置）与 C（libgit2/JNI，native 多平台分发）。
 - **★写者切分（2026-11-24 续研二新增，research §7.9.2）**：本地 bare 仓是**缓存 + 合并执行点，不是第二事实源**；每个 ref 只有一个写者——`master` 归人、`helloai/t{taskId}` 归平台、`helloai/t{taskId}-s{subId}-a{n}` 归执行 agent 本人。平台的本地↔远端动作必须叫**「发布」**（单向、只推自有 ref、写前必 fetch、禁 force、ref 白名单限 `helloai/` 命名空间），**禁止**叫「同步」或做双向写同名 ref——实测双向写会静默覆盖提交（research §7.9.1 三条佐证，强推后 `push` 退出码仍为 0）。
@@ -206,8 +219,8 @@
   3. **旧分支保留**：`a{n}` **永不删除**，返工时打 `rejected` tag——它是审计证据，reviewer 对比 `a1` vs `a2` 即可判「新 agent 是修复还是重写」。
   4. **派发载荷四项**：`repoUrl` / `baseSha` / `branchName` / `startFrom`（+ 参考分支）写进派发上下文，缺项由 `GT-5` 阻塞（不在本任务实现校验，只定契约）。
 - **★三处必须避开的坑**：
-  - **旧提交失效 ≠ 删分支**：`invalidateAttachmentsOnRework` 现把旧附件置 `INACTIVE`（`SubTaskStateMachineServiceImpl.java:594` 附近）；分支版等价动作是打 tag，删分支会连审计证据一起删。
-  - **分支代次不得复用 `attempt_total`**：`reworkFresh` / `redispatchDeadLetter` 都会 `resetAttemptTotal` 清零该计数器（`SubTaskStateMachineServiceImpl.java:590`、`SubTaskDispatchServiceImpl.java:405`）。复用会让「预算已清零」与「分支已到 `a3`」语义对不上；让分支号跟着回 `a1` 则发生覆盖。⇒ **独立只增序号**。
+  - **旧提交失效 ≠ 删分支**：`invalidateAttachmentsOnRework` 现把旧附件置 `INACTIVE`（`SubTaskStateMachineServiceImpl#invalidateAttachmentsOnRework:711`，由 `reworkFresh:574` / `rework:633` 两处调用）；分支版等价动作是打 tag，删分支会连审计证据一起删。
+  - **分支代次不得复用 `attempt_total`**：`reworkFresh` / `redispatchDeadLetter` 都会 `resetAttemptTotal` 清零该计数器（`SubTaskStateMachineServiceImpl#reworkFresh:598`、`SubTaskDispatchServiceImpl#redispatchDeadLetter:406`）。复用会让「预算已清零」与「分支已到 `a3`」语义对不上；让分支号跟着回 `a1` 则发生覆盖。⇒ **独立只增序号**。
   - **「当前有效分支」是投影，不是新事实源**：从最新 `agent_execution_record` 推导，**禁加 `current_branch_seq` 列**（同一事实双写必分叉，同 `ADR-008` §14）。
 - **不做什么（边界）**：
   - 不改沙箱作用域（`WorkspaceRef` / 槽池不动）——并行是外部 agent 的固有属性，不是平台沙箱的需求；
@@ -220,7 +233,7 @@
 
 ### GT-12 平台向远端发布 + 平台工作区前进
 
-> **状态**：待开始 ｜ **剩余动作**：实现**单向发布** `JGit PushCommand`（写前必 fetch、只接受 fast-forward、`RefSpec.setForceUpdate(false)`、ref 白名单限 `helloai/`）；子任务边界（`DONE`/审核通过）触发发布；平台工作区在子任务边界 `fetch` + 仅快进前进，不干净即 `BLOCKED`
+> **状态**：待开始 ｜ **剩余动作**：实现**单向发布** `JGit PushCommand`（写前必 fetch、只接受 fast-forward、`RefSpec.setForceUpdate(false)`、ref 白名单限 `helloai/`）；**发布成功判定必须显式遍历 `getRemoteUpdates()` 判 `status == OK`——非快进不抛异常（`GT-0` ⑥）**；子任务边界（`DONE`/审核通过）触发发布；平台工作区在子任务边界 `fetch` + 仅快进前进，不干净即 `BLOCKED`
 
 - **问题来源**（`research` §7.9）：混合协作时 S1 由内部 LLM 完成、S2 派给外部 agent，而外部 agent 在**另一台机器**上执行、只能从远端取代码。若平台不把内部产出推到远端，外部 agent 拿到的是分叉前的旧基线；反过来若两边都写同名 ref，则静默互相覆盖（§7.9.1 实测：强推后 `push` 退出码仍为 0，被覆盖的提交变为不可达）。
 - **做什么**：
@@ -228,13 +241,18 @@
   2. **发布时机 = 子任务边界**（`DONE` / 审核通过），不是每次 commit。未通过审核不发布——外部 agent 拿不到半成品。
   3. **工作区前进**：子任务边界对平台工作区 `{root}/{taskId}/repo` 执行 `fetch` + 仅快进更新（`PullCommand#setFastForwardMode(ONLY)` 或 `MergeCommand` 结果必须 `FAST_FORWARD`）。工作区有未提交改动 ⇒ `BLOCKED` 带原因，**不自动 stash、不丢弃**（stash 会让「上次执行的产物去哪了」不可归因）。
   4. **写者切分**：`master` 归人、`helloai/t{taskId}` 归平台、`helloai/t{taskId}-s{subId}-a{n}` 归执行 agent 本人。平台**永不**写 `-s*-a*`，agent **永不**写 `t{taskId}`。
+- **★★成功判定不能靠「没抛异常」——这是本任务最大的坑（`GT-0` ⑥ 实测，2026-11-26）**：本地与远端各自在 main 上前进（真分叉，`merge-base` 已确认）后，`RefSpec.setForceUpdate(false)` 下 **`PushCommand.call()` 正常返回、不抛任何异常**，只有逐个检查 `RemoteRefUpdate.getStatus()` 才能看到 `REJECTED_NONFASTFORWARD`（此时 `msg` 为空、`expectedOld` / `new` 都有值，远端 ref 未被改动）。对照实验：原生 `git push` 同样打印 `! [rejected] ... (non-fast-forward)` 而 **`RC=0`**。
+  - **后果**：`try { push() } catch (Exception e) { ... }` 这种写法会把「推失败了」当成「推成功了」——**静默失败，以为发布完成实际远端一点没动**，`GT-8` 的合并队列会基于过时的远端状态继续做决策。
+  - **正解**：`call()` 之后**必须** `for (RemoteRefUpdate u : result.getRemoteUpdates())` 逐条判 `u.getStatus() == RemoteRefUpdate.Status.OK`，任一非 `OK` 即视为发布失败并带上 `status` 原文；`UP_TO_DATE` 是成功（幂等重投的正常形态），`REJECTED_*` / `NON_EXISTING` 一律失败。
+  - **反证已做**：`setForce(true)` 后 `status=OK`、远端被覆盖、被覆盖提交变为不可达（远端 `cat-file -e` RC=128）⇒ 说明 `status` 字段确实反映真实结果，不是摆设。
+  - **架构守卫建议**：`setForceUpdate(true)` 全仓零命中（静态检查），防止以后有人为了「让 push 别再失败」顺手打开。**光靠这条不够**——`setForceUpdate` 默认就是 false，真正会漏的是「忘了判定 status」，而那是静态检查抓不到的，只能在评审时盯 `PushResult` 的处理。
 - **★术语纪律**：平台侧本地↔远端动作一律称**「发布」（publish，单向）**，**禁用「同步」（sync）**——「同步」暗示双向，双向写同名 ref 正是 §7.9.1 分叉的成因。代码命名同此（`GitGateway#publish` 而非 `sync`）。
 - **不做什么（边界）**：
   - 不做外部 agent 分支到 `t{taskId}` 的合并（归 `GT-8` 合并队列）；
   - 不做冲突自动解（`GT-8` 已定「冲突即中止」）；
   - 不实现凭证签发（归 `GT-7`；本任务只消费凭证）。
 - **前置**：`GT-7`（分支已存在 + 凭证可用）/ `GT-8`（合并队列 + 合并方向唯一）。`GT-1`~`GT-3` 完成后即可开发，但**验收**需 `GT-7`/`GT-8` 就绪。
-- **验收判据**：内部 LLM 完成并审核通过后，远端 `helloai/t{taskId}` 前进且含其提交；外部 agent 随后 clone 得到该提交（**无需 agent 自建分支**）；平台在远端已前进时发布被拒而非覆盖；`--force` 路径在代码中不存在（静态检查 `setForceUpdate(true)` 零命中）；工作区有未提交改动时子任务 `BLOCKED` 且原因可读。
+- **验收判据**：内部 LLM 完成并审核通过后，远端 `helloai/t{taskId}` 前进且含其提交；外部 agent 随后 clone 得到该提交（**无需 agent 自建分支**）；**远端已前进时发布被拒而非覆盖，且这一判定由 `RemoteRefUpdate.getStatus()` 逐条给出、不依赖异常**；`--force` 路径在代码中不存在（静态检查 `setForceUpdate(true)` 零命中）；**构造「远端已前进」的反例，断言发布返回失败而非静默成功**（判据 35：反例必须落在你要禁的那条路径上——不能只测「正常快进能推上去」）；工作区有未提交改动时子任务 `BLOCKED` 且原因可读。
 
 ## 并行轨：部署形态能力（GT-10，不阻塞主链）
 
